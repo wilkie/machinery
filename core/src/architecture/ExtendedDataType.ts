@@ -1,12 +1,15 @@
 /**
  * A set of types for compilation-related data.
  */
-export enum ExtendedDataType {
-  AssemblyData = 'assembly',
-  SourceData = 'source',
-  ObjectData = 'object',
-  ExecutableData = 'executable',
-  LibraryData = 'library',
-}
+export const ExtendedDataTypes = {
+  AssemblyData: 'assembly',
+  SourceData: 'source',
+  ObjectData: 'object',
+  ExecutableData: 'executable',
+  LibraryData: 'library',
+} as const;
 
-export default ExtendedDataType;
+export type ExtendedDataType =
+  (typeof ExtendedDataTypes)[keyof typeof ExtendedDataTypes];
+
+export default ExtendedDataTypes;

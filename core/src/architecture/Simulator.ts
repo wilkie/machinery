@@ -3,14 +3,17 @@ import Serial from './Serial';
 
 import type { RegisterInfo } from './Target';
 
-export enum SimulatorState {
-  Uninitialized = 0,
-  Initialized = 1,
-  Running = 2,
-  Paused = 3,
-  Stopped = 4,
-  Crashed = 5,
-}
+export const SimulatorStates = {
+  Uninitialized: 0,
+  Initialized: 1,
+  Running: 2,
+  Paused: 3,
+  Stopped: 4,
+  Crashed: 5,
+} as const;
+
+export type SimulatorState =
+  (typeof SimulatorStates)[keyof typeof SimulatorStates];
 
 export interface BaseSimulatorOptions {
   onBreakpoint?: (index: number) => void;
@@ -30,7 +33,7 @@ export abstract class Simulator {
 
   constructor(options: BaseSimulatorOptions) {
     this._options = options;
-    this._state = SimulatorState.Uninitialized;
+    this._state = SimulatorStates.Uninitialized;
   }
 
   /**

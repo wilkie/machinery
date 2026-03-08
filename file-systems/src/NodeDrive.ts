@@ -1,4 +1,4 @@
-import Drive, { DriveType, MediaType } from './Drive.js';
+import Drive, { DriveTypes, MediaTypes } from './Drive.js';
 import NativeFile from './NativeFile';
 import NativeDirectory from './NativeDirectory';
 import NativeStream from './NativeStream';
@@ -239,7 +239,7 @@ export class NodeDirectory extends NativeDirectory {
 
 export class NodeDrive extends Drive {
   constructor(name: string, root: Directory) {
-    super(name, DriveType.LocalStorage, MediaType.Fixed, root);
+    super(name, DriveTypes.LocalStorage, MediaTypes.Fixed, root);
   }
 
   static from(path: string, name?: string): NodeDrive {

@@ -1,4 +1,4 @@
-import type { InstructionInfo } from '@rawrs/architecture/Target';
+import type { InstructionInfo } from '@machinery/core';
 
 import { aaa } from './instructions/aaa';
 import { aad } from './instructions/aad';

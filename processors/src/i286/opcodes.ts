@@ -303,9 +303,9 @@ export const Opcodes = {
   // JMPF_ED
   // PUSH_MW
   CALL_JMP_INC_DEC_PUSH: 0xff,
-}
+} as const;
 
-export type Opcode = typeof Opcodes[keyof typeof Opcodes];
+export type Opcode = (typeof Opcodes)[keyof typeof Opcodes];
 
 /**
  * Sub-opcodes for generally privileged system commands off of the SYSTEM opcode (0x0f).
@@ -332,6 +332,6 @@ export const SystemOpcodes = {
   POP_FS: 0xa1,
   PUSH_GS: 0xa8,
   POP_GS: 0xa9,
-}
+} as const;
 
-export type SystemOpcode = typeof SystemOpcodes[keyof typeof SystemOpcodes];
+export type SystemOpcode = (typeof SystemOpcodes)[keyof typeof SystemOpcodes];

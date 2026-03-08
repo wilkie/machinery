@@ -1,4 +1,4 @@
-import type { MemoryInfo } from '@rawrs/architecture/Target';
+import type { MemoryInfo } from '@machinery/core';
 
 const BASE_2 = 2;
 

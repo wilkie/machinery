@@ -8,12 +8,14 @@ export type Operation = (string | Operation)[];
 /**
  * Describes the data representation for a register of a machine target.
  */
-export enum RegisterType {
+export const RegisterTypes = {
   /** Holds an integer value. */
-  Integer = 0,
+  Integer: 0,
   /** Holds a standard IEEE-754 floating point value. */
-  FloatingPoint = 1,
-}
+  FloatingPoint: 1,
+} as const;
+
+export type RegisterType = (typeof RegisterTypes)[keyof typeof RegisterTypes];
 
 /**
  * Describes a space within a register.
@@ -114,36 +116,42 @@ export interface RegisterInfo {
 /**
  * Auxiliary data encoded into the instruction stream.
  */
-export enum InstructionDataType {
+export const InstructionDataTypes = {
   /** The default type; an encoding of which operation is to be done. */
-  Opcode = 0,
+  Opcode: 0,
   /** Some kind of auxiliary operand data. */
-  Operand = 1,
+  Operand: 1,
   /** An amount to nudge an address. */
-  Displacement = 2,
+  Displacement: 2,
   /** A constant numerical value. */
-  Immediate = 3,
-}
+  Immediate: 3,
+} as const;
+
+export type InstructionDataType =
+  (typeof InstructionDataTypes)[keyof typeof InstructionDataTypes];
 
 /**
  * The type data sources/destinations an instruction operand could have.
  */
-export enum InstructionOperandType {
+export const InstructionOperandTypes = {
   /** Describes an operand that is equivalent to the source operand. */
-  Source = 0,
+  Source: 0,
   /** The operand represents a general register. */
-  Register = 1,
+  Register: 1,
   /** The operand represents a system register. */
-  SystemRegister = 2,
+  SystemRegister: 2,
   /** The operand represents a memory location. */
-  Memory = 3,
+  Memory: 3,
   /** The operand represents an interrupt vector. */
-  Interrupt = 4,
+  Interrupt: 4,
   /** The operand represents a relative jump. */
-  RelativeJump = 5,
+  RelativeJump: 5,
   /** The operand represents an absolute jump. */
-  AbsoluteJump = 6,
-}
+  AbsoluteJump: 6,
+} as const;
+
+export type InstructionOperandType =
+  (typeof InstructionOperandTypes)[keyof typeof InstructionOperandTypes];
 
 /**
  * Describes a field and/or pattern to match against a bit stream.

@@ -2,7 +2,9 @@
 // http://github.com/Hardmath123/nearley
 // Bypasses TS6133. Allow declared but unused functions.
 // @ts-ignore
-function id(d: any[]): any { return d[0]; }
+function id(d: any[]): any {
+  return d[0];
+}
 
 import ArrayAccessNode from './ast/ArrayAccessNode';
 import AssignmentNode from './ast/AssignmentNode';
@@ -42,7 +44,9 @@ const comparison = { test: (x: Token) => x.type === 'comparison' };
 const logical_operator = { test: (x: Token) => x.type === 'logical_operator' };
 const operator = { test: (x: Token) => x.type === 'operator' };
 const unary_operator = { test: (x: Token) => x.type === 'unary_operator' };
-const unary_logic_operator = { test: (x: Token) => x.type === 'unary_logic_operator' };
+const unary_logic_operator = {
+  test: (x: Token) => x.type === 'unary_logic_operator',
+};
 const assignment = { test: (x: Token) => x.type === 'assignment' };
 const left_paren = { test: (x: Token) => x.type === 'left_paren' };
 const right_paren = { test: (x: Token) => x.type === 'right_paren' };
@@ -60,7 +64,7 @@ const list_delimiter = { test: (x: Token) => x.type === 'list_delimiter' };
 interface NearleyToken {
   value: any;
   [key: string]: any;
-};
+}
 
 interface NearleyLexer {
   reset: (chunk: string, info: any) => void;
@@ -68,120 +72,467 @@ interface NearleyLexer {
   save: () => any;
   formatError: (token: never) => string;
   has: (tokenType: string) => boolean;
-};
+}
 
 interface NearleyRule {
   name: string;
   symbols: NearleySymbol[];
   postprocess?: (d: any[], loc?: number, reject?: {}) => any;
-};
+}
 
-type NearleySymbol = string | { literal: any } | { test: (token: any) => boolean };
+type NearleySymbol =
+  | string
+  | { literal: any }
+  | { test: (token: any) => boolean };
 
 interface Grammar {
   Lexer: NearleyLexer | undefined;
   ParserRules: NearleyRule[];
   ParserStart: string;
-};
+}
 
 const grammar: Grammar = {
   Lexer: undefined,
   ParserRules: [
-    {"name": "statement$ebnf$1", "symbols": []},
-    {"name": "statement$ebnf$1", "symbols": ["statement$ebnf$1", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$2", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$2", "symbols": [], "postprocess": () => null},
-    {"name": "statement", "symbols": ["assignment", terminator, "statement$ebnf$1", "statement$ebnf$2"], "postprocess": (data) => new StatementNode(data[0], data[3] || undefined)},
-    {"name": "statement$ebnf$3", "symbols": []},
-    {"name": "statement$ebnf$3", "symbols": ["statement$ebnf$3", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$4", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$4", "symbols": [], "postprocess": () => null},
-    {"name": "statement", "symbols": ["expression", terminator, "statement$ebnf$3", "statement$ebnf$4"], "postprocess": (data) => new StatementNode(data[0], data[3] || undefined)},
-    {"name": "statement$ebnf$5", "symbols": []},
-    {"name": "statement$ebnf$5", "symbols": ["statement$ebnf$5", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$6", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$6", "symbols": [], "postprocess": () => null},
-    {"name": "statement", "symbols": [next, if_, "comparison", "statement$ebnf$5", "statement$ebnf$6"], "postprocess": (data) => new StatementNode(new NextIfNode(data[2]), data[4] || undefined)},
-    {"name": "statement$ebnf$7", "symbols": []},
-    {"name": "statement$ebnf$7", "symbols": ["statement$ebnf$7", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$8", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$8", "symbols": [], "postprocess": () => null},
-    {"name": "statement$ebnf$9", "symbols": []},
-    {"name": "statement$ebnf$9", "symbols": ["statement$ebnf$9", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$10", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$10", "symbols": [], "postprocess": () => null},
-    {"name": "statement", "symbols": [loop, terminator, "statement$ebnf$7", "statement$ebnf$8", repeat, if_, "comparison", "statement$ebnf$9", "statement$ebnf$10"], "postprocess": (data) => new StatementNode(new LoopBlockNode('', new RepeatIfNode(data[6]), data[3] || undefined), data[8] || undefined)},
-    {"name": "statement$ebnf$11", "symbols": []},
-    {"name": "statement$ebnf$11", "symbols": ["statement$ebnf$11", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$12", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$12", "symbols": [], "postprocess": () => null},
-    {"name": "statement$ebnf$13", "symbols": []},
-    {"name": "statement$ebnf$13", "symbols": ["statement$ebnf$13", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$14", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$14", "symbols": [], "postprocess": () => null},
-    {"name": "statement", "symbols": [loop, if_, "comparison", terminator, "statement$ebnf$11", "statement$ebnf$12", repeat, "statement$ebnf$13", "statement$ebnf$14"], "postprocess": (data) => new StatementNode(new LoopBlockNode('', new LoopIfNode(data[2]), data[5] || undefined), data[8] || undefined)},
-    {"name": "statement$ebnf$15", "symbols": []},
-    {"name": "statement$ebnf$15", "symbols": ["statement$ebnf$15", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$16", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$16", "symbols": [], "postprocess": () => null},
-    {"name": "statement$ebnf$17", "symbols": []},
-    {"name": "statement$ebnf$17", "symbols": ["statement$ebnf$17", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$18", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$18", "symbols": [], "postprocess": () => null},
-    {"name": "statement", "symbols": [if_, "comparison", "statement$ebnf$15", "statement$ebnf$16", end, if_, "statement$ebnf$17", "statement$ebnf$18"], "postprocess": (data) => new StatementNode(new IfBlockNode(data[1], data[3]), data[7] || undefined)},
-    {"name": "statement$ebnf$19", "symbols": []},
-    {"name": "statement$ebnf$19", "symbols": ["statement$ebnf$19", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$20", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$20", "symbols": [], "postprocess": () => null},
-    {"name": "statement", "symbols": [raise, "operand", if_, "comparison", "statement$ebnf$19", "statement$ebnf$20"], "postprocess": (data) => new StatementNode(new RaiseExpressionNode(data[1], data[3]), data[5] || undefined)},
-    {"name": "statement$ebnf$21", "symbols": []},
-    {"name": "statement$ebnf$21", "symbols": ["statement$ebnf$21", not_terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$22", "symbols": []},
-    {"name": "statement$ebnf$22", "symbols": ["statement$ebnf$22", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$23", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$23", "symbols": [], "postprocess": () => null},
-    {"name": "statement", "symbols": [comment, "statement$ebnf$21", terminator, "statement$ebnf$22", "statement$ebnf$23"], "postprocess": (data) => new StatementNode(new CommentNode(data[1]), data[4] || undefined)},
-    {"name": "statement", "symbols": [terminator], "postprocess": () => new StatementNode(new EmptyNode())},
-    {"name": "assignment", "symbols": ["named", assignment, "expression"], "postprocess": (data) => new AssignmentNode(data[0], data[2])},
-    {"name": "assignment", "symbols": [macro_start, identifier, macro_end, assignment, "expression"], "postprocess": (data) => new AssignmentNode(new OperandNode(data[1].value, data[1].coercion), data[4])},
-    {"name": "assignment$ebnf$1", "symbols": []},
-    {"name": "assignment$ebnf$1$subexpression$1", "symbols": [list_delimiter, "operand"]},
-    {"name": "assignment$ebnf$1", "symbols": ["assignment$ebnf$1", "assignment$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "assignment", "symbols": [macro_start, list_start, "operand", "assignment$ebnf$1", list_end, list_start, "expression", list_end, macro_end, assignment, "expression"], "postprocess": (data) => new AssignmentNode(new ChoiceExpressionNode([data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))], data[6], data[7].coercion), data[10])},
-    {"name": "expression", "symbols": [left_paren, "expression", right_paren], "postprocess": (data) => new ExpressionNode(data[1])},
-    {"name": "expression", "symbols": ["comparison", ternary_if, "expression", ternary_else, "expression"], "postprocess": (data) => new TernaryExpressionNode(data[0], data[2], data[4])},
-    {"name": "expression", "symbols": ["expression", operator, "expression"], "postprocess": (data) => new BinaryExpressionNode(data[0], data[1].value.toString(), data[2])},
-    {"name": "expression", "symbols": [unary_operator, "expression"], "postprocess": (data) => new UnaryExpressionNode(data[1], data[0].value.toString())},
-    {"name": "expression$ebnf$1", "symbols": []},
-    {"name": "expression$ebnf$1$subexpression$1", "symbols": [list_delimiter, "expression"]},
-    {"name": "expression$ebnf$1", "symbols": ["expression$ebnf$1", "expression$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "expression", "symbols": ["named", left_paren, "expression", "expression$ebnf$1", right_paren], "postprocess": (data) => new CallExpressionNode(data[0].value.toString(), [data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))])},
-    {"name": "expression", "symbols": [raise, "operand"], "postprocess": (data) => new RaiseExpressionNode(data[1])},
-    {"name": "expression", "symbols": [macro_start, identifier, macro_end], "postprocess": (data) => new OperandNode(data[1].value, data[1].coercion)},
-    {"name": "expression$ebnf$2", "symbols": []},
-    {"name": "expression$ebnf$2$subexpression$1", "symbols": [list_delimiter, "operand"]},
-    {"name": "expression$ebnf$2", "symbols": ["expression$ebnf$2", "expression$ebnf$2$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "expression", "symbols": [macro_start, list_start, "operand", "expression$ebnf$2", list_end, list_start, "expression", list_end, macro_end], "postprocess": (data) => new ChoiceExpressionNode([data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))], data[6], data[7].coercion)},
-    {"name": "expression", "symbols": ["operand"], "postprocess": (data) => new ExpressionNode(data[0])},
-    {"name": "comparison", "symbols": [left_paren, "comparison", right_paren], "postprocess": (data) => new ComparisonNode(data[1])},
-    {"name": "comparison", "symbols": [unary_logic_operator, "comparison"], "postprocess": (data) => new UnaryLogicNode(data[0].value.toString(), data[1])},
-    {"name": "comparison", "symbols": ["comparison_operand", comparison, "comparison_operand"], "postprocess": (data) => new ComparisonEvaluationNode(data[0][0], data[1].value.toString(), data[2][0])},
-    {"name": "comparison", "symbols": ["comparison", logical_operator, "comparison"], "postprocess": (data) => new BinaryLogicNode(data[0], data[1].value.toString(), data[2])},
-    {"name": "comparison_operand", "symbols": ["comparison"]},
-    {"name": "comparison_operand", "symbols": ["expression"]},
-    {"name": "named$ebnf$1$subexpression$1", "symbols": [dot, "named"]},
-    {"name": "named$ebnf$1", "symbols": ["named$ebnf$1$subexpression$1"], "postprocess": id},
-    {"name": "named$ebnf$1", "symbols": [], "postprocess": () => null},
-    {"name": "named", "symbols": [identifier, "named$ebnf$1"], "postprocess": (data) => new OperandNode(data[0].value, data[0].coercion, data[1]?.[1])},
-    {"name": "named$ebnf$2$subexpression$1", "symbols": [dot, "named"]},
-    {"name": "named$ebnf$2", "symbols": ["named$ebnf$2$subexpression$1"], "postprocess": id},
-    {"name": "named$ebnf$2", "symbols": [], "postprocess": () => null},
-    {"name": "named", "symbols": [identifier, list_start, "expression", list_end, "named$ebnf$2"], "postprocess": (data) => new OperandNode(data[0].value, data[0].coercion, new ArrayAccessNode(data[2], data[4]?.[1]))},
-    {"name": "operand", "symbols": ["named"], "postprocess": (data) => data[0]},
-    {"name": "operand", "symbols": [local], "postprocess": (data) => new OperandNode(data[0].value, data[0].coercion)},
-    {"name": "operand", "symbols": [number], "postprocess": (data) => new OperandNode(data[0].value, data[0].coercion)}
+    { name: 'statement$ebnf$1', symbols: [] },
+    {
+      name: 'statement$ebnf$1',
+      symbols: ['statement$ebnf$1', terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$2', symbols: ['statement'], postprocess: id },
+    { name: 'statement$ebnf$2', symbols: [], postprocess: () => null },
+    {
+      name: 'statement',
+      symbols: [
+        'assignment',
+        terminator,
+        'statement$ebnf$1',
+        'statement$ebnf$2',
+      ],
+      postprocess: (data) => new StatementNode(data[0], data[3] || undefined),
+    },
+    { name: 'statement$ebnf$3', symbols: [] },
+    {
+      name: 'statement$ebnf$3',
+      symbols: ['statement$ebnf$3', terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$4', symbols: ['statement'], postprocess: id },
+    { name: 'statement$ebnf$4', symbols: [], postprocess: () => null },
+    {
+      name: 'statement',
+      symbols: [
+        'expression',
+        terminator,
+        'statement$ebnf$3',
+        'statement$ebnf$4',
+      ],
+      postprocess: (data) => new StatementNode(data[0], data[3] || undefined),
+    },
+    { name: 'statement$ebnf$5', symbols: [] },
+    {
+      name: 'statement$ebnf$5',
+      symbols: ['statement$ebnf$5', terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$6', symbols: ['statement'], postprocess: id },
+    { name: 'statement$ebnf$6', symbols: [], postprocess: () => null },
+    {
+      name: 'statement',
+      symbols: [
+        next,
+        if_,
+        'comparison',
+        'statement$ebnf$5',
+        'statement$ebnf$6',
+      ],
+      postprocess: (data) =>
+        new StatementNode(new NextIfNode(data[2]), data[4] || undefined),
+    },
+    { name: 'statement$ebnf$7', symbols: [] },
+    {
+      name: 'statement$ebnf$7',
+      symbols: ['statement$ebnf$7', terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$8', symbols: ['statement'], postprocess: id },
+    { name: 'statement$ebnf$8', symbols: [], postprocess: () => null },
+    { name: 'statement$ebnf$9', symbols: [] },
+    {
+      name: 'statement$ebnf$9',
+      symbols: ['statement$ebnf$9', terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$10', symbols: ['statement'], postprocess: id },
+    { name: 'statement$ebnf$10', symbols: [], postprocess: () => null },
+    {
+      name: 'statement',
+      symbols: [
+        loop,
+        terminator,
+        'statement$ebnf$7',
+        'statement$ebnf$8',
+        repeat,
+        if_,
+        'comparison',
+        'statement$ebnf$9',
+        'statement$ebnf$10',
+      ],
+      postprocess: (data) =>
+        new StatementNode(
+          new LoopBlockNode(
+            '',
+            new RepeatIfNode(data[6]),
+            data[3] || undefined,
+          ),
+          data[8] || undefined,
+        ),
+    },
+    { name: 'statement$ebnf$11', symbols: [] },
+    {
+      name: 'statement$ebnf$11',
+      symbols: ['statement$ebnf$11', terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$12', symbols: ['statement'], postprocess: id },
+    { name: 'statement$ebnf$12', symbols: [], postprocess: () => null },
+    { name: 'statement$ebnf$13', symbols: [] },
+    {
+      name: 'statement$ebnf$13',
+      symbols: ['statement$ebnf$13', terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$14', symbols: ['statement'], postprocess: id },
+    { name: 'statement$ebnf$14', symbols: [], postprocess: () => null },
+    {
+      name: 'statement',
+      symbols: [
+        loop,
+        if_,
+        'comparison',
+        terminator,
+        'statement$ebnf$11',
+        'statement$ebnf$12',
+        repeat,
+        'statement$ebnf$13',
+        'statement$ebnf$14',
+      ],
+      postprocess: (data) =>
+        new StatementNode(
+          new LoopBlockNode('', new LoopIfNode(data[2]), data[5] || undefined),
+          data[8] || undefined,
+        ),
+    },
+    { name: 'statement$ebnf$15', symbols: [] },
+    {
+      name: 'statement$ebnf$15',
+      symbols: ['statement$ebnf$15', terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$16', symbols: ['statement'], postprocess: id },
+    { name: 'statement$ebnf$16', symbols: [], postprocess: () => null },
+    { name: 'statement$ebnf$17', symbols: [] },
+    {
+      name: 'statement$ebnf$17',
+      symbols: ['statement$ebnf$17', terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$18', symbols: ['statement'], postprocess: id },
+    { name: 'statement$ebnf$18', symbols: [], postprocess: () => null },
+    {
+      name: 'statement',
+      symbols: [
+        if_,
+        'comparison',
+        'statement$ebnf$15',
+        'statement$ebnf$16',
+        end,
+        if_,
+        'statement$ebnf$17',
+        'statement$ebnf$18',
+      ],
+      postprocess: (data) =>
+        new StatementNode(
+          new IfBlockNode(data[1], data[3]),
+          data[7] || undefined,
+        ),
+    },
+    { name: 'statement$ebnf$19', symbols: [] },
+    {
+      name: 'statement$ebnf$19',
+      symbols: ['statement$ebnf$19', terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$20', symbols: ['statement'], postprocess: id },
+    { name: 'statement$ebnf$20', symbols: [], postprocess: () => null },
+    {
+      name: 'statement',
+      symbols: [
+        raise,
+        'operand',
+        if_,
+        'comparison',
+        'statement$ebnf$19',
+        'statement$ebnf$20',
+      ],
+      postprocess: (data) =>
+        new StatementNode(
+          new RaiseExpressionNode(data[1], data[3]),
+          data[5] || undefined,
+        ),
+    },
+    { name: 'statement$ebnf$21', symbols: [] },
+    {
+      name: 'statement$ebnf$21',
+      symbols: ['statement$ebnf$21', not_terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$22', symbols: [] },
+    {
+      name: 'statement$ebnf$22',
+      symbols: ['statement$ebnf$22', terminator],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    { name: 'statement$ebnf$23', symbols: ['statement'], postprocess: id },
+    { name: 'statement$ebnf$23', symbols: [], postprocess: () => null },
+    {
+      name: 'statement',
+      symbols: [
+        comment,
+        'statement$ebnf$21',
+        terminator,
+        'statement$ebnf$22',
+        'statement$ebnf$23',
+      ],
+      postprocess: (data) =>
+        new StatementNode(new CommentNode(data[1]), data[4] || undefined),
+    },
+    {
+      name: 'statement',
+      symbols: [terminator],
+      postprocess: () => new StatementNode(new EmptyNode()),
+    },
+    {
+      name: 'assignment',
+      symbols: ['named', assignment, 'expression'],
+      postprocess: (data) => new AssignmentNode(data[0], data[2]),
+    },
+    {
+      name: 'assignment',
+      symbols: [macro_start, identifier, macro_end, assignment, 'expression'],
+      postprocess: (data) =>
+        new AssignmentNode(
+          new OperandNode(data[1].value, data[1].coercion),
+          data[4],
+        ),
+    },
+    { name: 'assignment$ebnf$1', symbols: [] },
+    {
+      name: 'assignment$ebnf$1$subexpression$1',
+      symbols: [list_delimiter, 'operand'],
+    },
+    {
+      name: 'assignment$ebnf$1',
+      symbols: ['assignment$ebnf$1', 'assignment$ebnf$1$subexpression$1'],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    {
+      name: 'assignment',
+      symbols: [
+        macro_start,
+        list_start,
+        'operand',
+        'assignment$ebnf$1',
+        list_end,
+        list_start,
+        'expression',
+        list_end,
+        macro_end,
+        assignment,
+        'expression',
+      ],
+      postprocess: (data) =>
+        new AssignmentNode(
+          new ChoiceExpressionNode(
+            [data[2], ...(data[3] || []).map((set: NearleyToken) => set[1])],
+            data[6],
+            data[7].coercion,
+          ),
+          data[10],
+        ),
+    },
+    {
+      name: 'expression',
+      symbols: [left_paren, 'expression', right_paren],
+      postprocess: (data) => new ExpressionNode(data[1]),
+    },
+    {
+      name: 'expression',
+      symbols: [
+        'comparison',
+        ternary_if,
+        'expression',
+        ternary_else,
+        'expression',
+      ],
+      postprocess: (data) =>
+        new TernaryExpressionNode(data[0], data[2], data[4]),
+    },
+    {
+      name: 'expression',
+      symbols: ['expression', operator, 'expression'],
+      postprocess: (data) =>
+        new BinaryExpressionNode(data[0], data[1].value.toString(), data[2]),
+    },
+    {
+      name: 'expression',
+      symbols: [unary_operator, 'expression'],
+      postprocess: (data) =>
+        new UnaryExpressionNode(data[1], data[0].value.toString()),
+    },
+    { name: 'expression$ebnf$1', symbols: [] },
+    {
+      name: 'expression$ebnf$1$subexpression$1',
+      symbols: [list_delimiter, 'expression'],
+    },
+    {
+      name: 'expression$ebnf$1',
+      symbols: ['expression$ebnf$1', 'expression$ebnf$1$subexpression$1'],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    {
+      name: 'expression',
+      symbols: [
+        'named',
+        left_paren,
+        'expression',
+        'expression$ebnf$1',
+        right_paren,
+      ],
+      postprocess: (data) =>
+        new CallExpressionNode(data[0].value.toString(), [
+          data[2],
+          ...(data[3] || []).map((set: NearleyToken) => set[1]),
+        ]),
+    },
+    {
+      name: 'expression',
+      symbols: [raise, 'operand'],
+      postprocess: (data) => new RaiseExpressionNode(data[1]),
+    },
+    {
+      name: 'expression',
+      symbols: [macro_start, identifier, macro_end],
+      postprocess: (data) => new OperandNode(data[1].value, data[1].coercion),
+    },
+    { name: 'expression$ebnf$2', symbols: [] },
+    {
+      name: 'expression$ebnf$2$subexpression$1',
+      symbols: [list_delimiter, 'operand'],
+    },
+    {
+      name: 'expression$ebnf$2',
+      symbols: ['expression$ebnf$2', 'expression$ebnf$2$subexpression$1'],
+      postprocess: (d) => d[0].concat([d[1]]),
+    },
+    {
+      name: 'expression',
+      symbols: [
+        macro_start,
+        list_start,
+        'operand',
+        'expression$ebnf$2',
+        list_end,
+        list_start,
+        'expression',
+        list_end,
+        macro_end,
+      ],
+      postprocess: (data) =>
+        new ChoiceExpressionNode(
+          [data[2], ...(data[3] || []).map((set: NearleyToken) => set[1])],
+          data[6],
+          data[7].coercion,
+        ),
+    },
+    {
+      name: 'expression',
+      symbols: ['operand'],
+      postprocess: (data) => new ExpressionNode(data[0]),
+    },
+    {
+      name: 'comparison',
+      symbols: [left_paren, 'comparison', right_paren],
+      postprocess: (data) => new ComparisonNode(data[1]),
+    },
+    {
+      name: 'comparison',
+      symbols: [unary_logic_operator, 'comparison'],
+      postprocess: (data) =>
+        new UnaryLogicNode(data[0].value.toString(), data[1]),
+    },
+    {
+      name: 'comparison',
+      symbols: ['comparison_operand', comparison, 'comparison_operand'],
+      postprocess: (data) =>
+        new ComparisonEvaluationNode(
+          data[0][0],
+          data[1].value.toString(),
+          data[2][0],
+        ),
+    },
+    {
+      name: 'comparison',
+      symbols: ['comparison', logical_operator, 'comparison'],
+      postprocess: (data) =>
+        new BinaryLogicNode(data[0], data[1].value.toString(), data[2]),
+    },
+    { name: 'comparison_operand', symbols: ['comparison'] },
+    { name: 'comparison_operand', symbols: ['expression'] },
+    { name: 'named$ebnf$1$subexpression$1', symbols: [dot, 'named'] },
+    {
+      name: 'named$ebnf$1',
+      symbols: ['named$ebnf$1$subexpression$1'],
+      postprocess: id,
+    },
+    { name: 'named$ebnf$1', symbols: [], postprocess: () => null },
+    {
+      name: 'named',
+      symbols: [identifier, 'named$ebnf$1'],
+      postprocess: (data) =>
+        new OperandNode(data[0].value, data[0].coercion, data[1]?.[1]),
+    },
+    { name: 'named$ebnf$2$subexpression$1', symbols: [dot, 'named'] },
+    {
+      name: 'named$ebnf$2',
+      symbols: ['named$ebnf$2$subexpression$1'],
+      postprocess: id,
+    },
+    { name: 'named$ebnf$2', symbols: [], postprocess: () => null },
+    {
+      name: 'named',
+      symbols: [identifier, list_start, 'expression', list_end, 'named$ebnf$2'],
+      postprocess: (data) =>
+        new OperandNode(
+          data[0].value,
+          data[0].coercion,
+          new ArrayAccessNode(data[2], data[4]?.[1]),
+        ),
+    },
+    { name: 'operand', symbols: ['named'], postprocess: (data) => data[0] },
+    {
+      name: 'operand',
+      symbols: [local],
+      postprocess: (data) => new OperandNode(data[0].value, data[0].coercion),
+    },
+    {
+      name: 'operand',
+      symbols: [number],
+      postprocess: (data) => new OperandNode(data[0].value, data[0].coercion),
+    },
   ],
-  ParserStart: "statement",
+  ParserStart: 'statement',
 };
 
 export default grammar;

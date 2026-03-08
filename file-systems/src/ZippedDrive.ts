@@ -1,7 +1,7 @@
 import NativeStream from './NativeStream.js';
 import NativeDirectory from './NativeDirectory.js';
 import NativeFile from './NativeFile.js';
-import Drive, { DriveType, MediaType } from './Drive.js';
+import Drive, { DriveTypes, MediaTypes } from './Drive.js';
 import { File, Directory, Stream, type Stat } from '@machinery/core';
 
 import { BlobReader, ZipReader } from '@zip.js/zip.js';
@@ -213,7 +213,7 @@ export class ZippedDrive extends Drive {
   _entries: Entry[];
 
   constructor(name: string, entries: Entry[], root: Directory) {
-    super(name, DriveType.ContainedStorage, MediaType.Fixed, root);
+    super(name, DriveTypes.ContainedStorage, MediaTypes.Fixed, root);
     this._entries = entries;
   }
 

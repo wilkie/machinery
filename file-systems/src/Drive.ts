@@ -12,44 +12,48 @@ export type DriveEntrySerialization = {
   handle: FileSystemDirectoryHandle;
 };
 
-export enum DriveType {
+export const DriveTypes = {
   /**
    * The browser's StorageAPI.
    */
-  BrowserStorage,
+  BrowserStorage: 'browser',
 
   /**
    * The local filesystem, whenever available.
    */
-  LocalStorage,
+  LocalStorage: 'local',
 
   /**
    * A Container filesystem, like a CD image.
    */
-  ContainedStorage,
+  ContainedStorage: 'contained',
 
   /**
    * This storage system is not persisted.
    */
-  TemporaryStorage,
-}
+  TemporaryStorage: 'temporary',
+} as const;
 
-export enum MediaType {
+export type DriveType = (typeof DriveTypes)[keyof typeof DriveTypes];
+
+export const MediaTypes = {
   /**
    * A virtual disk the simulates a hard drive.
    */
-  Fixed,
+  Fixed: 'fixed',
 
   /**
    * A Floppy disk (removable)
    */
-  Floppy,
+  Floppy: 'floppy',
 
   /**
    * A compact-disc (CD)
    */
-  Optical,
-}
+  Optical: 'optical',
+} as const;
+
+export type MediaType = (typeof MediaTypes)[keyof typeof MediaTypes];
 
 export type DriveInfo = {
   name: string;
@@ -163,7 +167,7 @@ export class Drive {
             name,
             root,
             undefined,
-            type === DriveType.LocalStorage,
+            type === DriveTypes.LocalStorage,
           );
   }
 
@@ -188,8 +192,8 @@ export class Drive {
 
     const ret = new Drive(
       dir.name,
-      DriveType.LocalStorage,
-      MediaType.Fixed,
+      DriveTypes.LocalStorage,
+      MediaTypes.Fixed,
       dir,
     );
 
@@ -233,7 +237,7 @@ export class Drive {
       for await (const value of basedir.values()) {
         ret.push({
           name: value.name,
-          type: DriveType.BrowserStorage,
+          type: DriveTypes.BrowserStorage,
         });
       }
     }
@@ -258,8 +262,8 @@ export class Drive {
           for (const value of values) {
             ret.push({
               name: value.name,
-              type: DriveType.LocalStorage,
-              mediaType: MediaType.Fixed,
+              type: DriveTypes.LocalStorage,
+              mediaType: MediaTypes.Fixed,
             });
           }
 
@@ -297,7 +301,7 @@ export class Drive {
       }
       return {
         name: name,
-        type: DriveType.BrowserStorage,
+        type: DriveTypes.BrowserStorage,
       };
     }
   }
@@ -320,8 +324,8 @@ export class Drive {
         const handle = await basedir.getDirectoryHandle(name);
         return new Drive(
           name,
-          DriveType.BrowserStorage,
-          MediaType.Fixed,
+          DriveTypes.BrowserStorage,
+          MediaTypes.Fixed,
           handle,
         );
       } catch {
@@ -349,8 +353,8 @@ export class Drive {
             if (value.name === name) {
               return new Drive(
                 name,
-                DriveType.LocalStorage,
-                MediaType.Fixed,
+                DriveTypes.LocalStorage,
+                MediaTypes.Fixed,
                 value.handle,
               );
             }
@@ -429,7 +433,12 @@ export class Drive {
         create: true,
       });
       const handle = await basedir.getDirectoryHandle(name, { create: true });
-      return new Drive(name, DriveType.BrowserStorage, MediaType.Fixed, handle);
+      return new Drive(
+        name,
+        DriveTypes.BrowserStorage,
+        MediaTypes.Fixed,
+        handle,
+      );
     }
 
     // No means to create a Drive

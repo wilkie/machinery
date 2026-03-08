@@ -1,7 +1,7 @@
 import NativeStream from './NativeStream.js';
 import NativeFile from './NativeFile.js';
 import NativeDirectory from './NativeDirectory.js';
-import Drive, { DriveType, MediaType } from './Drive.js';
+import Drive, { DriveTypes, MediaTypes } from './Drive.js';
 import { File, Directory, Stream } from '@machinery/core';
 import type { Stat, FindOptions, DestroyOptions } from '@machinery/core';
 
@@ -199,7 +199,7 @@ export class MemoryFile extends NativeFile {
 export class MemoryDrive extends Drive {
   constructor(name: string) {
     const root = new MemoryDirectory(name);
-    super(name, DriveType.TemporaryStorage, MediaType.Fixed, root);
+    super(name, DriveTypes.TemporaryStorage, MediaTypes.Fixed, root);
   }
 }
 

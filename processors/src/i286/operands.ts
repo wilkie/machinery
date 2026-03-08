@@ -1,4 +1,4 @@
-import { InstructionDataType, InstructionOperandType } from '@machinery/core';
+import { InstructionDataTypes, InstructionOperandTypes } from '@machinery/core';
 import type { OpcodeMatcher } from '@machinery/core';
 
 export const operands: OpcodeMatcher[] = [
@@ -6,7 +6,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_110_reg_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -19,7 +19,7 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'reg',
         offset: 3,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'mod',
@@ -33,7 +33,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_reg_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -45,7 +45,7 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'reg',
         offset: 3,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'mod',
@@ -59,7 +59,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_reg_01',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -71,7 +71,7 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'reg',
         offset: 3,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'mod',
@@ -85,7 +85,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_reg_10',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -97,7 +97,7 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'reg',
         offset: 3,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'mod',
@@ -111,20 +111,20 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_reg_11',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
         identifier: 'rm',
         offset: 0,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'reg',
         offset: 3,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'mod',
@@ -138,7 +138,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_110_seg_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -151,7 +151,7 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'reg',
         offset: 3,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'mod',
@@ -165,7 +165,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_seg_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -177,7 +177,7 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'reg',
         offset: 3,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'mod',
@@ -191,7 +191,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_seg_01',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -203,7 +203,7 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'reg',
         offset: 3,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'mod',
@@ -217,7 +217,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_seg_10',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -229,7 +229,7 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'reg',
         offset: 3,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'mod',
@@ -243,20 +243,20 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_seg_11',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
         identifier: 'rm',
         offset: 0,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'reg',
         offset: 3,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'mod',
@@ -270,7 +270,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_110_000_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -297,7 +297,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_000_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -323,7 +323,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_000_01',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -349,7 +349,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_000_10',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -375,14 +375,14 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_000_11',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
         identifier: 'rm',
         offset: 0,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'reg',
@@ -402,7 +402,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_110_001_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -429,7 +429,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_001_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -455,7 +455,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_001_01',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -481,7 +481,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_001_10',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -507,14 +507,14 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_001_11',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
         identifier: 'rm',
         offset: 0,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'reg',
@@ -534,7 +534,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_110_010_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -561,7 +561,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_010_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -587,7 +587,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_010_01',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -613,7 +613,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_010_10',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -639,14 +639,14 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_010_11',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
         identifier: 'rm',
         offset: 0,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'reg',
@@ -666,7 +666,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_110_011_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -693,7 +693,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_011_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -719,7 +719,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_011_01',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -745,7 +745,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_011_10',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -771,14 +771,14 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_011_11',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
         identifier: 'rm',
         offset: 0,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'reg',
@@ -798,7 +798,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_110_100_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -825,7 +825,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_100_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -851,7 +851,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_100_01',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -877,7 +877,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_100_10',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -903,14 +903,14 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_100_11',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
         identifier: 'rm',
         offset: 0,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'reg',
@@ -930,7 +930,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_110_101_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -957,7 +957,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_101_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -983,7 +983,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_101_01',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -1009,7 +1009,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_101_10',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -1035,14 +1035,14 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_101_11',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
         identifier: 'rm',
         offset: 0,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'reg',
@@ -1062,7 +1062,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_110_110_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -1089,7 +1089,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_110_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -1115,7 +1115,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_110_01',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -1141,7 +1141,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_110_10',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -1167,14 +1167,14 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_110_11',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
         identifier: 'rm',
         offset: 0,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'reg',
@@ -1194,7 +1194,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_110_111_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -1221,7 +1221,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_111_00',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -1247,7 +1247,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_111_01',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -1273,7 +1273,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_111_10',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
@@ -1299,14 +1299,14 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'ModRM_rm_111_11',
     name: 'ModRM',
-    type: InstructionDataType.Operand,
+    type: InstructionDataTypes.Operand,
     size: 8,
     fields: [
       {
         identifier: 'rm',
         offset: 0,
         size: 3,
-        type: InstructionOperandType.Register,
+        type: InstructionOperandTypes.Register,
       },
       {
         identifier: 'reg',
@@ -1325,7 +1325,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'DISP_i8',
     name: '8-bit Displacement Value',
-    type: InstructionDataType.Displacement,
+    type: InstructionDataTypes.Displacement,
     size: 8,
     signed: true,
     fields: [
@@ -1340,7 +1340,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'DISP_i16',
     name: '16-bit Displacement Value',
-    type: InstructionDataType.Displacement,
+    type: InstructionDataTypes.Displacement,
     size: 16,
     signed: true,
     fields: [
@@ -1355,7 +1355,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'IMM_u8',
     name: '8-bit Unsigned Immediate Value',
-    type: InstructionDataType.Immediate,
+    type: InstructionDataTypes.Immediate,
     size: 8,
     fields: [
       {
@@ -1368,7 +1368,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'IMM_i8',
     name: '8-bit Signed Immediate Value',
-    type: InstructionDataType.Immediate,
+    type: InstructionDataTypes.Immediate,
     size: 8,
     signed: true,
     fields: [
@@ -1383,7 +1383,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'IMM_u16',
     name: '16-bit Unsigned Immediate Value',
-    type: InstructionDataType.Immediate,
+    type: InstructionDataTypes.Immediate,
     size: 16,
     fields: [
       {
@@ -1396,7 +1396,7 @@ export const operands: OpcodeMatcher[] = [
   {
     identifier: 'IMM_i16',
     name: '16-bit Signed Immediate Value',
-    type: InstructionDataType.Immediate,
+    type: InstructionDataTypes.Immediate,
     size: 16,
     signed: true,
     fields: [
@@ -1418,7 +1418,7 @@ export const operands: OpcodeMatcher[] = [
         size: 32,
       },
     ],
-    type: InstructionDataType.Immediate,
+    type: InstructionDataTypes.Immediate,
     size: 32,
   },
 ];

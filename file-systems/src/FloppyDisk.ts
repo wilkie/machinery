@@ -1,23 +1,25 @@
 import NativeStream from './NativeStream.js';
 import NativeFile from './NativeFile.js';
 import NativeDirectory from './NativeDirectory.js';
-import Drive, { DriveType, MediaType } from './Drive.js';
+import Drive, { DriveTypes, MediaTypes } from './Drive.js';
 import { File, Directory, Stream, type Stat } from '@machinery/core';
 
 export const FloppyDiskTypes = {
   Unknown: 'unknown',
-}
+};
 
-export type FloppyDiskType = typeof FloppyDiskTypes[keyof typeof FloppyDiskTypes];
+export type FloppyDiskType =
+  (typeof FloppyDiskTypes)[keyof typeof FloppyDiskTypes];
 
 export const FileSystemTypes = {
   Raw: 'raw',
   FAT12: 'fat12',
   FAT16: 'fat16',
   FAT32: 'fat32',
-}
+};
 
-export type FileSystemType = typeof FileSystemTypes[keyof typeof FileSystemTypes];
+export type FileSystemType =
+  (typeof FileSystemTypes)[keyof typeof FileSystemTypes];
 
 export interface DirectoryEntry {
   filename: string;
@@ -537,8 +539,8 @@ export class FloppyDisk {
 
     return new Drive(
       root.name,
-      DriveType.ContainedStorage,
-      MediaType.Floppy,
+      DriveTypes.ContainedStorage,
+      MediaTypes.Floppy,
       root,
     );
   }

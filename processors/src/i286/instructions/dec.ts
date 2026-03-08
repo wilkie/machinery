@@ -1,5 +1,5 @@
 import type { InstructionInfo } from '@machinery/core';
-import { InstructionDataType, InstructionOperandType } from '@machinery/core';
+import { InstructionDataTypes, InstructionOperandTypes } from '@machinery/core';
 
 import { Opcodes } from '../opcodes';
 
@@ -153,7 +153,7 @@ export const dec: InstructionInfo = {
         {
           identifier: 'OpcodeRM',
           name: 'DEC Opcode Field',
-          type: InstructionDataType.Operand,
+          type: InstructionDataTypes.Operand,
           size: 8,
           fields: [
             {
@@ -166,7 +166,7 @@ export const dec: InstructionInfo = {
               identifier: 'rm',
               offset: 0,
               size: 3,
-              type: InstructionOperandType.Register,
+              type: InstructionOperandTypes.Register,
             },
           ],
         },

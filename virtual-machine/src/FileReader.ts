@@ -1,5 +1,5 @@
-import type { FileFormat } from '@rawrs/architecture';
-import Stream from '@rawrs/file-system/Stream';
+import type { FileFormat } from '@machinery/core';
+import { Stream } from '@machinery/core';
 
 export interface FileObject {
   [key: string]: string;

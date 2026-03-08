@@ -1,4 +1,4 @@
-import type { Executable, FileFormat } from '@rawrs/architecture';
+import type { Executable, FileFormat } from '@machinery/core';
 
 /**
  * Defines the DOS COM executable file format.

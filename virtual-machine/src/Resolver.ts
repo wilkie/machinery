@@ -6,7 +6,7 @@ import type {
   MemoryRegionSubdividedField,
   BaseOffsettableMemoryRegion,
   Target,
-} from '@rawrs/architecture/Target';
+} from '@machinery/core';
 
 import type VirtualMachine from './VirtualMachine';
 

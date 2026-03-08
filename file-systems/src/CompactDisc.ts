@@ -1,17 +1,20 @@
 import NativeStream from './NativeStream.js';
 import NativeFile from './NativeFile.js';
 import NativeDirectory from './NativeDirectory.js';
-import Drive, { DriveType, MediaType } from './Drive.js';
+import Drive, { DriveTypes, MediaTypes } from './Drive.js';
 import { File, Stream, type Stat } from '@machinery/core';
 
-export enum CompactDiscTrackMode {
-  Unknown,
-  LeadIn,
-  LeadOut,
-  Audio,
-  Mode1,
-  Mode2,
-}
+export const CompactDiscTrackModes = {
+  Unknown: 'unknown',
+  LeadIn: 'lead-in',
+  LeadOut: 'lead-out',
+  Audio: 'audio',
+  Mode1: 'mode-1',
+  Mode2: 'mode-2',
+} as const;
+
+export type CompactDiscTrackMode =
+  (typeof CompactDiscTrackModes)[keyof typeof CompactDiscTrackModes];
 
 export type CompactDiscTrackInfo = {
   number: number;
@@ -84,23 +87,29 @@ export type CompactDiscDirectoryEntry = {
   offset?: number;
 };
 
-export enum CompactDiscVolumeType {
-  BootRecord = 0,
-  Primary = 1,
-  Supplementary = 2,
-  Partition = 3,
-  Terminator = 255,
-}
+export const CompactDiscVolumeTypes = {
+  BootRecord: 0,
+  Primary: 1,
+  Supplementary: 2,
+  Partition: 3,
+  Terminator: 255,
+} as const;
 
-export enum CompactDiscFileFlags {
-  Hidden = 0x1,
-  Directory = 0x2,
-  Associated = 0x04,
-  Record = 0x8,
-  HasOwner = 0x10,
-  HasExtendedAttributes = 0x20,
-  NotFinalDirectory = 0x80,
-}
+export type CompactDiscVolumeType =
+  (typeof CompactDiscVolumeTypes)[keyof typeof CompactDiscVolumeTypes];
+
+export const CompactDiscFileFlags = {
+  Hidden: 0x1,
+  Directory: 0x2,
+  Associated: 0x04,
+  Record: 0x8,
+  HasOwner: 0x10,
+  HasExtendedAttributes: 0x20,
+  NotFinalDirectory: 0x80,
+} as const;
+
+export type CompactDiscFileFlag =
+  (typeof CompactDiscFileFlags)[keyof typeof CompactDiscFileFlags];
 
 // The number of 'empty' sectors to expect in some images
 const EMPTY_BOOT_SECTORS = 16;
@@ -472,17 +481,19 @@ export class CompactDisc {
   static filterDataTracks(info: CompactDiscInfo): CompactDiscTrackInfo[] {
     return info.tracks.filter(
       (track) =>
-        ![
-          CompactDiscTrackMode.Audio,
-          CompactDiscTrackMode.LeadIn,
-          CompactDiscTrackMode.LeadOut,
-        ].includes(track.mode),
+        !(
+          [
+            CompactDiscTrackModes.Audio,
+            CompactDiscTrackModes.LeadIn,
+            CompactDiscTrackModes.LeadOut,
+          ] as CompactDiscTrackMode[]
+        ).includes(track.mode),
     );
   }
 
   static filterAudioTracks(info: CompactDiscInfo): CompactDiscTrackInfo[] {
     return info.tracks.filter(
-      (track) => track.mode === CompactDiscTrackMode.Audio,
+      (track) => track.mode === CompactDiscTrackModes.Audio,
     );
   }
 
@@ -524,7 +535,7 @@ export class CompactDisc {
   }
 
   async openAudio(trackNumber: number): Promise<CompactDiscAudio | undefined> {
-    if (this.trackInfoFor(trackNumber)?.mode !== CompactDiscTrackMode.Audio) {
+    if (this.trackInfoFor(trackNumber)?.mode !== CompactDiscTrackModes.Audio) {
       return undefined;
     }
 
@@ -615,8 +626,8 @@ export class CompactDisc {
 
       return new Drive(
         dir.name,
-        DriveType.ContainedStorage,
-        MediaType.Optical,
+        DriveTypes.ContainedStorage,
+        MediaTypes.Optical,
         dir,
       );
     }
@@ -749,7 +760,7 @@ export class CompactDisc {
           };
 
           tracks[cue.track] ||= {
-            mode: CompactDiscTrackMode.Unknown,
+            mode: CompactDiscTrackModes.Unknown,
             number: cue.track,
             sectorSize: MINIMUM_SECTOR_SIZE,
             indexPoints: {},
@@ -763,16 +774,16 @@ export class CompactDisc {
           // 0xaa when bcd-decoded is 0x6e (100 + 10)
           if (cue.track === 0x6e) {
             // Lead-out
-            currentTrack.mode = CompactDiscTrackMode.LeadOut;
+            currentTrack.mode = CompactDiscTrackModes.LeadOut;
           } else if (cue.track === 0x00) {
             // Lead-out
-            currentTrack.mode = CompactDiscTrackMode.LeadIn;
+            currentTrack.mode = CompactDiscTrackModes.LeadIn;
           } else if (cue.mode === 0x01 || cue.mode === 0x21) {
             // Audio
-            currentTrack.mode = CompactDiscTrackMode.Audio;
+            currentTrack.mode = CompactDiscTrackModes.Audio;
           } else {
             // Data
-            currentTrack.mode = CompactDiscTrackMode.Mode2;
+            currentTrack.mode = CompactDiscTrackModes.Mode2;
           }
         }
       } else if (lastChunk === 'DAOX') {
@@ -869,8 +880,8 @@ export class CompactDisc {
         // We are adding a track to the current file
         const modeParts = value.split('/').map((part) => part.toUpperCase());
         const modeMap: { [key: string]: CompactDiscTrackMode } = {
-          AUDIO: CompactDiscTrackMode.Audio,
-          MODE1: CompactDiscTrackMode.Mode1,
+          AUDIO: CompactDiscTrackModes.Audio,
+          MODE1: CompactDiscTrackModes.Mode1,
         };
 
         const trackKey = parseInt(key).toString();
@@ -913,7 +924,7 @@ export class CompactDisc {
           COMPACT_DISC_AUDIO_BYTES_PER_SAMPLE;
 
         // Add 16 bytes to the initial data track
-        if (currentTrack.mode === CompactDiscTrackMode.Mode1) {
+        if (currentTrack.mode === CompactDiscTrackModes.Mode1) {
           currentTrack.indexPoints[number] += 16;
         }
       }
@@ -962,7 +973,7 @@ export class CompactDisc {
       tracks: [
         {
           number: 1,
-          mode: CompactDiscTrackMode.Unknown,
+          mode: CompactDiscTrackModes.Unknown,
           sectorSize: sectorSize,
           indexPoints: {
             '1': dataOffset,
@@ -993,7 +1004,7 @@ export class CompactDisc {
     for (const track of dataTracks) {
       // If our track mode is unknown, we have to try a few options
       let data = new Uint8Array([]);
-      if (track.mode === CompactDiscTrackMode.Unknown) {
+      if (track.mode === CompactDiscTrackModes.Unknown) {
         let sectorSizesToAttempt = [track.sectorSize];
         let attemptedAll = false;
         while (sectorSizesToAttempt.length > 0) {
@@ -1056,14 +1067,14 @@ export class CompactDisc {
       for (let i = 0; i < data.byteLength; i += sectorSize) {
         const volumeInfo = CompactDisc.parseVolumeDescriptor(data.slice(i));
         if (
-          volumeInfo.type === CompactDiscVolumeType.Primary &&
+          volumeInfo.type === CompactDiscVolumeTypes.Primary &&
           volumeInfo.identifier === 'CD001'
         ) {
           // This is a primary volume
           // (Some CompactDisc files specify more than one primary for some reason...
           // do not overwrite it when it is already set)
           primaryInfo ||= volumeInfo;
-        } else if (volumeInfo.type === CompactDiscVolumeType.Terminator) {
+        } else if (volumeInfo.type === CompactDiscVolumeTypes.Terminator) {
           // This contains a sentinel value to halt iteration
           break;
         }

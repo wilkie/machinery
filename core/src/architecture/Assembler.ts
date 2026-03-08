@@ -1,4 +1,4 @@
-import { ExtendedDataType } from './ExtendedDataType';
+import { ExtendedDataTypes } from './ExtendedDataType';
 import { AssemblyFile } from './AssemblyFile';
 import { ObjectFile } from './ObjectFile';
 import { ToolchainProcess } from './Process';
@@ -23,12 +23,12 @@ export abstract class Assembler extends ToolchainProcess<
     name: 'Generic Assembler',
     input: [
       {
-        type: ExtendedDataType.AssemblyData,
+        type: ExtendedDataTypes.AssemblyData,
       },
     ],
     output: [
       {
-        type: ExtendedDataType.ObjectData,
+        type: ExtendedDataTypes.ObjectData,
       },
     ],
   };

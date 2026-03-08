@@ -1,4 +1,4 @@
-import { RegisterType } from '@machinery/core';
+import { RegisterTypes } from '@machinery/core';
 import type { RegisterInfo } from '@machinery/core';
 
 export const registers: RegisterInfo[] = [
@@ -7,7 +7,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'AX',
     name: 'General A',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         global: true,
@@ -29,7 +29,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'CX',
     name: 'General C',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         global: true,
@@ -51,7 +51,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'DX',
     name: 'General D',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         global: true,
@@ -73,7 +73,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'BX',
     name: 'General B',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         global: true,
@@ -95,31 +95,31 @@ export const registers: RegisterInfo[] = [
     identifier: 'SP',
     name: 'Stack Pointer',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
   },
   {
     identifier: 'BP',
     name: 'Base Pointer',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
   },
   {
     identifier: 'SI',
     name: 'Source Index',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
   },
   {
     identifier: 'DI',
     name: 'Data Index',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
   },
   {
     identifier: 'IP',
     name: 'Instruction Pointer',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     get: {
       operation: ['IP = FETCH_IP - CS_BASE'],
     },
@@ -131,7 +131,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'FLAGS',
     name: 'CPU Flags',
     size: 32,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         global: true,
@@ -217,7 +217,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'ES',
     name: 'E Segment Selector',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         identifier: 'RPL',
@@ -238,7 +238,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'CS',
     name: 'Code Segment Selector',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         identifier: 'RPL',
@@ -263,7 +263,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'SS',
     name: 'Stack Segment Selector',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         identifier: 'RPL',
@@ -288,7 +288,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'DS',
     name: 'Data Segment Selector',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         identifier: 'RPL',
@@ -316,7 +316,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'FS',
     name: 'F Segment Selector',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         identifier: 'RPL',
@@ -337,7 +337,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'GS',
     name: 'G Segment Selector',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         identifier: 'RPL',
@@ -359,13 +359,13 @@ export const registers: RegisterInfo[] = [
     identifier: 'HS',
     name: 'Extra Register 1',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
   },
   {
     identifier: 'IS',
     name: 'Extra Register 2',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
   },
   // System registers
   // Machine Status Word (sometimes referred to as CR0)
@@ -373,7 +373,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'MSW',
     name: 'Machine Status Words',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         identifier: 'PE',
@@ -402,14 +402,14 @@ export const registers: RegisterInfo[] = [
     identifier: 'TR',
     name: 'Task Register',
     size: 16,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
   },
   // Data structure addresses
   {
     identifier: 'IDTR',
     name: 'IDT Register',
     size: 40,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         identifier: 'limit',
@@ -429,7 +429,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'GDTR',
     name: 'GDT Register',
     size: 40,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         identifier: 'limit',
@@ -449,7 +449,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'LDTR',
     name: 'LDT Register',
     size: 40,
-    type: RegisterType.Integer,
+    type: RegisterTypes.Integer,
     fields: [
       {
         identifier: 'limit',

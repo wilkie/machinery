@@ -19,9 +19,7 @@ function usage(): never {
   console.error();
   console.error(`Options:`);
   console.error(`  -t, --target <name>    Target processor (e.g. i286)`);
-  console.error(
-    `  -b, --backend <name>   Code backend (default: typescript)`,
-  );
+  console.error(`  -b, --backend <name>   Code backend (default: typescript)`);
   process.exit(1);
 }
 

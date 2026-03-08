@@ -1,5 +1,5 @@
 import type { InstructionInfo } from '@machinery/core';
-import { InstructionDataType } from '@machinery/core';
+import { InstructionDataTypes } from '@machinery/core';
 
 import { Opcodes } from '../opcodes';
 
@@ -102,13 +102,13 @@ export const jmp: InstructionInfo = {
         {
           identifier: 'NEW_IP',
           name: 'New IP Value',
-          type: InstructionDataType.Immediate,
+          type: InstructionDataTypes.Immediate,
           size: 16,
         },
         {
           identifier: 'NEW_CS',
           name: 'New CS Value',
-          type: InstructionDataType.Immediate,
+          type: InstructionDataTypes.Immediate,
           size: 16,
         },
       ],

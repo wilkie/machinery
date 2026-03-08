@@ -1,5 +1,5 @@
 import type { InstructionInfo } from '@machinery/core';
-import { InstructionDataType } from '@machinery/core';
+import { InstructionDataTypes } from '@machinery/core';
 
 import { Opcodes } from '../opcodes';
 
@@ -70,7 +70,7 @@ export const enter: InstructionInfo = {
         {
           identifier: 'LEVEL',
           name: 'LEVEL Immediate Value',
-          type: InstructionDataType.Immediate,
+          type: InstructionDataTypes.Immediate,
           size: 8,
         },
       ],

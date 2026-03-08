@@ -1,4 +1,4 @@
-import { ExtendedDataType } from './ExtendedDataType';
+import { ExtendedDataTypes } from './ExtendedDataType';
 import { ExecutableFile } from './ExecutableFile';
 import { ObjectFile } from './ObjectFile';
 import { AggregateToolchainProcess } from './Process';
@@ -23,12 +23,12 @@ export abstract class Linker extends AggregateToolchainProcess<
     name: 'Generic Linker',
     input: [
       {
-        type: ExtendedDataType.ObjectData,
+        type: ExtendedDataTypes.ObjectData,
       },
     ],
     output: [
       {
-        type: ExtendedDataType.ExecutableData,
+        type: ExtendedDataTypes.ExecutableData,
       },
     ],
   };

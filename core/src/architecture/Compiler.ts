@@ -1,4 +1,4 @@
-import { ExtendedDataType } from './ExtendedDataType';
+import { ExtendedDataTypes } from './ExtendedDataType';
 import { SourceFile } from './SourceFile';
 import { AssemblyFile } from './AssemblyFile';
 import { ObjectFile } from './ObjectFile';
@@ -21,15 +21,15 @@ export abstract class Compiler extends ToolchainProcess<
     name: 'Generic Compiler',
     input: [
       {
-        type: ExtendedDataType.SourceData,
+        type: ExtendedDataTypes.SourceData,
       },
     ],
     output: [
       {
-        type: ExtendedDataType.ExecutableData,
+        type: ExtendedDataTypes.ExecutableData,
       },
       {
-        type: ExtendedDataType.AssemblyData,
+        type: ExtendedDataTypes.AssemblyData,
       },
     ],
   };

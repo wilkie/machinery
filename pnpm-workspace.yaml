@@ -1,0 +1,12 @@
+packages:
+  - 'core'
+  - 'file-systems'
+  - 'virtual-machine'
+  - 'processors'
+  - 'devices'
+  - 'simulators'
+  - 'compilers'
+  - 'assemblers'
+  - 'formats'
+onlyBuiltDependencies:
+  - 'esbuild'

@@ -1,0 +1,29 @@
+import tseslint from 'typescript-eslint';
+import prettier from 'eslint-config-prettier';
+
+export default tseslint.config(
+  {
+    ignores: [
+      '**/dist/',
+      '**/node_modules/',
+      '**/.turbo/',
+      '**/coverage/',
+      '**/grammar.ts',
+      '**/Machine.ts',
+    ],
+  },
+  ...tseslint.configs.recommended,
+  prettier,
+  {
+    rules: {
+      // Allow underscore-prefixed unused vars (common pattern in this codebase)
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+        },
+      ],
+    },
+  },
+);

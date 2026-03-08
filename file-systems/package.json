@@ -1,0 +1,41 @@
+{
+  "name": "@machinery/file-systems",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./node": {
+      "types": "./dist/NodeDrive.d.ts",
+      "import": "./dist/NodeDrive.js",
+      "require": "./dist/NodeDrive.cjs"
+    },
+    "./zip": {
+      "types": "./dist/ZippedDrive.d.ts",
+      "import": "./dist/ZippedDrive.js",
+      "require": "./dist/ZippedDrive.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "jest --passWithNoTests",
+    "lint": "eslint src",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@machinery/core": "workspace:*",
+    "@zip.js/zip.js": "^2.7.63"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0"
+  },
+  "files": [
+    "dist"
+  ]
+}

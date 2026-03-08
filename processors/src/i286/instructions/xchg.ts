@@ -1,0 +1,169 @@
+import type { InstructionInfo } from '@machinery/core';
+import { InstructionDataType, InstructionOperandType } from '@machinery/core';
+
+import { Opcodes } from '../opcodes';
+
+// TODO: #13 for operand 0xffff
+export const xchg: InstructionInfo = {
+  identifier: 'xchg',
+  name: 'Exchange Memory / Register with Register',
+  description:
+    'The two operands are exchanged. The order of the operands is immaterial. `BUS` `LOCK` is asserted for the duration of the exchange, regardless of the presence or absence of the `LOCK` prefix or `IOPL`.',
+  modifies: [],
+  undefined: [],
+  locals: [
+    {
+      identifier: 'effective_address',
+      name: 'Effective Address',
+      size: 32,
+    },
+    {
+      identifier: 'tmp',
+      name: 'Temporary Value',
+      size: 16,
+    },
+  ],
+  forms: [
+    // 0x86 /r - XCHG eb, rb
+    // 0x86 /r - XCHG rb, eb
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+        'tmp = RAM:u8[effective_address]',
+        'RAM:u8[effective_address] = ${MOD_RM_REG8}',
+        '${MOD_RM_REG8} = tmp',
+      ],
+      opcode: [Opcodes.XCHG_EB_RB, 'ModRM_110_reg_00', 'DISP_i16'],
+      operandSize: 8,
+      cycles: 5,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+        'tmp = RAM:u8[effective_address]',
+        'RAM:u8[effective_address] = ${MOD_RM_REG8}',
+        '${MOD_RM_REG8} = tmp',
+      ],
+      opcode: [Opcodes.XCHG_EB_RB, 'ModRM_rm_reg_00'],
+      operandSize: 8,
+      cycles: 5,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'tmp = RAM:u8[effective_address]',
+        'RAM:u8[effective_address] = ${MOD_RM_REG8}',
+        '${MOD_RM_REG8} = tmp',
+      ],
+      opcode: [Opcodes.XCHG_EB_RB, 'ModRM_rm_reg_01', 'DISP_i8'],
+      operandSize: 8,
+      cycles: 5,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'tmp = RAM:u8[effective_address]',
+        'RAM:u8[effective_address] = ${MOD_RM_REG8}',
+        '${MOD_RM_REG8} = tmp',
+      ],
+      opcode: [Opcodes.XCHG_EB_RB, 'ModRM_rm_reg_10', 'DISP_i16'],
+      operandSize: 8,
+      cycles: 5,
+    },
+    {
+      operation: [
+        'tmp = ${MOD_RM_REG8}',
+        '${MOD_RM_REG8} = ${MOD_RM_RM8}',
+        '${MOD_RM_RM8} = tmp',
+      ],
+      opcode: [Opcodes.XCHG_EB_RB, 'ModRM_rm_reg_11'],
+      operandSize: 8,
+      cycles: 3,
+    },
+    // 0x87 /r - XCHG ew, rw
+    // 0x87 /r - XCHG rw, ew
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+        'tmp = RAM:u16[effective_address]',
+        'RAM:u16[effective_address] = ${MOD_RM_REG16}',
+        '${MOD_RM_REG16} = tmp',
+      ],
+      opcode: [Opcodes.XCHG_EW_RW, 'ModRM_110_reg_00', 'DISP_i16'],
+      operandSize: 16,
+      cycles: 5,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+        'tmp = RAM:u16[effective_address]',
+        'RAM:u16[effective_address] = ${MOD_RM_REG16}',
+        '${MOD_RM_REG16} = tmp',
+      ],
+      opcode: [Opcodes.XCHG_EW_RW, 'ModRM_rm_reg_00'],
+      operandSize: 16,
+      cycles: 5,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'tmp = RAM:u16[effective_address]',
+        'RAM:u16[effective_address] = ${MOD_RM_REG16}',
+        '${MOD_RM_REG16} = tmp',
+      ],
+      opcode: [Opcodes.XCHG_EW_RW, 'ModRM_rm_reg_01', 'DISP_i8'],
+      operandSize: 16,
+      cycles: 5,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'tmp = RAM:u16[effective_address]',
+        'RAM:u16[effective_address] = ${MOD_RM_REG16}',
+        '${MOD_RM_REG16} = tmp',
+      ],
+      opcode: [Opcodes.XCHG_EW_RW, 'ModRM_rm_reg_10', 'DISP_i16'],
+      operandSize: 16,
+      cycles: 5,
+    },
+    {
+      operation: [
+        'tmp = ${MOD_RM_REG16}',
+        '${MOD_RM_REG16} = ${MOD_RM_RM16}',
+        '${MOD_RM_RM16} = tmp',
+      ],
+      opcode: [Opcodes.XCHG_EW_RW, 'ModRM_rm_reg_11'],
+      operandSize: 16,
+      cycles: 3,
+    },
+    // 0x90+rw - XCHG AX, rw
+    // 0x90+rw - XCHG rw, AX
+    {
+      operation: ['tmp = AX', 'AX = ${MOD_RM_RM16}', '${MOD_RM_RM16} = tmp'],
+      opcode: [
+        {
+          identifier: 'XCHG',
+          name: 'XCHG ModRM Field',
+          type: InstructionDataType.Operand,
+          size: 8,
+          fields: [
+            {
+              identifier: 'opcode',
+              offset: 3,
+              size: 5,
+              match: 0b10010,
+            },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              type: InstructionOperandType.Register,
+            },
+          ],
+        },
+      ],
+      operandSize: 16,
+      cycles: 3,
+    },
+  ],
+};

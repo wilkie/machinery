@@ -1,0 +1,37 @@
+{
+  "name": "@machinery/simulators",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./i286": {
+      "types": "./dist/i286/index.d.ts",
+      "import": "./dist/i286/index.js",
+      "require": "./dist/i286/index.cjs"
+    }
+  },
+  "scripts": {
+    "build:generate": "machinery-vm --target i286 --backend typescript > src/i286/Machine.ts",
+    "build": "pnpm build:generate && tsup",
+    "test": "jest --passWithNoTests",
+    "test:i286": "node test/i286/test.js",
+    "lint": "eslint src",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@machinery/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@machinery/virtual-machine": "workspace:*"
+  },
+  "files": [
+    "dist"
+  ]
+}

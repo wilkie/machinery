@@ -1,0 +1,466 @@
+import type { InstructionInfo } from '@rawrs/architecture/Target';
+
+import { Opcodes } from '../opcodes';
+
+// #13 for offset 0xffff
+export const sub: InstructionInfo = {
+  identifier: 'sub',
+  name: 'Integer Subtraction',
+  description:
+    'The second operand is subtracted from the first operand, and the first operand is replaced with the result.\n\nWhen a byte-immediate value is subtracted from a word operand, the immediate value is first sign-extended.',
+  modifies: ['OF', 'SF', 'ZF', 'AF', 'PF', 'CF'],
+  undefined: [],
+  macros: {
+    ALU8_OP: [
+      'alu_result = a - b',
+      'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_SUB} | ${FLAG_OP_8BIT}',
+    ],
+    ALU16_OP: [
+      'alu_result = a - b',
+      'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_SUB} | ${FLAG_OP_16BIT}',
+    ],
+  },
+  locals: [
+    {
+      identifier: 'effective_address',
+      name: 'Effective Address',
+      size: 32,
+    },
+  ],
+  forms: [
+    // 0x28 /r - SUB eb, rb
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+        'a = RAM:u8[effective_address]',
+        'b = ${MOD_RM_REG8}',
+        '${ALU8_OP}',
+        'RAM:u8[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.SUB_EB_RB, 'ModRM_110_reg_00', 'DISP_i16'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+        'a = RAM:u8[effective_address]',
+        'b = ${MOD_RM_REG8}',
+        '${ALU8_OP}',
+        'RAM:u8[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.SUB_EB_RB, 'ModRM_rm_reg_00'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = RAM:u8[effective_address]',
+        'b = ${MOD_RM_REG8}',
+        '${ALU8_OP}',
+        'RAM:u8[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.SUB_EB_RB, 'ModRM_rm_reg_01', 'DISP_i8'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = RAM:u8[effective_address]',
+        'b = ${MOD_RM_REG8}',
+        '${ALU8_OP}',
+        'RAM:u8[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.SUB_EB_RB, 'ModRM_rm_reg_10', 'DISP_i16'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'a = ${MOD_RM_RM8}',
+        'b = ${MOD_RM_REG8}',
+        '${ALU8_OP}',
+        '${MOD_RM_RM8} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_EB_RB, 'ModRM_rm_reg_11'],
+      operandSize: 8,
+      cycles: 2,
+    },
+    // 0x29 /r - SUB ew, rw
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+        'a = RAM:u16[effective_address]',
+        'b = ${MOD_RM_REG16}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.SUB_EW_RW, 'ModRM_110_reg_00', 'DISP_i16'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+        'a = RAM:u16[effective_address]',
+        'b = ${MOD_RM_REG16}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.SUB_EW_RW, 'ModRM_rm_reg_00'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = RAM:u16[effective_address]',
+        'b = ${MOD_RM_REG16}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.SUB_EW_RW, 'ModRM_rm_reg_01', 'DISP_i8'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = RAM:u16[effective_address]',
+        'b = ${MOD_RM_REG16}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.SUB_EW_RW, 'ModRM_rm_reg_10', 'DISP_i16'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'a = ${MOD_RM_RM16}',
+        'b = ${MOD_RM_REG16}',
+        '${ALU16_OP}',
+        '${MOD_RM_RM16} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_EW_RW, 'ModRM_rm_reg_11'],
+      operandSize: 16,
+      cycles: 2,
+    },
+    // 0x2A /r - SUB rb, eb
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+        'a = ${MOD_RM_REG8}',
+        'b = RAM:u8[effective_address]',
+        '${ALU8_OP}',
+        '${MOD_RM_REG8} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_RB_EB, 'ModRM_110_reg_00', 'DISP_i16'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+        'a = ${MOD_RM_REG8}',
+        'b = RAM:u8[effective_address]',
+        '${ALU8_OP}',
+        '${MOD_RM_REG8} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_RB_EB, 'ModRM_rm_reg_00'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = ${MOD_RM_REG8}',
+        'b = RAM:u8[effective_address]',
+        '${ALU8_OP}',
+        '${MOD_RM_REG8} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_RB_EB, 'ModRM_rm_reg_01', 'DISP_i8'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = ${MOD_RM_REG8}',
+        'b = RAM:u8[effective_address]',
+        '${ALU8_OP}',
+        '${MOD_RM_REG8} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_RB_EB, 'ModRM_rm_reg_10', 'DISP_i16'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'a = ${MOD_RM_REG8}',
+        'b = ${MOD_RM_RM8}',
+        '${ALU8_OP}',
+        '${MOD_RM_REG8} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_RB_EB, 'ModRM_rm_reg_11'],
+      operandSize: 8,
+      cycles: 2,
+    },
+    // 0x2B /r - SUB rw, ew
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+        'a = ${MOD_RM_REG16}',
+        'b = RAM:u16[effective_address]',
+        '${ALU16_OP}',
+        '${MOD_RM_REG16} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_RW_EW, 'ModRM_110_reg_00', 'DISP_i16'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+        'a = ${MOD_RM_REG16}',
+        'b = RAM:u16[effective_address]',
+        '${ALU16_OP}',
+        '${MOD_RM_REG16} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_RW_EW, 'ModRM_rm_reg_00'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = ${MOD_RM_REG16}',
+        'b = RAM:u16[effective_address]',
+        '${ALU16_OP}',
+        '${MOD_RM_REG16} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_RW_EW, 'ModRM_rm_reg_01', 'DISP_i8'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = ${MOD_RM_REG16}',
+        'b = RAM:u16[effective_address]',
+        '${ALU16_OP}',
+        '${MOD_RM_REG16} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_RW_EW, 'ModRM_rm_reg_10', 'DISP_i16'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'a = ${MOD_RM_REG16}',
+        'b = ${MOD_RM_RM16}',
+        '${ALU16_OP}',
+        '${MOD_RM_REG16} = alu_result',
+      ],
+      opcode: [Opcodes.SUB_RW_EW, 'ModRM_rm_reg_11'],
+      operandSize: 16,
+      cycles: 2,
+    },
+    // 0x2C db - SUB AL, db
+    {
+      operation: ['a = AL', 'b = %{IMM}', '${ALU8_OP}', 'AL = alu_result'],
+      opcode: [Opcodes.SUB_AL_DB, 'IMM_u8'],
+      operandSize: 8,
+      cycles: 3,
+    },
+    // 0x2D dw - SUB AX, dw
+    {
+      operation: ['a = AX', 'b = %{IMM}', '${ALU16_OP}', 'AX = alu_result'],
+      opcode: [Opcodes.SUB_AX_DW, 'IMM_u16'],
+      operandSize: 16,
+      cycles: 3,
+    },
+    // 0x80 /5 db - SUB eb, db
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+        'a = RAM:u8[effective_address]',
+        'b = %{IMM}',
+        '${ALU8_OP}',
+        'RAM:u8[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EB_DB, 'ModRM_110_101_00', 'DISP_i16', 'IMM_u8'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+        'a = RAM:u8[effective_address]',
+        'b = %{IMM}',
+        '${ALU8_OP}',
+        'RAM:u8[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EB_DB, 'ModRM_rm_101_00', 'IMM_u8'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = RAM:u8[effective_address]',
+        'b = %{IMM}',
+        '${ALU8_OP}',
+        'RAM:u8[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EB_DB, 'ModRM_rm_101_01', 'DISP_i8', 'IMM_u8'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = RAM:u8[effective_address]',
+        'b = %{IMM}',
+        '${ALU8_OP}',
+        'RAM:u8[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EB_DB, 'ModRM_rm_101_10', 'DISP_i16', 'IMM_u8'],
+      operandSize: 8,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'a = ${MOD_RM_RM8}',
+        'b = %{IMM}',
+        '${ALU8_OP}',
+        '${MOD_RM_RM8} = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EB_DB, 'ModRM_rm_101_11', 'IMM_u8'],
+      operandSize: 8,
+      cycles: 3,
+    },
+    // 0x81 /5 dw - SUB ew, dw
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+        'a = RAM:u16[effective_address]',
+        'b = %{IMM}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EW_DW, 'ModRM_110_101_00', 'DISP_i16', 'IMM_u16'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+        'a = RAM:u16[effective_address]',
+        'b = %{IMM}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EW_DW, 'ModRM_rm_101_00', 'IMM_u16'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = RAM:u16[effective_address]',
+        'b = %{IMM}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EW_DW, 'ModRM_rm_101_01', 'DISP_i8', 'IMM_u16'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = RAM:u16[effective_address]',
+        'b = %{IMM}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EW_DW, 'ModRM_rm_101_10', 'DISP_i16', 'IMM_u16'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'a = ${MOD_RM_RM16}',
+        'b = %{IMM}',
+        '${ALU16_OP}',
+        '${MOD_RM_RM16} = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EW_DW, 'ModRM_rm_101_11', 'IMM_u16'],
+      operandSize: 16,
+      cycles: 3,
+    },
+    // 0x83 /5 db - SUB ew, db
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+        'a = RAM:u16[effective_address]',
+        'b = %{IMM}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EW_DB, 'ModRM_110_101_00', 'DISP_i16', 'IMM_i8'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+        'a = RAM:u16[effective_address]',
+        'b = %{IMM}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm_101_00', 'IMM_i8'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = RAM:u16[effective_address]',
+        'b = %{IMM}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm_101_01', 'DISP_i8', 'IMM_i8'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        'a = RAM:u16[effective_address]',
+        'b = %{IMM}',
+        '${ALU16_OP}',
+        'RAM:u16[effective_address] = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm_101_10', 'DISP_i16', 'IMM_i8'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      operation: [
+        'a = ${MOD_RM_RM16}',
+        'b = %{IMM}',
+        '${ALU16_OP}',
+        '${MOD_RM_RM16} = alu_result',
+      ],
+      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm_101_11', 'IMM_i8'],
+      operandSize: 16,
+      cycles: 3,
+    },
+  ],
+};

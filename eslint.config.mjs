@@ -29,6 +29,15 @@ export default tseslint.config(
           varsIgnorePattern: '^_',
         },
       ],
+      // Prefer const objects with 'as const' over enums
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'TSEnumDeclaration',
+          message:
+            'Use `const X = { ... } as const` with a derived type instead of enum.',
+        },
+      ],
     },
   },
 );

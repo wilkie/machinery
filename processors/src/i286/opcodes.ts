@@ -267,6 +267,7 @@ export enum Opcodes {
   IN_AX_DX = 0xed,
   OUT_DX_AL = 0xee,
   OUT_DX_AX = 0xef,
+  LOCK_PREFIX = 0xf0,
   REPNE_PREFIX = 0xf2,
   REP_PREFIX = 0xf3,
   HLT = 0xf4,

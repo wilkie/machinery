@@ -15,7 +15,7 @@ export const sldt: InstructionInfo = {
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LTR_STR_LLDT_SLDT_VERR_VERW,
-        'ModRM_110_010_00',
+        'ModRM_110_000_00',
         'DISP_i16',
       ],
       operation: [
@@ -28,7 +28,7 @@ export const sldt: InstructionInfo = {
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LTR_STR_LLDT_SLDT_VERR_VERW,
-        'ModRM_rm_010_00',
+        'ModRM_rm_000_00',
       ],
       operation: [
         // Raise #6 in real mode
@@ -40,7 +40,7 @@ export const sldt: InstructionInfo = {
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LTR_STR_LLDT_SLDT_VERR_VERW,
-        'ModRM_rm_010_01',
+        'ModRM_rm_000_01',
         'DISP_i8',
       ],
       operation: [
@@ -53,7 +53,7 @@ export const sldt: InstructionInfo = {
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LTR_STR_LLDT_SLDT_VERR_VERW,
-        'ModRM_rm_010_10',
+        'ModRM_rm_000_10',
         'DISP_i16',
       ],
       operation: [
@@ -66,7 +66,7 @@ export const sldt: InstructionInfo = {
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LTR_STR_LLDT_SLDT_VERR_VERW,
-        'ModRM_rm_010_11',
+        'ModRM_rm_000_11',
       ],
       operation: [
         // Raise #6 in real mode

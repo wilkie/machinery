@@ -60,6 +60,7 @@ import { lgdt } from './instructions/lgdt';
 import { lidt } from './instructions/lidt';
 import { lldt } from './instructions/lldt';
 import { lmsw } from './instructions/lmsw';
+import { lock } from './instructions/lock';
 import { lods } from './instructions/lods';
 import { loop } from './instructions/loop';
 import { loope } from './instructions/loope';
@@ -174,7 +175,7 @@ export const instructions: InstructionInfo[] = [
   lidt,
   lldt,
   lmsw,
-  //lock,
+  lock,
   lods,
   loop,
   loope,

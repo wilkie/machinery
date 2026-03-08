@@ -1409,10 +1409,10 @@ export default class Machine {
                 this.mem8[20] = (this.mem8[20] & ~0x1) | (this.mem8[116] & 0x1)
                 this.interrupt(6)
               }
-              else if ((b2 & 0xff) === 0x16) {
+              else if ((b2 & 0xff) === 0x6) {
                 // 15
                 // 0
-                // ModRM_110_010_00
+                // ModRM_110_000_00
                 // DISP_i16
                 b3 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
                 _ip += 2;
@@ -1421,19 +1421,19 @@ export default class Machine {
                 this.mem32[30] = this.mem32[30] + 0x5
                 this.interrupt(6)
               }
-              else if ((b2 & 0xf8) === 0x10) {
+              else if ((b2 & 0xf8) === 0x0) {
                 // 15
                 // 0
-                // ModRM_rm_010_00
+                // ModRM_rm_000_00
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // IP += 0x3
                 this.mem32[30] = this.mem32[30] + 0x3
                 this.interrupt(6)
               }
-              else if ((b2 & 0xf8) === 0x50) {
+              else if ((b2 & 0xf8) === 0x40) {
                 // 15
                 // 0
-                // ModRM_rm_010_01
+                // ModRM_rm_000_01
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // DISP_i8
                 b3 = this.mem8[_ip];
@@ -1443,10 +1443,10 @@ export default class Machine {
                 this.mem32[30] = this.mem32[30] + 0x4
                 this.interrupt(6)
               }
-              else if ((b2 & 0xf8) === 0x90) {
+              else if ((b2 & 0xf8) === 0x80) {
                 // 15
                 // 0
-                // ModRM_rm_010_10
+                // ModRM_rm_000_10
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // DISP_i16
                 b3 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
@@ -1456,10 +1456,10 @@ export default class Machine {
                 this.mem32[30] = this.mem32[30] + 0x5
                 this.interrupt(6)
               }
-              else if ((b2 & 0xf8) === 0xd0) {
+              else if ((b2 & 0xf8) === 0xc0) {
                 // 15
                 // 0
-                // ModRM_rm_010_11
+                // ModRM_rm_000_11
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // IP += 0x3
                 this.mem32[30] = this.mem32[30] + 0x3
@@ -14009,6 +14009,11 @@ export default class Machine {
           this.mem32[30] = this.mem32[30] + 0x1
           if ((416 + this.mem16[2]) & 0x1) { const _value = this.mem16[0]; this.mem8[(416 + this.mem16[2])] = _value; this.mem8[((416 + this.mem16[2])) + 1] = _value >> 8; } else { this.mem16[((416 + this.mem16[2])) >> 1] = this.mem16[0]; }
           break outer;
+        case 0xf0:
+          // 240
+          // IP += 0x1
+          this.mem32[30] = this.mem32[30] + 0x1
+          continue outer;
         case 0xf2:
           // 242
           // IP += 0x1
@@ -17121,10 +17126,10 @@ export default class Machine {
                 this.mem8[20] = (this.mem8[20] & ~0x1) | (this.mem8[116] & 0x1)
                 this.interrupt(6)
               }
-              else if ((b2 & 0xff) === 0x16) {
+              else if ((b2 & 0xff) === 0x6) {
                 // 15
                 // 0
-                // ModRM_110_010_00
+                // ModRM_110_000_00
                 // DISP_i16
                 b3 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
                 _ip += 2;
@@ -17133,19 +17138,19 @@ export default class Machine {
                 this.mem32[30] = this.mem32[30] + 0x5
                 this.interrupt(6)
               }
-              else if ((b2 & 0xf8) === 0x10) {
+              else if ((b2 & 0xf8) === 0x0) {
                 // 15
                 // 0
-                // ModRM_rm_010_00
+                // ModRM_rm_000_00
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // IP += 0x3
                 this.mem32[30] = this.mem32[30] + 0x3
                 this.interrupt(6)
               }
-              else if ((b2 & 0xf8) === 0x50) {
+              else if ((b2 & 0xf8) === 0x40) {
                 // 15
                 // 0
-                // ModRM_rm_010_01
+                // ModRM_rm_000_01
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // DISP_i8
                 b3 = this.mem8[_ip];
@@ -17155,10 +17160,10 @@ export default class Machine {
                 this.mem32[30] = this.mem32[30] + 0x4
                 this.interrupt(6)
               }
-              else if ((b2 & 0xf8) === 0x90) {
+              else if ((b2 & 0xf8) === 0x80) {
                 // 15
                 // 0
-                // ModRM_rm_010_10
+                // ModRM_rm_000_10
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // DISP_i16
                 b3 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
@@ -17168,10 +17173,10 @@ export default class Machine {
                 this.mem32[30] = this.mem32[30] + 0x5
                 this.interrupt(6)
               }
-              else if ((b2 & 0xf8) === 0xd0) {
+              else if ((b2 & 0xf8) === 0xc0) {
                 // 15
                 // 0
-                // ModRM_rm_010_11
+                // ModRM_rm_000_11
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // IP += 0x3
                 this.mem32[30] = this.mem32[30] + 0x3
@@ -29722,6 +29727,11 @@ export default class Machine {
           this.mem32[30] = this.mem32[30] + 0x1
           if ((416 + this.mem16[2]) & 0x1) { const _value = this.mem16[0]; this.mem8[(416 + this.mem16[2])] = _value; this.mem8[((416 + this.mem16[2])) + 1] = _value >> 8; } else { this.mem16[((416 + this.mem16[2])) >> 1] = this.mem16[0]; }
           break outer;
+        case 0xf0:
+          // 240
+          // IP += 0x1
+          this.mem32[30] = this.mem32[30] + 0x1
+          continue outer;
         case 0xf2:
           // 242
           // IP += 0x1

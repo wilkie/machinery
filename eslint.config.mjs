@@ -10,6 +10,7 @@ export default tseslint.config(
       '**/coverage/',
       '**/grammar.ts',
       '**/Machine.ts',
+      'assemblers/src/i286/',
       '**/*.inc',
       '**/*.asm',
       '**/*.dsm',

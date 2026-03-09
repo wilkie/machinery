@@ -26,6 +26,7 @@ export const pushf: InstructionInfo = {
     // 0x9C - PUSHF
     {
       opcode: [Opcodes.PUSHF],
+      operands: [],
       operation: [
         '${RESOLVE_FLAGS}',
         'tmp = SP - 2',

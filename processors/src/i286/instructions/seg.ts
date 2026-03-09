@@ -12,21 +12,29 @@ export const seg: InstructionInfo = {
   forms: [
     {
       opcode: [Opcodes.ES_SEG_PREFIX],
+      operands: [],
+      segmentOverride: 'ES',
       operation: ['DATA_SEG_BASE = ES_BASE'],
       finalize: ['DATA_SEG_BASE = 0xffff'],
     },
     {
       opcode: [Opcodes.CS_SEG_PREFIX],
+      operands: [],
+      segmentOverride: 'CS',
       operation: ['DATA_SEG_BASE = CS_BASE'],
       finalize: ['DATA_SEG_BASE = 0xffff'],
     },
     {
       opcode: [Opcodes.SS_SEG_PREFIX],
+      operands: [],
+      segmentOverride: 'SS',
       operation: ['DATA_SEG_BASE = SS_BASE'],
       finalize: ['DATA_SEG_BASE = 0xffff'],
     },
     {
       opcode: [Opcodes.DS_SEG_PREFIX],
+      operands: [],
+      segmentOverride: 'DS',
       operation: ['DATA_SEG_BASE = DS_BASE'],
       finalize: ['DATA_SEG_BASE = 0xffff'],
     },

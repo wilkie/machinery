@@ -26,6 +26,7 @@ export const popf: InstructionInfo = {
     // 0x9D - POPF
     {
       opcode: [Opcodes.POPF],
+      operands: [],
       operation: [
         'stack_address = SS_BASE + SP',
         'value = RAM:u16[stack_address]',

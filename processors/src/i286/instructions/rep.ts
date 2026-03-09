@@ -16,6 +16,7 @@ export const rep: InstructionInfo = {
       // 0xF3 REP
       // 0xF3 REPE
       opcode: [Opcodes.REP_PREFIX],
+      operands: [],
       operation: ['REP = 1'],
       finalize: ['REP = 0'],
     },

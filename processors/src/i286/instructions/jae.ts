@@ -13,6 +13,7 @@ export const jae: InstructionInfo = {
     {
       operation: ['${RESOLVE_CF}', 'IP = (CARRY == 0) ? IP + %{IMM} : IP'],
       opcode: [Opcodes.JAE, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

@@ -23,6 +23,7 @@ export const das: InstructionInfo = {
     // 0x2F - DAS
     {
       opcode: [Opcodes.DAS],
+      operands: [],
       operation: [
         // Compute the AF flag from the last ALU op
         '${RESOLVE_FLAGS}',

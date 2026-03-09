@@ -78,18 +78,21 @@ export const int: InstructionInfo = {
     // 0xCC - INT 3
     {
       opcode: [Opcodes.INT_3],
+      operands: [],
       operation: ['${RESOLVE_FLAGS}', '#3'],
       cycles: 23, // protected-mode: 40 to same privilege, 78 raised privilege, 167 if via task gate
     },
     // 0xCD - INT db
     {
       opcode: [Opcodes.INT_DB, 'IMM_u8'],
+      operands: ['imm'],
       operation: ['${RESOLVE_FLAGS}', '#%{IMM}'],
       cycles: 23, // protected-mode: 40 to same privilege, 78 raised privilege, 167 if via task gate
     },
     // 0xCE - INTO
     {
       opcode: [Opcodes.INTO],
+      operands: [],
       operation: ['${RESOLVE_FLAGS}', '#4 if OF > 0x0'],
       cycles: 24, // 3, if no jump occurs
     },

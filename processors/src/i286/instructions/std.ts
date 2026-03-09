@@ -13,6 +13,7 @@ export const std: InstructionInfo = {
     // 0xFD - STD
     {
       opcode: [Opcodes.STD],
+      operands: [],
       operation: ['DF = 1'],
       cycles: 2,
     },

@@ -19,6 +19,7 @@ export const sgdt: InstructionInfo = {
         'ModRM_110_000_00',
         'DISP_i16',
       ],
+      operands: ['rm'],
       operation: [
         // Raise #6 in real mode
         '#6',
@@ -31,6 +32,7 @@ export const sgdt: InstructionInfo = {
         SystemOpcodes.SGDT_SIDT_LMSW_SMSW_LGDT_LIDT,
         'ModRM_rm_000_00',
       ],
+      operands: ['rm'],
       operation: [
         // Raise #6 in real mode
         '#6',
@@ -44,6 +46,7 @@ export const sgdt: InstructionInfo = {
         'ModRM_rm_000_01',
         'DISP_i8',
       ],
+      operands: ['rm'],
       operation: [
         // Raise #6 in real mode
         '#6',
@@ -57,6 +60,7 @@ export const sgdt: InstructionInfo = {
         'ModRM_rm_000_10',
         'DISP_i16',
       ],
+      operands: ['rm'],
       operation: [
         // Raise #6 in real mode
         '#6',
@@ -67,8 +71,9 @@ export const sgdt: InstructionInfo = {
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.SGDT_SIDT_LMSW_SMSW_LGDT_LIDT,
-        'ModRM_rm_000_11',
+        'ModRM_rm16_000_11',
       ],
+      operands: ['rm'],
       operation: [
         // Raise #UD (register source not allowed)
         '#6',

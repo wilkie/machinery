@@ -21,6 +21,7 @@ export const popa: InstructionInfo = {
     // 0x61 - POPA
     {
       opcode: [Opcodes.POPA],
+      operands: [],
       operation: [
         'SP = SP + 0x10',
         'stack_address = SS_BASE + SP',

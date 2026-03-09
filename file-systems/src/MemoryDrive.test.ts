@@ -4,7 +4,7 @@ import {
   MemoryDirectory,
   MemoryStream,
 } from './MemoryDrive.js';
-import { DriveType, MediaType } from './Drive.js';
+import { DriveTypes, MediaTypes } from './Drive.js';
 
 describe('MemoryDrive', () => {
   it('creates a drive with the given name', () => {
@@ -14,8 +14,8 @@ describe('MemoryDrive', () => {
 
   it('has TemporaryStorage type and Fixed media type', () => {
     const drive = new MemoryDrive('test');
-    expect(drive.type).toBe(DriveType.TemporaryStorage);
-    expect(drive.mediaType).toBe(MediaType.Fixed);
+    expect(drive.type).toBe(DriveTypes.TemporaryStorage);
+    expect(drive.mediaType).toBe(MediaTypes.Fixed);
   });
 
   it('has a root directory', () => {

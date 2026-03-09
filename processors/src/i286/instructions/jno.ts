@@ -13,6 +13,7 @@ export const jno: InstructionInfo = {
     {
       operation: ['${RESOLVE_OF}', 'IP = (OF == 0) ? IP + %{IMM} : IP'],
       opcode: [Opcodes.JNO, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

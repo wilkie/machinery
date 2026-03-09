@@ -19,6 +19,7 @@ export const jbe: InstructionInfo = {
         'IP = (CARRY == 1 || ZF == 1) ? IP + %{IMM} : IP',
       ],
       opcode: [Opcodes.JBE, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

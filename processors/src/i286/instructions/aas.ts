@@ -18,6 +18,7 @@ export const aas: InstructionInfo = {
   forms: [
     {
       opcode: [Opcodes.AAS],
+      operands: [],
       operation: [
         // Compute the AF flag from the last ALU op
         '${RESOLVE_AF}',

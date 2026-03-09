@@ -13,6 +13,7 @@ export const cmc: InstructionInfo = {
     // 0xF5 - CMC
     {
       opcode: [Opcodes.CMC],
+      operands: [],
       operation: [
         'CF = ~CF',
         'CARRY = CF',

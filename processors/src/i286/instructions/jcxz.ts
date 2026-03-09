@@ -14,6 +14,7 @@ export const jcxz: InstructionInfo = {
     {
       operation: ['IP = (CX == 0) ? IP + %{IMM} : IP'],
       opcode: [Opcodes.JCXZ, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 4, // 8 if jumped
     },

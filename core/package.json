@@ -16,7 +16,8 @@
     "build": "tsup",
     "test": "jest --passWithNoTests",
     "lint": "eslint src",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
   },
   "files": [
     "dist"

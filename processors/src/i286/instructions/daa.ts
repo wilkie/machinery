@@ -23,6 +23,7 @@ export const daa: InstructionInfo = {
     // 0x27 - DAA
     {
       opcode: [Opcodes.DAA],
+      operands: [],
       operation: [
         // Compute the AF flag from the last ALU op
         '${RESOLVE_FLAGS}',

@@ -19,6 +19,7 @@ export const aaa: InstructionInfo = {
     // 0x37 - AAA
     {
       opcode: [Opcodes.AAA],
+      operands: [],
       operation: [
         // Compute the AF flag from the last ALU op
         '${RESOLVE_AF}',

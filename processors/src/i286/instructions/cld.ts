@@ -13,6 +13,7 @@ export const cld: InstructionInfo = {
     // 0xFC - CLD
     {
       opcode: [Opcodes.CLD],
+      operands: [],
       operation: ['DF = 0'],
       cycles: 2,
     },

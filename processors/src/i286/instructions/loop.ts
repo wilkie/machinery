@@ -14,6 +14,7 @@ export const loop: InstructionInfo = {
     {
       operation: ['CX = CX - 1', 'IP = (CX != 0) ? IP + %{IMM} : IP'],
       opcode: [Opcodes.LOOP, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 16,
       cycles: 4, // 8 if jumped
     },

@@ -16,6 +16,7 @@ export const jb: InstructionInfo = {
     {
       operation: ['${RESOLVE_CF}', 'IP = (CARRY == 1) ? IP + %{IMM} : IP'],
       opcode: [Opcodes.JB, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

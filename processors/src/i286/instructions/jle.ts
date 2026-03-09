@@ -20,6 +20,7 @@ export const jle: InstructionInfo = {
         'IP = (ZF == 1 || SF != OF) ? IP + %{IMM} : IP',
       ],
       opcode: [Opcodes.JLE, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

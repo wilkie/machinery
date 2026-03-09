@@ -74,6 +74,7 @@ export const enter: InstructionInfo = {
           size: 8,
         },
       ],
+      operands: ['imm', 'level'],
       operandSize: 16,
       cycles: 12,
     },

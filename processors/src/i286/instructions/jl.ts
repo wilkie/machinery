@@ -19,6 +19,7 @@ export const jl: InstructionInfo = {
         'IP = (SF != OF) ? IP + %{IMM} : IP',
       ],
       opcode: [Opcodes.JL, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

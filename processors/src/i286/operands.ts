@@ -4,7 +4,7 @@ import type { OpcodeMatcher } from '@machinery/core';
 export const operands: OpcodeMatcher[] = [
   // ModRM block special case where mod == 0b00 and rm == 0b110
   {
-    identifier: 'ModRM_110_reg_00',
+    identifier: 'ModRM_110_reg8_00',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -20,6 +20,35 @@ export const operands: OpcodeMatcher[] = [
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b00,
+      },
+    ],
+  },
+  // ModRM block special case where mod == 0b00 and rm == 0b110
+  {
+    identifier: 'ModRM_110_reg16_00',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        match: 0b110,
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'mod',
@@ -31,7 +60,7 @@ export const operands: OpcodeMatcher[] = [
   },
   // ModRM block where mod == 0b00
   {
-    identifier: 'ModRM_rm_reg_00',
+    identifier: 'ModRM_rm_reg8_00',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -40,12 +69,44 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', null, 'BX'],
       },
       {
         identifier: 'reg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b00,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b00
+  {
+    identifier: 'ModRM_rm_reg16_00',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', null, 'BX'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'mod',
@@ -57,7 +118,7 @@ export const operands: OpcodeMatcher[] = [
   },
   // ModRM block where mod == 0b01
   {
-    identifier: 'ModRM_rm_reg_01',
+    identifier: 'ModRM_rm_reg8_01',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -66,12 +127,44 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
       },
       {
         identifier: 'reg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b01,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b01
+  {
+    identifier: 'ModRM_rm_reg16_01',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'mod',
@@ -83,7 +176,7 @@ export const operands: OpcodeMatcher[] = [
   },
   // ModRM block where mod == 0b10
   {
-    identifier: 'ModRM_rm_reg_10',
+    identifier: 'ModRM_rm_reg8_10',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -92,12 +185,44 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
       },
       {
         identifier: 'reg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b10,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b10
+  {
+    identifier: 'ModRM_rm_reg16_10',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'mod',
@@ -109,7 +234,7 @@ export const operands: OpcodeMatcher[] = [
   },
   // ModRM block where mod == 0b11
   {
-    identifier: 'ModRM_rm_reg_11',
+    identifier: 'ModRM_rm8_reg8_11',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -119,12 +244,43 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
       },
       {
         identifier: 'reg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b11,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b11
+  {
+    identifier: 'ModRM_rm16_reg16_11',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'mod',
@@ -152,6 +308,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['ES', 'CS', 'SS', 'DS', 'FS', 'GS'],
       },
       {
         identifier: 'mod',
@@ -172,12 +329,15 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', null, 'BX'],
       },
       {
         identifier: 'reg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['ES', 'CS', 'SS', 'DS', 'FS', 'GS'],
       },
       {
         identifier: 'mod',
@@ -198,12 +358,15 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
       },
       {
         identifier: 'reg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['ES', 'CS', 'SS', 'DS', 'FS', 'GS'],
       },
       {
         identifier: 'mod',
@@ -230,6 +393,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['ES', 'CS', 'SS', 'DS', 'FS', 'GS'],
       },
       {
         identifier: 'mod',
@@ -251,12 +415,14 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'reg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['ES', 'CS', 'SS', 'DS', 'FS', 'GS'],
       },
       {
         identifier: 'mod',
@@ -304,6 +470,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', null, 'BX'],
       },
       {
         identifier: 'reg',
@@ -330,6 +498,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
       },
       {
         identifier: 'reg',
@@ -373,7 +543,7 @@ export const operands: OpcodeMatcher[] = [
   },
   // ModRM block where mod == 0b11 and reg == 0b000
   {
-    identifier: 'ModRM_rm_000_11',
+    identifier: 'ModRM_rm8_000_11',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -383,6 +553,35 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        match: 0b000,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b11,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b11 and reg == 0b000
+  {
+    identifier: 'ModRM_rm16_000_11',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'reg',
@@ -436,6 +635,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', null, 'BX'],
       },
       {
         identifier: 'reg',
@@ -462,6 +663,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
       },
       {
         identifier: 'reg',
@@ -515,6 +718,35 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        match: 0b001,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b11,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b11 and reg == 0b001
+  {
+    identifier: 'ModRM_rm_001_11',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'reg',
@@ -568,6 +800,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', null, 'BX'],
       },
       {
         identifier: 'reg',
@@ -594,6 +828,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
       },
       {
         identifier: 'reg',
@@ -637,7 +873,7 @@ export const operands: OpcodeMatcher[] = [
   },
   // ModRM block where mod == 0b11 and reg == 0b010
   {
-    identifier: 'ModRM_rm_010_11',
+    identifier: 'ModRM_rm8_010_11',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -647,6 +883,35 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        match: 0b010,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b11,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b11 and reg == 0b010
+  {
+    identifier: 'ModRM_rm16_010_11',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'reg',
@@ -700,6 +965,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', null, 'BX'],
       },
       {
         identifier: 'reg',
@@ -726,6 +993,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
       },
       {
         identifier: 'reg',
@@ -769,7 +1038,7 @@ export const operands: OpcodeMatcher[] = [
   },
   // ModRM block where mod == 0b11 and reg == 0b011
   {
-    identifier: 'ModRM_rm_011_11',
+    identifier: 'ModRM_rm8_011_11',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -779,6 +1048,35 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        match: 0b011,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b11,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b11 and reg == 0b011
+  {
+    identifier: 'ModRM_rm16_011_11',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'reg',
@@ -832,6 +1130,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', null, 'BX'],
       },
       {
         identifier: 'reg',
@@ -858,6 +1158,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
       },
       {
         identifier: 'reg',
@@ -901,7 +1203,7 @@ export const operands: OpcodeMatcher[] = [
   },
   // ModRM block where mod == 0b11 and reg == 0b100
   {
-    identifier: 'ModRM_rm_100_11',
+    identifier: 'ModRM_rm8_100_11',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -911,6 +1213,35 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        match: 0b100,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b11,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b11 and reg == 0b100
+  {
+    identifier: 'ModRM_rm16_100_11',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'reg',
@@ -964,6 +1295,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', null, 'BX'],
       },
       {
         identifier: 'reg',
@@ -990,6 +1323,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
       },
       {
         identifier: 'reg',
@@ -1033,7 +1368,7 @@ export const operands: OpcodeMatcher[] = [
   },
   // ModRM block where mod == 0b11 and reg == 0b101
   {
-    identifier: 'ModRM_rm_101_11',
+    identifier: 'ModRM_rm8_101_11',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -1043,6 +1378,35 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        match: 0b101,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b11,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b11 and reg == 0b101
+  {
+    identifier: 'ModRM_rm16_101_11',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'reg',
@@ -1096,6 +1460,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', null, 'BX'],
       },
       {
         identifier: 'reg',
@@ -1122,6 +1488,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
       },
       {
         identifier: 'reg',
@@ -1165,7 +1533,7 @@ export const operands: OpcodeMatcher[] = [
   },
   // ModRM block where mod == 0b11 and reg == 0b110
   {
-    identifier: 'ModRM_rm_110_11',
+    identifier: 'ModRM_rm8_110_11',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -1175,6 +1543,35 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        match: 0b110,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b11,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b11 and reg == 0b110
+  {
+    identifier: 'ModRM_rm16_110_11',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'reg',
@@ -1228,6 +1625,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', null, 'BX'],
       },
       {
         identifier: 'reg',
@@ -1254,6 +1653,8 @@ export const operands: OpcodeMatcher[] = [
         identifier: 'rm',
         offset: 0,
         size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['BX + SI', 'BX + DI', 'BP + SI', 'BP + DI', 'SI', 'DI', 'BP', 'BX'],
       },
       {
         identifier: 'reg',
@@ -1297,7 +1698,7 @@ export const operands: OpcodeMatcher[] = [
   },
   // ModRM block where mod == 0b11 and reg == 0b111
   {
-    identifier: 'ModRM_rm_111_11',
+    identifier: 'ModRM_rm8_111_11',
     name: 'ModRM',
     type: InstructionDataTypes.Operand,
     size: 8,
@@ -1307,6 +1708,35 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        match: 0b111,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b11,
+      },
+    ],
+  },
+  // ModRM block where mod == 0b11 and reg == 0b111
+  {
+    identifier: 'ModRM_rm16_111_11',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
         identifier: 'reg',

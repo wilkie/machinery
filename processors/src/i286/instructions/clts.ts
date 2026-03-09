@@ -13,6 +13,7 @@ export const clts: InstructionInfo = {
     // 0x0F 0x06 CLTS
     {
       opcode: [Opcodes.SYSTEM, SystemOpcodes.CLTS],
+      operands: [],
       modes: {
         real: {
           operation: ['MSW.TS = 0'],

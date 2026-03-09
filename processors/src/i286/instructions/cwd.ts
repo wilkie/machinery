@@ -13,6 +13,7 @@ export const cwd: InstructionInfo = {
     // 0x99 - CWD
     {
       opcode: [Opcodes.CWD],
+      operands: [],
       operation: ['DX = (AX & 0x8000) > 0 ? 0xffff : 0x0'],
       cycles: 2,
     },

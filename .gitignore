@@ -3,3 +3,6 @@ dist/
 .turbo/
 *.tsbuildinfo
 coverage/
+
+# Generated assembler files
+assemblers/src/*/

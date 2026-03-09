@@ -153,10 +153,7 @@ export const InstructionOperandTypes = {
 export type InstructionOperandType =
   (typeof InstructionOperandTypes)[keyof typeof InstructionOperandTypes];
 
-/**
- * Describes a field and/or pattern to match against a bit stream.
- */
-export interface OpcodeMatcherField {
+export interface OpcodeMatcherFieldBase {
   /** The identifier used to refer to this field in code. */
   identifier: string;
   /** The name for this opcode field. */
@@ -167,11 +164,28 @@ export interface OpcodeMatcherField {
   size: number;
   /** Whether or not this field is interpreted as signed (2's complement). */
   signed?: boolean;
-  /** The type of information this subfield conveys, if any. */
-  type?: InstructionOperandType;
   /** Requires this field to match exactly the given number. */
   match?: number;
+  /** The encoding expected to map to the subfield value when assembled */
+  encoding?: string[];
 }
+
+export interface OpcodeMatcherFieldNonRegister extends OpcodeMatcherFieldBase {
+  /** The type of information this subfield conveys, if any. */
+  type?: Exclude<InstructionOperandType, typeof InstructionOperandTypes['Register']>;
+}
+
+export interface OpcodeMatcherFieldRegister extends OpcodeMatcherFieldBase {
+  /** Explicitly the 'register' opcode field type */
+  type: typeof InstructionOperandTypes['Register'];
+  /** The register names that this opcode field encodes */
+  encoding: string[];
+}
+
+/**
+ * Describes a field and/or pattern to match against a bit stream.
+ */
+export type OpcodeMatcherField = OpcodeMatcherFieldNonRegister | OpcodeMatcherFieldRegister;
 
 /**
  * A description of how to match a bytestream in order to identify a particular
@@ -266,6 +280,12 @@ export interface InstructionForm {
    */
   operandSize?: number;
   /**
+   * The assembly-syntax operands for this form, in Intel order (destination first).
+   * References field identifiers from OpcodeMatcher fields ('rm', 'reg', 'seg')
+   * and keywords: 'imm' (immediate), 'rel' (relative offset), 'ptr' (far pointer).
+   */
+  operands?: string[];
+  /**
    * An optional specific name for this form.
    */
   name?: string;
@@ -273,6 +293,12 @@ export interface InstructionForm {
    * An extended description detailing this form in particular.
    */
   description?: string;
+  /**
+   * If this form is a segment override prefix, the name of the segment register
+   * it overrides (e.g., 'ES', 'CS', 'SS', 'DS'). Used by assembler generators
+   * to emit the correct prefix byte when a memory operand specifies a segment.
+   */
+  segmentOverride?: string;
   /**
    * We might specify different values depending on mode.
    */

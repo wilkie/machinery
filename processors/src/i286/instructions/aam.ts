@@ -12,6 +12,7 @@ export const aam: InstructionInfo = {
   forms: [
     {
       opcode: [Opcodes.AAM, 'IMM_u8'],
+      operands: ['imm'],
       operation: [
         'AH = AL // IMM',
         'AL = AL % IMM',

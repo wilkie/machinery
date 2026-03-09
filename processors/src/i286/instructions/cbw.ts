@@ -13,6 +13,7 @@ export const cbw: InstructionInfo = {
     // 0x98 - CBW
     {
       opcode: [Opcodes.CBW],
+      operands: [],
       operation: ['AH = (AL & 0x80) > 0 ? 0xff : 0x00'],
       cycles: 2,
     },

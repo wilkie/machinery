@@ -96,6 +96,7 @@ export const iret: InstructionInfo = {
         'SP = SP + 6',
       ],
       opcode: [Opcodes.IRET],
+      operands: [],
       operandSize: 16,
       cycles: 17, // protected-mode: 31, 55 if lesser privilege, 169 if switching tasks (NT = 1)
     },

@@ -17,6 +17,7 @@ export const ja: InstructionInfo = {
         'IP = (CARRY == 0 && ZF == 0) ? IP + %{IMM} : IP',
       ],
       opcode: [Opcodes.JA, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

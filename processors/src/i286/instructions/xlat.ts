@@ -15,6 +15,7 @@ export const xlat: InstructionInfo = {
     // 0xD7 - XLAT
     {
       opcode: [Opcodes.XLAT],
+      operands: [],
       operation: ['AL = RAM:u8[DS_BASE + BX + AL]'],
       cycles: 5,
     },

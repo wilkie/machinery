@@ -12,14 +12,26 @@
       "require": "./dist/index.cjs"
     }
   },
+  "bin": {
+    "machinery-asm": "./dist/cli.js"
+  },
   "scripts": {
-    "build": "tsup",
+    "build:grammar": "nearleyc src/i286/intel/grammar.ne -o src/i286/intel/grammar.ts",
+    "build": "pnpm build:grammar && tsup",
     "test": "jest --passWithNoTests",
     "lint": "eslint src",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@machinery/core": "workspace:*"
+    "@machinery/core": "workspace:*",
+    "@machinery/processors": "workspace:*",
+    "moo": "^0.5.2",
+    "nearley": "^2.20.1"
+  },
+  "devDependencies": {
+    "@types/moo": "^0.5.10",
+    "@types/nearley": "^2.11.5",
+    "@types/node": "^22.15.0"
   },
   "files": [
     "dist"

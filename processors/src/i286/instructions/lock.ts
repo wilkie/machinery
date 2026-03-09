@@ -14,6 +14,7 @@ export const lock: InstructionInfo = {
     {
       // 0xF0 LOCK
       opcode: [Opcodes.LOCK_PREFIX],
+      operands: [],
       operation: [],
     },
   ],

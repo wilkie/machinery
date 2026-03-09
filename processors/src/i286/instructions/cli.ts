@@ -14,6 +14,7 @@ export const cli: InstructionInfo = {
     // 0xFA - CLI
     {
       opcode: [Opcodes.CLI],
+      operands: [],
       operation: ['${RESOLVE_FLAGS}', 'IF = 0'],
       cycles: 3,
     },

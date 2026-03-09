@@ -15,6 +15,7 @@ export const jnp: InstructionInfo = {
     {
       operation: ['${RESOLVE_PF}', 'IP = (PF == 0) ? IP + %{IMM} : IP'],
       opcode: [Opcodes.JNP, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

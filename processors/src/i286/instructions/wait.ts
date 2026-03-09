@@ -13,6 +13,7 @@ export const wait: InstructionInfo = {
     // 0x9B - WAIT
     {
       opcode: [Opcodes.WAIT],
+      operands: [],
       operation: [
         // No-op
       ],

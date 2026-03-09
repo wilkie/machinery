@@ -15,6 +15,7 @@ export const leave: InstructionInfo = {
     {
       operation: ['SP = BP + 2', 'BP = RAM:u16[SS_BASE + BP]'],
       opcode: [Opcodes.LEAVE],
+      operands: [],
       operandSize: 16,
       cycles: 5,
     },

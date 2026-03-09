@@ -13,6 +13,7 @@ export const lahf: InstructionInfo = {
     // 0x9F - LAHF
     {
       opcode: [Opcodes.LAHF],
+      operands: [],
       operation: ['${RESOLVE_FLAGS}', 'AH = FLAGS & 0xff'],
       cycles: 2,
     },

@@ -15,6 +15,7 @@ export const jp: InstructionInfo = {
     {
       operation: ['${RESOLVE_PF}', 'IP = (PF == 1) ? IP + %{IMM} : IP'],
       opcode: [Opcodes.JP, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

@@ -12,6 +12,7 @@ export const aad: InstructionInfo = {
   forms: [
     {
       opcode: [Opcodes.AAD, 'IMM_u8'],
+      operands: ['imm'],
       operation: [
         'AL = AL + (AH * IMM)',
         'AH = 0',

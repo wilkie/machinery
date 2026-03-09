@@ -13,6 +13,7 @@ export const js: InstructionInfo = {
     {
       operation: ['${RESOLVE_SF}', 'IP = (SF == 1) ? IP + %{IMM} : IP'],
       opcode: [Opcodes.JS, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

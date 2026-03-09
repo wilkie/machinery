@@ -13,6 +13,7 @@ export const nop: InstructionInfo = {
     // 0x90 - NOP
     {
       opcode: [Opcodes.NOP],
+      operands: [],
       operation: [],
       cycles: 3,
     },

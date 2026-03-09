@@ -31,6 +31,7 @@ export const ret: InstructionInfo = {
         'SP = SP + 4',
       ],
       opcode: [Opcodes.RETF],
+      operands: [],
       operandSize: 16,
       cycles: 15, // protected-mode: 25, 55 if switching stacks
     },
@@ -42,6 +43,7 @@ export const ret: InstructionInfo = {
         'SP = SP + 2',
       ],
       opcode: [Opcodes.RET],
+      operands: [],
       operandSize: 16,
       cycles: 11,
     },
@@ -55,6 +57,7 @@ export const ret: InstructionInfo = {
         'SP = SP + 4 + %{IMM}',
       ],
       opcode: [Opcodes.RETF_DW, 'IMM_u16'],
+      operands: ['imm'],
       operandSize: 16,
       cycles: 15, // protected-mode: 25, 55 if switching stacks
     },
@@ -66,6 +69,7 @@ export const ret: InstructionInfo = {
         'SP = SP + 2 + %{IMM}',
       ],
       opcode: [Opcodes.RET_DW, 'IMM_u16'],
+      operands: ['imm'],
       operandSize: 16,
       cycles: 11,
     },

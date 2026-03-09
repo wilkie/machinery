@@ -13,6 +13,7 @@ export const jns: InstructionInfo = {
     {
       operation: ['${RESOLVE_SF}', 'IP = (SF == 0) ? IP + %{IMM} : IP'],
       opcode: [Opcodes.JNS, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

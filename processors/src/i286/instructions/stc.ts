@@ -12,6 +12,7 @@ export const stc: InstructionInfo = {
     // 0xF9 - STC
     {
       opcode: [Opcodes.STC],
+      operands: [],
       operation: ['CF = 1', 'CARRY = 1', 'flag_op = flag_op | ${FLAG_OP_NOCF}'],
       cycles: 2,
     },

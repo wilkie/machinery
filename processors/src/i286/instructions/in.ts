@@ -14,6 +14,7 @@ export const in_: InstructionInfo = {
     {
       operation: ['AL = IO.read(1, %{IMM})'],
       opcode: [Opcodes.IN_AL_DB, 'IMM_u8'],
+      operands: ['AL', 'imm'],
       operandSize: 8,
       cycles: 5,
     },
@@ -21,6 +22,7 @@ export const in_: InstructionInfo = {
     {
       operation: ['AX = IO.read(2, %{IMM})'],
       opcode: [Opcodes.IN_AX_DB, 'IMM_u8'],
+      operands: ['AX', 'imm'],
       operandSize: 16,
       cycles: 5,
     },
@@ -28,6 +30,7 @@ export const in_: InstructionInfo = {
     {
       operation: ['AL = IO.read(1, DX)'],
       opcode: [Opcodes.IN_AL_DX],
+      operands: ['AL', 'DX'],
       operandSize: 8,
       cycles: 5,
     },
@@ -35,6 +38,7 @@ export const in_: InstructionInfo = {
     {
       operation: ['AX = IO.read(2, DX)'],
       opcode: [Opcodes.IN_AX_DX],
+      operands: ['AX', 'DX'],
       operandSize: 16,
       cycles: 5,
     },

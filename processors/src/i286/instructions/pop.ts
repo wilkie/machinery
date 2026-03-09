@@ -34,12 +34,14 @@ export const pop: InstructionInfo = {
     // 0x07 - POP ES
     {
       opcode: [Opcodes.POP_ES],
+      operands: ['ES'],
       operation: ['${OP}', 'ES = value'],
       cycles: 5, // protected-mode: 20
     },
     // 0x17 - POP SS
     {
       opcode: [Opcodes.POP_SS],
+      operands: ['SS'],
       operation: [
         '${OP}',
         'SS = value',
@@ -51,18 +53,21 @@ export const pop: InstructionInfo = {
     // 0x1F - POP DS
     {
       opcode: [Opcodes.POP_DS],
+      operands: ['DS'],
       operation: ['${OP}', 'DS = value'],
       cycles: 5, // protected-mode: 20
     },
     // 0x0F 0xA1 - POP FS
     {
       opcode: [Opcodes.SYSTEM, SystemOpcodes.POP_FS],
+      operands: ['FS'],
       operation: ['${OP}', 'FS = value'],
       cycles: 5,
     },
     // 0x0F 0xA9 - POP GS
     {
       opcode: [Opcodes.SYSTEM, SystemOpcodes.POP_GS],
+      operands: ['GS'],
       operation: ['${OP}', 'GS = value'],
       cycles: 5,
     },
@@ -87,10 +92,12 @@ export const pop: InstructionInfo = {
               offset: 0,
               size: 3,
               type: InstructionOperandTypes.Register,
+              encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
             },
           ],
         },
       ],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
@@ -102,6 +109,7 @@ export const pop: InstructionInfo = {
         'RAM:u16[effective_address] = value',
       ],
       opcode: [Opcodes.POP_MW, 'ModRM_110_000_00', 'DISP_i16'],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
@@ -112,6 +120,7 @@ export const pop: InstructionInfo = {
         'RAM:u16[effective_address] = value',
       ],
       opcode: [Opcodes.POP_MW, 'ModRM_rm_000_00'],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
@@ -122,6 +131,7 @@ export const pop: InstructionInfo = {
         'RAM:u16[effective_address] = value',
       ],
       opcode: [Opcodes.POP_MW, 'ModRM_rm_000_01', 'DISP_i8'],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
@@ -132,12 +142,14 @@ export const pop: InstructionInfo = {
         'RAM:u16[effective_address] = value',
       ],
       opcode: [Opcodes.POP_MW, 'ModRM_rm_000_10', 'DISP_i16'],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
     {
       operation: ['${OP}', '${MOD_RM_RM16} = value'],
-      opcode: [Opcodes.POP_MW, 'ModRM_rm_000_11'],
+      opcode: [Opcodes.POP_MW, 'ModRM_rm16_000_11'],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 3,
     },

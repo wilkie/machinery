@@ -20,6 +20,7 @@ export const loope: InstructionInfo = {
         'IP = (CX != 0 && ZF == 1) ? IP + %{IMM} : IP',
       ],
       opcode: [Opcodes.LOOPE, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 16,
       cycles: 4, // 8 if jumped
     },

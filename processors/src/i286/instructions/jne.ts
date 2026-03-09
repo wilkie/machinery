@@ -15,6 +15,7 @@ export const jne: InstructionInfo = {
     {
       operation: ['${RESOLVE_ZF}', 'IP = (ZF == 0) ? IP + %{IMM} : IP'],
       opcode: [Opcodes.JNE, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

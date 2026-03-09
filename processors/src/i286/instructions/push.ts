@@ -45,36 +45,42 @@ export const push: InstructionInfo = {
     // 0x06 - PUSH ES
     {
       opcode: [Opcodes.PUSH_ES],
+      operands: ['ES'],
       operation: ['value = ES', '${OP}'],
       cycles: 3,
     },
     // 0x0E - PUSH CS
     {
       opcode: [Opcodes.PUSH_CS],
+      operands: ['CS'],
       operation: ['value = CS', '${OP}'],
       cycles: 3,
     },
     // 0x16 - PUSH SS
     {
       opcode: [Opcodes.PUSH_SS],
+      operands: ['SS'],
       operation: ['value = SS', '${OP}'],
       cycles: 3,
     },
     // 0x1E - PUSH DS
     {
       opcode: [Opcodes.PUSH_DS],
+      operands: ['DS'],
       operation: ['value = DS', '${OP}'],
       cycles: 3,
     },
     // 0x0F 0xA0 - PUSH FS
     {
       opcode: [Opcodes.SYSTEM, SystemOpcodes.PUSH_FS],
+      operands: ['FS'],
       operation: ['value = FS', '${OP}'],
       cycles: 3,
     },
     // 0x0F 0xA8 - PUSH GS
     {
       opcode: [Opcodes.SYSTEM, SystemOpcodes.PUSH_GS],
+      operands: ['GS'],
       operation: ['value = GS', '${OP}'],
       cycles: 3,
     },
@@ -99,10 +105,12 @@ export const push: InstructionInfo = {
               offset: 0,
               size: 3,
               type: InstructionOperandTypes.Register,
+              encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
             },
           ],
         },
       ],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 3,
     },
@@ -114,6 +122,7 @@ export const push: InstructionInfo = {
         '${OP}',
       ],
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_110_110_00', 'DISP_i16'],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
@@ -124,6 +133,7 @@ export const push: InstructionInfo = {
         '${OP}',
       ],
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_110_00'],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
@@ -134,6 +144,7 @@ export const push: InstructionInfo = {
         '${OP}',
       ],
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_110_01', 'DISP_i8'],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
@@ -144,12 +155,14 @@ export const push: InstructionInfo = {
         '${OP}',
       ],
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_110_10', 'DISP_i16'],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
     {
       operation: ['value = ${MOD_RM_RM16}', '${OP}'],
-      opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_110_11'],
+      opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_110_11'],
+      operands: ['rm'],
       operandSize: 16,
       cycles: 3,
     },
@@ -157,6 +170,7 @@ export const push: InstructionInfo = {
     {
       operation: ['value = %{IMM}', '${OP}'],
       opcode: [Opcodes.PUSH_DW, 'IMM_u16'],
+      operands: ['imm'],
       operandSize: 16,
       cycles: 3,
     },
@@ -164,6 +178,7 @@ export const push: InstructionInfo = {
     {
       operation: ['value = %{IMM}', '${OP}'],
       opcode: [Opcodes.PUSH_DB, 'IMM_i8'],
+      operands: ['imm'],
       operandSize: 16,
       cycles: 3,
     },

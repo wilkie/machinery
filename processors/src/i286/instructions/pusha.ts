@@ -22,6 +22,7 @@ export const pusha: InstructionInfo = {
     // 0x60 - PUSHA
     {
       opcode: [Opcodes.PUSHA],
+      operands: [],
       operation: [
         'stack_address = SS_BASE + SP',
         'RAM:u16[stack_address - 0x02] = AX',

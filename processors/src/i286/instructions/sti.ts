@@ -13,6 +13,7 @@ export const sti: InstructionInfo = {
     // 0xFB - STI
     {
       opcode: [Opcodes.STI],
+      operands: [],
       operation: ['${RESOLVE_FLAGS}', 'IF = 1'],
       cycles: 2,
     },

@@ -13,6 +13,7 @@ export const hlt: InstructionInfo = {
     // 0xF4 - HLT
     {
       opcode: [Opcodes.HLT],
+      operands: [],
       operation: [
         '${RESOLVE_FLAGS}',
         'HALTED = 1',

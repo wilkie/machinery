@@ -13,6 +13,7 @@ export const sahf: InstructionInfo = {
     // 0x9E - SAHF
     {
       opcode: [Opcodes.SAHF],
+      operands: [],
       operation: [
         '${RESOLVE_FLAGS}',
         'FLAGS = (FLAGS & ~0b11010101) | (AH & 0b11010101)',

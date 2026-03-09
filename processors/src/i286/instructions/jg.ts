@@ -20,6 +20,7 @@ export const jg: InstructionInfo = {
         'IP = (ZF == 0 && SF == OF) ? IP + %{IMM} : IP',
       ],
       opcode: [Opcodes.JG, 'IMM_i8'],
+      operands: ['rel'],
       operandSize: 8,
       cycles: 3, // 7 if jumped
     },

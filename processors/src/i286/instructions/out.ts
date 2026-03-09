@@ -14,6 +14,7 @@ export const out: InstructionInfo = {
     {
       operation: ['IO:u8[%{IMM}] = AL'],
       opcode: [Opcodes.OUT_DB_AL, 'IMM_u8'],
+      operands: ['imm', 'AL'],
       operandSize: 8,
       cycles: 5,
     },
@@ -21,6 +22,7 @@ export const out: InstructionInfo = {
     {
       operation: ['IO:u16[%{IMM}] = AX'],
       opcode: [Opcodes.OUT_DB_AX, 'IMM_u8'],
+      operands: ['imm', 'AX'],
       operandSize: 16,
       cycles: 5,
     },
@@ -28,6 +30,7 @@ export const out: InstructionInfo = {
     {
       operation: ['IO:u8[DX] = AL'],
       opcode: [Opcodes.OUT_DX_AL],
+      operands: ['DX', 'AL'],
       operandSize: 8,
       cycles: 5,
     },
@@ -35,6 +38,7 @@ export const out: InstructionInfo = {
     {
       operation: ['IO:u16[DX] = AX'],
       opcode: [Opcodes.OUT_DX_AX],
+      operands: ['DX', 'AX'],
       operandSize: 16,
       cycles: 5,
     },

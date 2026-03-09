@@ -13,6 +13,7 @@ export const repne: InstructionInfo = {
     {
       // 0xF2 REPNE
       opcode: [Opcodes.REPNE_PREFIX],
+      operands: [],
       operation: ['REP = 1', 'REP_CHECK = 1'],
       finalize: ['REP = 0', 'REP_CHECK = 0'],
     },

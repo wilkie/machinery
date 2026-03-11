@@ -1,5 +1,8 @@
 import { readFile } from 'fs/promises';
+import { resolve } from 'path';
 import Machine from './Machine';
+
+const testDir = resolve(__dirname, '../../test/i286');
 
 class TestMachine extends Machine {
   halted = 0;
@@ -151,7 +154,7 @@ const complex = [
 
 describe('i286 simple instructions', () => {
   test.each(simple)('%s', async (name) => {
-    const data = await readFile(`test/i286/simple/bin/${name}.com`);
+    const data = await readFile(resolve(testDir, `simple/bin/${name}.com`));
     const { halted } = runProgram(data);
     expect(halted).toBe(1);
   });
@@ -159,7 +162,7 @@ describe('i286 simple instructions', () => {
 
 describe('i286 complex instructions', () => {
   test.each(complex)('%s', async (name) => {
-    const data = await readFile(`test/i286/complex/bin/${name}.com`);
+    const data = await readFile(resolve(testDir, `complex/bin/${name}.com`));
     const { halted } = runProgram(data);
     expect(halted).toBe(1);
   });

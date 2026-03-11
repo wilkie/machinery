@@ -7,6 +7,7 @@ packages:
   - 'simulators'
   - 'compilers'
   - 'assemblers'
+  - 'disassemblers'
   - 'formats'
 onlyBuiltDependencies:
   - 'esbuild'

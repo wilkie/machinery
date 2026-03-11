@@ -8,6 +8,7 @@ module.exports = {
     '<rootDir>/simulators',
     '<rootDir>/compilers',
     '<rootDir>/assemblers',
+    '<rootDir>/disassemblers',
     '<rootDir>/formats',
   ],
 };

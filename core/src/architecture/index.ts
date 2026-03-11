@@ -13,6 +13,8 @@ export { ToolchainProcess } from './Process';
 export { AggregateToolchainProcess } from './Process';
 
 export * from './Target';
+export { generateDecoderMap } from './DecoderMap';
+export type { DecoderMap, DecoderPartial, InputMap } from './DecoderMap';
 export type { ToolchainProcessorOptions } from './Process';
 export type { LineMessage } from './Process';
 export type { Executable } from './Executable';

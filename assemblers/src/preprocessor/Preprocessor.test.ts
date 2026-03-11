@@ -21,9 +21,7 @@ describe('Preprocessor', () => {
     });
 
     it('substitutes multiple defines', () => {
-      const result = process(
-        '%define A 1\n%define B 2\nadd A, B',
-      );
+      const result = process('%define A 1\n%define B 2\nadd A, B');
       expect(lines(result)).toContain('add 1, 2');
     });
 
@@ -93,22 +91,14 @@ describe('Preprocessor', () => {
 
   describe('%rep / %endrep', () => {
     it('repeats body N times', () => {
-      const src = [
-        '%rep 3',
-        '  nop',
-        '%endrep',
-      ].join('\n');
+      const src = ['%rep 3', '  nop', '%endrep'].join('\n');
       const result = lines(process(src));
       const nopCount = result.filter((l) => l === 'nop').length;
       expect(nopCount).toBe(3);
     });
 
     it('repeats zero times produces no output', () => {
-      const src = [
-        '%rep 0',
-        '  db 0xFF',
-        '%endrep',
-      ].join('\n');
+      const src = ['%rep 0', '  db 0xFF', '%endrep'].join('\n');
       const result = lines(process(src));
       expect(result.filter((l) => l.includes('db'))).toHaveLength(0);
     });
@@ -174,21 +164,13 @@ describe('Preprocessor', () => {
     });
 
     it('ifdef false when not defined', () => {
-      const src = [
-        '%ifdef FEATURE',
-        '  mov ax, 1',
-        '%endif',
-      ].join('\n');
+      const src = ['%ifdef FEATURE', '  mov ax, 1', '%endif'].join('\n');
       const result = lines(process(src));
       expect(result).not.toContain('mov ax, 1');
     });
 
     it('ifndef true when not defined', () => {
-      const src = [
-        '%ifndef FEATURE',
-        '  mov ax, 1',
-        '%endif',
-      ].join('\n');
+      const src = ['%ifndef FEATURE', '  mov ax, 1', '%endif'].join('\n');
       const result = lines(process(src));
       expect(result).toContain('mov ax, 1');
     });

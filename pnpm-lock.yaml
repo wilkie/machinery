@@ -84,6 +84,19 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  disassemblers:
+    dependencies:
+      '@machinery/core':
+        specifier: workspace:*
+        version: link:../core
+      '@machinery/processors':
+        specifier: workspace:*
+        version: link:../processors
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.19.15
+
   file-systems:
     dependencies:
       '@machinery/core':

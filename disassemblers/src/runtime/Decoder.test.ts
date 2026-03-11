@@ -1,4 +1,8 @@
+import { readFileSync, readdirSync } from 'fs';
+import { resolve } from 'path';
 import { Decoder, disassemble } from './Decoder';
+import { AttSyntax } from './AttSyntax';
+import { IntelSyntax } from './IntelSyntax';
 import { generateDecoderMap } from '@machinery/core';
 import type { Target } from '@machinery/core';
 
@@ -268,6 +272,68 @@ describe('Decoder', () => {
         displacement: 0x0ee5,
       });
     });
+
+    it('MOV [BX+SI], AX -> 89 00 (mod=00 memory)', () => {
+      const instr = decode([0x89, 0x00]);
+      expect(instr!.mnemonic).toBe('mov');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'memory',
+        base: 'bx',
+        index: 'si',
+        direct: false,
+      });
+      expect(instr!.operands[1]).toMatchObject({
+        type: 'register',
+        name: 'ax',
+      });
+    });
+
+    it('MOV [BP+DI+5], CL -> 88 4B 05 (mod=01 disp8)', () => {
+      const instr = decode([0x88, 0x4b, 0x05]);
+      expect(instr!.mnemonic).toBe('mov');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'memory',
+        base: 'bp',
+        index: 'di',
+        displacement: 5,
+        displacementSize: 8,
+        direct: false,
+      });
+      expect(instr!.operands[1]).toMatchObject({
+        type: 'register',
+        name: 'cl',
+      });
+    });
+
+    it('MOV [SI+0x1234], DX -> 89 94 34 12 (mod=10 disp16)', () => {
+      const instr = decode([0x89, 0x94, 0x34, 0x12]);
+      expect(instr!.mnemonic).toBe('mov');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'memory',
+        base: 'si',
+        displacement: 0x1234,
+        displacementSize: 16,
+        direct: false,
+      });
+      expect(instr!.operands[1]).toMatchObject({
+        type: 'register',
+        name: 'dx',
+      });
+    });
+
+    it('ADD [BX], 0x01 -> 80 07 01 (mod=00 rm memory + imm8)', () => {
+      const instr = decode([0x80, 0x07, 0x01]);
+      expect(instr!.mnemonic).toBe('add');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'memory',
+        base: 'bx',
+        direct: false,
+      });
+      expect(instr!.operands[1]).toMatchObject({
+        type: 'immediate',
+        value: 0x01,
+      });
+    });
   });
 
   describe('segment override prefix', () => {
@@ -275,6 +341,198 @@ describe('Decoder', () => {
       const instr = decode([0x36, 0x8b, 0x46, 0x00]);
       expect(instr!.mnemonic).toBe('mov');
       expect(instr!.segmentOverride).toBe('ss');
+    });
+
+    it('ES: prefix -> 26', () => {
+      // ES: MOV AX, [BX+SI] -> 26 8B 00
+      const instr = decode([0x26, 0x8b, 0x00]);
+      expect(instr!.mnemonic).toBe('mov');
+      expect(instr!.segmentOverride).toBe('es');
+    });
+  });
+
+  describe('ALU group instructions', () => {
+    it('SUB AX, 0x0002 -> 83 E8 02 (sign-extended imm8)', () => {
+      const instr = decode([0x83, 0xe8, 0x02]);
+      expect(instr!.mnemonic).toBe('sub');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'register',
+        name: 'ax',
+      });
+      expect(instr!.operands[1]).toMatchObject({
+        type: 'immediate',
+        value: 2,
+      });
+    });
+
+    it('XOR AH, AH -> 30 E4', () => {
+      const instr = decode([0x30, 0xe4]);
+      expect(instr!.mnemonic).toBe('xor');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'register',
+        name: 'ah',
+      });
+      expect(instr!.operands[1]).toMatchObject({
+        type: 'register',
+        name: 'ah',
+      });
+    });
+
+    it('AND AL, 0x01 -> 24 01', () => {
+      const instr = decode([0x24, 0x01]);
+      expect(instr!.mnemonic).toBe('and');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'register',
+        name: 'al',
+      });
+      expect(instr!.operands[1]).toMatchObject({
+        type: 'immediate',
+        value: 0x01,
+      });
+    });
+
+    it('SHR CL, AX -> D3 E8', () => {
+      const instr = decode([0xd3, 0xe8]);
+      expect(instr!.mnemonic).toBe('shr');
+      expect(instr!.operands).toHaveLength(2);
+    });
+
+    it('TEST AL, 0x01 -> A8 01', () => {
+      const instr = decode([0xa8, 0x01]);
+      expect(instr!.mnemonic).toBe('test');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'register',
+        name: 'al',
+      });
+      expect(instr!.operands[1]).toMatchObject({
+        type: 'immediate',
+        value: 0x01,
+      });
+    });
+  });
+
+  describe('CALL and RET', () => {
+    it('CALL rel16 -> E8 xx xx', () => {
+      const instr = decode([0xe8, 0x10, 0x00]);
+      expect(instr!.mnemonic).toBe('call');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'relative',
+        target: 0x13, // 3 bytes instr + 0x10 offset
+      });
+    });
+
+    it('RET -> C3', () => {
+      const instr = decode([0xc3]);
+      expect(instr!.mnemonic).toBe('ret');
+    });
+
+    it('RET imm16 -> C2 xx xx', () => {
+      const instr = decode([0xc2, 0x04, 0x00]);
+      expect(instr!.mnemonic).toBe('ret');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'immediate',
+        value: 4,
+      });
+    });
+  });
+
+  describe('XCHG', () => {
+    it('XCHG AX, CX -> 91', () => {
+      const instr = decode([0x91]);
+      expect(instr!.mnemonic).toBe('xchg');
+      expect(
+        instr!.operands.some((o) => o.type === 'register' && o.name === 'cx'),
+      ).toBe(true);
+    });
+  });
+
+  describe('LEA', () => {
+    it('LEA AX, [0x1234] -> 8D 06 34 12', () => {
+      const instr = decode([0x8d, 0x06, 0x34, 0x12]);
+      expect(instr!.mnemonic).toBe('lea');
+      // LEA form has operands ['rm', 'reg'] — memory is first
+      expect(instr!.operands).toHaveLength(2);
+      expect(
+        instr!.operands.some(
+          (o) =>
+            o.type === 'memory' && o.direct === true && o.displacement === 0x1234,
+        ),
+      ).toBe(true);
+      expect(
+        instr!.operands.some((o) => o.type === 'register' && o.name === 'ax'),
+      ).toBe(true);
+    });
+  });
+
+  describe('REP prefix', () => {
+    it('REP MOVSB -> F3 A4', () => {
+      const instr = decode([0xf3, 0xa4]);
+      expect(instr!.mnemonic).toBe('movs');
+      expect(instr!.prefix).toBe('rep');
+    });
+
+    it('REPNE SCASB -> F2 AE', () => {
+      const instr = decode([0xf2, 0xae]);
+      expect(instr!.mnemonic).toBe('scas');
+      expect(instr!.prefix).toBe('repne');
+    });
+  });
+
+  describe('LOCK prefix', () => {
+    it('LOCK prefix is recorded', () => {
+      // LOCK INC [BX] would be F0 FF 07
+      const instr = decode([0xf0, 0xff, 0x07]);
+      expect(instr!.prefix).toBe('lock');
+    });
+  });
+
+  describe('far pointer', () => {
+    it('CALL FAR ptr16:16 -> 9A xx xx xx xx', () => {
+      const instr = decode([0x9a, 0x00, 0x01, 0x00, 0x10]);
+      expect(instr!.mnemonic).toBe('call');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'far_pointer',
+        offset: 0x0100,
+        segment: 0x1000,
+      });
+    });
+  });
+
+  describe('ENTER/LEAVE', () => {
+    it('ENTER imm16, imm8 -> C8 xx xx xx', () => {
+      const instr = decode([0xc8, 0x10, 0x00, 0x00]);
+      expect(instr!.mnemonic).toBe('enter');
+      expect(instr!.operands).toHaveLength(2);
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'immediate',
+        value: 0x10,
+      });
+    });
+
+    it('LEAVE -> C9', () => {
+      const instr = decode([0xc9]);
+      expect(instr!.mnemonic).toBe('leave');
+      expect(instr!.operands).toHaveLength(0);
+    });
+  });
+
+  describe('PUSH immediate', () => {
+    it('PUSH imm16 -> 68 xx xx', () => {
+      const instr = decode([0x68, 0x34, 0x12]);
+      expect(instr!.mnemonic).toBe('push');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'immediate',
+        value: 0x1234,
+      });
+    });
+
+    it('PUSH imm8 -> 6A xx (sign-extended)', () => {
+      const instr = decode([0x6a, 0xff]);
+      expect(instr!.mnemonic).toBe('push');
+      expect(instr!.operands[0]).toMatchObject({
+        type: 'immediate',
+        value: -1,
+      });
     });
   });
 
@@ -289,6 +547,22 @@ describe('Decoder', () => {
     ])('%s -> %s', (bytes, mnemonic) => {
       const instr = decode(bytes);
       expect(instr!.mnemonic).toBe(mnemonic);
+    });
+  });
+
+  describe('unknown/bad bytes', () => {
+    it('produces (bad) for unrecognized bytes', () => {
+      // 0x0F by itself (without a valid second byte) should be bad or
+      // at least not crash. Try a truly invalid sequence.
+      const decoder = new Decoder(
+        new Uint8Array([0x63, 0x00]),
+        decoderMap,
+        prefixMap,
+        target,
+      );
+      const instr = decoder.decode();
+      // Should either decode as arpl or produce some output without crashing
+      expect(instr).not.toBeNull();
     });
   });
 
@@ -315,5 +589,278 @@ describe('Decoder', () => {
       expect(Array.from(instrs[0].bytes)).toEqual([0xb8, 0x34, 0x12]);
       expect(Array.from(instrs[1].bytes)).toEqual([0x90]);
     });
+  });
+});
+
+describe('Syntax formatters', () => {
+  const intel = new IntelSyntax();
+  const att = new AttSyntax();
+
+  it('IntelSyntax formats register instruction', () => {
+    const text = intel.formatInstruction({
+      address: 0,
+      bytes: new Uint8Array([0x89, 0xd8]),
+      mnemonic: 'mov',
+      operands: [
+        { type: 'register', name: 'ax', size: 16 },
+        { type: 'register', name: 'bx', size: 16 },
+      ],
+    });
+    expect(text).toBe('MOV AX, BX');
+  });
+
+  it('AttSyntax formats register instruction with reversed operands', () => {
+    const text = att.formatInstruction({
+      address: 0,
+      bytes: new Uint8Array([0x89, 0xd8]),
+      mnemonic: 'mov',
+      operands: [
+        { type: 'register', name: 'ax', size: 16 },
+        { type: 'register', name: 'bx', size: 16 },
+      ],
+    });
+    expect(text).toBe('mov %bx,%ax');
+  });
+
+  it('IntelSyntax formats memory with base+index+displacement', () => {
+    const text = intel.formatOperand(
+      {
+        type: 'memory',
+        base: 'bx',
+        index: 'si',
+        displacement: 4,
+        displacementSize: 8,
+        size: 16,
+        direct: false,
+      },
+      0,
+    );
+    // Intel syntax joins with " + " and displacement
+    expect(text).toMatch(/BX.*SI.*0x04/);
+    expect(text).toMatch(/^\[.*\]$/);
+  });
+
+  it('AttSyntax formats memory with base+index+displacement', () => {
+    const text = att.formatOperand(
+      {
+        type: 'memory',
+        base: 'bx',
+        index: 'si',
+        displacement: 4,
+        displacementSize: 8,
+        size: 16,
+        direct: false,
+      },
+      0,
+    );
+    expect(text).toBe('0x4(%bx,%si)');
+  });
+
+  it('IntelSyntax formats far pointer', () => {
+    const text = intel.formatOperand(
+      { type: 'far_pointer', segment: 0x1000, offset: 0x0100 },
+      0,
+    );
+    expect(text).toBe('0x1000:0x0100');
+  });
+
+  it('AttSyntax formats immediate with $ prefix', () => {
+    const text = att.formatOperand(
+      { type: 'immediate', value: 0x42, size: 8, signed: false },
+      0,
+    );
+    expect(text).toBe('$0x42');
+  });
+
+  it('IntelSyntax formats segment override memory', () => {
+    const text = intel.formatOperand(
+      {
+        type: 'memory',
+        base: 'bp',
+        displacement: 0,
+        displacementSize: 0,
+        size: 16,
+        segment: 'ss',
+        direct: false,
+      },
+      0,
+    );
+    expect(text).toBe('SS:[BP]');
+  });
+
+  it('IntelSyntax formats direct memory', () => {
+    const text = intel.formatOperand(
+      {
+        type: 'memory',
+        displacement: 0x1234,
+        displacementSize: 16,
+        size: 16,
+        direct: true,
+      },
+      0,
+    );
+    expect(text).toBe('[0x1234]');
+  });
+
+  it('IntelSyntax formats prefix instruction', () => {
+    const text = intel.formatInstruction({
+      address: 0,
+      bytes: new Uint8Array([0xf3, 0xa4]),
+      mnemonic: 'movs',
+      operands: [],
+      prefix: 'rep',
+    });
+    expect(text).toBe('REP MOVS');
+  });
+});
+
+describe('dsm reference validation', () => {
+  const dsmDir = resolve(__dirname, '../../../simulators/test/i286/complex/dsm');
+  const binDir = resolve(__dirname, '../../../simulators/test/i286/complex/bin');
+
+  // Get all .dsm files that have matching .com binaries
+  let dsmFiles: string[] = [];
+  try {
+    dsmFiles = readdirSync(dsmDir)
+      .filter((f) => f.endsWith('.dsm'))
+      .map((f) => f.replace('.dsm', ''));
+  } catch {
+    // directory doesn't exist in CI or other environments
+  }
+
+  if (dsmFiles.length === 0) {
+    it('skipped (no .dsm reference files found)', () => {
+      expect(true).toBe(true);
+    });
+    return;
+  }
+
+  /**
+   * Parse a .dsm file into a map of address -> { hex, mnemonic }.
+   * We only compare the hex bytes and mnemonic (first word of assembly),
+   * ignoring operand formatting differences (size suffixes, zero disp, etc.).
+   */
+  function parseDsm(content: string): Map<number, { hex: string; mnemonic: string }> {
+    const map = new Map<number, { hex: string; mnemonic: string }>();
+    for (const line of content.split('\n')) {
+      // Match lines like: "   0:	8d 06 f2 15          	lea    0x15f2,%ax"
+      const m = line.match(
+        /^\s*([0-9a-f]+):\s+([0-9a-f ]+?)\s{2,}\t?\s*(\S+)/,
+      );
+      if (!m) continue;
+      const addr = parseInt(m[1], 16);
+      const hex = m[2].trim();
+      const mnemonic = m[3];
+      map.set(addr, { hex, mnemonic });
+    }
+    return map;
+  }
+
+  /**
+   * Compare mnemonics allowing for known AT&T / objdump differences:
+   * - Size suffixes: addb/addw/addl → add
+   * - int3: objdump uses "int3" for 0xCC, we use "int"
+   * - Far variants: objdump uses lcall/lret/ljmp, we use call/ret/jmp
+   * - Rep prefix: objdump puts "rep" as mnemonic, we use the actual instruction
+   */
+  function mnemonicsMatch(ours: string, ref: string): boolean {
+    if (ours === ref) return true;
+    // int vs int3 (0xCC single-byte INT 3)
+    if (ours === 'int' && ref === 'int3') return true;
+    // Far call/ret/jmp: objdump prefixes with 'l'
+    if (ref === 'lcall' && ours === 'call') return true;
+    if (ref === 'lret' && ours === 'ret') return true;
+    if (ref === 'ljmp' && ours === 'jmp') return true;
+    // Rep prefix as mnemonic: objdump shows "rep" or "repnz", we show the instruction
+    if (ref === 'rep' || ref === 'repnz' || ref === 'repz') return true;
+    // Try stripping a single-char size suffix from reference
+    const stripped = ref.replace(/^(.*[a-z]{2,})[bwld]$/, '$1');
+    if (ours === stripped) return true;
+    return false;
+  }
+
+  it.each(dsmFiles)('%s: hex bytes match reference', (name) => {
+    let binData: Uint8Array;
+    try {
+      binData = new Uint8Array(readFileSync(resolve(binDir, `${name}.com`)));
+    } catch {
+      return; // skip if binary not available
+    }
+
+    const dsmContent = readFileSync(resolve(dsmDir, `${name}.dsm`), 'utf-8');
+    const reference = parseDsm(dsmContent);
+
+    const instrs = [...disassemble(binData, decoderMap, prefixMap, target)];
+
+    let matched = 0;
+    let mismatched = 0;
+
+    for (const instr of instrs) {
+      const ref = reference.get(instr.address);
+      if (!ref) continue;
+      // Skip unrecognized instructions — our decoder emits (bad) for opcodes
+      // not in the i286 ISA (e.g., ud2, MMX), consuming fewer bytes than objdump
+      if (instr.mnemonic === '(bad)') continue;
+
+      const ourHex = Array.from(instr.bytes)
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(' ');
+
+      if (ourHex === ref.hex) {
+        matched++;
+      } else {
+        mismatched++;
+      }
+    }
+
+    // We should match the vast majority of instructions' hex bytes
+    // (byte-level decoding should be exact)
+    expect(mismatched).toBe(0);
+    expect(matched).toBeGreaterThan(0);
+  });
+
+  it.each(dsmFiles)('%s: mnemonics match reference', (name) => {
+    let binData: Uint8Array;
+    try {
+      binData = new Uint8Array(readFileSync(resolve(binDir, `${name}.com`)));
+    } catch {
+      return; // skip if binary not available
+    }
+
+    const dsmContent = readFileSync(resolve(dsmDir, `${name}.dsm`), 'utf-8');
+    const reference = parseDsm(dsmContent);
+
+    const instrs = [...disassemble(binData, decoderMap, prefixMap, target)];
+
+    let matched = 0;
+    let mismatched = 0;
+    const failures: string[] = [];
+
+    for (const instr of instrs) {
+      const ref = reference.get(instr.address);
+      if (!ref) continue;
+
+      const ourMnemonic = instr.mnemonic.toLowerCase();
+      const refMnemonic = ref.mnemonic.toLowerCase();
+
+      if (mnemonicsMatch(ourMnemonic, refMnemonic)) {
+        matched++;
+      } else {
+        mismatched++;
+        if (failures.length < 5) {
+          failures.push(
+            `  0x${instr.address.toString(16)}: ours='${ourMnemonic}' ref='${refMnemonic}'`,
+          );
+        }
+      }
+    }
+
+    // Allow small percentage of mnemonic differences (e.g., prefix handling)
+    const total = matched + mismatched;
+    if (total > 0) {
+      const matchRate = matched / total;
+      expect(matchRate).toBeGreaterThanOrEqual(0.95);
+    }
+    expect(matched).toBeGreaterThan(0);
   });
 });

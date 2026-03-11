@@ -365,9 +365,11 @@ export class Decoder {
       }
 
       case 'ptr': {
-        // Far pointer: offset, segment (size determined by operandSize)
-        const offset = this.readValue(size);
-        const segment = this.readValue(16);
+        // Far pointer: offset, segment — sizes come from the form's inline
+        // opcode entries (two consecutive Immediate-typed matchers)
+        const ptrSizes = this.getFarPointerSizes(form);
+        const offset = this.readValue(ptrSizes[0]);
+        const segment = this.readValue(ptrSizes[1]);
         return { type: 'far_pointer', segment, offset };
       }
 
@@ -590,6 +592,21 @@ export class Decoder {
         return true;
     }
     return false;
+  }
+
+  /**
+   * Extract the sizes of the two immediate fields in a far pointer form's
+   * opcode array (offset size, then segment size).
+   */
+  private getFarPointerSizes(form: InstructionForm): [number, number] {
+    const sizes: number[] = [];
+    for (const entry of form.opcode) {
+      if (typeof entry === 'object' && 'size' in entry) {
+        sizes.push((entry as OpcodeMatcher).size);
+      }
+    }
+    // Default to 16-bit offset, 16-bit segment
+    return [sizes[0] ?? 16, sizes[1] ?? 16];
   }
 
   private getTrailingSuffixIds(form: InstructionForm): string[] {

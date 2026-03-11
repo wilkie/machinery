@@ -1,4 +1,8 @@
-import type { InstructionInfo } from '@machinery/core';
+import {
+  InstructionDataTypes,
+  InstructionOperandTypes,
+  type InstructionInfo,
+} from '@machinery/core';
 
 import { Opcodes } from '../opcodes';
 
@@ -24,8 +28,37 @@ export const ex_af: InstructionInfo = {
     },
     // EX (SP), HL
     {
-      opcode: [Opcodes.EX_xSPx_HL],
-      operands: ['(SP)', 'HL'],
+      opcode: [
+        {
+          identifier: 'Opcode_EX_xSPx_HL',
+          name: 'EX (SP), HL Opcode Field',
+          type: InstructionDataTypes.Operand,
+          size: 8,
+          fields: [
+            {
+              identifier: 'opcode_low',
+              offset: 0,
+              size: 3,
+              match: 0b011,
+            },
+            {
+              identifier: 'rm',
+              offset: 3,
+              size: 3,
+              match: 0b100,
+              type: InstructionOperandTypes.Memory,
+              encoding: ['SP'],
+            },
+            {
+              identifier: 'opcode_high',
+              offset: 6,
+              size: 2,
+              match: 0b11,
+            },
+          ],
+        },
+      ],
+      operands: ['rm', 'HL'],
       operation: ['tmp = RAM:u16[SP]', 'RAM:u16[SP] = HL', 'HL = tmp'],
       cycles: 19,
     },

@@ -35,6 +35,8 @@ export interface RegisterField {
   size: number;
   /** Whether or not this register field can be referred to on its own. */
   global?: boolean;
+  /** Optionally, how this field is further broken down into named subfields. */
+  fields?: RegisterField[];
 }
 
 /**

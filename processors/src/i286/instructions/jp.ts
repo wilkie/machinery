@@ -13,7 +13,7 @@ export const jp: InstructionInfo = {
     // 0x7A cb - JP cb
     // 0x7A cb - JPE cb
     {
-      operation: ['${RESOLVE_PF}', 'IP = (PF == 1) ? IP + %{IMM} : IP'],
+      operation: ['${RESOLVE_PF}', 'IP = (PF == 1) ? IP + %{imm} : IP'],
       opcode: [Opcodes.JP, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,

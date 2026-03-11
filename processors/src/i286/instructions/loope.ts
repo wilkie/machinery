@@ -17,11 +17,12 @@ export const loope: InstructionInfo = {
       operation: [
         '${RESOLVE_ZF}',
         'CX = CX - 1',
-        'IP = (CX != 0 && ZF == 1) ? IP + %{IMM} : IP',
+        'IP = (CX != 0 && ZF == 1) ? IP + %{imm} : IP',
       ],
       opcode: [Opcodes.LOOPE, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 16,
+      addressing: 'relative',
       cycles: 4, // 8 if jumped
     },
   ],

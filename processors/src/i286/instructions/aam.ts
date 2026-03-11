@@ -14,8 +14,8 @@ export const aam: InstructionInfo = {
       opcode: [Opcodes.AAM, 'IMM_u8'],
       operands: ['imm'],
       operation: [
-        'AH = AL // IMM',
-        'AL = AL % IMM',
+        'AH = AL // imm',
+        'AL = AL % imm',
         'alu_result = AL',
         // Reset flag operation
         'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_8BIT}',

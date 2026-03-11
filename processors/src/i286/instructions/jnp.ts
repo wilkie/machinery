@@ -13,7 +13,7 @@ export const jnp: InstructionInfo = {
     // 0x7B cb - JNP cb
     // 0x7B cb - JPO cb
     {
-      operation: ['${RESOLVE_PF}', 'IP = (PF == 0) ? IP + %{IMM} : IP'],
+      operation: ['${RESOLVE_PF}', 'IP = (PF == 0) ? IP + %{imm} : IP'],
       opcode: [Opcodes.JNP, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,

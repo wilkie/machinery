@@ -76,6 +76,81 @@ export class Encoder {
     this.endianness = endianness;
   }
 
+  /**
+   * Look up the operand type for a given operand name from the form's opcode matchers.
+   * Returns the InstructionOperandTypes value (Register, Memory, SystemRegister) from
+   * the matching field, or the InstructionDataTypes (Immediate, Displacement) from the
+   * matcher itself. Returns undefined for literal register names not found in matchers.
+   */
+  private resolveOperandType(
+    form: EncoderForm,
+    operandName: string,
+  ):
+    | { fieldType?: number; dataType?: number; unattached?: boolean }
+    | undefined {
+    // First, check if any matcher field has this identifier
+    for (const entry of form.opcodeEntries) {
+      if (entry.kind === 'fixed') continue;
+      const matcher =
+        entry.kind === 'ref'
+          ? this.operandDefs[entry.identifier]
+          : entry.matcher;
+      if (!matcher) continue;
+
+      if (matcher.fields) {
+        for (const field of matcher.fields) {
+          if (field.identifier === operandName) {
+            return { fieldType: field.type, dataType: matcher.type };
+          }
+        }
+      }
+    }
+
+    // Second, check for matchers whose fields don't match ANY operand name.
+    // These are "unattached" matchers (e.g., far pointer NEW_IP/NEW_CS) that
+    // belong to the operand being queried if it's the only unmatched one.
+    const matchedFieldIds = new Set<string>();
+    for (const entry of form.opcodeEntries) {
+      if (entry.kind === 'fixed') continue;
+      const matcher =
+        entry.kind === 'ref'
+          ? this.operandDefs[entry.identifier]
+          : entry.matcher;
+      if (!matcher?.fields) continue;
+      for (const field of matcher.fields) {
+        if (form.operands.includes(field.identifier)) {
+          matchedFieldIds.add(field.identifier);
+        }
+      }
+    }
+
+    // If this operand name isn't matched to any field, check if there are
+    // unattached Immediate matchers — this indicates the operand takes immediate values.
+    if (!matchedFieldIds.has(operandName)) {
+      for (const entry of form.opcodeEntries) {
+        if (entry.kind === 'fixed') continue;
+        const matcher =
+          entry.kind === 'ref'
+            ? this.operandDefs[entry.identifier]
+            : entry.matcher;
+        if (!matcher) continue;
+        if (matcher.type & DataTypes.Immediate) {
+          // Check that this matcher's fields don't match any other operand
+          const fieldsMatchOther = matcher.fields?.some(
+            (f) =>
+              form.operands.includes(f.identifier) &&
+              f.identifier !== operandName,
+          );
+          if (!fieldsMatchOther) {
+            return { dataType: matcher.type, unattached: true };
+          }
+        }
+      }
+    }
+
+    return undefined;
+  }
+
   /** Emit a multi-byte value in the target's byte order. */
   private emitValue(value: number, numBytes: number): number[] {
     const bytes: number[] = [];
@@ -261,13 +336,16 @@ export class Encoder {
       }
 
       // For shift/rotate by immediate 1, also try the implicit-1 form (D0/D1)
-      // which has only ["rm"] operands (no immediate)
+      // which has only one operand that accepts register/memory (no immediate)
       if (
         operands.length === 2 &&
         operands[1].type === 'immediate' &&
         operands[1].value === 1 &&
         form.operands.length === 1 &&
-        form.operands[0] === 'rm'
+        (() => {
+          const resolved = this.resolveOperandType(form, form.operands[0]);
+          return resolved && !(resolved.dataType! & DataTypes.Immediate);
+        })()
       ) {
         const singleOp = [operands[0]];
         if (this.operandsMatch(form, singleOp)) {
@@ -315,81 +393,110 @@ export class Encoder {
       const formOp = formOps[i];
       const actualOp = operands[i];
 
-      switch (formOp) {
-        case 'rm':
-          if (actualOp.type !== 'register' && actualOp.type !== 'memory') {
-            // Accept immediate if the form has a dual displacement/immediate matcher
-            if (actualOp.type === 'immediate' && this.formHasDispImm(form)) {
-              break;
-            }
-            return false;
-          }
-          if (form.operandSize !== undefined) {
-            if (
-              actualOp.type === 'register' &&
-              actualOp.size !== form.operandSize
-            )
-              return false;
-            if (
-              actualOp.type === 'memory' &&
-              actualOp.size !== undefined &&
-              actualOp.size !== form.operandSize
-            )
-              return false;
-          }
-          break;
-        case 'reg':
-          if (actualOp.type !== 'register') return false;
+      // Look up the operand type from the form's opcode matcher fields.
+      const resolved = this.resolveOperandType(form, formOp);
+
+      if (!resolved) {
+        // No matching field in matchers — this is a literal operand (register name or constant).
+        if (actualOp.type === 'register' && actualOp.name === formOp) continue;
+        if (
+          actualOp.type === 'immediate' &&
+          typeof actualOp.value === 'number'
+        ) {
+          const formValue = Number(formOp);
+          if (!isNaN(formValue) && actualOp.value === formValue) continue;
+        }
+        return false;
+      }
+
+      const { fieldType, dataType } = resolved;
+
+      if (fieldType === OperandTypes.Register) {
+        // Field is a register selector — accept register operands
+        if (actualOp.type !== 'register') return false;
+        if (
+          form.operandSize !== undefined &&
+          actualOp.size !== form.operandSize
+        )
+          return false;
+      } else if (fieldType === OperandTypes.SystemRegister) {
+        // System/segment register selector
+        if (actualOp.type !== 'register') return false;
+      } else if (fieldType === OperandTypes.Memory) {
+        // Field is a memory operand
+        if (dataType !== undefined && dataType & DataTypes.Immediate) {
+          // Immediate that encodes a memory address (e.g., IMM_MEM_u16) — direct memory only
+          if (actualOp.type !== 'memory') return false;
+          if (actualOp.base || actualOp.index) return false;
+        } else {
+          // Operand-type memory (e.g., Z80 register-indirect in opcode byte)
+          if (actualOp.type !== 'memory') return false;
           if (
             form.operandSize !== undefined &&
+            actualOp.size !== undefined &&
             actualOp.size !== form.operandSize
           )
             return false;
-          break;
-        case 'seg':
-          if (actualOp.type !== 'register') return false;
-          break;
-        case 'imm':
-        case 'level':
-          if (actualOp.type !== 'immediate') return false;
-          // Reject far pointers for non-ptr operand types
+        }
+      } else if (dataType !== undefined && dataType & DataTypes.Immediate) {
+        // Immediate value (imm, rel, level, ptr, etc.)
+        if (actualOp.type !== 'immediate') return false;
+        // Far pointer check only for unattached Immediates (e.g., ptr operands)
+        // Regular attached immediates (e.g., RETF imm) don't require far pointer values
+        if (resolved.unattached) {
+          if (form.distance === 'far') {
+            // Far forms with unattached Immediate require a far pointer (seg:off object)
+            if (
+              typeof actualOp.value !== 'object' ||
+              !actualOp.value ||
+              !('seg' in actualOp.value)
+            )
+              return false;
+          } else {
+            // Non-far unattached immediate forms reject far pointers
+            if (
+              typeof actualOp.value === 'object' &&
+              actualOp.value &&
+              'seg' in actualOp.value
+            )
+              return false;
+          }
+        } else {
+          // Attached immediate — always reject far pointer values
           if (
-            actualOp.type === 'immediate' &&
             typeof actualOp.value === 'object' &&
             actualOp.value &&
             'seg' in actualOp.value
           )
             return false;
-          break;
-        case 'rel':
-          if (actualOp.type !== 'immediate') return false;
-          // Reject far pointers for relative jumps
-          if (
-            typeof actualOp.value === 'object' &&
-            actualOp.value &&
-            'seg' in actualOp.value
-          )
-            return false;
-          break;
-        case 'ptr':
-          if (actualOp.type !== 'immediate') return false;
-          // ptr requires a far pointer value (seg:off object), not a simple number or label
-          if (
-            typeof actualOp.value !== 'object' ||
-            !actualOp.value ||
-            !('seg' in actualOp.value)
-          )
-            return false;
-          break;
-        case 'mem':
-          if (actualOp.type !== 'memory') return false;
-          // 'mem' operand type = direct memory address (moffs), no base/index allowed
-          if (actualOp.base || actualOp.index) return false;
-          break;
-        default:
-          // Literal register name match (e.g., 'AL', 'AX', 'ES', 'CL', 'DX')
-          if (actualOp.type === 'register' && actualOp.name === formOp) break;
+        }
+      } else if (dataType !== undefined && dataType & DataTypes.Operand) {
+        // Operand-type field with no specific fieldType — could be register or memory
+        // depending on the specific matcher variant (e.g., ModRM rm field).
+        // Accept both register and memory operands.
+        if (actualOp.type !== 'register' && actualOp.type !== 'memory') {
+          // Accept immediate if the form has a dual displacement/immediate matcher
+          if (actualOp.type === 'immediate' && this.formHasDispImm(form)) {
+            continue;
+          }
           return false;
+        }
+        if (form.operandSize !== undefined) {
+          if (
+            actualOp.type === 'register' &&
+            actualOp.size !== form.operandSize
+          )
+            return false;
+          if (
+            actualOp.type === 'memory' &&
+            actualOp.size !== undefined &&
+            actualOp.size !== form.operandSize
+          )
+            return false;
+        }
+      } else {
+        // Unknown field type — reject
+        return false;
       }
     }
 
@@ -399,7 +506,7 @@ export class Encoder {
   private canEncode(form: EncoderForm, operands: Operand[]): boolean {
     // For relative jump forms, the value-fits check must consider the relative offset,
     // not the absolute target address. We skip the check here and let encoding handle it.
-    const isRelative = form.operands.includes('rel');
+    const isRelative = form.addressing === 'relative';
 
     for (const entry of form.opcodeEntries) {
       if (entry.kind === 'fixed') continue;
@@ -461,7 +568,9 @@ export class Encoder {
           // Direct address forms (e.g., ModRM_110_xxx_00 with rm match: 6)
           // should not match memory operands that have base/index registers.
           // Those forms only match [disp16] (no base/index).
-          if (field.identifier === 'rm') {
+          // Skip this check when the field has an explicit encoding (e.g., Z80
+          // register-indirect modes like (HL) encoded as type: Memory).
+          if (!field.encoding && form.operands.includes(field.identifier)) {
             const operandIdx = this.findOperandIndex(
               form.operands,
               field.identifier,
@@ -474,7 +583,9 @@ export class Encoder {
               }
             }
           }
-          continue;
+          // If the field also has encoding info, fall through to validate it;
+          // otherwise skip (pure fixed-match field).
+          if (!field.encoding) continue;
         }
         if (!field.encoding) continue;
         if (field.type === undefined) continue;
@@ -502,13 +613,12 @@ export class Encoder {
           const mem = operand as MemoryOperand;
           const hasBase = mem.base || mem.index;
           if (hasBase) {
-            const hasDispEntry = form.opcodeEntries.some(
-              (e) =>
-                (e.kind === 'ref' && e.identifier.startsWith('DISP')) ||
-                (e.kind === 'inline' &&
-                  e.matcher &&
-                  (e.matcher.type & DataTypes.Displacement) !== 0),
-            );
+            const hasDispEntry = form.opcodeEntries.some((e) => {
+              if (e.kind === 'fixed') return false;
+              const m =
+                e.kind === 'ref' ? this.operandDefs[e.identifier] : e.matcher;
+              return m && (m.type & DataTypes.Displacement) !== 0;
+            });
             const rawDisp = mem.displacement;
             const dispIsNumeric = typeof rawDisp === 'number';
             const disp = dispIsNumeric ? rawDisp : 0;
@@ -555,6 +665,9 @@ export class Encoder {
               }
             }
           }
+        } else {
+          // Field type and operand type mismatch (e.g., Memory field with register operand)
+          return false;
         }
       }
     }
@@ -590,29 +703,67 @@ export class Encoder {
     return false;
   }
 
+  /**
+   * Get the ordinal position of a matcher among unattached Immediate matchers
+   * (those whose field identifiers don't match any operand name).
+   * Used for far pointers where the first Immediate is offset, second is segment.
+   */
+  private getUnattachedImmediateOrder(
+    form: EncoderForm,
+    targetMatcher: EncoderMatcher,
+  ): number {
+    let order = 0;
+    for (const entry of form.opcodeEntries) {
+      if (entry.kind === 'fixed') continue;
+      const matcher =
+        entry.kind === 'ref'
+          ? this.operandDefs[entry.identifier]
+          : entry.matcher;
+      if (!matcher || !(matcher.type & DataTypes.Immediate)) continue;
+      // Check if this is an unattached matcher (fields don't match operand names)
+      const attached = matcher.fields?.some((f) =>
+        form.operands.includes(f.identifier),
+      );
+      if (attached) continue;
+      if (
+        matcher === targetMatcher ||
+        matcher.identifier === targetMatcher.identifier
+      ) {
+        return order;
+      }
+      order++;
+    }
+    return 0;
+  }
+
   private findImmediateOperandIndex(
     form: EncoderForm,
     matcher: EncoderMatcher,
   ): number {
-    const fieldId = matcher.fields?.[0]?.identifier ?? matcher.identifier;
+    const field = matcher.fields?.[0];
+    const fieldId = field?.identifier ?? matcher.identifier;
+
+    // If the field declares a specific operand type (e.g., Memory), find the operand
+    // slot matching the field's identifier directly — no hardcoded name checks needed.
+    if (field?.type === OperandTypes.Memory) {
+      return form.operands.indexOf(fieldId);
+    }
+
+    // Field identifier now matches operand name directly (imm, rel, level, etc.)
+    const directIdx = form.operands.indexOf(fieldId);
+    if (directIdx !== -1) return directIdx;
+
+    // Pure displacement comes from memory operand, not from operand list
+    if (
+      matcher.type & DataTypes.Displacement &&
+      !(matcher.type & DataTypes.Immediate)
+    )
+      return -1;
+
+    // Fallback: find first operand slot whose type resolves to Immediate
     for (let i = 0; i < form.operands.length; i++) {
-      const fop = form.operands[i];
-      if (
-        fop === 'imm' ||
-        fop === 'rel' ||
-        fop === 'ptr' ||
-        fop === 'level' ||
-        fop === 'mem'
-      ) {
-        if (
-          fieldId === 'IMM' &&
-          (fop === 'imm' || fop === 'rel' || fop === 'ptr' || fop === 'mem')
-        )
-          return i;
-        if (fieldId === 'LEVEL' && fop === 'level') return i;
-        // Pure displacement comes from memory operand, but dual disp/imm can match immediates
-        if (fieldId === 'DISP' && !(matcher.type & DataTypes.Immediate))
-          return -1;
+      const r = this.resolveOperandType(form, form.operands[i]);
+      if (r && r.dataType !== undefined && r.dataType & DataTypes.Immediate) {
         return i;
       }
     }
@@ -742,7 +893,7 @@ export class Encoder {
     fixup?: { offset: number; size: number; relative?: boolean };
   } {
     const numBytes = Math.ceil(matcher.size / 8);
-    const isRelative = form.operands.includes('rel');
+    const isRelative = form.addressing === 'relative';
 
     // Find the operand value
     let value = 0;
@@ -751,51 +902,58 @@ export class Encoder {
 
     // Map matcher to operand
     let operandIdx = -1;
+
     if (matcher.type & DataTypes.Immediate) {
-      // Find the 'imm', 'rel', 'ptr', 'level', or 'mem' operand
-      for (let i = 0; i < form.operands.length; i++) {
-        const fop = form.operands[i];
-        if (
-          fop === 'imm' ||
-          fop === 'rel' ||
-          fop === 'ptr' ||
-          fop === 'level' ||
-          fop === 'mem'
-        ) {
-          // For forms with multiple immediates, match by field identifier
+      // Field identifier now matches operand name directly (imm, rel, mem, level, etc.)
+      operandIdx = form.operands.indexOf(fieldId);
+
+      // Fallback: find first operand slot whose type resolves to Immediate
+      if (operandIdx === -1) {
+        for (let i = 0; i < form.operands.length; i++) {
+          const r = this.resolveOperandType(form, form.operands[i]);
           if (
-            fieldId === 'IMM' &&
-            (fop === 'imm' || fop === 'rel' || fop === 'ptr' || fop === 'mem')
+            r &&
+            r.dataType !== undefined &&
+            r.dataType & DataTypes.Immediate
           ) {
             operandIdx = i;
             break;
-          }
-          if (fieldId === 'LEVEL' && fop === 'level') {
-            operandIdx = i;
-            break;
-          }
-          if (fieldId === 'DISP' && !(matcher.type & DataTypes.Immediate)) {
-            // Pure displacement comes from memory operand, not from operand list
-            break;
-          }
-          // Fallback for simple single-immediate
-          if (operandIdx === -1) {
-            operandIdx = i;
           }
         }
       }
     }
 
     if (matcher.type & DataTypes.Displacement) {
-      // Displacement comes from memory operand
-      const memIdx = form.operands.indexOf('rm');
-      if (memIdx !== -1 && operands[memIdx]?.type === 'memory') {
+      // Displacement comes from memory operand — find the actual memory operand
+      const memIdx = operands.findIndex((op) => op.type === 'memory');
+      if (memIdx !== -1) {
         const mem = operands[memIdx] as MemoryOperand;
-        value =
-          (typeof mem.displacement === 'number' ? mem.displacement : 0) ?? 0;
+        if (typeof mem.displacement === 'number') {
+          value = mem.displacement ?? 0;
+        } else if (typeof mem.displacement === 'string') {
+          // Label reference in displacement
+          if (mem.displacement in labels) {
+            value = labels[mem.displacement];
+          } else {
+            needsFixup = true;
+            value = 0;
+          }
+        } else {
+          value = 0;
+        }
       } else if (matcher.type & DataTypes.Immediate) {
-        // Dual displacement/immediate: try immediate from 'imm' operand slot or 'rm' slot
-        const immIdx = operandIdx !== -1 ? operandIdx : memIdx;
+        // Dual displacement/immediate: try immediate from operand slot
+        // When no memory operand is found, fall back to finding the Operand-type slot
+        // (e.g., 'rm' operand receiving a bare label as immediate for LEA)
+        let immIdx = operandIdx !== -1 ? operandIdx : memIdx;
+        if (immIdx === -1) {
+          // Find the operand slot that IS an immediate and whose form type is Operand
+          immIdx = form.operands.findIndex((opName, idx) => {
+            if (operands[idx]?.type !== 'immediate') return false;
+            const r = this.resolveOperandType(form, opName);
+            return r && r.dataType === DataTypes.Operand;
+          });
+        }
         if (immIdx !== -1 && operands[immIdx]?.type === 'immediate') {
           const operand = operands[immIdx];
           if (
@@ -814,8 +972,18 @@ export class Encoder {
     } else if (operandIdx !== -1 && operands[operandIdx]?.type === 'memory') {
       // Direct memory address: extract displacement from memory operand
       const mem = operands[operandIdx] as MemoryOperand;
-      value =
-        (typeof mem.displacement === 'number' ? mem.displacement : 0) ?? 0;
+      if (typeof mem.displacement === 'number') {
+        value = mem.displacement ?? 0;
+      } else if (typeof mem.displacement === 'string') {
+        if (mem.displacement in labels) {
+          value = labels[mem.displacement];
+        } else {
+          needsFixup = true;
+          value = 0;
+        }
+      } else {
+        value = 0;
+      }
     } else if (operandIdx !== -1) {
       const operand = operands[operandIdx];
       if (operand.type === 'immediate') {
@@ -842,11 +1010,14 @@ export class Encoder {
           operand.value !== null
         ) {
           // Far pointer: { seg, off }
+          // Determine which component by this matcher's position among unattached
+          // Immediate matchers: first → offset, second → segment.
           if ('seg' in operand.value && 'off' in operand.value) {
             const ptr = operand.value as { seg: number; off: number };
-            if (fieldId === 'NEW_IP' || !fieldId) {
+            const immOrder = this.getUnattachedImmediateOrder(form, matcher);
+            if (immOrder === 0) {
               value = typeof ptr.off === 'number' ? ptr.off : 0;
-            } else if (fieldId === 'NEW_CS') {
+            } else {
               value = typeof ptr.seg === 'number' ? ptr.seg : 0;
             }
           }
@@ -929,16 +1100,7 @@ export class Encoder {
     formOperands: string[],
     fieldIdentifier: string,
   ): number {
-    // Direct match: field identifier matches operand slot name
-    for (let i = 0; i < formOperands.length; i++) {
-      if (formOperands[i] === fieldIdentifier) return i;
-    }
-    // If field is 'reg' and operands have 'seg', match segment
-    if (fieldIdentifier === 'reg') {
-      const segIdx = formOperands.indexOf('seg');
-      if (segIdx !== -1) return segIdx;
-    }
-    return -1;
+    return formOperands.indexOf(fieldIdentifier);
   }
 
   /**
@@ -960,13 +1122,11 @@ export class Encoder {
         continue;
 
       // Must be a no-displacement form
-      const hasDisp = form.opcodeEntries.some(
-        (e) =>
-          (e.kind === 'ref' && e.identifier.startsWith('DISP')) ||
-          (e.kind === 'inline' &&
-            e.matcher &&
-            (e.matcher.type & DataTypes.Displacement) !== 0),
-      );
+      const hasDisp = form.opcodeEntries.some((e) => {
+        if (e.kind === 'fixed') return false;
+        const m = e.kind === 'ref' ? this.operandDefs[e.identifier] : e.matcher;
+        return m && (m.type & DataTypes.Displacement) !== 0;
+      });
       if (hasDisp) continue;
 
       // Find the same field (by identifier and type) in this form

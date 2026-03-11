@@ -11,7 +11,7 @@ export const jae: InstructionInfo = {
   forms: [
     // 0x73 cb - JAE cb
     {
-      operation: ['${RESOLVE_CF}', 'IP = (CARRY == 0) ? IP + %{IMM} : IP'],
+      operation: ['${RESOLVE_CF}', 'IP = (CARRY == 0) ? IP + %{imm} : IP'],
       opcode: [Opcodes.JAE, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,

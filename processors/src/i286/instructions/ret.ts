@@ -54,7 +54,7 @@ export const ret: InstructionInfo = {
       operation: [
         'stack_address = SS_BASE + SP',
         'IP = RAM:u16[stack_address]',
-        'SP = SP + 2 + %{IMM}',
+        'SP = SP + 2 + %{imm}',
       ],
       opcode: [Opcodes.RET_DW, 'IMM_u16'],
       operands: ['imm'],
@@ -69,7 +69,7 @@ export const ret: InstructionInfo = {
         'stack_address = SS_BASE + SP',
         'IP = RAM:u16[stack_address]',
         'CS = RAM:u16[stack_address + 2]',
-        'SP = SP + 4 + %{IMM}',
+        'SP = SP + 4 + %{imm}',
       ],
       opcode: [Opcodes.RETF_DW, 'IMM_u16'],
       operands: ['imm'],

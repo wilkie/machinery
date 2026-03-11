@@ -43,7 +43,7 @@ export const operandDefinitions: Record<string, EncoderMatcher> = {
     name: 'Unsigned 8-bit Immediate',
     type: 4,
     size: 8,
-    fields: [{ identifier: 'IMM', offset: 0, size: 8 }],
+    fields: [{ identifier: 'imm', offset: 0, size: 8 }],
   },
   IMM_i8: {
     identifier: 'IMM_i8',
@@ -51,14 +51,21 @@ export const operandDefinitions: Record<string, EncoderMatcher> = {
     type: 4,
     size: 8,
     signed: true,
-    fields: [{ identifier: 'IMM', offset: 0, size: 8, signed: true }],
+    fields: [{ identifier: 'imm', offset: 0, size: 8, signed: true }],
   },
   IMM_u16: {
     identifier: 'IMM_u16',
     name: 'Unsigned 16-bit Immediate',
     type: 4,
     size: 16,
-    fields: [{ identifier: 'IMM', offset: 0, size: 16 }],
+    fields: [{ identifier: 'imm', offset: 0, size: 16 }],
+  },
+  IMM_MEM_u16: {
+    identifier: 'IMM_MEM_u16',
+    name: 'Unsigned 16-bit Immediate Dereference',
+    type: 4,
+    size: 16,
+    fields: [{ identifier: 'mem', offset: 0, size: 16, type: 3 }],
   },
   DISP_i8: {
     identifier: 'DISP_i8',
@@ -74,7 +81,7 @@ export const operandDefinitions: Record<string, EncoderMatcher> = {
     type: 4,
     size: 8,
     signed: true,
-    fields: [{ identifier: 'REL', offset: 0, size: 8, signed: true }],
+    fields: [{ identifier: 'rel', offset: 0, size: 8, signed: true }],
   },
   REG8_SRC: {
     identifier: 'REG8_SRC',
@@ -235,8 +242,29 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'LD',
-    operands: ['B', '(HL)'],
-    opcodeEntries: [{ kind: 'fixed', value: 70 }],
+    operands: ['B', 'rm'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_B_xHLx',
+          name: 'LD B, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 8 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
@@ -275,8 +303,29 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'LD',
-    operands: ['C', '(HL)'],
-    opcodeEntries: [{ kind: 'fixed', value: 78 }],
+    operands: ['C', 'rm'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_C_xHLx',
+          name: 'LD C, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 9 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
@@ -315,8 +364,29 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'LD',
-    operands: ['D', '(HL)'],
-    opcodeEntries: [{ kind: 'fixed', value: 86 }],
+    operands: ['D', 'rm'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_D_xHLx',
+          name: 'LD D, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 10 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
@@ -355,8 +425,29 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'LD',
-    operands: ['E', '(HL)'],
-    opcodeEntries: [{ kind: 'fixed', value: 94 }],
+    operands: ['E', 'rm'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_E_xHLx',
+          name: 'LD E, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 11 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
@@ -395,8 +486,29 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'LD',
-    operands: ['H', '(HL)'],
-    opcodeEntries: [{ kind: 'fixed', value: 102 }],
+    operands: ['H', 'rm'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_H_xHLx',
+          name: 'LD H, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 12 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
@@ -435,8 +547,29 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'LD',
-    operands: ['L', '(HL)'],
-    opcodeEntries: [{ kind: 'fixed', value: 110 }],
+    operands: ['L', 'rm'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_L_xHLx',
+          name: 'LD L, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 13 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
@@ -445,38 +578,185 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'LD',
-    operands: ['(HL)', 'B'],
-    opcodeEntries: [{ kind: 'fixed', value: 112 }],
+    operands: ['rm', 'B'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_xHLx_B',
+          name: 'LD (HL), B Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 14 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 0,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(HL)', 'C'],
-    opcodeEntries: [{ kind: 'fixed', value: 113 }],
+    operands: ['rm', 'C'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_xHLx_C',
+          name: 'LD (HL), C Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 14 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 1,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(HL)', 'D'],
-    opcodeEntries: [{ kind: 'fixed', value: 114 }],
+    operands: ['rm', 'D'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_xHLx_D',
+          name: 'LD (HL), D Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 14 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 2,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(HL)', 'E'],
-    opcodeEntries: [{ kind: 'fixed', value: 115 }],
+    operands: ['rm', 'E'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_xHLx_E',
+          name: 'LD (HL), E Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 14 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 3,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(HL)', 'H'],
-    opcodeEntries: [{ kind: 'fixed', value: 116 }],
+    operands: ['rm', 'H'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_xHLx_H',
+          name: 'LD (HL), H Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 14 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 4,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(HL)', 'L'],
-    opcodeEntries: [{ kind: 'fixed', value: 117 }],
+    operands: ['rm', 'L'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_xHLx_L',
+          name: 'LD (HL), L Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 14 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 5,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(HL)', 'A'],
-    opcodeEntries: [{ kind: 'fixed', value: 119 }],
+    operands: ['rm', 'A'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_xHLx_A',
+          name: 'LD (HL), A Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 14 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 7,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
@@ -510,8 +790,29 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'LD',
-    operands: ['A', '(HL)'],
-    opcodeEntries: [{ kind: 'fixed', value: 126 }],
+    operands: ['A', 'rm'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_A_xHLx',
+          name: 'LD A, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 15 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
@@ -574,10 +875,29 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'LD',
-    operands: ['(HL)', 'imm'],
+    operands: ['rm', 'imm'],
     operandSize: 8,
     opcodeEntries: [
-      { kind: 'fixed', value: 54 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_xHLx_N',
+          name: 'LD (HL), N Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 6 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+          ],
+        },
+      },
       { kind: 'ref', identifier: 'IMM_u8' },
     ],
   },
@@ -628,58 +948,142 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'LD',
-    operands: ['(BC)', 'A'],
-    opcodeEntries: [{ kind: 'fixed', value: 2 }],
+    operands: ['rm', 'A'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_xBCx_A',
+          name: 'LD (BC), A Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 0 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 2,
+              type: 3,
+              encoding: ['BC'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(DE)', 'A'],
-    opcodeEntries: [{ kind: 'fixed', value: 18 }],
+    operands: ['rm', 'A'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_xDEx_A',
+          name: 'LD (DE), A Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 2 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 2,
+              type: 3,
+              encoding: ['DE'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
-    operands: ['A', '(BC)'],
-    opcodeEntries: [{ kind: 'fixed', value: 10 }],
+    operands: ['A', 'rm'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_A_xBCx',
+          name: 'LD A, (BC) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 1 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 2,
+              type: 3,
+              encoding: ['BC'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
-    operands: ['A', '(DE)'],
-    opcodeEntries: [{ kind: 'fixed', value: 26 }],
+    operands: ['A', 'rm'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_LD_A_xDEx',
+          name: 'LD A, (DE) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode', offset: 3, size: 5, match: 3 },
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 2,
+              type: 3,
+              encoding: ['DE'],
+            },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(imm)', 'HL'],
+    operands: ['mem', 'HL'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 34 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
     mnemonic: 'LD',
-    operands: ['HL', '(imm)'],
+    operands: ['HL', 'mem'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 42 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(imm)', 'A'],
+    operands: ['mem', 'A'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 50 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
     mnemonic: 'LD',
-    operands: ['A', '(imm)'],
+    operands: ['A', 'mem'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 58 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
@@ -689,82 +1093,82 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'LD',
-    operands: ['(imm)', 'BC'],
+    operands: ['mem', 'BC'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
       { kind: 'fixed', value: 67 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
     mnemonic: 'LD',
-    operands: ['BC', '(imm)'],
+    operands: ['BC', 'mem'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
       { kind: 'fixed', value: 75 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(imm)', 'DE'],
+    operands: ['mem', 'DE'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
       { kind: 'fixed', value: 83 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
     mnemonic: 'LD',
-    operands: ['DE', '(imm)'],
+    operands: ['DE', 'mem'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
       { kind: 'fixed', value: 91 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(imm)', 'HL'],
+    operands: ['mem', 'HL'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
       { kind: 'fixed', value: 99 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
     mnemonic: 'LD',
-    operands: ['HL', '(imm)'],
+    operands: ['HL', 'mem'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
       { kind: 'fixed', value: 107 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
     mnemonic: 'LD',
-    operands: ['(imm)', 'SP'],
+    operands: ['mem', 'SP'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
       { kind: 'fixed', value: 115 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
     mnemonic: 'LD',
-    operands: ['SP', '(imm)'],
+    operands: ['SP', 'mem'],
     operandSize: 16,
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
       { kind: 'fixed', value: 123 },
-      { kind: 'ref', identifier: 'IMM_u16' },
+      { kind: 'ref', identifier: 'IMM_MEM_u16' },
     ],
   },
   {
@@ -837,9 +1241,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'ADD',
-    operands: ['A', '(HL)'],
+    operands: ['A', 'rm'],
     operandSize: 8,
-    opcodeEntries: [{ kind: 'fixed', value: 134 }],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_ADD_A_xHLx',
+          name: 'ADD A, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 16 },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'ADD',
@@ -918,9 +1343,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'ADC',
-    operands: ['A', '(HL)'],
+    operands: ['A', 'rm'],
     operandSize: 8,
-    opcodeEntries: [{ kind: 'fixed', value: 142 }],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_ADC_A_xHLx',
+          name: 'ADC A, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 17 },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'ADC',
@@ -1011,9 +1457,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SUB',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
-    opcodeEntries: [{ kind: 'fixed', value: 150 }],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_SUB_xHLx',
+          name: 'SUB (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 18 },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'SUB',
@@ -1068,9 +1535,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SBC',
-    operands: ['A', '(HL)'],
+    operands: ['A', 'rm'],
     operandSize: 8,
-    opcodeEntries: [{ kind: 'fixed', value: 158 }],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_SBC_A_xHLx',
+          name: 'SBC A, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 19 },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'SBC',
@@ -1161,9 +1649,31 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'INC',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
-    opcodeEntries: [{ kind: 'fixed', value: 52 }],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_INC_xHLx',
+          name: 'INC (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode_low', offset: 0, size: 3, match: 4 },
+            {
+              identifier: 'rm',
+              offset: 3,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 0 },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'INC',
@@ -1233,9 +1743,31 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'DEC',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
-    opcodeEntries: [{ kind: 'fixed', value: 53 }],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_DEC_xHLx',
+          name: 'DEC (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode_low', offset: 0, size: 3, match: 5 },
+            {
+              identifier: 'rm',
+              offset: 3,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 0 },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'DEC',
@@ -1305,9 +1837,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'AND',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
-    opcodeEntries: [{ kind: 'fixed', value: 166 }],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_AND_xHLx',
+          name: 'AND (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 20 },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'AND',
@@ -1362,9 +1915,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'OR',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
-    opcodeEntries: [{ kind: 'fixed', value: 182 }],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_OR_xHLx',
+          name: 'OR (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 22 },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'OR',
@@ -1419,9 +1993,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'XOR',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
-    opcodeEntries: [{ kind: 'fixed', value: 174 }],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_XOR_xHLx',
+          name: 'XOR (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 21 },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'XOR',
@@ -1476,9 +2071,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'CP',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
-    opcodeEntries: [{ kind: 'fixed', value: 190 }],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_CP_xHLx',
+          name: 'CP (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 23 },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'CP',
@@ -1595,8 +2211,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'JP',
-    operands: ['(HL)'],
-    opcodeEntries: [{ kind: 'fixed', value: 233 }],
+    operands: ['rm'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_JP_xHLx',
+          name: 'JP (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode_low', offset: 0, size: 3, match: 1 },
+            {
+              identifier: 'rm',
+              offset: 3,
+              size: 3,
+              match: 5,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 3 },
+          ],
+        },
+      },
+    ],
     addressing: 'absolute',
   },
   {
@@ -1922,8 +2560,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'EX',
-    operands: ['(SP)', 'HL'],
-    opcodeEntries: [{ kind: 'fixed', value: 227 }],
+    operands: ['rm', 'HL'],
+    opcodeEntries: [
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_EX_xSPx_HL',
+          name: 'EX (SP), HL Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            { identifier: 'opcode_low', offset: 0, size: 3, match: 3 },
+            {
+              identifier: 'rm',
+              offset: 3,
+              size: 3,
+              match: 4,
+              type: 3,
+              encoding: ['SP'],
+            },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 3 },
+          ],
+        },
+      },
+    ],
   },
   {
     mnemonic: 'EXX',
@@ -2029,66 +2689,226 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'IN',
-    operands: ['B', '(C)'],
+    operands: ['B', 'rm'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 64 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_IN_B_xCx',
+          name: 'IN B, (C) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 0,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 0 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'IN',
-    operands: ['C', '(C)'],
+    operands: ['C', 'rm'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 72 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_IN_C_xCx',
+          name: 'IN C, (C) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 0,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 1 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'IN',
-    operands: ['D', '(C)'],
+    operands: ['D', 'rm'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 80 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_IN_D_xCx',
+          name: 'IN D, (C) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 0,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 2 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'IN',
-    operands: ['E', '(C)'],
+    operands: ['E', 'rm'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 88 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_IN_E_xCx',
+          name: 'IN E, (C) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 0,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 3 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'IN',
-    operands: ['H', '(C)'],
+    operands: ['H', 'rm'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 96 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_IN_H_xCx',
+          name: 'IN H, (C) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 0,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 4 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'IN',
-    operands: ['L', '(C)'],
+    operands: ['L', 'rm'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 104 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_IN_L_xCx',
+          name: 'IN L, (C) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 0,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 5 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'IN',
-    operands: ['A', '(C)'],
+    operands: ['A', 'rm'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 120 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_IN_A_xCx',
+          name: 'IN A, (C) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 0,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 7 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'IN',
-    operands: ['(C)'],
+    operands: ['rm'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 112 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_IN_xCx',
+          name: 'IN (C) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 0,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'opcode_mid', offset: 3, size: 3, match: 6 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -2102,66 +2922,226 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'OUT',
-    operands: ['(C)', 'B'],
+    operands: ['rm', 'B'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 65 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_OUT_xCx_B',
+          name: 'OUT (C), B Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 1,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 0 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'OUT',
-    operands: ['(C)', 'C'],
+    operands: ['rm', 'C'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 73 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_OUT_xCx_C',
+          name: 'OUT (C), C Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 1,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 1 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'OUT',
-    operands: ['(C)', 'D'],
+    operands: ['rm', 'D'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 81 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_OUT_xCx_D',
+          name: 'OUT (C), D Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 1,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 2 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'OUT',
-    operands: ['(C)', 'E'],
+    operands: ['rm', 'E'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 89 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_OUT_xCx_E',
+          name: 'OUT (C), E Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 1,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 3 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'OUT',
-    operands: ['(C)', 'H'],
+    operands: ['rm', 'H'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 97 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_OUT_xCx_H',
+          name: 'OUT (C), H Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 1,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 4 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'OUT',
-    operands: ['(C)', 'L'],
+    operands: ['rm', 'L'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 105 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_OUT_xCx_L',
+          name: 'OUT (C), L Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 1,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 5 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'OUT',
-    operands: ['(C)', 'A'],
+    operands: ['rm', 'A'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 121 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_OUT_xCx_A',
+          name: 'OUT (C), A Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 1,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 7 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
     mnemonic: 'OUT',
-    operands: ['(C)', '0'],
+    operands: ['rm', '0'],
     opcodeEntries: [
       { kind: 'fixed', value: 237 },
-      { kind: 'fixed', value: 113 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_OUT_xCx_0',
+          name: 'OUT (C), 0 Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 1,
+              type: 3,
+              encoding: ['C'],
+            },
+            { identifier: 'reg', offset: 3, size: 3, match: 6 },
+            { identifier: 'opcode_high', offset: 6, size: 2, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -2348,11 +3328,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RLC',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 6 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_RLC_xHLx',
+          name: 'RLC (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 0 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -2420,11 +3419,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RRC',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 14 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_RRC_xHLx',
+          name: 'RRC (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 1 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -2492,11 +3510,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RL',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 22 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_RL_xHLx',
+          name: 'RL (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 2 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -2564,11 +3601,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RR',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 30 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_RR_xHLx',
+          name: 'RR (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 3 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -2636,11 +3692,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SLA',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 38 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_SLA_xHLx',
+          name: 'SLA (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 4 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -2708,11 +3783,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SRA',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 46 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_SRA_xHLx',
+          name: 'SRA (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 5 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -2780,11 +3874,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SRL',
-    operands: ['(HL)'],
+    operands: ['rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 62 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_SRL_xHLx',
+          name: 'SRL (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 7 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -2852,11 +3965,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'BIT',
-    operands: ['0', '(HL)'],
+    operands: ['0', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 70 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT0_xHLx',
+          name: 'BIT/RES/SET 0, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 8 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -2924,11 +4056,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'BIT',
-    operands: ['1', '(HL)'],
+    operands: ['1', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 78 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT1_xHLx',
+          name: 'BIT/RES/SET 1, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 9 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -2996,11 +4147,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'BIT',
-    operands: ['2', '(HL)'],
+    operands: ['2', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 86 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT2_xHLx',
+          name: 'BIT/RES/SET 2, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 10 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3068,11 +4238,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'BIT',
-    operands: ['3', '(HL)'],
+    operands: ['3', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 94 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT3_xHLx',
+          name: 'BIT/RES/SET 3, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 11 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3140,11 +4329,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'BIT',
-    operands: ['4', '(HL)'],
+    operands: ['4', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 102 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT4_xHLx',
+          name: 'BIT/RES/SET 4, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 12 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3212,11 +4420,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'BIT',
-    operands: ['5', '(HL)'],
+    operands: ['5', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 110 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT5_xHLx',
+          name: 'BIT/RES/SET 5, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 13 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3284,11 +4511,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'BIT',
-    operands: ['6', '(HL)'],
+    operands: ['6', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 118 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT6_xHLx',
+          name: 'BIT/RES/SET 6, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 14 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3356,11 +4602,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'BIT',
-    operands: ['7', '(HL)'],
+    operands: ['7', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 126 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT7_xHLx',
+          name: 'BIT/RES/SET 7, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 15 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3428,11 +4693,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RES',
-    operands: ['0', '(HL)'],
+    operands: ['0', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 134 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT0_xHLx',
+          name: 'BIT/RES/SET 0, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 16 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3500,11 +4784,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RES',
-    operands: ['1', '(HL)'],
+    operands: ['1', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 142 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT1_xHLx',
+          name: 'BIT/RES/SET 1, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 17 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3572,11 +4875,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RES',
-    operands: ['2', '(HL)'],
+    operands: ['2', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 150 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT2_xHLx',
+          name: 'BIT/RES/SET 2, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 18 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3644,11 +4966,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RES',
-    operands: ['3', '(HL)'],
+    operands: ['3', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 158 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT3_xHLx',
+          name: 'BIT/RES/SET 3, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 19 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3716,11 +5057,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RES',
-    operands: ['4', '(HL)'],
+    operands: ['4', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 166 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT4_xHLx',
+          name: 'BIT/RES/SET 4, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 20 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3788,11 +5148,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RES',
-    operands: ['5', '(HL)'],
+    operands: ['5', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 174 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT5_xHLx',
+          name: 'BIT/RES/SET 5, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 21 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3860,11 +5239,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RES',
-    operands: ['6', '(HL)'],
+    operands: ['6', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 182 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT6_xHLx',
+          name: 'BIT/RES/SET 6, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 22 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -3932,11 +5330,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'RES',
-    operands: ['7', '(HL)'],
+    operands: ['7', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 190 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT7_xHLx',
+          name: 'BIT/RES/SET 7, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 23 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -4004,11 +5421,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SET',
-    operands: ['0', '(HL)'],
+    operands: ['0', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 198 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT0_xHLx',
+          name: 'BIT/RES/SET 0, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 24 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -4076,11 +5512,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SET',
-    operands: ['1', '(HL)'],
+    operands: ['1', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 206 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT1_xHLx',
+          name: 'BIT/RES/SET 1, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 25 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -4148,11 +5603,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SET',
-    operands: ['2', '(HL)'],
+    operands: ['2', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 214 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT2_xHLx',
+          name: 'BIT/RES/SET 2, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 26 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -4220,11 +5694,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SET',
-    operands: ['3', '(HL)'],
+    operands: ['3', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 222 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT3_xHLx',
+          name: 'BIT/RES/SET 3, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 27 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -4292,11 +5785,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SET',
-    operands: ['4', '(HL)'],
+    operands: ['4', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 230 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT4_xHLx',
+          name: 'BIT/RES/SET 4, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 28 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -4364,11 +5876,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SET',
-    operands: ['5', '(HL)'],
+    operands: ['5', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 238 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT5_xHLx',
+          name: 'BIT/RES/SET 5, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 29 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -4436,11 +5967,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SET',
-    operands: ['6', '(HL)'],
+    operands: ['6', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 246 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT6_xHLx',
+          name: 'BIT/RES/SET 6, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 30 },
+          ],
+        },
+      },
     ],
   },
   {
@@ -4508,11 +6058,30 @@ export const encoderForms: EncoderForm[] = [
   },
   {
     mnemonic: 'SET',
-    operands: ['7', '(HL)'],
+    operands: ['7', 'rm'],
     operandSize: 8,
     opcodeEntries: [
       { kind: 'fixed', value: 203 },
-      { kind: 'fixed', value: 254 },
+      {
+        kind: 'inline',
+        matcher: {
+          identifier: 'Opcode_BIT7_xHLx',
+          name: 'BIT/RES/SET 7, (HL) Opcode Field',
+          type: 1,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 6,
+              type: 3,
+              encoding: ['HL'],
+            },
+            { identifier: 'opcode', offset: 3, size: 5, match: 31 },
+          ],
+        },
+      },
     ],
   },
   {

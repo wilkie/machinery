@@ -16,7 +16,7 @@ export const jbe: InstructionInfo = {
       operation: [
         '${RESOLVE_CF}',
         '${RESOLVE_ZF}',
-        'IP = (CARRY == 1 || ZF == 1) ? IP + %{IMM} : IP',
+        'IP = (CARRY == 1 || ZF == 1) ? IP + %{imm} : IP',
       ],
       opcode: [Opcodes.JBE, 'IMM_i8'],
       operands: ['rel'],

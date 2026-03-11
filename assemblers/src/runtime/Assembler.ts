@@ -426,6 +426,25 @@ export class Assembler {
                   result.bytes[fixup.offset + i] = patchBytes[i];
                 }
               }
+            } else if (
+              op.type === 'memory' &&
+              typeof op.displacement === 'string'
+            ) {
+              const resolvedValue = this.resolveImmediateForFixup(
+                op.displacement,
+                labels,
+                constants,
+                fixup.relative,
+                offset2,
+                result.bytes.length,
+                currentGlobalLabel2,
+              );
+              if (resolvedValue !== undefined) {
+                const patchBytes = this.emitValue(resolvedValue, fixup.size);
+                for (let i = 0; i < fixup.size; i++) {
+                  result.bytes[fixup.offset + i] = patchBytes[i];
+                }
+              }
             }
           }
         }

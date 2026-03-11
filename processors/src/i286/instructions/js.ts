@@ -11,7 +11,7 @@ export const js: InstructionInfo = {
   forms: [
     // 0x78 cb - JS cb
     {
-      operation: ['${RESOLVE_SF}', 'IP = (SF == 1) ? IP + %{IMM} : IP'],
+      operation: ['${RESOLVE_SF}', 'IP = (SF == 1) ? IP + %{imm} : IP'],
       opcode: [Opcodes.JS, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,

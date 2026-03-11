@@ -11,7 +11,7 @@ export const jns: InstructionInfo = {
   forms: [
     // 0x79 cb - JNS cb
     {
-      operation: ['${RESOLVE_SF}', 'IP = (SF == 0) ? IP + %{IMM} : IP'],
+      operation: ['${RESOLVE_SF}', 'IP = (SF == 0) ? IP + %{imm} : IP'],
       opcode: [Opcodes.JNS, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,

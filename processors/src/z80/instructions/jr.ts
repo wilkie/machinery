@@ -15,7 +15,7 @@ export const jr: InstructionInfo = {
       operands: ['rel'],
       addressing: 'relative',
       distance: 'short',
-      operation: ['PC = PC + %{REL}'],
+      operation: ['PC = PC + %{rel}'],
       cycles: 12,
     },
     // JR cc, e — conditional
@@ -25,7 +25,7 @@ export const jr: InstructionInfo = {
       aliases: ['jr nz'],
       addressing: 'relative',
       distance: 'short',
-      operation: ['if (ZF == 0) PC = PC + %{REL}'],
+      operation: ['${RESOLVE_ZF}', 'PC = (ZF == 0) ? PC + %{rel} : PC'],
       cycles: 12,
     },
     {
@@ -34,7 +34,7 @@ export const jr: InstructionInfo = {
       aliases: ['jr z'],
       addressing: 'relative',
       distance: 'short',
-      operation: ['if (ZF == 1) PC = PC + %{REL}'],
+      operation: ['${RESOLVE_ZF}', 'PC = (ZF == 1) ? PC + %{rel} : PC'],
       cycles: 12,
     },
     {
@@ -43,7 +43,7 @@ export const jr: InstructionInfo = {
       aliases: ['jr nc'],
       addressing: 'relative',
       distance: 'short',
-      operation: ['if (CF == 0) PC = PC + %{REL}'],
+      operation: ['${RESOLVE_CF}', 'PC = (CF == 0) ? PC + %{rel} : PC'],
       cycles: 12,
     },
     {
@@ -52,7 +52,7 @@ export const jr: InstructionInfo = {
       aliases: ['jr c'],
       addressing: 'relative',
       distance: 'short',
-      operation: ['if (CF == 1) PC = PC + %{REL}'],
+      operation: ['${RESOLVE_CF}', 'PC = (CF == 1) ? PC + %{rel} : PC'],
       cycles: 12,
     },
   ],

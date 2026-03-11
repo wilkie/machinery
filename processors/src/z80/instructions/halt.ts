@@ -12,7 +12,7 @@ export const halt: InstructionInfo = {
     {
       opcode: [Opcodes.HALT],
       operands: [],
-      operation: [],
+      operation: ['HALTED = 1'],
       cycles: 4,
     },
   ],

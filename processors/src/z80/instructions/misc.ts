@@ -7,7 +7,7 @@ export const daa: InstructionInfo = {
   name: 'Decimal Adjust Accumulator',
   description:
     'Adjusts A so that a correct BCD result is obtained after an addition or subtraction.',
-  modifies: ['S', 'Z', 'H', 'P', 'C'],
+  modifies: ['SF', 'ZF', 'HF', 'PF', 'CF'],
   forms: [{ opcode: [Opcodes.DAA], operands: [], operation: [], cycles: 4 }],
 };
 
@@ -15,9 +15,19 @@ export const cpl: InstructionInfo = {
   identifier: 'cpl',
   name: 'Complement Accumulator',
   description: "Inverts all bits of A (one's complement).",
-  modifies: ['H', 'N'],
+  modifies: ['HF', 'NF'],
   forms: [
-    { opcode: [Opcodes.CPL], operands: [], operation: ['A = ~A'], cycles: 4 },
+    {
+      opcode: [Opcodes.CPL],
+      operands: [],
+      operation: [
+        'A = ~A',
+        'HF = 1',
+        'NF = 1',
+        'flag_op = ${FLAG_OP_RESOLVED}',
+      ],
+      cycles: 4,
+    },
   ],
 };
 
@@ -25,12 +35,18 @@ export const neg: InstructionInfo = {
   identifier: 'neg',
   name: 'Negate Accumulator',
   description: "Negates A (two's complement).",
-  modifies: ['S', 'Z', 'H', 'P', 'N', 'C'],
+  modifies: ['SF', 'ZF', 'HF', 'PF', 'NF', 'CF'],
   forms: [
     {
       opcode: [Opcodes.ED_PREFIX, EDOpcodes.NEG],
       operands: [],
-      operation: ['A = 0 - A'],
+      operation: [
+        'a = 0',
+        'b = A',
+        'alu_result = a - b',
+        'flag_op = ${FLAG_OP_ALU_SUB8}',
+        'A = alu_result',
+      ],
       cycles: 8,
     },
   ],
@@ -40,9 +56,19 @@ export const scf: InstructionInfo = {
   identifier: 'scf',
   name: 'Set Carry Flag',
   description: 'Sets the carry flag to 1.',
-  modifies: ['H', 'N', 'C'],
+  modifies: ['HF', 'NF', 'CF'],
   forms: [
-    { opcode: [Opcodes.SCF], operands: [], operation: ['CF = 1'], cycles: 4 },
+    {
+      opcode: [Opcodes.SCF],
+      operands: [],
+      operation: [
+        'CF = 1',
+        'HF = 0',
+        'NF = 0',
+        'flag_op = ${FLAG_OP_RESOLVED}',
+      ],
+      cycles: 4,
+    },
   ],
 };
 
@@ -50,9 +76,20 @@ export const ccf: InstructionInfo = {
   identifier: 'ccf',
   name: 'Complement Carry Flag',
   description: 'Inverts the carry flag.',
-  modifies: ['H', 'N', 'C'],
+  modifies: ['HF', 'NF', 'CF'],
   forms: [
-    { opcode: [Opcodes.CCF], operands: [], operation: ['CF = ~CF'], cycles: 4 },
+    {
+      opcode: [Opcodes.CCF],
+      operands: [],
+      operation: [
+        '${RESOLVE_CF}',
+        'HF = CF',
+        'CF = ~CF',
+        'NF = 0',
+        'flag_op = ${FLAG_OP_RESOLVED}',
+      ],
+      cycles: 4,
+    },
   ],
 };
 

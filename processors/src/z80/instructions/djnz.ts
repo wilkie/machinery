@@ -14,7 +14,7 @@ export const djnz: InstructionInfo = {
       operands: ['rel'],
       addressing: 'relative',
       distance: 'short',
-      operation: ['B = B - 1', 'if (B != 0) PC = PC + %{REL}'],
+      operation: ['B = B - 1', 'PC = (B != 0) ? PC + %{rel} : PC'],
       cycles: 13,
     },
   ],

@@ -29,7 +29,7 @@ export const operands: OpcodeMatcher[] = [
     name: 'Unsigned 8-bit Immediate',
     type: InstructionDataTypes.Immediate,
     size: 8,
-    fields: [{ identifier: 'IMM', offset: 0, size: 8 }],
+    fields: [{ identifier: 'imm', offset: 0, size: 8 }],
   },
   {
     identifier: 'IMM_i8',
@@ -37,14 +37,28 @@ export const operands: OpcodeMatcher[] = [
     type: InstructionDataTypes.Immediate,
     size: 8,
     signed: true,
-    fields: [{ identifier: 'IMM', offset: 0, size: 8, signed: true }],
+    fields: [{ identifier: 'imm', offset: 0, size: 8, signed: true }],
   },
   {
     identifier: 'IMM_u16',
     name: 'Unsigned 16-bit Immediate',
     type: InstructionDataTypes.Immediate,
     size: 16,
-    fields: [{ identifier: 'IMM', offset: 0, size: 16 }],
+    fields: [{ identifier: 'imm', offset: 0, size: 16 }],
+  },
+  {
+    identifier: 'IMM_MEM_u16',
+    name: 'Unsigned 16-bit Immediate Dereference',
+    type: InstructionDataTypes.Immediate,
+    size: 16,
+    fields: [
+      {
+        identifier: 'mem',
+        type: InstructionOperandTypes.Memory,
+        offset: 0,
+        size: 16,
+      },
+    ],
   },
 
   // --- Displacements ---
@@ -64,7 +78,7 @@ export const operands: OpcodeMatcher[] = [
     type: InstructionDataTypes.Immediate,
     size: 8,
     signed: true,
-    fields: [{ identifier: 'REL', offset: 0, size: 8, signed: true }],
+    fields: [{ identifier: 'rel', offset: 0, size: 8, signed: true }],
   },
 
   // --- Register selectors embedded in opcode byte ---

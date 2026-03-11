@@ -19,6 +19,48 @@ export const registers: RegisterInfo[] = [
       },
       {
         global: true,
+        identifier: 'CF',
+        name: 'Carry Flag',
+        offset: 0,
+        size: 1,
+      },
+      {
+        global: true,
+        identifier: 'NF',
+        name: 'Subtract Flag',
+        offset: 1,
+        size: 1,
+      },
+      {
+        global: true,
+        identifier: 'PF',
+        name: 'Parity/Overflow Flag',
+        offset: 2,
+        size: 1,
+      },
+      {
+        global: true,
+        identifier: 'HF',
+        name: 'Half-Carry Flag',
+        offset: 4,
+        size: 1,
+      },
+      {
+        global: true,
+        identifier: 'ZF',
+        name: 'Zero Flag',
+        offset: 6,
+        size: 1,
+      },
+      {
+        global: true,
+        identifier: 'SF',
+        name: 'Sign Flag',
+        offset: 7,
+        size: 1,
+      },
+      {
+        global: true,
         identifier: 'A',
         name: 'Accumulator',
         offset: 8,
@@ -245,9 +287,4 @@ export const registers: RegisterInfo[] = [
       },
     ],
   },
-  // Flags register (expanded view — fields of F)
-  // The F register fields are: S Z - H - P/V N C
-  // Bit 7: S (Sign), Bit 6: Z (Zero), Bit 5: Y/F5 (undocumented),
-  // Bit 4: H (Half-carry), Bit 3: X/F3 (undocumented),
-  // Bit 2: P/V (Parity/Overflow), Bit 1: N (Subtract), Bit 0: C (Carry)
 ];

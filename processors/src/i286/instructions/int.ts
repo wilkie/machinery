@@ -86,7 +86,7 @@ export const int: InstructionInfo = {
     {
       opcode: [Opcodes.INT_DB, 'IMM_u8'],
       operands: ['imm'],
-      operation: ['${RESOLVE_FLAGS}', '#%{IMM}'],
+      operation: ['${RESOLVE_FLAGS}', '#%{imm}'],
       cycles: 23, // protected-mode: 40 to same privilege, 78 raised privilege, 167 if via task gate
     },
     // 0xCE - INTO

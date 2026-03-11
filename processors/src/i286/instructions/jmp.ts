@@ -82,7 +82,7 @@ export const jmp: InstructionInfo = {
   forms: [
     // 0xEB cb - JMP NEAR cb
     {
-      operation: ['IP = IP + %{IMM}'],
+      operation: ['IP = IP + %{imm}'],
       opcode: [Opcodes.JMP_CB, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,
@@ -92,7 +92,7 @@ export const jmp: InstructionInfo = {
     },
     // 0xE9 cw - JMP NEAR cw
     {
-      operation: ['IP = IP + %{IMM}'],
+      operation: ['IP = IP + %{imm}'],
       opcode: [Opcodes.JMP_CW, 'IMM_i16'],
       operands: ['rel'],
       operandSize: 8,

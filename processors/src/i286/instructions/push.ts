@@ -168,7 +168,7 @@ export const push: InstructionInfo = {
     },
     // 0x68 dw - PUSH dw
     {
-      operation: ['value = %{IMM}', '${OP}'],
+      operation: ['value = %{imm}', '${OP}'],
       opcode: [Opcodes.PUSH_DW, 'IMM_u16'],
       operands: ['imm'],
       operandSize: 16,
@@ -176,7 +176,7 @@ export const push: InstructionInfo = {
     },
     // 0x6A db - PUSH db
     {
-      operation: ['value = %{IMM}', '${OP}'],
+      operation: ['value = %{imm}', '${OP}'],
       opcode: [Opcodes.PUSH_DB, 'IMM_i8'],
       operands: ['imm'],
       operandSize: 16,

@@ -13,7 +13,7 @@ export const je: InstructionInfo = {
     // 0x74 cb - JE cb
     // 0x74 cb - JZ cb
     {
-      operation: ['${RESOLVE_ZF}', 'IP = (ZF == 1) ? IP + %{IMM} : IP'],
+      operation: ['${RESOLVE_ZF}', 'IP = (ZF == 1) ? IP + %{imm} : IP'],
       opcode: [Opcodes.JE, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,

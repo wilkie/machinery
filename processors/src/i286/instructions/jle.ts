@@ -17,7 +17,7 @@ export const jle: InstructionInfo = {
         '${RESOLVE_ZF}',
         '${RESOLVE_SF}',
         '${RESOLVE_OF}',
-        'IP = (ZF == 1 || SF != OF) ? IP + %{IMM} : IP',
+        'IP = (ZF == 1 || SF != OF) ? IP + %{imm} : IP',
       ],
       opcode: [Opcodes.JLE, 'IMM_i8'],
       operands: ['rel'],

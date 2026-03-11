@@ -1,4 +1,8 @@
-import type { InstructionInfo } from '@machinery/core';
+import {
+  InstructionDataTypes,
+  InstructionOperandTypes,
+  type InstructionInfo,
+} from '@machinery/core';
 
 import { Opcodes } from '../opcodes';
 
@@ -6,63 +10,90 @@ export const add: InstructionInfo = {
   identifier: 'add',
   name: 'Add',
   description: 'Adds the operand to the accumulator (8-bit) or to HL (16-bit).',
-  modifies: ['S', 'Z', 'H', 'P', 'N', 'C'],
+  modifies: ['SF', 'ZF', 'HF', 'PF', 'NF', 'CF'],
+  macros: {
+    ALU8_OP: ['alu_result = a + b', 'flag_op = ${FLAG_OP_ALU_ADD8}'],
+    ALU16_OP: ['alu_result = a + b', 'flag_op = ${FLAG_OP_ALU_ADD16}'],
+  },
   forms: [
     // ADD A, r — 8-bit register
     {
       opcode: [Opcodes.ADD_A_B],
       operands: ['A', 'B'],
       operandSize: 8,
-      operation: ['A = A + B'],
+      operation: ['a = A', 'b = B', '${ALU8_OP}', 'A = alu_result'],
       cycles: 4,
     },
     {
       opcode: [Opcodes.ADD_A_C],
       operands: ['A', 'C'],
       operandSize: 8,
-      operation: ['A = A + C'],
+      operation: ['a = A', 'b = C', '${ALU8_OP}', 'A = alu_result'],
       cycles: 4,
     },
     {
       opcode: [Opcodes.ADD_A_D],
       operands: ['A', 'D'],
       operandSize: 8,
-      operation: ['A = A + D'],
+      operation: ['a = A', 'b = D', '${ALU8_OP}', 'A = alu_result'],
       cycles: 4,
     },
     {
       opcode: [Opcodes.ADD_A_E],
       operands: ['A', 'E'],
       operandSize: 8,
-      operation: ['A = A + E'],
+      operation: ['a = A', 'b = E', '${ALU8_OP}', 'A = alu_result'],
       cycles: 4,
     },
     {
       opcode: [Opcodes.ADD_A_H],
       operands: ['A', 'H'],
       operandSize: 8,
-      operation: ['A = A + H'],
+      operation: ['a = A', 'b = H', '${ALU8_OP}', 'A = alu_result'],
       cycles: 4,
     },
     {
       opcode: [Opcodes.ADD_A_L],
       operands: ['A', 'L'],
       operandSize: 8,
-      operation: ['A = A + L'],
+      operation: ['a = A', 'b = L', '${ALU8_OP}', 'A = alu_result'],
       cycles: 4,
     },
     {
-      opcode: [Opcodes.ADD_A_xHLx],
-      operands: ['A', '(HL)'],
+      opcode: [
+        {
+          identifier: 'Opcode_ADD_A_xHLx',
+          name: 'ADD A, (HL) Opcode Field',
+          type: InstructionDataTypes.Operand,
+          size: 8,
+          fields: [
+            {
+              identifier: 'rm',
+              offset: 0,
+              size: 3,
+              match: 0b110,
+              type: InstructionOperandTypes.Memory,
+              encoding: ['HL'],
+            },
+            {
+              identifier: 'opcode',
+              offset: 3,
+              size: 5,
+              match: 0b10000,
+            },
+          ],
+        },
+      ],
+      operands: ['A', 'rm'],
       operandSize: 8,
-      operation: ['A = A + RAM:u8[HL]'],
+      operation: ['a = A', 'b = RAM:u8[HL]', '${ALU8_OP}', 'A = alu_result'],
       cycles: 7,
     },
     {
       opcode: [Opcodes.ADD_A_A],
       operands: ['A', 'A'],
       operandSize: 8,
-      operation: ['A = A + A'],
+      operation: ['a = A', 'b = A', '${ALU8_OP}', 'A = alu_result'],
       cycles: 4,
     },
 
@@ -71,41 +102,41 @@ export const add: InstructionInfo = {
       opcode: [Opcodes.ADD_A_N, 'IMM_u8'],
       operands: ['A', 'imm'],
       operandSize: 8,
-      operation: ['A = A + %{IMM}'],
+      operation: ['a = A', 'b = %{imm}', '${ALU8_OP}', 'A = alu_result'],
       cycles: 7,
     },
 
-    // ADD HL, rp — 16-bit register pair
+    // ADD HL, rp — 16-bit register pair (only HF, NF, CF affected)
     {
       opcode: [Opcodes.ADD_HL_BC],
       operands: ['HL', 'BC'],
       operandSize: 16,
-      modifies: ['H', 'N', 'C'],
-      operation: ['HL = HL + BC'],
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = HL', 'b = BC', '${ALU16_OP}', 'HL = alu_result'],
       cycles: 11,
     },
     {
       opcode: [Opcodes.ADD_HL_DE],
       operands: ['HL', 'DE'],
       operandSize: 16,
-      modifies: ['H', 'N', 'C'],
-      operation: ['HL = HL + DE'],
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = HL', 'b = DE', '${ALU16_OP}', 'HL = alu_result'],
       cycles: 11,
     },
     {
       opcode: [Opcodes.ADD_HL_HL],
       operands: ['HL', 'HL'],
       operandSize: 16,
-      modifies: ['H', 'N', 'C'],
-      operation: ['HL = HL + HL'],
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = HL', 'b = HL', '${ALU16_OP}', 'HL = alu_result'],
       cycles: 11,
     },
     {
       opcode: [Opcodes.ADD_HL_SP],
       operands: ['HL', 'SP'],
       operandSize: 16,
-      modifies: ['H', 'N', 'C'],
-      operation: ['HL = HL + SP'],
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = HL', 'b = SP', '${ALU16_OP}', 'HL = alu_result'],
       cycles: 11,
     },
   ],

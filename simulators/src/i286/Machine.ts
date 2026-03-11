@@ -453,7 +453,7 @@ export default class Machine {
     let b0 = 0; let b1 = 0; let b2 = 0; let b3 = 0; let b4 = 0; let v_0 = 0; let v_1 = 0; let v_2 = 0; let v_3 = 0; let v_4 = 0; let v_5 = 0; let v_6 = 0;
 416
     let _ip = this.mem32[30] + 0x1a0;
-    let _finalize = [];
+    let _finalize: number[] = [];
     outer: while (true) {
       b0 = this.mem8[_ip];
       _ip++;
@@ -8971,7 +8971,7 @@ export default class Machine {
           break outer;
         case 0xa0:
           // 160
-          // IMM_u16
+          // IMM_MEM_u16
           b1 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
           _ip += 2;
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
@@ -8981,7 +8981,7 @@ export default class Machine {
           break outer;
         case 0xa1:
           // 161
-          // IMM_u16
+          // IMM_MEM_u16
           b1 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
           _ip += 2;
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
@@ -8991,7 +8991,7 @@ export default class Machine {
           break outer;
         case 0xa2:
           // 162
-          // IMM_u16
+          // IMM_MEM_u16
           b1 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
           _ip += 2;
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
@@ -9001,7 +9001,7 @@ export default class Machine {
           break outer;
         case 0xa3:
           // 163
-          // IMM_u16
+          // IMM_MEM_u16
           b1 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
           _ip += 2;
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
@@ -11118,31 +11118,31 @@ export default class Machine {
           // IMM_u16
           b1 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
           _ip += 2;
-          v_4 = (b1 & 0xffff); // 1 , 0 , 0 , 3
+          v_3 = (b1 & 0xffff); // 1 , 0 , 0 , 3
           b3 = this.mem8[_ip];
           _ip++;
-          v_1 = (b3 & 0xff); // 2 , 0 , 0 , 4
+          v_0 = (b3 & 0xff); // 2 , 0 , 0 , 4
           // IP += 0x4
           this.mem32[30] = this.mem32[30] + 0x4
-          v_0 = (v_1 % 32)
+          v_0 = (v_0 % 32)
           this.mem16[4] = (this.mem16[4] - 2)
-          v_2 = (this.mem16[50] + this.mem16[4])
-          if ((416 + v_2) & 0x1) { const _value = this.mem16[5]; this.mem8[(416 + v_2)] = _value; this.mem8[((416 + v_2)) + 1] = _value >> 8; } else { this.mem16[((416 + v_2)) >> 1] = this.mem16[5]; }
-          v_3 = this.mem16[4]
+          v_1 = (this.mem16[50] + this.mem16[4])
+          if ((416 + v_1) & 0x1) { const _value = this.mem16[5]; this.mem8[(416 + v_1)] = _value; this.mem8[((416 + v_1)) + 1] = _value >> 8; } else { this.mem16[((416 + v_1)) >> 1] = this.mem16[5]; }
+          v_2 = this.mem16[4]
           if (v_0 > 0) {
             while (v_0 > 1) { // 
               this.mem16[5] = (this.mem16[5] - 2)
               this.mem16[4] = (this.mem16[4] - 2)
-              v_2 = (v_2 - 2)
-              if ((416 + v_2) & 0x1) { const _value = ((416 + (this.mem16[50] + this.mem16[5])) & 0x1 ? (this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1] >> 8) | ((this.mem16[(((416 + (this.mem16[50] + this.mem16[5]))) >> 1) + 1] & 0xff) << 8) : this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1]); this.mem8[(416 + v_2)] = _value; this.mem8[((416 + v_2)) + 1] = _value >> 8; } else { this.mem16[((416 + v_2)) >> 1] = ((416 + (this.mem16[50] + this.mem16[5])) & 0x1 ? (this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1] >> 8) | ((this.mem16[(((416 + (this.mem16[50] + this.mem16[5]))) >> 1) + 1] & 0xff) << 8) : this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1]); }
+              v_1 = (v_1 - 2)
+              if ((416 + v_1) & 0x1) { const _value = ((416 + (this.mem16[50] + this.mem16[5])) & 0x1 ? (this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1] >> 8) | ((this.mem16[(((416 + (this.mem16[50] + this.mem16[5]))) >> 1) + 1] & 0xff) << 8) : this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1]); this.mem8[(416 + v_1)] = _value; this.mem8[((416 + v_1)) + 1] = _value >> 8; } else { this.mem16[((416 + v_1)) >> 1] = ((416 + (this.mem16[50] + this.mem16[5])) & 0x1 ? (this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1] >> 8) | ((this.mem16[(((416 + (this.mem16[50] + this.mem16[5]))) >> 1) + 1] & 0xff) << 8) : this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1]); }
               v_0 = (v_0 - 1)
             } // end 
             this.mem16[4] = (this.mem16[4] - 2)
-            v_2 = (v_2 - 2)
-            if ((416 + v_2) & 0x1) { const _value = (v_3 + 2); this.mem8[(416 + v_2)] = _value; this.mem8[((416 + v_2)) + 1] = _value >> 8; } else { this.mem16[((416 + v_2)) >> 1] = (v_3 + 2); }
+            v_1 = (v_1 - 2)
+            if ((416 + v_1) & 0x1) { const _value = (v_2 + 2); this.mem8[(416 + v_1)] = _value; this.mem8[((416 + v_1)) + 1] = _value >> 8; } else { this.mem16[((416 + v_1)) >> 1] = (v_2 + 2); }
           }
-          this.mem16[5] = v_3
-          this.mem16[4] = (this.mem16[4] - v_4)
+          this.mem16[5] = v_2
+          this.mem16[4] = (this.mem16[4] - v_3)
           break outer;
         case 0xc9:
           // 201
@@ -16170,7 +16170,7 @@ export default class Machine {
     let b0 = 0; let b1 = 0; let b2 = 0; let b3 = 0; let b4 = 0; let v_0 = 0; let v_1 = 0; let v_2 = 0; let v_3 = 0; let v_4 = 0; let v_5 = 0; let v_6 = 0;
 416
     let _ip = this.mem32[30] + 0x1a0;
-    let _finalize = [];
+    let _finalize: number[] = [];
     outer: while (true) {
       b0 = this.mem8[_ip];
       _ip++;
@@ -24689,7 +24689,7 @@ export default class Machine {
           break outer;
         case 0xa0:
           // 160
-          // IMM_u16
+          // IMM_MEM_u16
           b1 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
           _ip += 2;
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
@@ -24699,7 +24699,7 @@ export default class Machine {
           break outer;
         case 0xa1:
           // 161
-          // IMM_u16
+          // IMM_MEM_u16
           b1 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
           _ip += 2;
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
@@ -24709,7 +24709,7 @@ export default class Machine {
           break outer;
         case 0xa2:
           // 162
-          // IMM_u16
+          // IMM_MEM_u16
           b1 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
           _ip += 2;
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
@@ -24719,7 +24719,7 @@ export default class Machine {
           break outer;
         case 0xa3:
           // 163
-          // IMM_u16
+          // IMM_MEM_u16
           b1 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
           _ip += 2;
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
@@ -26836,31 +26836,31 @@ export default class Machine {
           // IMM_u16
           b1 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
           _ip += 2;
-          v_4 = (b1 & 0xffff); // 1 , 0 , 0 , 3
+          v_3 = (b1 & 0xffff); // 1 , 0 , 0 , 3
           b3 = this.mem8[_ip];
           _ip++;
-          v_1 = (b3 & 0xff); // 2 , 0 , 0 , 4
+          v_0 = (b3 & 0xff); // 2 , 0 , 0 , 4
           // IP += 0x4
           this.mem32[30] = this.mem32[30] + 0x4
-          v_0 = (v_1 % 32)
+          v_0 = (v_0 % 32)
           this.mem16[4] = (this.mem16[4] - 2)
-          v_2 = (this.mem16[50] + this.mem16[4])
-          if ((416 + v_2) & 0x1) { const _value = this.mem16[5]; this.mem8[(416 + v_2)] = _value; this.mem8[((416 + v_2)) + 1] = _value >> 8; } else { this.mem16[((416 + v_2)) >> 1] = this.mem16[5]; }
-          v_3 = this.mem16[4]
+          v_1 = (this.mem16[50] + this.mem16[4])
+          if ((416 + v_1) & 0x1) { const _value = this.mem16[5]; this.mem8[(416 + v_1)] = _value; this.mem8[((416 + v_1)) + 1] = _value >> 8; } else { this.mem16[((416 + v_1)) >> 1] = this.mem16[5]; }
+          v_2 = this.mem16[4]
           if (v_0 > 0) {
             while (v_0 > 1) { // 
               this.mem16[5] = (this.mem16[5] - 2)
               this.mem16[4] = (this.mem16[4] - 2)
-              v_2 = (v_2 - 2)
-              if ((416 + v_2) & 0x1) { const _value = ((416 + (this.mem16[50] + this.mem16[5])) & 0x1 ? (this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1] >> 8) | ((this.mem16[(((416 + (this.mem16[50] + this.mem16[5]))) >> 1) + 1] & 0xff) << 8) : this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1]); this.mem8[(416 + v_2)] = _value; this.mem8[((416 + v_2)) + 1] = _value >> 8; } else { this.mem16[((416 + v_2)) >> 1] = ((416 + (this.mem16[50] + this.mem16[5])) & 0x1 ? (this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1] >> 8) | ((this.mem16[(((416 + (this.mem16[50] + this.mem16[5]))) >> 1) + 1] & 0xff) << 8) : this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1]); }
+              v_1 = (v_1 - 2)
+              if ((416 + v_1) & 0x1) { const _value = ((416 + (this.mem16[50] + this.mem16[5])) & 0x1 ? (this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1] >> 8) | ((this.mem16[(((416 + (this.mem16[50] + this.mem16[5]))) >> 1) + 1] & 0xff) << 8) : this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1]); this.mem8[(416 + v_1)] = _value; this.mem8[((416 + v_1)) + 1] = _value >> 8; } else { this.mem16[((416 + v_1)) >> 1] = ((416 + (this.mem16[50] + this.mem16[5])) & 0x1 ? (this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1] >> 8) | ((this.mem16[(((416 + (this.mem16[50] + this.mem16[5]))) >> 1) + 1] & 0xff) << 8) : this.mem16[((416 + (this.mem16[50] + this.mem16[5]))) >> 1]); }
               v_0 = (v_0 - 1)
             } // end 
             this.mem16[4] = (this.mem16[4] - 2)
-            v_2 = (v_2 - 2)
-            if ((416 + v_2) & 0x1) { const _value = (v_3 + 2); this.mem8[(416 + v_2)] = _value; this.mem8[((416 + v_2)) + 1] = _value >> 8; } else { this.mem16[((416 + v_2)) >> 1] = (v_3 + 2); }
+            v_1 = (v_1 - 2)
+            if ((416 + v_1) & 0x1) { const _value = (v_2 + 2); this.mem8[(416 + v_1)] = _value; this.mem8[((416 + v_1)) + 1] = _value >> 8; } else { this.mem16[((416 + v_1)) >> 1] = (v_2 + 2); }
           }
-          this.mem16[5] = v_3
-          this.mem16[4] = (this.mem16[4] - v_4)
+          this.mem16[5] = v_2
+          this.mem16[4] = (this.mem16[4] - v_3)
           break outer;
         case 0xc9:
           // 201

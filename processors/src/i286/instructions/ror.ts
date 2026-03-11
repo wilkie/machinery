@@ -219,10 +219,10 @@ export const ror: InstructionInfo = {
     // 0xC0 /1 - ROR eb, db
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'tmp_a = RAM:u8[effective_address]',
-        'tmp_b = %{IMM} & 0x1f',
+        'tmp_b = %{imm} & 0x1f',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = tmp',
       ],
@@ -238,10 +238,10 @@ export const ror: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'tmp_a = RAM:u8[effective_address]',
-        'tmp_b = %{IMM} & 0x1f',
+        'tmp_b = %{imm} & 0x1f',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = tmp',
       ],
@@ -256,10 +256,10 @@ export const ror: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'tmp_a = RAM:u8[effective_address]',
-        'tmp_b = %{IMM} & 0x1f',
+        'tmp_b = %{imm} & 0x1f',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = tmp',
       ],
@@ -275,10 +275,10 @@ export const ror: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'tmp_a = RAM:u8[effective_address]',
-        'tmp_b = %{IMM} & 0x1f',
+        'tmp_b = %{imm} & 0x1f',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = tmp',
       ],
@@ -294,9 +294,9 @@ export const ror: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'tmp_a = ${MOD_RM_RM8}',
-        'tmp_b = %{IMM} & 0x1f',
+        'tmp_b = %{imm} & 0x1f',
         '${ALU8_OP}',
         '${MOD_RM_RM8} = tmp',
       ],
@@ -476,10 +476,10 @@ export const ror: InstructionInfo = {
     // 0xC1 /1 - ROR ew, db
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'tmp_a = RAM:u16[effective_address]',
-        'tmp_b = %{IMM} & 0x1f',
+        'tmp_b = %{imm} & 0x1f',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = tmp',
       ],
@@ -495,10 +495,10 @@ export const ror: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'tmp_a = RAM:u16[effective_address]',
-        'tmp_b = %{IMM} & 0x1f',
+        'tmp_b = %{imm} & 0x1f',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = tmp',
       ],
@@ -513,10 +513,10 @@ export const ror: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'tmp_a = RAM:u16[effective_address]',
-        'tmp_b = %{IMM} & 0x1f',
+        'tmp_b = %{imm} & 0x1f',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = tmp',
       ],
@@ -532,10 +532,10 @@ export const ror: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'tmp_a = RAM:u16[effective_address]',
-        'tmp_b = %{IMM} & 0x1f',
+        'tmp_b = %{imm} & 0x1f',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = tmp',
       ],
@@ -551,9 +551,9 @@ export const ror: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'tmp_a = ${MOD_RM_RM16}',
-        'tmp_b = %{IMM} & 0x1f',
+        'tmp_b = %{imm} & 0x1f',
         '${ALU16_OP}',
         '${MOD_RM_RM16} = tmp',
       ],

@@ -358,7 +358,7 @@ export const operands: OpcodeMatcher[] = [
         match: 0b110,
       },
       {
-        identifier: 'reg',
+        identifier: 'seg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
@@ -396,7 +396,7 @@ export const operands: OpcodeMatcher[] = [
         ],
       },
       {
-        identifier: 'reg',
+        identifier: 'seg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
@@ -434,7 +434,7 @@ export const operands: OpcodeMatcher[] = [
         ],
       },
       {
-        identifier: 'reg',
+        identifier: 'seg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
@@ -461,7 +461,7 @@ export const operands: OpcodeMatcher[] = [
         size: 3,
       },
       {
-        identifier: 'reg',
+        identifier: 'seg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
@@ -490,7 +490,7 @@ export const operands: OpcodeMatcher[] = [
         encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
       },
       {
-        identifier: 'reg',
+        identifier: 'seg',
         offset: 3,
         size: 3,
         type: InstructionOperandTypes.Register,
@@ -2123,7 +2123,7 @@ export const operands: OpcodeMatcher[] = [
     size: 8,
     fields: [
       {
-        identifier: 'IMM',
+        identifier: 'imm',
         offset: 0,
         size: 8,
       },
@@ -2137,10 +2137,24 @@ export const operands: OpcodeMatcher[] = [
     signed: true,
     fields: [
       {
-        identifier: 'IMM',
+        identifier: 'imm',
         offset: 0,
         size: 8,
         signed: true,
+      },
+    ],
+  },
+  {
+    identifier: 'IMM_MEM_u8',
+    name: '8-bit Unsigned Immediate Value for Memory Dereference',
+    type: InstructionDataTypes.Immediate,
+    size: 8,
+    fields: [
+      {
+        identifier: 'mem',
+        type: InstructionOperandTypes.Memory,
+        offset: 0,
+        size: 8,
       },
     ],
   },
@@ -2151,7 +2165,7 @@ export const operands: OpcodeMatcher[] = [
     size: 16,
     fields: [
       {
-        identifier: 'IMM',
+        identifier: 'imm',
         offset: 0,
         size: 16,
       },
@@ -2165,10 +2179,24 @@ export const operands: OpcodeMatcher[] = [
     signed: true,
     fields: [
       {
-        identifier: 'IMM',
+        identifier: 'imm',
         offset: 0,
         size: 16,
         signed: true,
+      },
+    ],
+  },
+  {
+    identifier: 'IMM_MEM_u16',
+    name: '16-bit Unsigned Immediate Value for Memory Dereference',
+    type: InstructionDataTypes.Immediate,
+    size: 16,
+    fields: [
+      {
+        identifier: 'mem',
+        type: InstructionOperandTypes.Memory,
+        offset: 0,
+        size: 16,
       },
     ],
   },
@@ -2177,7 +2205,7 @@ export const operands: OpcodeMatcher[] = [
     name: '32-bit Unsigned Immediate Value',
     fields: [
       {
-        identifier: 'IMM',
+        identifier: 'imm',
         offset: 0,
         size: 32,
       },

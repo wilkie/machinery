@@ -319,39 +319,39 @@ export const mov: InstructionInfo = {
     },
     // 0xA0 dw - MOV AL, xb
     {
-      operation: ['AL = RAM:u8[DS_BASE + %{IMM}]'],
-      opcode: [Opcodes.MOV_AL_XB, 'IMM_u16'],
+      operation: ['AL = RAM:u8[DS_BASE + %{mem}]'],
+      opcode: [Opcodes.MOV_AL_XB, 'IMM_MEM_u16'],
       operands: ['AL', 'mem'],
       operandSize: 8,
       cycles: 5,
     },
     // 0xA1 dw - MOV AX, xw
     {
-      operation: ['AX = RAM:u16[DS_BASE + %{IMM}]'],
-      opcode: [Opcodes.MOV_AX_XW, 'IMM_u16'],
+      operation: ['AX = RAM:u16[DS_BASE + %{mem}]'],
+      opcode: [Opcodes.MOV_AX_XW, 'IMM_MEM_u16'],
       operands: ['AX', 'mem'],
       operandSize: 16,
       cycles: 5,
     },
     // 0xA2 dw - MOV xb, AL
     {
-      operation: ['RAM:u8[DS_BASE + %{IMM}] = AL'],
-      opcode: [Opcodes.MOV_XB_AL, 'IMM_u16'],
+      operation: ['RAM:u8[DS_BASE + %{mem}] = AL'],
+      opcode: [Opcodes.MOV_XB_AL, 'IMM_MEM_u16'],
       operands: ['mem', 'AL'],
       operandSize: 8,
       cycles: 3,
     },
     // 0xA3 dw - MOV xw, AX
     {
-      operation: ['RAM:u16[DS_BASE + %{IMM}] = AX'],
-      opcode: [Opcodes.MOV_XW_AX, 'IMM_u16'],
+      operation: ['RAM:u16[DS_BASE + %{mem}] = AX'],
+      opcode: [Opcodes.MOV_XW_AX, 'IMM_MEM_u16'],
       operands: ['mem', 'AX'],
       operandSize: 16,
       cycles: 3,
     },
     // 0xB0+rb db - MOV rb, db
     {
-      operation: ['${MOD_RM_RM8} = %{IMM}'],
+      operation: ['${MOD_RM_RM8} = %{imm}'],
       opcode: [
         {
           identifier: 'MOV',
@@ -382,7 +382,7 @@ export const mov: InstructionInfo = {
     },
     // 0xB8+rb dw - MOV rw, dw
     {
-      operation: ['${MOD_RM_RM16} = %{IMM}'],
+      operation: ['${MOD_RM_RM16} = %{imm}'],
       opcode: [
         {
           identifier: 'MOV',
@@ -415,7 +415,7 @@ export const mov: InstructionInfo = {
     {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'RAM:u8[effective_address] = %{IMM}',
+        'RAM:u8[effective_address] = %{imm}',
       ],
       opcode: [Opcodes.MOV_EB_DB, 'ModRM_110_000_00', 'DISP_i16', 'IMM_u8'],
       operands: ['rm', 'imm'],
@@ -425,7 +425,7 @@ export const mov: InstructionInfo = {
     {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'RAM:u8[effective_address] = %{IMM}',
+        'RAM:u8[effective_address] = %{imm}',
       ],
       opcode: [Opcodes.MOV_EB_DB, 'ModRM_rm_000_00', 'IMM_u8'],
       operands: ['rm', 'imm'],
@@ -435,7 +435,7 @@ export const mov: InstructionInfo = {
     {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'RAM:u8[effective_address] = %{IMM}',
+        'RAM:u8[effective_address] = %{imm}',
       ],
       opcode: [Opcodes.MOV_EB_DB, 'ModRM_rm_000_01', 'DISP_i8', 'IMM_u8'],
       operands: ['rm', 'imm'],
@@ -445,7 +445,7 @@ export const mov: InstructionInfo = {
     {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'RAM:u8[effective_address] = %{IMM}',
+        'RAM:u8[effective_address] = %{imm}',
       ],
       opcode: [Opcodes.MOV_EB_DB, 'ModRM_rm_000_10', 'DISP_i16', 'IMM_u8'],
       operands: ['rm', 'imm'],
@@ -453,7 +453,7 @@ export const mov: InstructionInfo = {
       cycles: 3,
     },
     {
-      operation: ['${MOD_RM_RM8} = %{IMM}'],
+      operation: ['${MOD_RM_RM8} = %{imm}'],
       opcode: [Opcodes.MOV_EB_DB, 'ModRM_rm8_000_11', 'IMM_u8'],
       operands: ['rm', 'imm'],
       operandSize: 8,
@@ -463,7 +463,7 @@ export const mov: InstructionInfo = {
     {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'RAM:u16[effective_address] = %{IMM}',
+        'RAM:u16[effective_address] = %{imm}',
       ],
       opcode: [Opcodes.MOV_EW_DW, 'ModRM_110_000_00', 'DISP_i16', 'IMM_u16'],
       operands: ['rm', 'imm'],
@@ -473,7 +473,7 @@ export const mov: InstructionInfo = {
     {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'RAM:u16[effective_address] = %{IMM}',
+        'RAM:u16[effective_address] = %{imm}',
       ],
       opcode: [Opcodes.MOV_EW_DW, 'ModRM_rm_000_00', 'IMM_u16'],
       operands: ['rm', 'imm'],
@@ -483,7 +483,7 @@ export const mov: InstructionInfo = {
     {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'RAM:u16[effective_address] = %{IMM}',
+        'RAM:u16[effective_address] = %{imm}',
       ],
       opcode: [Opcodes.MOV_EW_DW, 'ModRM_rm_000_01', 'DISP_i8', 'IMM_u16'],
       operands: ['rm', 'imm'],
@@ -493,7 +493,7 @@ export const mov: InstructionInfo = {
     {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'RAM:u16[effective_address] = %{IMM}',
+        'RAM:u16[effective_address] = %{imm}',
       ],
       opcode: [Opcodes.MOV_EW_DW, 'ModRM_rm_000_10', 'DISP_i16', 'IMM_u16'],
       operands: ['rm', 'imm'],
@@ -501,7 +501,7 @@ export const mov: InstructionInfo = {
       cycles: 3,
     },
     {
-      operation: ['${MOD_RM_RM16} = %{IMM}'],
+      operation: ['${MOD_RM_RM16} = %{imm}'],
       opcode: [Opcodes.MOV_EW_DW, 'ModRM_rm16_000_11', 'IMM_u16'],
       operands: ['rm', 'imm'],
       operandSize: 16,

@@ -144,7 +144,7 @@ export const test: InstructionInfo = {
     },
     // 0xA8 db - TEST AL, db
     {
-      operation: ['a = AL', 'b = %{IMM}', '${ALU8_OP}'],
+      operation: ['a = AL', 'b = %{imm}', '${ALU8_OP}'],
       opcode: [Opcodes.TEST_AL_DB, 'IMM_u8'],
       operands: ['AL', 'imm'],
       operandSize: 8,
@@ -153,7 +153,7 @@ export const test: InstructionInfo = {
     },
     // 0xA9 dw - TEST AX, dw
     {
-      operation: ['a = AX', 'b = %{IMM}', '${ALU16_OP}'],
+      operation: ['a = AX', 'b = %{imm}', '${ALU16_OP}'],
       opcode: [Opcodes.TEST_AX_DW, 'IMM_u16'],
       operands: ['AX', 'imm'],
       operandSize: 16,
@@ -165,7 +165,7 @@ export const test: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU8_OP}',
       ],
       opcode: [Opcodes.ALU_LOGIC_EB, 'ModRM_110_000_00', 'DISP_i16', 'IMM_u8'],
@@ -177,7 +177,7 @@ export const test: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU8_OP}',
       ],
       opcode: [Opcodes.ALU_LOGIC_EB, 'ModRM_rm_000_00', 'IMM_u8'],
@@ -189,7 +189,7 @@ export const test: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU8_OP}',
       ],
       opcode: [Opcodes.ALU_LOGIC_EB, 'ModRM_rm_000_01', 'DISP_i8', 'IMM_u8'],
@@ -201,7 +201,7 @@ export const test: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU8_OP}',
       ],
       opcode: [Opcodes.ALU_LOGIC_EB, 'ModRM_rm_000_10', 'DISP_i16', 'IMM_u8'],
@@ -210,7 +210,7 @@ export const test: InstructionInfo = {
       cycles: 6,
     },
     {
-      operation: ['a = ${MOD_RM_RM8}', 'b = %{IMM}', '${ALU8_OP}'],
+      operation: ['a = ${MOD_RM_RM8}', 'b = %{imm}', '${ALU8_OP}'],
       opcode: [Opcodes.ALU_LOGIC_EB, 'ModRM_rm8_000_11', 'IMM_u8'],
       operands: ['rm', 'imm'],
       operandSize: 8,
@@ -221,7 +221,7 @@ export const test: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
       ],
       opcode: [Opcodes.ALU_LOGIC_EW, 'ModRM_110_000_00', 'DISP_i16', 'IMM_u16'],
@@ -233,7 +233,7 @@ export const test: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
       ],
       opcode: [Opcodes.ALU_LOGIC_EW, 'ModRM_rm_000_00', 'IMM_u16'],
@@ -245,7 +245,7 @@ export const test: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
       ],
       opcode: [Opcodes.ALU_LOGIC_EW, 'ModRM_rm_000_01', 'DISP_i8', 'IMM_u16'],
@@ -257,7 +257,7 @@ export const test: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
       ],
       opcode: [Opcodes.ALU_LOGIC_EW, 'ModRM_rm_000_10', 'DISP_i16', 'IMM_u16'],
@@ -266,7 +266,7 @@ export const test: InstructionInfo = {
       cycles: 6,
     },
     {
-      operation: ['a = ${MOD_RM_RM16}', 'b = %{IMM}', '${ALU16_OP}'],
+      operation: ['a = ${MOD_RM_RM16}', 'b = %{imm}', '${ALU16_OP}'],
       opcode: [Opcodes.ALU_LOGIC_EW, 'ModRM_rm16_000_11', 'IMM_u16'],
       operands: ['rm', 'imm'],
       operandSize: 16,

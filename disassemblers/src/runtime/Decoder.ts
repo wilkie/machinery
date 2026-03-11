@@ -5,7 +5,7 @@ import type {
   OpcodeMatcher,
   Target,
 } from '@machinery/core';
-import { InstructionOperandTypes } from '@machinery/core';
+import { InstructionDataTypes, InstructionOperandTypes } from '@machinery/core';
 
 import type {
   DecodedInstruction,
@@ -21,6 +21,14 @@ import type {
 interface ConsumedByte {
   value: number;
   matcher?: OpcodeMatcher;
+}
+
+/**
+ * A trailing opcode entry (non-opcode, non-ModRM matcher) with its resolved
+ * matcher, used for reading immediates, displacements, and relative offsets.
+ */
+interface TrailingSuffix {
+  matcher: OpcodeMatcher;
 }
 
 export interface PrefixState {
@@ -85,6 +93,68 @@ export class Decoder {
       }
     }
     return map;
+  }
+
+  /**
+   * Look up the operand type for a given operand name from the form's opcode matchers.
+   * Returns the field type (Register, Memory, SystemRegister, etc.) and the matcher's
+   * data type (Operand, Immediate, Displacement). Returns undefined for literal operands.
+   */
+  private resolveOperandType(
+    form: InstructionForm,
+    operandName: string,
+  ): { fieldType?: number; dataType?: number } | undefined {
+    // Resolve an opcode entry to its OpcodeMatcher
+    const resolveMatcher = (entry: unknown): OpcodeMatcher | undefined => {
+      if (typeof entry === 'string') return this.operandsMap.get(entry);
+      if (typeof entry === 'object' && entry !== null && 'type' in entry) {
+        return entry as OpcodeMatcher;
+      }
+      return undefined;
+    };
+
+    // First, check if any matcher field has this identifier
+    for (const entry of form.opcode) {
+      const matcher = resolveMatcher(entry);
+      if (!matcher?.fields) continue;
+      for (const field of matcher.fields) {
+        if (field.identifier === operandName) {
+          return { fieldType: field.type, dataType: matcher.type };
+        }
+      }
+    }
+
+    // Check for unattached Immediate matchers (e.g., far pointer NEW_IP/NEW_CS)
+    const matchedFieldIds = new Set<string>();
+    const operandNames = form.operands || [];
+    for (const entry of form.opcode) {
+      const matcher = resolveMatcher(entry);
+      if (!matcher?.fields) continue;
+      for (const field of matcher.fields) {
+        if (operandNames.includes(field.identifier)) {
+          matchedFieldIds.add(field.identifier);
+        }
+      }
+    }
+
+    if (!matchedFieldIds.has(operandName)) {
+      for (const entry of form.opcode) {
+        const matcher = resolveMatcher(entry);
+        if (!matcher) continue;
+        if (matcher.type & InstructionDataTypes.Immediate) {
+          const fieldsMatchOther = matcher.fields?.some(
+            (f) =>
+              operandNames.includes(f.identifier) &&
+              f.identifier !== operandName,
+          );
+          if (!fieldsMatchOther) {
+            return { dataType: matcher.type };
+          }
+        }
+      }
+    }
+
+    return undefined;
   }
 
   seek(offset: number): void {
@@ -279,8 +349,8 @@ export class Decoder {
         ),
     );
 
-    // Collect trailing opcode identifiers for IMM/DISP
-    const suffixIds = this.getTrailingSuffixIds(form);
+    // Collect trailing matchers for IMM/DISP
+    const suffixes = this.getTrailingMatchers(form);
 
     for (const opName of operandNames) {
       const operand = this.decodeSingleOperand(
@@ -290,7 +360,7 @@ export class Decoder {
         modrm,
         modrmMatcher,
         segmentOverride,
-        suffixIds,
+        suffixes,
         inlineRegEntry,
       );
       if (operand) operands.push(operand);
@@ -328,7 +398,7 @@ export class Decoder {
     modrm: number | null,
     modrmMatcher: OpcodeMatcher | undefined,
     segmentOverride: string | undefined,
-    suffixIds: string[],
+    suffixes: TrailingSuffix[],
     inlineRegEntry: ConsumedByte | undefined,
   ): DecodedOperand | null {
     // Handle fixed register operand names (e.g., 'AL', 'AX', 'CL', 'DX')
@@ -337,64 +407,83 @@ export class Decoder {
       return { type: 'register', name: name.toLowerCase(), size: regSize };
     }
 
-    switch (name) {
-      case 'rm': {
-        // If there's an inline register matcher (like MOV 0xB0+r), use it
-        if (inlineRegEntry && modrm === null) {
-          return this.decodeInlineRegister(inlineRegEntry, size);
-        }
-        if (modrm !== null && modrmMatcher) {
-          return this.decodeRMFromMatcher(
-            modrm,
-            modrmMatcher,
-            size,
-            segmentOverride,
-            suffixIds,
-          );
-        }
-        return null;
-      }
+    // Look up operand type from the form's matcher fields
+    const resolved = this.resolveOperandType(form, name);
 
-      case 'reg':
-      case 'sreg':
-      case 'seg': {
-        if (modrm !== null && modrmMatcher) {
-          return this.decodeRegFromMatcher(modrm, modrmMatcher, 'reg');
-        }
-        return null;
-      }
+    if (!resolved) {
+      // No matching field — this is a literal operand (constant, register-indirect, etc.)
+      return this.decodeLiteralOperand(name, size);
+    }
 
-      case 'ptr': {
-        // Far pointer: offset, segment — sizes come from the form's inline
-        // opcode entries (two consecutive Immediate-typed matchers)
-        const ptrSizes = this.getFarPointerSizes(form);
-        const offset = this.readValue(ptrSizes[0]);
-        const segment = this.readValue(ptrSizes[1]);
+    const { fieldType, dataType } = resolved;
+
+    // Operand-type matcher fields (from ModRM or inline opcode byte)
+    if (dataType === InstructionDataTypes.Operand) {
+      // If there's an inline register matcher (e.g., MOV 0xB0+r) and no ModRM, use it
+      if (inlineRegEntry && modrm === null) {
+        return this.decodeInlineRegister(inlineRegEntry, size);
+      }
+      // Decode from ModRM — handles Register, SystemRegister, Memory, and direct addressing
+      if (modrm !== null && modrmMatcher) {
+        return this.decodeRMFromMatcher(
+          modrm,
+          modrmMatcher,
+          name,
+          size,
+          segmentOverride,
+          suffixes,
+        );
+      }
+      return null;
+    }
+
+    // Immediate-typed matcher
+    if (dataType !== undefined && dataType & InstructionDataTypes.Immediate) {
+      // Far pointer: form.distance === 'far' — read two consecutive Immediates
+      if (form.distance === 'far' && !fieldType) {
+        const ptrSuffixes = suffixes.filter(
+          (s) => s.matcher.type & InstructionDataTypes.Immediate,
+        );
+        const offsetMatcher = ptrSuffixes[0]?.matcher;
+        const segmentMatcher = ptrSuffixes[1]?.matcher;
+        const offset = offsetMatcher ? this.readValue(offsetMatcher.size) : 0;
+        const segment = segmentMatcher
+          ? this.readValue(segmentMatcher.size)
+          : 0;
         return { type: 'far_pointer', segment, offset };
       }
 
-      case 'level': {
-        // ENTER nesting level (imm8)
-        const val = this.readByte();
-        return { type: 'immediate', value: val, size: 8, signed: false };
+      // Check for relative addressing (form.addressing === 'relative')
+      if (form.addressing === 'relative') {
+        const suffix = this.findSuffixForOperand(
+          suffixes,
+          name,
+          InstructionDataTypes.Immediate,
+        );
+        if (!suffix) return null;
+        const raw = this.readValue(suffix.matcher.size);
+        const offset = this.signExtend(raw, suffix.matcher.size);
+        return {
+          type: 'relative',
+          offset,
+          size: suffix.matcher.size,
+          target: 0,
+        };
       }
 
-      case 'imm': {
-        const immId = suffixIds.find((id) => id.startsWith('IMM_'));
-        if (!immId) return null;
-        return this.readImmediateOperand(immId);
-      }
-
-      case 'mem': {
-        // Direct memory operand (MOV AL, [addr])
-        const dispId = suffixIds.find((id) => id.startsWith('IMM_'));
-        if (dispId) {
-          const dispSize = this.parseFieldSize(dispId);
-          const addr = this.readValue(dispSize);
+      // Check for Memory field type → direct memory address
+      if (fieldType === InstructionOperandTypes.Memory) {
+        const suffix = this.findSuffixForOperand(
+          suffixes,
+          name,
+          InstructionDataTypes.Immediate,
+        );
+        if (suffix) {
+          const addr = this.readValue(suffix.matcher.size);
           return {
             type: 'memory',
             displacement: addr,
-            displacementSize: dispSize,
+            displacementSize: suffix.matcher.size,
             size,
             segment: segmentOverride,
             direct: true,
@@ -403,43 +492,19 @@ export class Decoder {
         return null;
       }
 
-      case 'rel': {
-        const relId = suffixIds.find((id) => id.startsWith('REL_'));
-        if (relId) {
-          const relSize = this.parseFieldSize(relId);
-          const raw = this.readValue(relSize);
-          const offset = this.signExtend(raw, relSize);
-          return { type: 'relative', offset, size: relSize, target: 0 };
-        }
-        // Fall through to IMM-based rel handling
-        const relImmId = suffixIds.find((id) => id.startsWith('IMM_'));
-        if (!relImmId) return null;
-        const relSize2 = this.parseFieldSize(relImmId);
-        const raw2 = this.readValue(relSize2);
-        const offset2 = this.signExtend(raw2, relSize2);
-        return { type: 'relative', offset: offset2, size: relSize2, target: 0 };
+      // Plain immediate value
+      const suffix = this.findSuffixForOperand(
+        suffixes,
+        name,
+        InstructionDataTypes.Immediate,
+      );
+      if (suffix) {
+        return this.readImmediateFromMatcher(suffix.matcher);
       }
-
-      case '(imm)': {
-        // Direct memory from immediate (e.g., LD (nn), A / OUT (n), A)
-        const immId = suffixIds.find(
-          (id) => id.startsWith('IMM_') || id.startsWith('PORT_'),
-        );
-        if (!immId) return null;
-        const immSize = this.parseFieldSize(immId);
-        const addr = this.readValue(immSize);
-        return {
-          type: 'memory',
-          displacement: addr,
-          displacementSize: immSize,
-          size,
-          direct: true,
-        };
-      }
-
-      default:
-        return this.decodeLiteralOperand(name, size);
+      return null;
     }
+
+    return this.decodeLiteralOperand(name, size);
   }
 
   /**
@@ -452,20 +517,22 @@ export class Decoder {
   private decodeRMFromMatcher(
     modrm: number,
     matcher: OpcodeMatcher,
+    fieldId: string,
     operandSize: number,
     segmentOverride: string | undefined,
-    suffixIds: string[],
+    suffixes: TrailingSuffix[],
   ): DecodedOperand | null {
-    const rmField = matcher.fields?.find((f) => f.identifier === 'rm');
+    const rmField = matcher.fields?.find((f) => f.identifier === fieldId);
     if (!rmField) return null;
 
     const fieldMask = (1 << rmField.size) - 1;
     const rmValue = (modrm >> rmField.offset) & fieldMask;
 
-    // Check if the rm field represents a register (mod=11 equivalent)
+    // Check if the field represents a register (mod=11 or reg/seg field)
     if (
       'type' in rmField &&
-      rmField.type === InstructionOperandTypes.Register
+      (rmField.type === InstructionOperandTypes.Register ||
+        rmField.type === InstructionOperandTypes.SystemRegister)
     ) {
       const regName = rmField.encoding?.[rmValue];
       if (!regName) return null;
@@ -480,7 +547,7 @@ export class Decoder {
         encoding as string | null,
       );
       const { displacement, displacementSize } =
-        this.readDisplacementFromSuffix(suffixIds);
+        this.readDisplacementFromSuffix(suffixes);
 
       return {
         type: 'memory',
@@ -501,7 +568,7 @@ export class Decoder {
       !('type' in rmField && rmField.type !== undefined)
     ) {
       const { displacement, displacementSize } =
-        this.readDisplacementFromSuffix(suffixIds);
+        this.readDisplacementFromSuffix(suffixes);
       return {
         type: 'memory',
         displacement,
@@ -510,32 +577,6 @@ export class Decoder {
         segment: segmentOverride,
         direct: true,
       };
-    }
-
-    return null;
-  }
-
-  /**
-   * Decode the 'reg' (or 'sreg'/'seg') operand from the ModRM matcher's
-   * reg field encoding. The field's encoding array maps bit values to
-   * register names.
-   */
-  private decodeRegFromMatcher(
-    modrm: number,
-    matcher: OpcodeMatcher,
-    fieldId: string,
-  ): DecodedOperand | null {
-    const regField = matcher.fields?.find((f) => f.identifier === fieldId);
-    if (!regField) return null;
-
-    const fieldMask = (1 << regField.size) - 1;
-    const regValue = (modrm >> regField.offset) & fieldMask;
-
-    if (regField.encoding) {
-      const regName = regField.encoding[regValue];
-      if (!regName) return null;
-      const regSize = this.getRegisterSize(regName);
-      return { type: 'register', name: regName.toLowerCase(), size: regSize };
     }
 
     return null;
@@ -561,15 +602,17 @@ export class Decoder {
    * Read displacement bytes from the stream based on DISP_ suffix entries
    * in the form's opcode array.
    */
-  private readDisplacementFromSuffix(suffixIds: string[]): {
+  private readDisplacementFromSuffix(suffixes: TrailingSuffix[]): {
     displacement: number;
     displacementSize: number;
   } {
-    const dispId = suffixIds.find((id) => id.startsWith('DISP_'));
-    if (!dispId) return { displacement: 0, displacementSize: 0 };
+    const dispSuffix = suffixes.find(
+      (s) => (s.matcher.type & InstructionDataTypes.Displacement) !== 0,
+    );
+    if (!dispSuffix) return { displacement: 0, displacementSize: 0 };
 
-    const dispSize = this.parseFieldSize(dispId);
-    const signed = dispId.includes('_i');
+    const dispSize = dispSuffix.matcher.size;
+    const signed = dispSuffix.matcher.signed === true;
     const raw = this.readValue(dispSize);
     const displacement = signed ? this.signExtend(raw, dispSize) : raw;
 
@@ -619,50 +662,67 @@ export class Decoder {
     return false;
   }
 
-  /**
-   * Extract the sizes of the two immediate fields in a far pointer form's
-   * opcode array (offset size, then segment size).
-   */
-  private getFarPointerSizes(form: InstructionForm): [number, number] {
-    const sizes: number[] = [];
+  private getTrailingMatchers(form: InstructionForm): TrailingSuffix[] {
+    const result: TrailingSuffix[] = [];
     for (const entry of form.opcode) {
-      if (typeof entry === 'object' && 'size' in entry) {
-        sizes.push((entry as OpcodeMatcher).size);
-      }
-    }
-    // Default to 16-bit offset, 16-bit segment
-    return [sizes[0] ?? 16, sizes[1] ?? 16];
-  }
-
-  private getTrailingSuffixIds(form: InstructionForm): string[] {
-    const result: string[] = [];
-    for (const entry of form.opcode) {
-      const id =
-        typeof entry === 'string'
-          ? entry
-          : typeof entry === 'object' && 'identifier' in entry
-            ? (entry as OpcodeMatcher).identifier
-            : '';
-      if (
-        id.startsWith('IMM_') ||
-        id.startsWith('DISP_') ||
-        id.startsWith('REL_') ||
-        id.startsWith('PORT_')
+      let matcher: OpcodeMatcher | undefined;
+      if (typeof entry === 'string') {
+        matcher = this.operandsMap.get(entry);
+      } else if (
+        typeof entry === 'object' &&
+        entry !== null &&
+        'type' in entry
       ) {
-        result.push(id);
+        matcher = entry as OpcodeMatcher;
+      }
+      if (!matcher) continue;
+      // Collect non-Operand matchers (Immediate, Displacement, or both)
+      if (
+        matcher.type & InstructionDataTypes.Immediate ||
+        matcher.type & InstructionDataTypes.Displacement
+      ) {
+        result.push({ matcher });
       }
     }
     return result;
   }
 
-  private readImmediateOperand(id: string): DecodedOperand {
-    const size = this.parseFieldSize(id);
-    const signed = id.includes('_i');
-    const raw = this.readValue(size);
+  /**
+   * Find the trailing suffix matcher that corresponds to a given operand name.
+   * Matches by field identifier first, then by matcher identifier.
+   */
+  private findSuffixForOperand(
+    suffixes: TrailingSuffix[],
+    operandName: string,
+    dataType: number,
+  ): TrailingSuffix | undefined {
+    // First: find suffix whose matcher has a field with this operand's identifier
+    const byField = suffixes.find(
+      (s) =>
+        (s.matcher.type & dataType) !== 0 &&
+        s.matcher.fields?.some((f) => f.identifier === operandName),
+    );
+    if (byField) return byField;
+
+    // Second: find suffix whose matcher identifier matches the operand name
+    const byId = suffixes.find(
+      (s) =>
+        (s.matcher.type & dataType) !== 0 &&
+        s.matcher.identifier === operandName,
+    );
+    if (byId) return byId;
+
+    // Fallback: first suffix of the matching data type
+    return suffixes.find((s) => (s.matcher.type & dataType) !== 0);
+  }
+
+  private readImmediateFromMatcher(matcher: OpcodeMatcher): DecodedOperand {
+    const raw = this.readValue(matcher.size);
+    const signed = matcher.signed === true;
     return {
       type: 'immediate',
-      value: signed ? this.signExtend(raw, size) : raw,
-      size,
+      value: signed ? this.signExtend(raw, matcher.size) : raw,
+      size: matcher.size,
       signed,
     };
   }
@@ -726,14 +786,6 @@ export class Decoder {
     }
 
     return null;
-  }
-
-  private parseFieldSize(id: string): number {
-    const match = id.match(/(\d+)/);
-    if (match) {
-      return parseInt(match[1], 10);
-    }
-    return 8;
   }
 
   private readByte(): number {

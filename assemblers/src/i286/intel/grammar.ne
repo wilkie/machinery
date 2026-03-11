@@ -36,7 +36,7 @@ const registerMap: Record<string, { type: string; name: string; size: number }> 
   'SS': { type: 'register', name: 'SS', size: 16 },
 };
 
-const segmentRegisters = new Set(["ES","CS","SS","DS","FS","GS"]);
+const segmentRegisters = new Set<string>(["ES","CS","SS","DS","FS","GS"]);
 
 const lexer = moo.compile({
   ws: { match: /[ \t]+/, lineBreaks: false },

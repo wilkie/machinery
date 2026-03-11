@@ -1,3 +1,4 @@
 **/Machine.ts
 **/grammar.ts
+**/*.inc
 assemblers/src/i286/

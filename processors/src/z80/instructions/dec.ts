@@ -1,4 +1,8 @@
-import type { InstructionInfo } from '@machinery/core';
+import {
+  InstructionDataTypes,
+  InstructionOperandTypes,
+  type InstructionInfo,
+} from '@machinery/core';
 
 import { Opcodes } from '../opcodes';
 
@@ -6,63 +10,100 @@ export const dec: InstructionInfo = {
   identifier: 'dec',
   name: 'Decrement',
   description: 'Decrements the operand by one.',
-  modifies: ['S', 'Z', 'H', 'P', 'N'],
+  modifies: ['SF', 'ZF', 'HF', 'PF', 'NF'],
+  macros: {
+    ALU_OP: ['alu_result = a - b', 'flag_op = ${FLAG_OP_ALU_DEC8}'],
+  },
   forms: [
     // 8-bit DEC r
     {
       opcode: [Opcodes.DEC_B],
       operands: ['B'],
       operandSize: 8,
-      operation: ['B = B - 1'],
+      operation: ['a = B', 'b = 1', '${ALU_OP}', 'B = alu_result'],
       cycles: 4,
     },
     {
       opcode: [Opcodes.DEC_C],
       operands: ['C'],
       operandSize: 8,
-      operation: ['C = C - 1'],
+      operation: ['a = C', 'b = 1', '${ALU_OP}', 'C = alu_result'],
       cycles: 4,
     },
     {
       opcode: [Opcodes.DEC_D],
       operands: ['D'],
       operandSize: 8,
-      operation: ['D = D - 1'],
+      operation: ['a = D', 'b = 1', '${ALU_OP}', 'D = alu_result'],
       cycles: 4,
     },
     {
       opcode: [Opcodes.DEC_E],
       operands: ['E'],
       operandSize: 8,
-      operation: ['E = E - 1'],
+      operation: ['a = E', 'b = 1', '${ALU_OP}', 'E = alu_result'],
       cycles: 4,
     },
     {
       opcode: [Opcodes.DEC_H],
       operands: ['H'],
       operandSize: 8,
-      operation: ['H = H - 1'],
+      operation: ['a = H', 'b = 1', '${ALU_OP}', 'H = alu_result'],
       cycles: 4,
     },
     {
       opcode: [Opcodes.DEC_L],
       operands: ['L'],
       operandSize: 8,
-      operation: ['L = L - 1'],
+      operation: ['a = L', 'b = 1', '${ALU_OP}', 'L = alu_result'],
       cycles: 4,
     },
     {
-      opcode: [Opcodes.DEC_xHLx],
-      operands: ['(HL)'],
+      opcode: [
+        {
+          identifier: 'Opcode_DEC_xHLx',
+          name: 'DEC (HL) Opcode Field',
+          type: InstructionDataTypes.Operand,
+          size: 8,
+          fields: [
+            {
+              identifier: 'opcode_low',
+              offset: 0,
+              size: 3,
+              match: 0b101,
+            },
+            {
+              identifier: 'rm',
+              offset: 3,
+              size: 3,
+              match: 0b110,
+              type: InstructionOperandTypes.Memory,
+              encoding: ['HL'],
+            },
+            {
+              identifier: 'opcode_high',
+              offset: 6,
+              size: 2,
+              match: 0b00,
+            },
+          ],
+        },
+      ],
+      operands: ['rm'],
       operandSize: 8,
-      operation: ['RAM:u8[HL] = RAM:u8[HL] - 1'],
+      operation: [
+        'a = RAM:u8[HL]',
+        'b = 1',
+        '${ALU_OP}',
+        'RAM:u8[HL] = alu_result',
+      ],
       cycles: 11,
     },
     {
       opcode: [Opcodes.DEC_A],
       operands: ['A'],
       operandSize: 8,
-      operation: ['A = A - 1'],
+      operation: ['a = A', 'b = 1', '${ALU_OP}', 'A = alu_result'],
       cycles: 4,
     },
 

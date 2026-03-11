@@ -291,7 +291,7 @@ export const and: InstructionInfo = {
     },
     // 0x24 db - AND AL, db
     {
-      operation: ['a = AL', 'b = %{IMM}', '${ALU8_OP}', 'AL = alu_result'],
+      operation: ['a = AL', 'b = %{imm}', '${ALU8_OP}', 'AL = alu_result'],
       opcode: [Opcodes.AND_AL_DB, 'IMM_i8'],
       operands: ['AL', 'imm'],
       operandSize: 8,
@@ -300,7 +300,7 @@ export const and: InstructionInfo = {
     },
     // 0x25 dw - AND AX, dw
     {
-      operation: ['a = AX', 'b = %{IMM}', '${ALU16_OP}', 'AX = alu_result'],
+      operation: ['a = AX', 'b = %{imm}', '${ALU16_OP}', 'AX = alu_result'],
       opcode: [Opcodes.AND_AX_DW, 'IMM_u16'],
       operands: ['AX', 'imm'],
       operandSize: 16,
@@ -312,7 +312,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = alu_result',
       ],
@@ -325,7 +325,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = alu_result',
       ],
@@ -338,7 +338,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = alu_result',
       ],
@@ -351,7 +351,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = alu_result',
       ],
@@ -363,7 +363,7 @@ export const and: InstructionInfo = {
     {
       operation: [
         'a = ${MOD_RM_RM8}',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU8_OP}',
         '${MOD_RM_RM8} = alu_result',
       ],
@@ -377,7 +377,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -390,7 +390,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -403,7 +403,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -416,7 +416,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -428,7 +428,7 @@ export const and: InstructionInfo = {
     {
       operation: [
         'a = ${MOD_RM_RM16}',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_RM16} = alu_result',
       ],
@@ -442,7 +442,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -455,7 +455,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -468,7 +468,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -481,7 +481,7 @@ export const and: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -493,7 +493,7 @@ export const and: InstructionInfo = {
     {
       operation: [
         'a = ${MOD_RM_RM16}',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_RM16} = alu_result',
       ],

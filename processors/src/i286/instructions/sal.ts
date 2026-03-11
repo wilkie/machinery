@@ -200,10 +200,10 @@ export const sal: InstructionInfo = {
     // 0xC0 /4 - SAL eb, db
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM} & 0x1f',
+        'b = %{imm} & 0x1f',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = alu_result',
       ],
@@ -220,10 +220,10 @@ export const sal: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM} & 0x1f',
+        'b = %{imm} & 0x1f',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = alu_result',
       ],
@@ -239,10 +239,10 @@ export const sal: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM} & 0x1f',
+        'b = %{imm} & 0x1f',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = alu_result',
       ],
@@ -259,10 +259,10 @@ export const sal: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u8[effective_address]',
-        'b = %{IMM} & 0x1f',
+        'b = %{imm} & 0x1f',
         '${ALU8_OP}',
         'RAM:u8[effective_address] = alu_result',
       ],
@@ -279,9 +279,9 @@ export const sal: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'a = ${MOD_RM_RM8}',
-        'b = %{IMM} & 0x1f',
+        'b = %{imm} & 0x1f',
         '${ALU8_OP}',
         '${MOD_RM_RM8} = alu_result',
       ],
@@ -467,10 +467,10 @@ export const sal: InstructionInfo = {
     // 0xC1 /4 - SAL ew, db
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM} & 0x1f',
+        'b = %{imm} & 0x1f',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -487,10 +487,10 @@ export const sal: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM} & 0x1f',
+        'b = %{imm} & 0x1f',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -506,10 +506,10 @@ export const sal: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM} & 0x1f',
+        'b = %{imm} & 0x1f',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -526,10 +526,10 @@ export const sal: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM} & 0x1f',
+        'b = %{imm} & 0x1f',
         '${ALU16_OP}',
         'RAM:u16[effective_address] = alu_result',
       ],
@@ -546,9 +546,9 @@ export const sal: InstructionInfo = {
     },
     {
       operation: [
-        'next if (%{IMM} & 0x1f) == 0',
+        'next if (%{imm} & 0x1f) == 0',
         'a = ${MOD_RM_RM16}',
-        'b = %{IMM} & 0x1f',
+        'b = %{imm} & 0x1f',
         '${ALU16_OP}',
         '${MOD_RM_RM16} = alu_result',
       ],

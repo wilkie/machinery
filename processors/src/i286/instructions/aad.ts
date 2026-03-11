@@ -14,7 +14,7 @@ export const aad: InstructionInfo = {
       opcode: [Opcodes.AAD, 'IMM_u8'],
       operands: ['imm'],
       operation: [
-        'AL = AL + (AH * IMM)',
+        'AL = AL + (AH * imm)',
         'AH = 0',
         'alu_result = AX',
         // Reset flag operation

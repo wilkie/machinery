@@ -17,7 +17,7 @@ export const jg: InstructionInfo = {
         '${RESOLVE_ZF}',
         '${RESOLVE_SF}',
         '${RESOLVE_OF}',
-        'IP = (ZF == 0 && SF == OF) ? IP + %{IMM} : IP',
+        'IP = (ZF == 0 && SF == OF) ? IP + %{imm} : IP',
       ],
       opcode: [Opcodes.JG, 'IMM_i8'],
       operands: ['rel'],

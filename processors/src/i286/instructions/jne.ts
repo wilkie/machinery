@@ -13,7 +13,7 @@ export const jne: InstructionInfo = {
     // 0x75 cb - JNE cb
     // 0x75 cb - JNZ cb
     {
-      operation: ['${RESOLVE_ZF}', 'IP = (ZF == 0) ? IP + %{IMM} : IP'],
+      operation: ['${RESOLVE_ZF}', 'IP = (ZF == 0) ? IP + %{imm} : IP'],
       opcode: [Opcodes.JNE, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,

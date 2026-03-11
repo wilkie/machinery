@@ -60,7 +60,7 @@ export class IntelSyntax implements Syntax {
       .filter((r) => r.type === RegisterTypes.Segment)
       .map((r) => r.identifier.toUpperCase());
     lines.push(
-      `const segmentRegisters = new Set(${JSON.stringify(segmentRegs)});`,
+      `const segmentRegisters = new Set<string>(${JSON.stringify(segmentRegs)});`,
     );
     lines.push(``);
 
@@ -590,19 +590,29 @@ export class IntelSyntax implements Syntax {
             this.collectFromMatcher(entry as OpcodeMatcher, encodedNames);
           }
         }
-        // Collect literal register names from operands arrays
+        // Collect literal register names from operands arrays.
+        // An operand is "literal" if its name doesn't match any field identifier
+        // in the form's opcode matchers (i.e., it's a fixed register name like 'AL').
         if (form.operands) {
           for (const op of form.operands) {
-            if (
-              op !== 'rm' &&
-              op !== 'reg' &&
-              op !== 'seg' &&
-              op !== 'imm' &&
-              op !== 'rel' &&
-              op !== 'ptr' &&
-              op !== 'level' &&
-              op !== 'mem'
-            ) {
+            const isField = form.opcode.some((entry) => {
+              if (typeof entry === 'string') {
+                // Referenced operand definition — check its fields
+                const def = target.operands.find((d) => d.identifier === entry);
+                return def?.fields?.some((f) => f.identifier === op);
+              } else if (
+                typeof entry === 'object' &&
+                entry !== null &&
+                'fields' in entry
+              ) {
+                // Inline matcher — check its fields
+                return (entry as OpcodeMatcher).fields?.some(
+                  (f) => f.identifier === op,
+                );
+              }
+              return false;
+            });
+            if (!isField) {
               encodedNames.add(op);
             }
           }

@@ -172,7 +172,7 @@ export const imul: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_REG16} = alu_result',
       ],
@@ -185,7 +185,7 @@ export const imul: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_REG16} = alu_result',
       ],
@@ -198,7 +198,7 @@ export const imul: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_REG16} = alu_result',
       ],
@@ -211,7 +211,7 @@ export const imul: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_REG16} = alu_result',
       ],
@@ -223,7 +223,7 @@ export const imul: InstructionInfo = {
     {
       operation: [
         'a = ${MOD_RM_RM16}',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_REG16} = alu_result',
       ],
@@ -237,7 +237,7 @@ export const imul: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_REG16} = alu_result',
       ],
@@ -250,7 +250,7 @@ export const imul: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_REG16} = alu_result',
       ],
@@ -263,7 +263,7 @@ export const imul: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_REG16} = alu_result',
       ],
@@ -276,7 +276,7 @@ export const imul: InstructionInfo = {
       operation: [
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'a = RAM:u16[effective_address]',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_REG16} = alu_result',
       ],
@@ -288,7 +288,7 @@ export const imul: InstructionInfo = {
     {
       operation: [
         'a = ${MOD_RM_RM16}',
-        'b = %{IMM}',
+        'b = %{imm}',
         '${ALU16_OP}',
         '${MOD_RM_REG16} = alu_result',
       ],

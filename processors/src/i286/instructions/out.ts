@@ -12,7 +12,7 @@ export const out: InstructionInfo = {
   forms: [
     // 0xE6 db - OUT db, AL
     {
-      operation: ['IO:u8[%{IMM}] = AL'],
+      operation: ['IO:u8[%{imm}] = AL'],
       opcode: [Opcodes.OUT_DB_AL, 'IMM_u8'],
       operands: ['imm', 'AL'],
       operandSize: 8,
@@ -20,7 +20,7 @@ export const out: InstructionInfo = {
     },
     // 0xE7 db - OUT db, AX
     {
-      operation: ['IO:u16[%{IMM}] = AX'],
+      operation: ['IO:u16[%{imm}] = AX'],
       opcode: [Opcodes.OUT_DB_AX, 'IMM_u8'],
       operands: ['imm', 'AX'],
       operandSize: 16,

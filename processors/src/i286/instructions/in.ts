@@ -12,7 +12,7 @@ export const in_: InstructionInfo = {
   forms: [
     // 0xE4 db - IN AL, db
     {
-      operation: ['AL = IO.read(1, %{IMM})'],
+      operation: ['AL = IO.read(1, %{imm})'],
       opcode: [Opcodes.IN_AL_DB, 'IMM_u8'],
       operands: ['AL', 'imm'],
       operandSize: 8,
@@ -20,7 +20,7 @@ export const in_: InstructionInfo = {
     },
     // 0xE5 db - IN AX, db
     {
-      operation: ['AX = IO.read(2, %{IMM})'],
+      operation: ['AX = IO.read(2, %{imm})'],
       opcode: [Opcodes.IN_AX_DB, 'IMM_u8'],
       operands: ['AX', 'imm'],
       operandSize: 16,

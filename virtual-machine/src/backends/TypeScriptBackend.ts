@@ -55,6 +55,11 @@ interface DecoderContext {
   prefixMap: PrefixMapEntry[];
 }
 
+/** Sanitize an identifier for use as a JavaScript property name (e.g. AF' → AF_) */
+function jsName(name: string): string {
+  return name.replace(/'/g, '_');
+}
+
 class TypeScriptBackend extends Backend {
   prologue(): string[] {
     const target = this.target;
@@ -175,7 +180,7 @@ class TypeScriptBackend extends Backend {
       const getOnlyDefault =
         getModes.length === 0 ||
         (getModes.length === 1 && getModes[0] === 'default');
-      code.push(`  get ${name}() {`);
+      code.push(`  get ${jsName(name)}() {`);
       ((target.modes as Pick<ModeInfo, 'identifier'>[]) || [])
         .concat([{ identifier: 'default' }])
         .forEach((modeInfo, i) => {
@@ -222,7 +227,7 @@ class TypeScriptBackend extends Backend {
       const setOnlyDefault =
         setModes.length === 0 ||
         (setModes.length === 1 && setModes[0] === 'default');
-      code.push(`  set ${name}(value: number) {`);
+      code.push(`  set ${jsName(name)}(value: number) {`);
       ((target.modes as Pick<ModeInfo, 'identifier'>[]) || [])
         .concat([{ identifier: 'default' }])
         .forEach((modeInfo, i) => {
@@ -282,7 +287,7 @@ class TypeScriptBackend extends Backend {
             localMap: { _ip: { identifier: '_ip' } },
           },
         };
-        code.push('  get ' + subname + '() {');
+        code.push('  get ' + jsName(subname) + '() {');
         for (const line of this.fromAccessors(generated3)) {
           code.push(`    ${line};`);
         }
@@ -308,7 +313,7 @@ class TypeScriptBackend extends Backend {
           },
           'value',
         );
-        code.push('  set ' + subname + '(value: number) {');
+        code.push('  set ' + jsName(subname) + '(value: number) {');
         for (const line of writeSubCode) {
           code.push(`    ${line};`);
         }
@@ -743,7 +748,7 @@ class TypeScriptBackend extends Backend {
       context.code.push(
         `${indent}let _ip = ${this.readRegister(generated, ipReference)}${start ? ` + 0x${start.toString(16)}` : ''};`,
       );
-      context.code.push(`${indent}let _finalize = [];`);
+      context.code.push(`${indent}let _finalize: number[] = [];`);
 
       // Define the prefix loop
       context.code.push(indent + 'outer: while (true) {');

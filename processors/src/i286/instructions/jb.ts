@@ -14,7 +14,7 @@ export const jb: InstructionInfo = {
     // 0x72 cb - JC cb
     // 0x72 cb - JNAE cb
     {
-      operation: ['${RESOLVE_CF}', 'IP = (CARRY == 1) ? IP + %{IMM} : IP'],
+      operation: ['${RESOLVE_CF}', 'IP = (CARRY == 1) ? IP + %{imm} : IP'],
       opcode: [Opcodes.JB, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,

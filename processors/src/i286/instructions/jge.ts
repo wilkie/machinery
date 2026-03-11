@@ -16,7 +16,7 @@ export const jge: InstructionInfo = {
       operation: [
         '${RESOLVE_SF}',
         '${RESOLVE_OF}',
-        'IP = (SF == OF) ? IP + %{IMM} : IP',
+        'IP = (SF == OF) ? IP + %{imm} : IP',
       ],
       opcode: [Opcodes.JGE, 'IMM_i8'],
       operands: ['rel'],

@@ -15,14 +15,22 @@
       "types": "./dist/i286/index.d.ts",
       "import": "./dist/i286/index.js",
       "require": "./dist/i286/index.cjs"
+    },
+    "./z80": {
+      "types": "./dist/z80/index.d.ts",
+      "import": "./dist/z80/index.js",
+      "require": "./dist/z80/index.cjs"
     }
   },
   "scripts": {
-    "build:generate": "machinery-vm --target i286 --backend typescript > src/i286/Machine.ts",
+    "build:generate:i286": "machinery-vm --target i286 --backend typescript > src/i286/Machine.ts",
+    "build:generate:z80": "machinery-vm --target z80 --backend typescript > src/z80/Machine.ts",
+    "build:generate": "pnpm build:generate:i286 && pnpm build:generate:z80",
     "build": "pnpm build:generate && tsup",
     "test": "jest --passWithNoTests",
-    "build:tests": "tsx test/i286/assemble.ts",
-    "test:i286": "node test/i286/test.js",
+    "build:tests": "pnpm build:tests:i286 && pnpm build:tests:z80",
+    "build:tests:i286": "npx tsx test/i286/assemble.ts",
+    "build:tests:z80": "npx tsx test/z80/assemble.ts",
     "lint": "eslint src",
     "clean": "rm -rf dist"
   },

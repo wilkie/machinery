@@ -11,7 +11,7 @@ export const jno: InstructionInfo = {
   forms: [
     // 0x71 cb - JNO cb
     {
-      operation: ['${RESOLVE_OF}', 'IP = (OF == 0) ? IP + %{IMM} : IP'],
+      operation: ['${RESOLVE_OF}', 'IP = (OF == 0) ? IP + %{imm} : IP'],
       opcode: [Opcodes.JNO, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,

@@ -14,7 +14,7 @@ export const ja: InstructionInfo = {
       operation: [
         '${RESOLVE_CF}',
         '${RESOLVE_ZF}',
-        'IP = (CARRY == 0 && ZF == 0) ? IP + %{IMM} : IP',
+        'IP = (CARRY == 0 && ZF == 0) ? IP + %{imm} : IP',
       ],
       opcode: [Opcodes.JA, 'IMM_i8'],
       operands: ['rel'],

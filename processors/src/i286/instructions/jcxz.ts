@@ -12,7 +12,7 @@ export const jcxz: InstructionInfo = {
   forms: [
     // 0xE3 cb - JCXZ cb
     {
-      operation: ['IP = (CX == 0) ? IP + %{IMM} : IP'],
+      operation: ['IP = (CX == 0) ? IP + %{imm} : IP'],
       opcode: [Opcodes.JCXZ, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,

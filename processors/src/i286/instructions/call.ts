@@ -34,7 +34,7 @@ export const call: InstructionInfo = {
         'stack_address = SS_BASE + tmp',
         'RAM:u16[stack_address] = IP',
         'SP = tmp',
-        'IP = IP + %{IMM}',
+        'IP = IP + %{imm}',
       ],
       opcode: [Opcodes.CALL_CW, 'IMM_i16'],
       operands: ['rel'],

@@ -33,7 +33,7 @@ export const enter: InstructionInfo = {
     // 0xC8 dw db - ENTER dw, db  (12 + 4(db) cycles)
     {
       operation: [
-        'level = %{LEVEL} % 32',
+        'level = %{level} % 32',
         // Push BP
         'SP = SP - 2',
         'stack_address = SS_BASE + SP',
@@ -62,13 +62,13 @@ export const enter: InstructionInfo = {
         // Maintain frame_ptr into BP
         'BP = frame_ptr',
         // Allocate requested space on the stack
-        'SP = SP - %{IMM}',
+        'SP = SP - %{imm}',
       ],
       opcode: [
         Opcodes.ENTER,
         'IMM_u16',
         {
-          identifier: 'LEVEL',
+          identifier: 'level',
           name: 'LEVEL Immediate Value',
           type: InstructionDataTypes.Immediate,
           size: 8,

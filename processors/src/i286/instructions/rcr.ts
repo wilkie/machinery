@@ -225,7 +225,7 @@ export const rcr: InstructionInfo = {
     // 0xC0 /3 - RCR eb, db
     {
       operation: [
-        'tmp_b = (%{IMM} & 0x1f) % 9',
+        'tmp_b = (%{imm} & 0x1f) % 9',
         'next if tmp_b == 0',
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'tmp_a = RAM:u8[effective_address]',
@@ -244,7 +244,7 @@ export const rcr: InstructionInfo = {
     },
     {
       operation: [
-        'tmp_b = (%{IMM} & 0x1f) % 9',
+        'tmp_b = (%{imm} & 0x1f) % 9',
         'next if tmp_b == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'tmp_a = RAM:u8[effective_address]',
@@ -262,7 +262,7 @@ export const rcr: InstructionInfo = {
     },
     {
       operation: [
-        'tmp_b = (%{IMM} & 0x1f) % 9',
+        'tmp_b = (%{imm} & 0x1f) % 9',
         'next if tmp_b == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'tmp_a = RAM:u8[effective_address]',
@@ -281,7 +281,7 @@ export const rcr: InstructionInfo = {
     },
     {
       operation: [
-        'tmp_b = (%{IMM} & 0x1f) % 9',
+        'tmp_b = (%{imm} & 0x1f) % 9',
         'next if tmp_b == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'tmp_a = RAM:u8[effective_address]',
@@ -300,7 +300,7 @@ export const rcr: InstructionInfo = {
     },
     {
       operation: [
-        'tmp_b = (%{IMM} & 0x1f) % 9',
+        'tmp_b = (%{imm} & 0x1f) % 9',
         'next if tmp_b == 0',
         'tmp_a = ${MOD_RM_RM8}',
         '${ALU8_OP}',
@@ -482,7 +482,7 @@ export const rcr: InstructionInfo = {
     // 0xC1 /3 - RCR ew, db
     {
       operation: [
-        'tmp_b = (%{IMM} & 0x1f) % 17',
+        'tmp_b = (%{imm} & 0x1f) % 17',
         'next if tmp_b == 0',
         'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
         'tmp_a = RAM:u16[effective_address]',
@@ -501,7 +501,7 @@ export const rcr: InstructionInfo = {
     },
     {
       operation: [
-        'tmp_b = (%{IMM} & 0x1f) % 17',
+        'tmp_b = (%{imm} & 0x1f) % 17',
         'next if tmp_b == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
         'tmp_a = RAM:u16[effective_address]',
@@ -519,7 +519,7 @@ export const rcr: InstructionInfo = {
     },
     {
       operation: [
-        'tmp_b = (%{IMM} & 0x1f) % 17',
+        'tmp_b = (%{imm} & 0x1f) % 17',
         'next if tmp_b == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'tmp_a = RAM:u16[effective_address]',
@@ -538,7 +538,7 @@ export const rcr: InstructionInfo = {
     },
     {
       operation: [
-        'tmp_b = (%{IMM} & 0x1f) % 17',
+        'tmp_b = (%{imm} & 0x1f) % 17',
         'next if tmp_b == 0',
         'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
         'tmp_a = RAM:u16[effective_address]',
@@ -557,7 +557,7 @@ export const rcr: InstructionInfo = {
     },
     {
       operation: [
-        'tmp_b = (%{IMM} & 0x1f) % 17',
+        'tmp_b = (%{imm} & 0x1f) % 17',
         'next if tmp_b == 0',
         'tmp_a = ${MOD_RM_RM16}',
         '${ALU16_OP}',

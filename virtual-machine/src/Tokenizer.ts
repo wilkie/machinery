@@ -64,7 +64,7 @@ class Tokenizer {
       ],
       // An identifier is something specifically named, like a register or local value
       // ex: 'AX'
-      identifier: /[a-zA-Z_][a-zA-Z0-9_]*(?::(?:u|i)\d+)?/,
+      identifier: /[a-zA-Z_][a-zA-Z0-9_]*'?(?::(?:u|i)\d+)?/,
       // Operators that may appear as symbols
       logical_operator: /&&|[|][|]/,
       operator: /\/\/|[+*&|/%^-]|~>\[\d+\]|<~\[\d+\]|>>>|>>|<</,

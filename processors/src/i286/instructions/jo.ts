@@ -11,7 +11,7 @@ export const jo: InstructionInfo = {
   forms: [
     // 0x70 cb - JO cb
     {
-      operation: ['${RESOLVE_OF}', 'IP = (OF == 1) ? IP + %{IMM} : IP'],
+      operation: ['${RESOLVE_OF}', 'IP = (OF == 1) ? IP + %{imm} : IP'],
       opcode: [Opcodes.JO, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,

@@ -12,10 +12,11 @@ export const loop: InstructionInfo = {
   forms: [
     // 0xE2 cb - LOOP cb
     {
-      operation: ['CX = CX - 1', 'IP = (CX != 0) ? IP + %{IMM} : IP'],
+      operation: ['CX = CX - 1', 'IP = (CX != 0) ? IP + %{imm} : IP'],
       opcode: [Opcodes.LOOP, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 16,
+      addressing: 'relative',
       cycles: 4, // 8 if jumped
     },
   ],

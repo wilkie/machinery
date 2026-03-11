@@ -14,7 +14,7 @@ export const macros = {
   MOD_RM_RMS16: '${[ES,CS,SS,DS,FS,GS,HS,IS][%{rm}]}',
   MOD_RM_REG8: '${[AL,CL,DL,BL,AH,CH,DH,BH][%{reg}]}',
   MOD_RM_REG16: '${[AX,CX,DX,BX,SP,BP,SI,DI][%{reg}]}',
-  MOD_RM_REGS16: '${[ES,CS,SS,DS,FS,GS,HS,IS][%{reg}]}',
+  MOD_RM_REGS16: '${[ES,CS,SS,DS,FS,GS,HS,IS][%{seg}]}',
 
   // For FLAGS, instead of calculating the actual flags after every operation,
   // we instead define a set of internal flags that indicate the operation and

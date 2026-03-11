@@ -39,6 +39,8 @@ export const call: InstructionInfo = {
       opcode: [Opcodes.CALL_CW, 'IMM_i16'],
       operands: ['rel'],
       operandSize: 8,
+      distance: 'near',
+      addressing: 'relative',
       cycles: 7,
     },
     // 0xFF /2 - CALL ew
@@ -54,6 +56,8 @@ export const call: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_110_010_00', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'near',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -68,6 +72,8 @@ export const call: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_010_00'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'near',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -82,6 +88,8 @@ export const call: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_010_01', 'DISP_i8'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'near',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -96,6 +104,8 @@ export const call: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_010_10', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'near',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -109,6 +119,8 @@ export const call: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_010_11'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'near',
+      addressing: 'absolute',
       cycles: 7,
     },
     // 0x9a cd - CALL cd
@@ -141,6 +153,8 @@ export const call: InstructionInfo = {
       ],
       operands: ['ptr'],
       operandSize: 8,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 7,
     },
     // 0xFF /3 - CALL ed
@@ -160,6 +174,8 @@ export const call: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_110_011_00', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -176,6 +192,8 @@ export const call: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_011_00'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -192,6 +210,8 @@ export const call: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_011_01', 'DISP_i8'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -208,6 +228,8 @@ export const call: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_011_10', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -224,6 +246,8 @@ export const call: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_011_11'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 7,
     },
   ],

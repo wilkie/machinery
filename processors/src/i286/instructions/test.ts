@@ -148,6 +148,7 @@ export const test: InstructionInfo = {
       opcode: [Opcodes.TEST_AL_DB, 'IMM_u8'],
       operands: ['AL', 'imm'],
       operandSize: 8,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0xA9 dw - TEST AX, dw
@@ -156,6 +157,7 @@ export const test: InstructionInfo = {
       opcode: [Opcodes.TEST_AX_DW, 'IMM_u16'],
       operands: ['AX', 'imm'],
       operandSize: 16,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0xF6 /0 db - TEST eb, db

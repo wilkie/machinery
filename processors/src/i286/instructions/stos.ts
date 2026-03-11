@@ -31,6 +31,7 @@ export const stos: InstructionInfo = {
       opcode: [Opcodes.STOS_MB],
       operands: [],
       operandSize: 8,
+      aliases: ['stosb'],
       cycles: 3,
     },
     // 0xAB STOS mw
@@ -49,6 +50,7 @@ export const stos: InstructionInfo = {
       opcode: [Opcodes.STOS_MW],
       operands: [],
       operandSize: 16,
+      aliases: ['stosw'],
       cycles: 3,
     },
   ],

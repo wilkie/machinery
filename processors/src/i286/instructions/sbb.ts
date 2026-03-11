@@ -320,6 +320,7 @@ export const sbb: InstructionInfo = {
       opcode: [Opcodes.SBB_AL_DB, 'IMM_u8'],
       operands: ['AL', 'imm'],
       operandSize: 8,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0x1D dw - SBB AX, dw
@@ -334,6 +335,7 @@ export const sbb: InstructionInfo = {
       opcode: [Opcodes.SBB_AX_DW, 'IMM_u16'],
       operands: ['AX', 'imm'],
       operandSize: 16,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0x80 /3 db - SBB eb, db

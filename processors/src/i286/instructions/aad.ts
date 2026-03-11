@@ -22,5 +22,17 @@ export const aad: InstructionInfo = {
       ],
       cycles: 14,
     },
+    {
+      // No-operand form: AAD with implicit base 10
+      opcode: [Opcodes.AAD, 0x0a],
+      operands: [],
+      operation: [
+        'AL = AL + (AH * 10)',
+        'AH = 0',
+        'alu_result = AX',
+        'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_8BIT}',
+      ],
+      cycles: 14,
+    },
   ],
 };

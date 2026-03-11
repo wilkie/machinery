@@ -294,6 +294,7 @@ export const add: InstructionInfo = {
       opcode: [Opcodes.ADD_AL_DB, 'IMM_u8'],
       operands: ['AL', 'imm'],
       operandSize: 8,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0x05 dw - ADD AX, dw
@@ -302,6 +303,7 @@ export const add: InstructionInfo = {
       opcode: [Opcodes.ADD_AX_DW, 'IMM_u16'],
       operands: ['AX', 'imm'],
       operandSize: 16,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0x80 /0 db - ADD eb, db

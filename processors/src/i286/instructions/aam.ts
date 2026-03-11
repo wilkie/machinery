@@ -22,5 +22,17 @@ export const aam: InstructionInfo = {
       ],
       cycles: 16,
     },
+    {
+      // No-operand form: AAM with implicit base 10
+      opcode: [Opcodes.AAM, 0x0a],
+      operands: [],
+      operation: [
+        'AH = AL // 10',
+        'AL = AL % 10',
+        'alu_result = AL',
+        'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_8BIT}',
+      ],
+      cycles: 16,
+    },
   ],
 };

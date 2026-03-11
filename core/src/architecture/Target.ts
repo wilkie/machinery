@@ -13,6 +13,8 @@ export const RegisterTypes = {
   Integer: 0,
   /** Holds a standard IEEE-754 floating point value. */
   FloatingPoint: 1,
+  /** Holds a segment selector value. */
+  Segment: 2,
 } as const;
 
 export type RegisterType = (typeof RegisterTypes)[keyof typeof RegisterTypes];
@@ -124,7 +126,9 @@ export const InstructionDataTypes = {
   /** An amount to nudge an address. */
   Displacement: 2,
   /** A constant numerical value. */
-  Immediate: 3,
+  Immediate: 4,
+  /** When a displacement can be written out as a pseudo-immediate value */
+  DisplacementImmediate: 2 | 4,
 } as const;
 
 export type InstructionDataType =
@@ -166,26 +170,39 @@ export interface OpcodeMatcherFieldBase {
   signed?: boolean;
   /** Requires this field to match exactly the given number. */
   match?: number;
-  /** The encoding expected to map to the subfield value when assembled */
-  encoding?: string[];
+  /**
+   * The encoding expected to map to the subfield value when assembled.
+   *
+   * When any value is null, the specified encoding is not allowed.
+   */
+  encoding?: (string | null)[];
 }
 
 export interface OpcodeMatcherFieldNonRegister extends OpcodeMatcherFieldBase {
   /** The type of information this subfield conveys, if any. */
-  type?: Exclude<InstructionOperandType, typeof InstructionOperandTypes['Register']>;
+  type?: Exclude<
+    InstructionOperandType,
+    (typeof InstructionOperandTypes)['Register']
+  >;
 }
 
 export interface OpcodeMatcherFieldRegister extends OpcodeMatcherFieldBase {
   /** Explicitly the 'register' opcode field type */
-  type: typeof InstructionOperandTypes['Register'];
-  /** The register names that this opcode field encodes */
-  encoding: string[];
+  type: (typeof InstructionOperandTypes)['Register'];
+  /**
+   * The register names that this opcode field encodes
+   *
+   * When any value is null, the specified encoding is not allowed.
+   */
+  encoding?: (string | null)[];
 }
 
 /**
  * Describes a field and/or pattern to match against a bit stream.
  */
-export type OpcodeMatcherField = OpcodeMatcherFieldNonRegister | OpcodeMatcherFieldRegister;
+export type OpcodeMatcherField =
+  | OpcodeMatcherFieldNonRegister
+  | OpcodeMatcherFieldRegister;
 
 /**
  * A description of how to match a bytestream in order to identify a particular
@@ -300,6 +317,24 @@ export interface InstructionForm {
    */
   segmentOverride?: string;
   /**
+   * The distance qualifier for branch/return instructions.
+   * - 'short': smallest intra-segment offset (e.g., 8-bit on x86)
+   * - 'near': full intra-segment offset or indirect
+   * - 'far': inter-segment (e.g., CALL FAR, RETF)
+   */
+  distance?: 'short' | 'near' | 'far';
+  /**
+   * How the branch target is specified.
+   * - 'relative': offset from current instruction pointer
+   * - 'absolute': direct or indirect absolute address
+   */
+  addressing?: 'relative' | 'absolute';
+  /**
+   * Encoding priority for tiebreaking when multiple forms produce the same
+   * byte count. Lower values are preferred. Defaults to 0 if not specified.
+   */
+  encodingPriority?: number;
+  /**
    * We might specify different values depending on mode.
    */
   modes?: {
@@ -323,6 +358,8 @@ export interface InstructionInfo {
   modifies: string[];
   /** Whether or not this instruction is actually a prefix to another one. */
   prefix?: boolean;
+  /** Whether the instruction's operands are commutative (order doesn't affect result). */
+  commutative?: boolean;
   /** Flags left undefined, if any */
   undefined?: string[];
   /** Any macros defined just for this instruction */
@@ -648,4 +685,16 @@ export interface Target {
   interrupts?: InterruptsInfo;
   /** A description of modes the code can be in */
   modes?: ModeInfo[];
+  /**
+   * The byte order for multi-byte values in instruction encoding.
+   * - 'little': least significant byte first (x86, ARM in LE mode)
+   * - 'big': most significant byte first (68k, MIPS in BE mode)
+   * - 'bi': switchable at runtime (ARM, MIPS) — assembler defaults to target convention
+   */
+  endianness?: 'little' | 'big' | 'bi';
+  /**
+   * The byte value used for alignment padding. Defaults to 0x00.
+   * x86 uses 0x90 (NOP) so alignment padding is executable as no-ops.
+   */
+  alignmentFill?: number;
 }

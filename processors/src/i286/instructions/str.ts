@@ -94,7 +94,7 @@ export const str: InstructionInfo = {
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LTR_STR_LLDT_SLDT_VERR_VERW,
-        'ModRM_rm_001_11',
+        'ModRM_rm16_001_11',
       ],
       operands: ['rm'],
       operandSize: 16,

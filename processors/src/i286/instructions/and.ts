@@ -295,6 +295,7 @@ export const and: InstructionInfo = {
       opcode: [Opcodes.AND_AL_DB, 'IMM_i8'],
       operands: ['AL', 'imm'],
       operandSize: 8,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0x25 dw - AND AX, dw
@@ -303,6 +304,7 @@ export const and: InstructionInfo = {
       opcode: [Opcodes.AND_AX_DW, 'IMM_u16'],
       operands: ['AX', 'imm'],
       operandSize: 16,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0x80 /4 db - AND eb, db

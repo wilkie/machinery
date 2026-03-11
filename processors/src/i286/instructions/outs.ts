@@ -34,6 +34,7 @@ export const outs: InstructionInfo = {
       opcode: [Opcodes.OUTS_DX_EB],
       operands: [],
       operandSize: 8,
+      aliases: ['outsb'],
       cycles: 5,
     },
     // 0x6F - OUTS DX, ew
@@ -53,6 +54,7 @@ export const outs: InstructionInfo = {
       opcode: [Opcodes.OUTS_DX_EW],
       operands: [],
       operandSize: 8,
+      aliases: ['outsw'],
       cycles: 5,
     },
   ],

@@ -4,7 +4,6 @@ import { Opcodes } from '../opcodes';
 
 export const lods: InstructionInfo = {
   identifier: 'lods',
-  aliases: ['lodsb', 'lodsw'],
   name: 'Load String Operand',
   description:
     '`LODS` loads the `AL` or `AX` register with the memory byte or word at `SI`. After the transfer is made, `SI` is automatically advanced. If the direction flag is 0 (`CLD` was executed), `SI` increments; if the direction flag is 1 (`STD` was executed), `SI` decrements. `SI` increments or decrements by 1 if a byte was moved; by 2 if a word was moved.',
@@ -35,6 +34,7 @@ export const lods: InstructionInfo = {
       opcode: [Opcodes.LODS_MB],
       operands: [],
       operandSize: 8,
+      aliases: ['lodsb'],
       cycles: 5,
     },
     // 0xAD LODS mw
@@ -54,6 +54,7 @@ export const lods: InstructionInfo = {
       opcode: [Opcodes.LODS_MW],
       operands: [],
       operandSize: 16,
+      aliases: ['lodsw'],
       cycles: 5,
     },
   ],

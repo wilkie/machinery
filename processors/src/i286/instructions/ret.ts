@@ -21,6 +21,19 @@ export const ret: InstructionInfo = {
     },
   ],
   forms: [
+    // 0xC3 - RET near
+    {
+      operation: [
+        'stack_address = SS_BASE + SP',
+        'IP = RAM:u16[stack_address]',
+        'SP = SP + 2',
+      ],
+      opcode: [Opcodes.RET],
+      operands: [],
+      operandSize: 16,
+      distance: 'near',
+      cycles: 11,
+    },
     // 0xCB - RET far
     // 0xCB - RET to lesser privilege
     {
@@ -33,18 +46,20 @@ export const ret: InstructionInfo = {
       opcode: [Opcodes.RETF],
       operands: [],
       operandSize: 16,
+      distance: 'far',
       cycles: 15, // protected-mode: 25, 55 if switching stacks
     },
-    // 0xC3 - RET near
+    // 0xC2 dw - RET near dw
     {
       operation: [
         'stack_address = SS_BASE + SP',
         'IP = RAM:u16[stack_address]',
-        'SP = SP + 2',
+        'SP = SP + 2 + %{IMM}',
       ],
-      opcode: [Opcodes.RET],
-      operands: [],
+      opcode: [Opcodes.RET_DW, 'IMM_u16'],
+      operands: ['imm'],
       operandSize: 16,
+      distance: 'near',
       cycles: 11,
     },
     // 0xCA dw - RET far dw
@@ -59,19 +74,8 @@ export const ret: InstructionInfo = {
       opcode: [Opcodes.RETF_DW, 'IMM_u16'],
       operands: ['imm'],
       operandSize: 16,
+      distance: 'far',
       cycles: 15, // protected-mode: 25, 55 if switching stacks
-    },
-    // 0xC2 dw - RET near dw
-    {
-      operation: [
-        'stack_address = SS_BASE + SP',
-        'IP = RAM:u16[stack_address]',
-        'SP = SP + 2 + %{IMM}',
-      ],
-      opcode: [Opcodes.RET_DW, 'IMM_u16'],
-      operands: ['imm'],
-      operandSize: 16,
-      cycles: 11,
     },
   ],
 };

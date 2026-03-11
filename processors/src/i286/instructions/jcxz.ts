@@ -16,6 +16,8 @@ export const jcxz: InstructionInfo = {
       opcode: [Opcodes.JCXZ, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,
+      distance: 'short',
+      addressing: 'relative',
       cycles: 4, // 8 if jumped
     },
   ],

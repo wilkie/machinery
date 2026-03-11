@@ -294,6 +294,7 @@ export const sub: InstructionInfo = {
       opcode: [Opcodes.SUB_AL_DB, 'IMM_u8'],
       operands: ['AL', 'imm'],
       operandSize: 8,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0x2D dw - SUB AX, dw
@@ -302,6 +303,7 @@ export const sub: InstructionInfo = {
       opcode: [Opcodes.SUB_AX_DW, 'IMM_u16'],
       operands: ['AX', 'imm'],
       operandSize: 16,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0x80 /5 db - SUB eb, db

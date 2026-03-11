@@ -9,6 +9,7 @@ export const xchg: InstructionInfo = {
   name: 'Exchange Memory / Register with Register',
   description:
     'The two operands are exchanged. The order of the operands is immaterial. `BUS` `LOCK` is asserted for the duration of the exchange, regardless of the presence or absence of the `LOCK` prefix or `IOPL`.',
+  commutative: true,
   modifies: [],
   undefined: [],
   locals: [
@@ -81,7 +82,7 @@ export const xchg: InstructionInfo = {
         '${MOD_RM_RM8} = tmp',
       ],
       opcode: [Opcodes.XCHG_EB_RB, 'ModRM_rm8_reg8_11'],
-      operands: ['rm', 'reg'],
+      operands: ['reg', 'rm'],
       operandSize: 8,
       cycles: 3,
     },
@@ -142,7 +143,7 @@ export const xchg: InstructionInfo = {
         '${MOD_RM_RM16} = tmp',
       ],
       opcode: [Opcodes.XCHG_EW_RW, 'ModRM_rm16_reg16_11'],
-      operands: ['rm', 'reg'],
+      operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 3,
     },

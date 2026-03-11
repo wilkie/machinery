@@ -71,7 +71,7 @@ export const sidt: InstructionInfo = {
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.SGDT_SIDT_LMSW_SMSW_LGDT_LIDT,
-        'ModRM_rm_001_11',
+        'ModRM_rm16_001_11',
       ],
       operands: ['rm'],
       operation: [

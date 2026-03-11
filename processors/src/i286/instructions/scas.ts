@@ -38,6 +38,7 @@ export const scas: InstructionInfo = {
       opcode: [Opcodes.SCAS_MB],
       operands: [],
       operandSize: 8,
+      aliases: ['scasb'],
       cycles: 7,
     },
     // 0xAF SCAS mw
@@ -58,6 +59,7 @@ export const scas: InstructionInfo = {
       opcode: [Opcodes.SCAS_MW],
       operands: [],
       operandSize: 16,
+      aliases: ['scasw'],
       cycles: 7,
     },
   ],

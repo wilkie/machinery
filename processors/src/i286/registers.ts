@@ -217,7 +217,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'ES',
     name: 'E Segment Selector',
     size: 16,
-    type: RegisterTypes.Integer,
+    type: RegisterTypes.Segment,
     fields: [
       {
         identifier: 'RPL',
@@ -238,7 +238,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'CS',
     name: 'Code Segment Selector',
     size: 16,
-    type: RegisterTypes.Integer,
+    type: RegisterTypes.Segment,
     fields: [
       {
         identifier: 'RPL',
@@ -263,7 +263,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'SS',
     name: 'Stack Segment Selector',
     size: 16,
-    type: RegisterTypes.Integer,
+    type: RegisterTypes.Segment,
     fields: [
       {
         identifier: 'RPL',
@@ -288,7 +288,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'DS',
     name: 'Data Segment Selector',
     size: 16,
-    type: RegisterTypes.Integer,
+    type: RegisterTypes.Segment,
     fields: [
       {
         identifier: 'RPL',
@@ -316,7 +316,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'FS',
     name: 'F Segment Selector',
     size: 16,
-    type: RegisterTypes.Integer,
+    type: RegisterTypes.Segment,
     fields: [
       {
         identifier: 'RPL',
@@ -337,7 +337,7 @@ export const registers: RegisterInfo[] = [
     identifier: 'GS',
     name: 'G Segment Selector',
     size: 16,
-    type: RegisterTypes.Integer,
+    type: RegisterTypes.Segment,
     fields: [
       {
         identifier: 'RPL',

@@ -8,6 +8,7 @@
     "test": {
       "dependsOn": ["build"]
     },
+    "typecheck": {},
     "lint": {},
     "clean": {
       "cache": false

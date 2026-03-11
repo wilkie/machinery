@@ -65,7 +65,12 @@ export const lsl: InstructionInfo = {
         'tmp = RAM:u16[effective_address]',
         '${OP}',
       ],
-      opcode: [Opcodes.SYSTEM, SystemOpcodes.LSL, 'ModRM_rm_reg16_01', 'DISP_i8'],
+      opcode: [
+        Opcodes.SYSTEM,
+        SystemOpcodes.LSL,
+        'ModRM_rm_reg16_01',
+        'DISP_i8',
+      ],
       operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 16,

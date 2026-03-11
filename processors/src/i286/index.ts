@@ -18,6 +18,8 @@ const Target286: Target = {
   class: 'x86',
   name: 'Intel 80286',
   description: '16-bit x86',
+  endianness: 'little',
+  alignmentFill: 0x90,
   memory,
   registers,
   fetch: {

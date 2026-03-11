@@ -1551,7 +1551,7 @@ export default class Machine {
               else if ((b2 & 0xf8) === 0xc8) {
                 // 15
                 // 0
-                // ModRM_rm_001_11
+                // ModRM_rm16_001_11
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // IP += 0x3
                 this.mem32[30] = this.mem32[30] + 0x3
@@ -1962,7 +1962,7 @@ export default class Machine {
               else if ((b2 & 0xf8) === 0xc8) {
                 // 15
                 // 1
-                // ModRM_rm_001_11
+                // ModRM_rm16_001_11
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // IP += 0x3
                 this.mem32[30] = this.mem32[30] + 0x3
@@ -6042,7 +6042,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 128
-            // ModRM_rm_001_11
+            // ModRM_rm8_001_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IMM_i8
             b2 = this.mem8[_ip];
@@ -6819,7 +6819,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 129
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IMM_u16
             b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
@@ -7596,7 +7596,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 131
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IMM_i8
             b2 = this.mem8[_ip];
@@ -8564,7 +8564,7 @@ export default class Machine {
             // 141
             // ModRM_110_reg16_00
             v_0 = (b1 >> 3 & 0x7); // 1 , 1 , 1 , 2
-            // DISP_i16
+            // DISP_IMM_i16
             b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
             _ip += 2;
             v_2 = (b2 & 0xffff) << 16 >> 16; // 2 , 1 , 1 , 4
@@ -8586,7 +8586,7 @@ export default class Machine {
             // ModRM_rm_reg16_01
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             v_0 = (b1 >> 3 & 0x7); // 1 , 1 , 1 , 2
-            // DISP_i8
+            // DISP_IMM_i8
             b2 = this.mem8[_ip];
             _ip++;
             v_2 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
@@ -8599,7 +8599,7 @@ export default class Machine {
             // ModRM_rm_reg16_10
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             v_0 = (b1 >> 3 & 0x7); // 1 , 1 , 1 , 2
-            // DISP_i16
+            // DISP_IMM_i16
             b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
             _ip += 2;
             v_2 = (b2 & 0xffff) << 16 >> 16; // 2 , 1 , 1 , 4
@@ -9637,7 +9637,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 192
-            // ModRM_rm_001_11
+            // ModRM_rm8_001_11
             v_2 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IMM_u8
             b2 = this.mem8[_ip];
@@ -10429,7 +10429,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 193
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_2 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IMM_u8
             b2 = this.mem8[_ip];
@@ -11622,7 +11622,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 208
-            // ModRM_rm_001_11
+            // ModRM_rm8_001_11
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -12239,7 +12239,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 209
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -12875,7 +12875,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 210
-            // ModRM_rm_001_11
+            // ModRM_rm8_001_11
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -13527,7 +13527,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 211
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -15355,7 +15355,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 254
-            // ModRM_rm_001_11
+            // ModRM_rm8_001_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -15435,7 +15435,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc0) {
             // 254
-            // ModRM_rm16_000_11
+            // ModRM_rm8_000_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -15743,7 +15743,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 255
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -17268,7 +17268,7 @@ export default class Machine {
               else if ((b2 & 0xf8) === 0xc8) {
                 // 15
                 // 0
-                // ModRM_rm_001_11
+                // ModRM_rm16_001_11
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // IP += 0x3
                 this.mem32[30] = this.mem32[30] + 0x3
@@ -17679,7 +17679,7 @@ export default class Machine {
               else if ((b2 & 0xf8) === 0xc8) {
                 // 15
                 // 1
-                // ModRM_rm_001_11
+                // ModRM_rm16_001_11
                 v_0 = (b2 & 0x7); // 2 , 2 , 2 , 3
                 // IP += 0x3
                 this.mem32[30] = this.mem32[30] + 0x3
@@ -21760,7 +21760,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 128
-            // ModRM_rm_001_11
+            // ModRM_rm8_001_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IMM_i8
             b2 = this.mem8[_ip];
@@ -22537,7 +22537,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 129
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IMM_u16
             b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
@@ -23314,7 +23314,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 131
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IMM_i8
             b2 = this.mem8[_ip];
@@ -24282,7 +24282,7 @@ export default class Machine {
             // 141
             // ModRM_110_reg16_00
             v_0 = (b1 >> 3 & 0x7); // 1 , 1 , 1 , 2
-            // DISP_i16
+            // DISP_IMM_i16
             b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
             _ip += 2;
             v_2 = (b2 & 0xffff) << 16 >> 16; // 2 , 1 , 1 , 4
@@ -24304,7 +24304,7 @@ export default class Machine {
             // ModRM_rm_reg16_01
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             v_0 = (b1 >> 3 & 0x7); // 1 , 1 , 1 , 2
-            // DISP_i8
+            // DISP_IMM_i8
             b2 = this.mem8[_ip];
             _ip++;
             v_2 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
@@ -24317,7 +24317,7 @@ export default class Machine {
             // ModRM_rm_reg16_10
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             v_0 = (b1 >> 3 & 0x7); // 1 , 1 , 1 , 2
-            // DISP_i16
+            // DISP_IMM_i16
             b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
             _ip += 2;
             v_2 = (b2 & 0xffff) << 16 >> 16; // 2 , 1 , 1 , 4
@@ -25355,7 +25355,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 192
-            // ModRM_rm_001_11
+            // ModRM_rm8_001_11
             v_2 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IMM_u8
             b2 = this.mem8[_ip];
@@ -26147,7 +26147,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 193
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_2 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IMM_u8
             b2 = this.mem8[_ip];
@@ -27340,7 +27340,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 208
-            // ModRM_rm_001_11
+            // ModRM_rm8_001_11
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -27957,7 +27957,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 209
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -28593,7 +28593,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 210
-            // ModRM_rm_001_11
+            // ModRM_rm8_001_11
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -29245,7 +29245,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 211
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_1 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -31073,7 +31073,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 254
-            // ModRM_rm_001_11
+            // ModRM_rm8_001_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -31153,7 +31153,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc0) {
             // 254
-            // ModRM_rm16_000_11
+            // ModRM_rm8_000_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2
@@ -31461,7 +31461,7 @@ export default class Machine {
           }
           else if ((b1 & 0xf8) === 0xc8) {
             // 255
-            // ModRM_rm_001_11
+            // ModRM_rm16_001_11
             v_0 = (b1 & 0x7); // 1 , 1 , 1 , 2
             // IP += 0x2
             this.mem32[30] = this.mem32[30] + 0x2

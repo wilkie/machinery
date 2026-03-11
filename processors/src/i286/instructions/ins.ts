@@ -34,6 +34,7 @@ export const ins: InstructionInfo = {
       opcode: [Opcodes.INS_EB_DX],
       operands: [],
       operandSize: 8,
+      aliases: ['insb'],
       cycles: 5,
     },
     // 0x6D - INS ew, DX
@@ -53,6 +54,7 @@ export const ins: InstructionInfo = {
       opcode: [Opcodes.INS_EW_DX],
       operands: [],
       operandSize: 8,
+      aliases: ['insw'],
       cycles: 5,
     },
   ],

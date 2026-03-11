@@ -10,6 +10,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./i286/intel": {
+      "types": "./dist/i286/intel/index.d.ts",
+      "import": "./dist/i286/intel/index.js",
+      "require": "./dist/i286/intel/index.cjs"
     }
   },
   "bin": {
@@ -20,7 +25,8 @@
     "build": "pnpm build:grammar && tsup",
     "test": "jest --passWithNoTests",
     "lint": "eslint src",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@machinery/core": "workspace:*",

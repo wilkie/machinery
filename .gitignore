@@ -4,5 +4,5 @@ dist/
 *.tsbuildinfo
 coverage/
 
-# Generated assembler files
-assemblers/src/*/
+# Generated assembler grammar (nearleyc output, rebuilt from .ne)
+assemblers/src/*/*/grammar.ts

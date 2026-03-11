@@ -65,7 +65,12 @@ export const lar: InstructionInfo = {
         'tmp = RAM:u16[effective_address]',
         '${OP}',
       ],
-      opcode: [Opcodes.SYSTEM, SystemOpcodes.LAR, 'ModRM_rm_reg16_01', 'DISP_i8'],
+      opcode: [
+        Opcodes.SYSTEM,
+        SystemOpcodes.LAR,
+        'ModRM_rm_reg16_01',
+        'DISP_i8',
+      ],
       operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 16,

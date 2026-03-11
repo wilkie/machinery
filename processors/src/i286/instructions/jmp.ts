@@ -86,6 +86,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.JMP_CB, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,
+      distance: 'short',
+      addressing: 'relative',
       cycles: 7,
     },
     // 0xE9 cw - JMP NEAR cw
@@ -94,6 +96,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.JMP_CW, 'IMM_i16'],
       operands: ['rel'],
       operandSize: 8,
+      distance: 'near',
+      addressing: 'relative',
       cycles: 7,
     },
     // 0xEA cd - JMP FAR cd
@@ -116,6 +120,8 @@ export const jmp: InstructionInfo = {
       ],
       operands: ['ptr'],
       operandSize: 8,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 11, // 23 in protected mode, 38 via same-privilege call-gate, 175 via tss, 180 via task gate
     },
     // 0xFF /4 - JMP NEAR ew (absolute offset)
@@ -127,6 +133,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_110_100_00', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'near',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -137,6 +145,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_100_00'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'near',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -147,6 +157,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_100_01', 'DISP_i8'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'near',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -157,6 +169,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_100_10', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'near',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -164,6 +178,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_100_11'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'near',
+      addressing: 'absolute',
       cycles: 7,
     },
     // 0xFF /5 - JMP FAR ed
@@ -176,6 +192,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_110_101_00', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 15, // 26 in protected-mode, 41 via same-privilege call gate, 178 via tss, 183 via task gate
     },
     {
@@ -187,6 +205,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_101_00'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -198,6 +218,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_101_01', 'DISP_i8'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -209,6 +231,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_101_10', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 11,
     },
     {
@@ -219,6 +243,8 @@ export const jmp: InstructionInfo = {
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_101_11'],
       operands: ['rm'],
       operandSize: 16,
+      distance: 'far',
+      addressing: 'absolute',
       cycles: 7,
     },
   ],

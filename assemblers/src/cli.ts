@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
 import { parseArgs } from 'node:util';
-import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { GrammarGenerator } from './generator/GrammarGenerator';
 import { EncoderGenerator } from './generator/EncoderGenerator';
 import { IntelSyntax } from './generator/syntax/IntelSyntax';
 import type { Syntax } from './generator/syntax/Syntax';
+import { targets } from './targets';
 
 const syntaxes: Record<string, () => Syntax> = {
   intel: () => new IntelSyntax(),
@@ -30,7 +32,56 @@ function usage(): never {
   console.error(`  -s, --syntax <name>    Assembly syntax (default: intel)`);
   console.error(`  -o, --output <file>    Output binary file`);
   console.error(`  <input>                Input assembly file`);
+  console.error();
+  console.error(
+    `Available targets: ${Object.keys(targets).join(', ') || '(none — run generate first)'}`,
+  );
   return process.exit(1);
+}
+
+function generateTargetsRegistry(srcDir: string) {
+  const targetsPath = resolve(srcDir, 'targets.ts');
+  const lines: string[] = [];
+  lines.push(
+    `// Generated target registry — updated by \`machinery-asm generate\``,
+  );
+  lines.push(`// Do not edit manually`);
+  lines.push(``);
+
+  // Scan for target/syntax directories with an index.ts
+  const entries: { key: string; importPath: string }[] = [];
+
+  for (const targetDir of readdirSync(srcDir, { withFileTypes: true })) {
+    if (!targetDir.isDirectory()) continue;
+    // Skip non-target directories
+    if (['generator', 'preprocessor', 'runtime'].includes(targetDir.name))
+      continue;
+
+    const targetPath = resolve(srcDir, targetDir.name);
+    for (const syntaxDir of readdirSync(targetPath, { withFileTypes: true })) {
+      if (!syntaxDir.isDirectory()) continue;
+
+      const indexPath = resolve(targetPath, syntaxDir.name, 'index.ts');
+      if (!existsSync(indexPath)) continue;
+
+      const key = `${targetDir.name}/${syntaxDir.name}`;
+      const importPath = `./${targetDir.name}/${syntaxDir.name}`;
+      entries.push({ key, importPath });
+    }
+  }
+
+  lines.push(``);
+  lines.push(
+    `export const targets: Record<string, () => Promise<{ assemble: (inputPath: string) => { binary: Uint8Array; origin: number } }>> = {`,
+  );
+  for (const { key, importPath } of entries) {
+    lines.push(`  '${key}': () => import('${importPath}'),`);
+  }
+  lines.push(`};`);
+  lines.push(``);
+
+  writeFileSync(targetsPath, lines.join('\n'));
+  console.log(`Updated target registry: ${targetsPath}`);
 }
 
 async function generate(args: string[]) {
@@ -55,7 +106,9 @@ async function generate(args: string[]) {
 
   const syntaxFactory = syntaxes[syntaxName];
   if (!syntaxFactory) {
-    console.error(`Unknown syntax: ${syntaxName}. Valid options: ${Object.keys(syntaxes).join(', ')}`);
+    console.error(
+      `Unknown syntax: ${syntaxName}. Valid options: ${Object.keys(syntaxes).join(', ')}`,
+    );
     return process.exit(1) as never;
   }
 
@@ -87,6 +140,13 @@ async function generate(args: string[]) {
   const encoderPath = resolve(outPath, 'encoder.ts');
   writeFileSync(encoderPath, encoderContent);
   console.log(`Generated encoder: ${encoderPath}`);
+
+  // Regenerate the target registry
+  const cliDir =
+    typeof __dirname !== 'undefined'
+      ? __dirname
+      : dirname(fileURLToPath(import.meta.url));
+  generateTargetsRegistry(resolve(cliDir));
 }
 
 async function assemble(args: string[]) {
@@ -107,49 +167,23 @@ async function assemble(args: string[]) {
   const inputFile = positionals[0];
 
   if (!targetName || !outputFile || !inputFile) {
-    console.error(`Error: --target, --output, and input file are required for assemble`);
+    console.error(
+      `Error: --target, --output, and input file are required for assemble`,
+    );
     return usage();
   }
 
-  // Dynamically import the target's grammar and encoder
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let grammar: any, encoderModule: any;
-  try {
-    grammar = await import(`./${targetName}/${syntaxName}/grammar`);
-    encoderModule = await import(`./${targetName}/${syntaxName}/encoder`);
-  } catch {
+  const key = `${targetName}/${syntaxName}`;
+  const targetLoader = targets[key];
+  if (!targetLoader) {
     console.error(
-      `Failed to load grammar/encoder for ${targetName}/${syntaxName}. Run 'machinery-asm generate' first.`,
+      `Unknown target "${key}". Available: ${Object.keys(targets).join(', ') || '(none — run generate first)'}`,
     );
     return process.exit(1) as never;
   }
 
-  // Set up parser
-  const nearley = await import('nearley');
-
-  const source = readFileSync(inputFile, 'utf-8');
-
-  // Import and set up assembler
-  const { Assembler } = await import('./runtime/Assembler');
-  const assembler = new Assembler(
-    {
-      parse(input: string) {
-        const p = new nearley.default.Parser(
-          nearley.default.Grammar.fromCompiled(grammar.default || grammar),
-        );
-        p.feed(input);
-        if (p.results.length === 0) {
-          throw new Error('No parse results');
-        }
-        return p.results[0];
-      },
-    },
-    encoderModule.operandDefinitions,
-    encoderModule.encoderForms,
-    encoderModule.segmentOverridePrefixes,
-  );
-
-  const result = assembler.assemble(source);
+  const { assemble: assembleFile } = await targetLoader();
+  const result = assembleFile(inputFile);
   writeFileSync(outputFile, result.binary);
   console.log(
     `Assembled ${inputFile} -> ${outputFile} (${result.binary.length} bytes, origin: 0x${result.origin.toString(16)})`,
@@ -169,7 +203,7 @@ async function main() {
       await generate(args.slice(1));
       break;
     case 'assemble':
-      await assemble(args.slice(1));
+      assemble(args.slice(1));
       break;
     default:
       console.error(`Unknown command: ${command}`);

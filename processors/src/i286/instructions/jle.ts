@@ -22,6 +22,8 @@ export const jle: InstructionInfo = {
       opcode: [Opcodes.JLE, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,
+      distance: 'short',
+      addressing: 'relative',
       cycles: 3, // 7 if jumped
     },
   ],

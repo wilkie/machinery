@@ -88,7 +88,7 @@ export const inc: InstructionInfo = {
         '${ALU8_OP}',
         '${MOD_RM_RM8} = alu_result',
       ],
-      opcode: [Opcodes.INC_DEC, 'ModRM_rm16_000_11'],
+      opcode: [Opcodes.INC_DEC, 'ModRM_rm8_000_11'],
       operands: ['rm'],
       operandSize: 8,
       cycles: 2,
@@ -150,7 +150,7 @@ export const inc: InstructionInfo = {
       ],
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_000_11'],
       operands: ['rm'],
-      operandSize: 8,
+      operandSize: 16,
       cycles: 2,
     },
     // 0x40+rw - INC rw

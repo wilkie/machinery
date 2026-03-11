@@ -21,6 +21,7 @@
     "build:generate": "machinery-vm --target i286 --backend typescript > src/i286/Machine.ts",
     "build": "pnpm build:generate && tsup",
     "test": "jest --passWithNoTests",
+    "build:tests": "tsx test/i286/assemble.ts",
     "test:i286": "node test/i286/test.js",
     "lint": "eslint src",
     "clean": "rm -rf dist"
@@ -29,6 +30,7 @@
     "@machinery/core": "workspace:*"
   },
   "devDependencies": {
+    "@machinery/assemblers": "workspace:*",
     "@machinery/virtual-machine": "workspace:*"
   },
   "files": [

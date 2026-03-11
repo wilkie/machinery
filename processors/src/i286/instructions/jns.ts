@@ -15,6 +15,8 @@ export const jns: InstructionInfo = {
       opcode: [Opcodes.JNS, 'IMM_i8'],
       operands: ['rel'],
       operandSize: 8,
+      distance: 'short',
+      addressing: 'relative',
       cycles: 3, // 7 if jumped
     },
   ],

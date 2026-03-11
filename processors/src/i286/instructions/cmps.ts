@@ -47,6 +47,7 @@ export const cmps: InstructionInfo = {
       opcode: [Opcodes.CMPS_MB_MB],
       operands: [],
       operandSize: 8,
+      aliases: ['cmpsb'],
       cycles: 7,
     },
     // 0xA7 CMPS mw, mw
@@ -69,6 +70,7 @@ export const cmps: InstructionInfo = {
       opcode: [Opcodes.CMPS_MW_MW],
       operands: [],
       operandSize: 16,
+      aliases: ['cmpsw'],
       cycles: 7,
     },
   ],

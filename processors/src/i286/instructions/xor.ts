@@ -296,6 +296,7 @@ export const xor: InstructionInfo = {
       opcode: [Opcodes.XOR_AL_DB, 'IMM_i8'],
       operands: ['AL', 'imm'],
       operandSize: 8,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0x35 dw - XOR AX, dw
@@ -304,6 +305,7 @@ export const xor: InstructionInfo = {
       opcode: [Opcodes.XOR_AX_DW, 'IMM_u16'],
       operands: ['AX', 'imm'],
       operandSize: 16,
+      encodingPriority: 1,
       cycles: 3,
     },
     // 0x80 /6 db - XOR eb, db

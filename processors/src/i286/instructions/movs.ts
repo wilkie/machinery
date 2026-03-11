@@ -9,7 +9,6 @@ import { Opcodes } from '../opcodes';
 // TODO: #UD for abnormal segment selectors (reg/rm: 110 and 111)
 export const movs: InstructionInfo = {
   identifier: 'movs',
-  aliases: ['movsb', 'movsw'],
   name: 'Move Data from String to String',
   description:
     '`MOVS` copies the byte or word at `[SI]` to the byte or word at `ES:[DI]`. The destination operand must be addressable from the `ES` register; no segment override is possible. A segment override may be used for the source operand.\n\nAfter the data movement is made, both `SI` and `DI` are automatically advanced. If the direction flag is 0 (`CLD` was executed), the registers increment; if the direction flag is `1` (`STD` was executed), the registers decrement. The registers increment or decrement by `1` if a byte was moved; by `2` if a word was moved.\n\n`MOVS` can be preceded by the `REP` prefix for block movement of `CX` bytes or words. Refer to the `REP` instruction for details of this operation.',
@@ -41,6 +40,7 @@ export const movs: InstructionInfo = {
       opcode: [Opcodes.MOVS_MB_MB],
       operands: [],
       operandSize: 8,
+      aliases: ['movsb'],
       cycles: 5,
     },
     // 0xA5 MOVS mw, mw
@@ -61,6 +61,7 @@ export const movs: InstructionInfo = {
       opcode: [Opcodes.MOVS_MW_MW],
       operands: [],
       operandSize: 16,
+      aliases: ['movsw'],
       cycles: 5,
     },
   ],

@@ -194,8 +194,9 @@ describe('Encoder', () => {
         expect(encode('CMP', [reg8('AL'), imm(0x00)])).toBe('3C 00');
       });
 
-      it('CMP AX, 0xFFFF -> 3D FF FF', () => {
-        expect(encode('CMP', [reg16('AX'), imm(0xffff)])).toBe('3D FF FF');
+      it('CMP AX, 0xFFFF -> 83 F8 FF (sign-extended imm8)', () => {
+        // 0xFFFF = -1 sign-extended, so encoder prefers shorter imm8 form
+        expect(encode('CMP', [reg16('AX'), imm(0xffff)])).toBe('83 F8 FF');
       });
     });
 
@@ -214,8 +215,9 @@ describe('Encoder', () => {
         expect(encode('OR', [reg8('AL'), imm(0x0f)])).toBe('0C 0F');
       });
 
-      it('OR AX, 0x0001 -> 0D 01 00', () => {
-        expect(encode('OR', [reg16('AX'), imm(0x0001)])).toBe('0D 01 00');
+      it('OR AX, 0x0001 -> 83 C8 01 (sign-extended imm8)', () => {
+        // Encoder prefers shorter sign-extended imm8 form
+        expect(encode('OR', [reg16('AX'), imm(0x0001)])).toBe('83 C8 01');
       });
     });
 

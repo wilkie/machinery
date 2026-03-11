@@ -666,17 +666,18 @@ export class Preprocessor {
       }
 
       if (branch.condition !== null) {
-        const condStr = this.applyDefines(branch.condition.trim());
+        const rawCond = branch.condition.trim();
 
         if (branch.type === 'ifdef') {
-          if (this.defines.has(condStr)) return branch.lines;
+          if (this.defines.has(rawCond)) return branch.lines;
           continue;
         }
         if (branch.type === 'ifndef') {
-          if (!this.defines.has(condStr)) return branch.lines;
+          if (!this.defines.has(rawCond)) return branch.lines;
           continue;
         }
 
+        const condStr = this.applyDefines(rawCond);
         if (this.evaluateCondition(condStr)) {
           return branch.lines;
         }

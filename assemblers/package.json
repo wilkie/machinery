@@ -15,14 +15,26 @@
       "types": "./dist/i286/intel/index.d.ts",
       "import": "./dist/i286/intel/index.js",
       "require": "./dist/i286/intel/index.cjs"
+    },
+    "./z80/intel": {
+      "types": "./dist/z80/intel/index.d.ts",
+      "import": "./dist/z80/intel/index.js",
+      "require": "./dist/z80/intel/index.cjs"
     }
   },
   "bin": {
-    "machinery-asm": "./dist/cli.js"
+    "machinery-asm": "./dist/cli.js",
+    "machinery-generate": "./dist/generate.js"
   },
   "scripts": {
-    "build:grammar": "nearleyc src/i286/intel/grammar.ne -o src/i286/intel/grammar.ts",
-    "build": "pnpm build:grammar && tsup",
+    "generate:i286": "npx tsx src/generate.ts -t i286 -s intel -o src/i286/intel",
+    "generate:z80": "npx tsx src/generate.ts -t z80 -s intel -o src/z80/intel",
+    "generate": "pnpm generate:i286 && pnpm generate:z80",
+    "generate:targets": "npx tsx src/generate-targets.ts",
+    "build:grammar:i286": "nearleyc src/i286/intel/grammar.ne -o src/i286/intel/grammar.ts",
+    "build:grammar:z80": "nearleyc src/z80/intel/grammar.ne -o src/z80/intel/grammar.ts",
+    "build:grammar": "pnpm build:grammar:i286 && pnpm build:grammar:z80",
+    "build": "pnpm generate:targets && pnpm build:grammar && tsup",
     "test": "jest --passWithNoTests",
     "lint": "eslint src",
     "clean": "rm -rf dist",

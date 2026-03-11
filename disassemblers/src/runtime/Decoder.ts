@@ -385,15 +385,6 @@ export class Decoder {
         return this.readImmediateOperand(immId);
       }
 
-      case 'rel': {
-        const relId = suffixIds.find((id) => id.startsWith('IMM_'));
-        if (!relId) return null;
-        const relSize = this.parseFieldSize(relId);
-        const raw = this.readValue(relSize);
-        const offset = this.signExtend(raw, relSize);
-        return { type: 'relative', offset, size: relSize, target: 0 };
-      }
-
       case 'mem': {
         // Direct memory operand (MOV AL, [addr])
         const dispId = suffixIds.find((id) => id.startsWith('IMM_'));
@@ -412,8 +403,42 @@ export class Decoder {
         return null;
       }
 
+      case 'rel': {
+        const relId = suffixIds.find((id) => id.startsWith('REL_'));
+        if (relId) {
+          const relSize = this.parseFieldSize(relId);
+          const raw = this.readValue(relSize);
+          const offset = this.signExtend(raw, relSize);
+          return { type: 'relative', offset, size: relSize, target: 0 };
+        }
+        // Fall through to IMM-based rel handling
+        const relImmId = suffixIds.find((id) => id.startsWith('IMM_'));
+        if (!relImmId) return null;
+        const relSize2 = this.parseFieldSize(relImmId);
+        const raw2 = this.readValue(relSize2);
+        const offset2 = this.signExtend(raw2, relSize2);
+        return { type: 'relative', offset: offset2, size: relSize2, target: 0 };
+      }
+
+      case '(imm)': {
+        // Direct memory from immediate (e.g., LD (nn), A / OUT (n), A)
+        const immId = suffixIds.find(
+          (id) => id.startsWith('IMM_') || id.startsWith('PORT_'),
+        );
+        if (!immId) return null;
+        const immSize = this.parseFieldSize(immId);
+        const addr = this.readValue(immSize);
+        return {
+          type: 'memory',
+          displacement: addr,
+          displacementSize: immSize,
+          size,
+          direct: true,
+        };
+      }
+
       default:
-        return null;
+        return this.decodeLiteralOperand(name, size);
     }
   }
 
@@ -618,7 +643,12 @@ export class Decoder {
           : typeof entry === 'object' && 'identifier' in entry
             ? (entry as OpcodeMatcher).identifier
             : '';
-      if (id.startsWith('IMM_') || id.startsWith('DISP_')) {
+      if (
+        id.startsWith('IMM_') ||
+        id.startsWith('DISP_') ||
+        id.startsWith('REL_') ||
+        id.startsWith('PORT_')
+      ) {
         result.push(id);
       }
     }
@@ -650,6 +680,52 @@ export class Decoder {
    */
   private getRegisterSize(name: string): number {
     return this.registerSizes.get(name.toLowerCase()) ?? 16;
+  }
+
+  /**
+   * Handle literal operand names that aren't field references or keywords.
+   * Covers:
+   *   - '(REG)' — register indirect memory (e.g., '(HL)', '(BC)', '(SP)', '(C)')
+   *   - Numeric literals ('0', '1', '0x00', '0x38')
+   *   - Quoted register names that didn't match isFixedRegisterName (e.g., "AF'")
+   */
+  private decodeLiteralOperand(
+    name: string,
+    size: number,
+  ): DecodedOperand | null {
+    // Register indirect: (REG)
+    const indirectMatch = name.match(/^\((\w+)\)$/);
+    if (indirectMatch) {
+      const reg = indirectMatch[1];
+      if (this.isFixedRegisterName(reg)) {
+        return {
+          type: 'memory',
+          base: reg.toLowerCase(),
+          displacement: 0,
+          displacementSize: 0,
+          size,
+          direct: false,
+        };
+      }
+    }
+
+    // Numeric literal (e.g., '0', '1', '2', '0x00', '0x38')
+    if (/^(0x[\da-fA-F]+|\d+)$/.test(name)) {
+      const value = name.startsWith('0x')
+        ? parseInt(name, 16)
+        : parseInt(name, 10);
+      return { type: 'immediate', value, size: 8, signed: false };
+    }
+
+    // Fallback: try as register name (handles shadow registers like "AF'")
+    const stripped = name.replace(/'/g, '');
+    if (this.isFixedRegisterName(stripped) || this.isFixedRegisterName(name)) {
+      const regSize =
+        this.getRegisterSize(stripped) || this.getRegisterSize(name) || 16;
+      return { type: 'register', name: name.toLowerCase(), size: regSize };
+    }
+
+    return null;
   }
 
   private parseFieldSize(id: string): number {

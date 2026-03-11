@@ -47,8 +47,9 @@ export class IntelSyntax implements Syntax {
     for (const [name, entry] of [...registerMap.entries()].sort(([a], [b]) =>
       a.localeCompare(b),
     )) {
+      const escaped = name.replace(/'/g, "\\'");
       lines.push(
-        `  '${name}': { type: 'register', name: '${name}', size: ${entry.size} },`,
+        `  '${escaped}': { type: 'register', name: '${escaped}', size: ${entry.size} },`,
       );
     }
     lines.push(`};`);
@@ -89,13 +90,13 @@ export class IntelSyntax implements Syntax {
     lines.push(`  dot: '.',`);
     lines.push(`  dollar: '$',`);
     lines.push(`  ident: {`);
-    lines.push(`    match: /[a-zA-Z_][a-zA-Z0-9_]*/,`);
+    lines.push(`    match: /[a-zA-Z_][a-zA-Z0-9_]*'?/,`);
     lines.push(`    type: caseInsensitiveKeywords({`);
     lines.push(
       `      mnemonic: [${sortedMnemonics.map((m) => `'${m}'`).join(', ')}],`,
     );
     lines.push(
-      `      register: [${sortedRegisters.map((r) => `'${r}'`).join(', ')}],`,
+      `      register: [${sortedRegisters.map((r) => `'${r.replace(/'/g, "\\'")}'`).join(', ')}],`,
     );
     lines.push(`      kw_byte: ['BYTE'],`);
     lines.push(`      kw_word: ['WORD'],`);

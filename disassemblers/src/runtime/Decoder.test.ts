@@ -455,7 +455,9 @@ describe('Decoder', () => {
       expect(
         instr!.operands.some(
           (o) =>
-            o.type === 'memory' && o.direct === true && o.displacement === 0x1234,
+            o.type === 'memory' &&
+            o.direct === true &&
+            o.displacement === 0x1234,
         ),
       ).toBe(true);
       expect(
@@ -715,8 +717,14 @@ describe('Syntax formatters', () => {
 });
 
 describe('dsm reference validation', () => {
-  const dsmDir = resolve(__dirname, '../../../simulators/test/i286/complex/dsm');
-  const binDir = resolve(__dirname, '../../../simulators/test/i286/complex/bin');
+  const dsmDir = resolve(
+    __dirname,
+    '../../../simulators/test/i286/complex/dsm',
+  );
+  const binDir = resolve(
+    __dirname,
+    '../../../simulators/test/i286/complex/bin',
+  );
 
   // Get all .dsm files that have matching .com binaries
   let dsmFiles: string[] = [];
@@ -740,13 +748,13 @@ describe('dsm reference validation', () => {
    * We only compare the hex bytes and mnemonic (first word of assembly),
    * ignoring operand formatting differences (size suffixes, zero disp, etc.).
    */
-  function parseDsm(content: string): Map<number, { hex: string; mnemonic: string }> {
+  function parseDsm(
+    content: string,
+  ): Map<number, { hex: string; mnemonic: string }> {
     const map = new Map<number, { hex: string; mnemonic: string }>();
     for (const line of content.split('\n')) {
       // Match lines like: "   0:	8d 06 f2 15          	lea    0x15f2,%ax"
-      const m = line.match(
-        /^\s*([0-9a-f]+):\s+([0-9a-f ]+?)\s{2,}\t?\s*(\S+)/,
-      );
+      const m = line.match(/^\s*([0-9a-f]+):\s+([0-9a-f ]+?)\s{2,}\t?\s*(\S+)/);
       if (!m) continue;
       const addr = parseInt(m[1], 16);
       const hex = m[2].trim();

@@ -22,6 +22,10 @@ const targets: Record<string, () => Promise<Target>> = {
     const mod = await import('@machinery/processors/i286');
     return mod.default;
   },
+  z80: async () => {
+    const mod = await import('@machinery/processors/z80');
+    return mod.default;
+  },
 };
 
 function usage(): never {

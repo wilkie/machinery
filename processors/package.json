@@ -15,6 +15,11 @@
       "types": "./dist/i286/index.d.ts",
       "import": "./dist/i286/index.js",
       "require": "./dist/i286/index.cjs"
+    },
+    "./z80": {
+      "types": "./dist/z80/index.d.ts",
+      "import": "./dist/z80/index.js",
+      "require": "./dist/z80/index.cjs"
     }
   },
   "scripts": {

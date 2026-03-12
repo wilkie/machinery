@@ -24,6 +24,8 @@ const registerMap: Record<string, { type: string; name: string; size: number }> 
   'H': { type: 'register', name: 'H', size: 8 },
   'HL': { type: 'register', name: 'HL', size: 16 },
   'I': { type: 'register', name: 'I', size: 8 },
+  'IX': { type: 'register', name: 'IX', size: 16 },
+  'IY': { type: 'register', name: 'IY', size: 16 },
   'L': { type: 'register', name: 'L', size: 8 },
   'R': { type: 'register', name: 'R', size: 8 },
   'SP': { type: 'register', name: 'SP', size: 16 },
@@ -58,7 +60,7 @@ const lexer = moo.compile({
     match: /[a-zA-Z_][a-zA-Z0-9_]*'?/,
     type: caseInsensitiveKeywords({
       mnemonic: ['ADC', 'ADD', 'AND', 'BIT', 'CALL', 'CALL C', 'CALL M', 'CALL NC', 'CALL NZ', 'CALL P', 'CALL PE', 'CALL PO', 'CALL Z', 'CCF', 'CP', 'CPD', 'CPDR', 'CPI', 'CPIR', 'CPL', 'DAA', 'DEC', 'DI', 'DJNZ', 'EI', 'EX', 'EXX', 'HALT', 'IM', 'IN', 'INC', 'IND', 'INDR', 'INI', 'INIR', 'JP', 'JP C', 'JP M', 'JP NC', 'JP NZ', 'JP P', 'JP PE', 'JP PO', 'JP Z', 'JR', 'JR C', 'JR NC', 'JR NZ', 'JR Z', 'LD', 'LDD', 'LDDR', 'LDI', 'LDIR', 'NEG', 'NOP', 'OR', 'OTDR', 'OTIR', 'OUT', 'OUTD', 'OUTI', 'POP', 'PUSH', 'RES', 'RET', 'RET C', 'RET M', 'RET NC', 'RET NZ', 'RET P', 'RET PE', 'RET PO', 'RET Z', 'RETF', 'RETI', 'RETN', 'RL', 'RLA', 'RLC', 'RLCA', 'RLD', 'RR', 'RRA', 'RRC', 'RRCA', 'RRD', 'RST', 'SBC', 'SCF', 'SET', 'SLA', 'SRA', 'SRL', 'SUB', 'XOR'],
-      register: ['A', 'AF', 'AF\'', 'B', 'BC', 'C', 'D', 'DE', 'E', 'H', 'HL', 'I', 'L', 'R', 'SP'],
+      register: ['A', 'AF', 'AF\'', 'B', 'BC', 'C', 'D', 'DE', 'E', 'H', 'HL', 'I', 'IX', 'IY', 'L', 'R', 'SP'],
       kw_byte: ['BYTE'],
       kw_word: ['WORD'],
       kw_ptr: ['PTR'],

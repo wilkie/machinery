@@ -117,6 +117,22 @@ export const sbc: InstructionInfo = {
       cycles: 7,
     },
 
+    // SBC A, (IX+d) / SBC A, (IY+d)
+    {
+      opcode: ['DD_IX', Opcodes.SBC_A_xHLx, 'DISP_i8'],
+      operands: ['A', 'rm'],
+      operandSize: 8,
+      operation: ['a = A', 'b = RAM:u8[IX + %{DISP}]', '${ALU8_OP}', 'A = alu_result'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.SBC_A_xHLx, 'DISP_i8'],
+      operands: ['A', 'rm'],
+      operandSize: 8,
+      operation: ['a = A', 'b = RAM:u8[IY + %{DISP}]', '${ALU8_OP}', 'A = alu_result'],
+      cycles: 19,
+    },
+
     // SBC HL, rp (ED prefix)
     {
       opcode: [Opcodes.ED_PREFIX, EDOpcodes.SBC_HL_BC],

@@ -107,6 +107,32 @@ export const inc: InstructionInfo = {
       cycles: 4,
     },
 
+    // INC (IX+d) / INC (IY+d)
+    {
+      opcode: ['DD_IX', Opcodes.INC_xHLx, 'DISP_i8'],
+      operands: ['rm'],
+      operandSize: 8,
+      operation: [
+        'a = RAM:u8[IX + %{DISP}]',
+        'b = 1',
+        '${ALU_OP}',
+        'RAM:u8[IX + %{DISP}] = alu_result',
+      ],
+      cycles: 23,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.INC_xHLx, 'DISP_i8'],
+      operands: ['rm'],
+      operandSize: 8,
+      operation: [
+        'a = RAM:u8[IY + %{DISP}]',
+        'b = 1',
+        '${ALU_OP}',
+        'RAM:u8[IY + %{DISP}] = alu_result',
+      ],
+      cycles: 23,
+    },
+
     // 16-bit INC rp (no flags affected)
     {
       opcode: [Opcodes.INC_BC],
@@ -139,6 +165,22 @@ export const inc: InstructionInfo = {
       modifies: [],
       operation: ['SP = SP + 1'],
       cycles: 6,
+    },
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.INC_HL],
+      operands: ['IX'],
+      operandSize: 16,
+      modifies: [],
+      operation: ['IX = IX + 1'],
+      cycles: 10,
+    },
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.INC_HL],
+      operands: ['IY'],
+      operandSize: 16,
+      modifies: [],
+      operation: ['IY = IY + 1'],
+      cycles: 10,
     },
   ],
 };

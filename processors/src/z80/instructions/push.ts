@@ -33,5 +33,18 @@ export const push: InstructionInfo = {
       operation: ['SP = SP - 2', 'RAM:u16[SP] = AF'],
       cycles: 11,
     },
+    // PUSH IX / PUSH IY
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.PUSH_HL],
+      operands: ['IX'],
+      operation: ['SP = SP - 2', 'RAM:u16[SP] = IX'],
+      cycles: 15,
+    },
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.PUSH_HL],
+      operands: ['IY'],
+      operation: ['SP = SP - 2', 'RAM:u16[SP] = IY'],
+      cycles: 15,
+    },
   ],
 };

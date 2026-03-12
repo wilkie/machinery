@@ -105,5 +105,21 @@ export const and: InstructionInfo = {
       operation: ['a = A', 'b = %{imm}', '${ALU_OP}', 'A = alu_result'],
       cycles: 7,
     },
+
+    // AND (IX+d) / AND (IY+d)
+    {
+      opcode: ['DD_IX', Opcodes.AND_xHLx, 'DISP_i8'],
+      operands: ['rm'],
+      operandSize: 8,
+      operation: ['a = A', 'b = RAM:u8[IX + %{DISP}]', '${ALU_OP}', 'A = alu_result'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.AND_xHLx, 'DISP_i8'],
+      operands: ['rm'],
+      operandSize: 8,
+      operation: ['a = A', 'b = RAM:u8[IY + %{DISP}]', '${ALU_OP}', 'A = alu_result'],
+      cycles: 19,
+    },
   ],
 };

@@ -317,7 +317,7 @@ export default class Machine {
   }
 
   decode_default() {
-    let b0 = 0; let b1 = 0; let b2 = 0; let v_0 = 0;
+    let b0 = 0; let b1 = 0; let b2 = 0; let b3 = 0; let v_0 = 0; let v_1 = 0;
 320
     let _ip = this.mem16[5] + 0x140;
     let _finalize: number[] = [];
@@ -339,6 +339,11 @@ export default class Machine {
           // IP += 0x3
           this.mem16[5] = this.mem16[5] + 0x3
           this.mem16[1] = v_0
+          break outer;
+        case 0x2:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[(320 + this.mem16[1])] = this.mem8[1]
           break outer;
         case 0x3:
           // 3
@@ -403,6 +408,11 @@ export default class Machine {
           this.mem32[8] = (this.mem16[13] + this.mem16[14])
           this.mem16[18] = 20
           this.mem16[3] = this.mem32[8]
+          break outer;
+        case 0xa:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[1] = this.mem8[(320 + this.mem16[1])]
           break outer;
         case 0xb:
           // 11
@@ -471,6 +481,11 @@ export default class Machine {
           this.mem16[5] = this.mem16[5] + 0x3
           this.mem16[2] = v_0
           break outer;
+        case 0x12:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[(320 + this.mem16[2])] = this.mem8[1]
+          break outer;
         case 0x13:
           // 19
           // IP += 0x1
@@ -538,6 +553,11 @@ export default class Machine {
           this.mem32[8] = (this.mem16[13] + this.mem16[14])
           this.mem16[18] = 20
           this.mem16[3] = this.mem32[8]
+          break outer;
+        case 0x1a:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[1] = this.mem8[(320 + this.mem16[2])]
           break outer;
         case 0x1b:
           // 27
@@ -772,6 +792,33 @@ export default class Machine {
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem16[4] = (this.mem16[4] + 1)
           break outer;
+        case 0x34:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[13] = this.mem8[(320 + this.mem16[3])]
+          this.mem16[14] = 1
+          this.mem32[8] = (this.mem16[13] + this.mem16[14])
+          this.mem16[18] = 80
+          this.mem8[(320 + this.mem16[3])] = this.mem32[8]
+          break outer;
+        case 0x35:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[13] = this.mem8[(320 + this.mem16[3])]
+          this.mem16[14] = 1
+          this.mem32[8] = (this.mem16[13] - this.mem16[14])
+          this.mem16[18] = 88
+          this.mem8[(320 + this.mem16[3])] = this.mem32[8]
+          break outer;
+        case 0x36:
+          // IMM_u8
+          b1 = this.mem8[_ip];
+          _ip++;
+          v_0 = (b1 & 0xff); // 1 , 0 , 0 , 2
+          // IP += 0x2
+          this.mem16[5] = this.mem16[5] + 0x2
+          this.mem8[(320 + this.mem16[3])] = v_0
+          break outer;
         case 0x37:
           // 55
           // IP += 0x1
@@ -893,6 +940,11 @@ export default class Machine {
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem8[3] = this.mem8[6]
           break outer;
+        case 0x46:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[3] = this.mem8[(320 + this.mem16[3])]
+          break outer;
         case 0x47:
           // 71
           // IP += 0x1
@@ -933,6 +985,11 @@ export default class Machine {
           // IP += 0x1
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem8[2] = this.mem8[6]
+          break outer;
+        case 0x4e:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[2] = this.mem8[(320 + this.mem16[3])]
           break outer;
         case 0x4f:
           // 79
@@ -975,6 +1032,11 @@ export default class Machine {
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem8[5] = this.mem8[6]
           break outer;
+        case 0x56:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[5] = this.mem8[(320 + this.mem16[3])]
+          break outer;
         case 0x57:
           // 87
           // IP += 0x1
@@ -1015,6 +1077,11 @@ export default class Machine {
           // IP += 0x1
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem8[4] = this.mem8[6]
+          break outer;
+        case 0x5e:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[4] = this.mem8[(320 + this.mem16[3])]
           break outer;
         case 0x5f:
           // 95
@@ -1057,6 +1124,11 @@ export default class Machine {
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem8[7] = this.mem8[6]
           break outer;
+        case 0x66:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[7] = this.mem8[(320 + this.mem16[3])]
+          break outer;
         case 0x67:
           // 103
           // IP += 0x1
@@ -1098,17 +1170,57 @@ export default class Machine {
           // IP += 0x1
           this.mem16[5] = this.mem16[5] + 0x1
           break outer;
+        case 0x6e:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[6] = this.mem8[(320 + this.mem16[3])]
+          break outer;
         case 0x6f:
           // 111
           // IP += 0x1
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem8[6] = this.mem8[1]
           break outer;
+        case 0x70:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[(320 + this.mem16[3])] = this.mem8[3]
+          break outer;
+        case 0x71:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[(320 + this.mem16[3])] = this.mem8[2]
+          break outer;
+        case 0x72:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[(320 + this.mem16[3])] = this.mem8[5]
+          break outer;
+        case 0x73:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[(320 + this.mem16[3])] = this.mem8[4]
+          break outer;
+        case 0x74:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[(320 + this.mem16[3])] = this.mem8[7]
+          break outer;
+        case 0x75:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[(320 + this.mem16[3])] = this.mem8[6]
+          break outer;
         case 0x76:
           // 118
           // IP += 0x1
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem8[42] = 1 & 0x1
+          break outer;
+        case 0x77:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[(320 + this.mem16[3])] = this.mem8[1]
           break outer;
         case 0x78:
           // 120
@@ -1145,6 +1257,11 @@ export default class Machine {
           // IP += 0x1
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem8[1] = this.mem8[6]
+          break outer;
+        case 0x7e:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[1] = this.mem8[(320 + this.mem16[3])]
           break outer;
         case 0x7f:
           // 127
@@ -1207,6 +1324,15 @@ export default class Machine {
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem16[13] = this.mem8[1]
           this.mem16[14] = this.mem8[6]
+          this.mem32[8] = (this.mem16[13] + this.mem16[14])
+          this.mem16[18] = 16
+          this.mem8[1] = this.mem32[8]
+          break outer;
+        case 0x86:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[13] = this.mem8[1]
+          this.mem16[14] = this.mem8[(320 + this.mem16[3])]
           this.mem32[8] = (this.mem16[13] + this.mem16[14])
           this.mem16[18] = 16
           this.mem8[1] = this.mem32[8]
@@ -1293,6 +1419,17 @@ export default class Machine {
           this.mem16[18] = 17
           this.mem8[1] = this.mem32[8]
           break outer;
+        case 0x8e:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[13] = this.mem8[1]
+          this.mem16[14] = this.mem8[(320 + this.mem16[3])]
+          this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+          this.mem16[14] = (this.mem16[14] + ((this.mem8[0]) & 0x1))
+          this.mem32[8] = (this.mem16[13] + this.mem16[14])
+          this.mem16[18] = 17
+          this.mem8[1] = this.mem32[8]
+          break outer;
         case 0x8f:
           // 143
           // IP += 0x1
@@ -1361,6 +1498,15 @@ export default class Machine {
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem16[13] = this.mem8[1]
           this.mem16[14] = this.mem8[6]
+          this.mem32[8] = (this.mem16[13] - this.mem16[14])
+          this.mem16[18] = 24
+          this.mem8[1] = this.mem32[8]
+          break outer;
+        case 0x96:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[13] = this.mem8[1]
+          this.mem16[14] = this.mem8[(320 + this.mem16[3])]
           this.mem32[8] = (this.mem16[13] - this.mem16[14])
           this.mem16[18] = 24
           this.mem8[1] = this.mem32[8]
@@ -1447,6 +1593,17 @@ export default class Machine {
           this.mem16[18] = 25
           this.mem8[1] = this.mem32[8]
           break outer;
+        case 0x9e:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[13] = this.mem8[1]
+          this.mem16[14] = this.mem8[(320 + this.mem16[3])]
+          this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+          this.mem16[14] = (this.mem16[14] + ((this.mem8[0]) & 0x1))
+          this.mem32[8] = (this.mem16[13] - this.mem16[14])
+          this.mem16[18] = 25
+          this.mem8[1] = this.mem32[8]
+          break outer;
         case 0x9f:
           // 159
           // IP += 0x1
@@ -1515,6 +1672,15 @@ export default class Machine {
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem16[13] = this.mem8[1]
           this.mem16[14] = this.mem8[6]
+          this.mem32[8] = ((this.mem16[13] & this.mem16[14]) >>> 0)
+          this.mem16[18] = 160
+          this.mem8[1] = this.mem32[8]
+          break outer;
+        case 0xa6:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[13] = this.mem8[1]
+          this.mem16[14] = this.mem8[(320 + this.mem16[3])]
           this.mem32[8] = ((this.mem16[13] & this.mem16[14]) >>> 0)
           this.mem16[18] = 160
           this.mem8[1] = this.mem32[8]
@@ -1589,6 +1755,15 @@ export default class Machine {
           this.mem16[18] = 32
           this.mem8[1] = this.mem32[8]
           break outer;
+        case 0xae:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[13] = this.mem8[1]
+          this.mem16[14] = this.mem8[(320 + this.mem16[3])]
+          this.mem32[8] = (this.mem16[13] ^ this.mem16[14])
+          this.mem16[18] = 32
+          this.mem8[1] = this.mem32[8]
+          break outer;
         case 0xaf:
           // 175
           // IP += 0x1
@@ -1659,6 +1834,15 @@ export default class Machine {
           this.mem16[18] = 32
           this.mem8[1] = this.mem32[8]
           break outer;
+        case 0xb6:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[13] = this.mem8[1]
+          this.mem16[14] = this.mem8[(320 + this.mem16[3])]
+          this.mem32[8] = ((this.mem16[13] | this.mem16[14]) >>> 0)
+          this.mem16[18] = 32
+          this.mem8[1] = this.mem32[8]
+          break outer;
         case 0xb7:
           // 183
           // IP += 0x1
@@ -1720,6 +1904,14 @@ export default class Machine {
           this.mem16[5] = this.mem16[5] + 0x1
           this.mem16[13] = this.mem8[1]
           this.mem16[14] = this.mem8[6]
+          this.mem32[8] = (this.mem16[13] - this.mem16[14])
+          this.mem16[18] = 24
+          break outer;
+        case 0xbe:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[13] = this.mem8[1]
+          this.mem16[14] = this.mem8[(320 + this.mem16[3])]
           this.mem32[8] = (this.mem16[13] - this.mem16[14])
           this.mem16[18] = 24
           break outer;
@@ -1912,6 +2104,16 @@ export default class Machine {
               this.mem8[6] = this.mem32[8]
               this.mem16[18] = 96
               break outer;
+            case 0x6:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem8[(320 + this.mem16[3])]
+              this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
+              this.mem32[8] = ((((this.mem16[13] << 1) >>> 0) | ((this.mem8[0]) & 0x1)) >>> 0)
+              this.mem8[(320 + this.mem16[3])] = this.mem32[8]
+              this.mem16[18] = 96
+              break outer;
             case 0x7:
               // 203
               // 7
@@ -1987,6 +2189,16 @@ export default class Machine {
               this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
               this.mem32[8] = (((this.mem16[13] >> 1) | ((((this.mem8[0]) & 0x1) << 7) >>> 0)) >>> 0)
               this.mem8[6] = this.mem32[8]
+              this.mem16[18] = 96
+              break outer;
+            case 0xe:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem8[(320 + this.mem16[3])]
+              this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+              this.mem32[8] = (((this.mem16[13] >> 1) | ((((this.mem8[0]) & 0x1) << 7) >>> 0)) >>> 0)
+              this.mem8[(320 + this.mem16[3])] = this.mem32[8]
               this.mem16[18] = 96
               break outer;
             case 0xf:
@@ -2076,6 +2288,18 @@ export default class Machine {
               this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
               this.mem32[8] = ((((this.mem16[13] << 1) >>> 0) | this.mem16[19]) >>> 0)
               this.mem8[6] = this.mem32[8]
+              this.mem16[18] = 96
+              break outer;
+            case 0x16:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+              this.mem16[13] = this.mem8[(320 + this.mem16[3])]
+              this.mem16[19] = ((this.mem8[0]) & 0x1)
+              this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
+              this.mem32[8] = ((((this.mem16[13] << 1) >>> 0) | this.mem16[19]) >>> 0)
+              this.mem8[(320 + this.mem16[3])] = this.mem32[8]
               this.mem16[18] = 96
               break outer;
             case 0x17:
@@ -2169,6 +2393,18 @@ export default class Machine {
               this.mem8[6] = this.mem32[8]
               this.mem16[18] = 96
               break outer;
+            case 0x1e:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+              this.mem16[13] = this.mem8[(320 + this.mem16[3])]
+              this.mem16[19] = ((this.mem8[0]) & 0x1)
+              this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+              this.mem32[8] = (((this.mem16[13] >> 1) | ((this.mem16[19] << 7) >>> 0)) >>> 0)
+              this.mem8[(320 + this.mem16[3])] = this.mem32[8]
+              this.mem16[18] = 96
+              break outer;
             case 0x1f:
               // 203
               // 31
@@ -2248,6 +2484,16 @@ export default class Machine {
               this.mem8[6] = this.mem32[8]
               this.mem16[18] = 96
               break outer;
+            case 0x26:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem8[(320 + this.mem16[3])]
+              this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
+              this.mem32[8] = ((this.mem16[13] << 1) >>> 0)
+              this.mem8[(320 + this.mem16[3])] = this.mem32[8]
+              this.mem16[18] = 96
+              break outer;
             case 0x27:
               // 203
               // 39
@@ -2323,6 +2569,16 @@ export default class Machine {
               this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
               this.mem32[8] = ((((this.mem16[13] & 128) >>> 0) | (this.mem16[13] >> 1)) >>> 0)
               this.mem8[6] = this.mem32[8]
+              this.mem16[18] = 96
+              break outer;
+            case 0x2e:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem8[(320 + this.mem16[3])]
+              this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+              this.mem32[8] = ((((this.mem16[13] & 128) >>> 0) | (this.mem16[13] >> 1)) >>> 0)
+              this.mem8[(320 + this.mem16[3])] = this.mem32[8]
               this.mem16[18] = 96
               break outer;
             case 0x2f:
@@ -2402,6 +2658,16 @@ export default class Machine {
               this.mem8[6] = this.mem32[8]
               this.mem16[18] = 96
               break outer;
+            case 0x3e:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem8[(320 + this.mem16[3])]
+              this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+              this.mem32[8] = (this.mem16[13] >> 1)
+              this.mem8[(320 + this.mem16[3])] = this.mem32[8]
+              this.mem16[18] = 96
+              break outer;
             case 0x3f:
               // 203
               // 63
@@ -2469,6 +2735,15 @@ export default class Machine {
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
               this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 0) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+              this.mem16[18] = 256
+              break outer;
+            case 0x46:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 0) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2543,6 +2818,15 @@ export default class Machine {
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
               break outer;
+            case 0x4e:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 1) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+              this.mem16[18] = 256
+              break outer;
             case 0x4f:
               // 203
               // 79
@@ -2609,6 +2893,15 @@ export default class Machine {
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
               this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 2) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+              this.mem16[18] = 256
+              break outer;
+            case 0x56:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 2) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2683,6 +2976,15 @@ export default class Machine {
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
               break outer;
+            case 0x5e:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 3) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+              this.mem16[18] = 256
+              break outer;
             case 0x5f:
               // 203
               // 95
@@ -2749,6 +3051,15 @@ export default class Machine {
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
               this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 4) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+              this.mem16[18] = 256
+              break outer;
+            case 0x66:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 4) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2823,6 +3134,15 @@ export default class Machine {
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
               break outer;
+            case 0x6e:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 5) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+              this.mem16[18] = 256
+              break outer;
             case 0x6f:
               // 203
               // 111
@@ -2889,6 +3209,15 @@ export default class Machine {
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
               this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 6) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+              this.mem16[18] = 256
+              break outer;
+            case 0x76:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 6) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2963,6 +3292,15 @@ export default class Machine {
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
               break outer;
+            case 0x7e:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 7) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+              this.mem16[18] = 256
+              break outer;
             case 0x7f:
               // 203
               // 127
@@ -2978,1031 +3316,882 @@ export default class Machine {
               // 128
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] & ~ 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] & ~ 1) >>> 0)
               break outer;
             case 0x81:
               // 203
               // 129
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] & ~ 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] & ~ 1) >>> 0)
               break outer;
             case 0x82:
               // 203
               // 130
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] & ~ 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] & ~ 1) >>> 0)
               break outer;
             case 0x83:
               // 203
               // 131
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] & ~ 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] & ~ 1) >>> 0)
               break outer;
             case 0x84:
               // 203
               // 132
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] & ~ 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] & ~ 1) >>> 0)
               break outer;
             case 0x85:
               // 203
               // 133
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] & ~ 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] & ~ 1) >>> 0)
+              break outer;
+            case 0x86:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 1) >>> 0)
               break outer;
             case 0x87:
               // 203
               // 135
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] & ~ 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] & ~ 1) >>> 0)
               break outer;
             case 0x88:
               // 203
               // 136
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] & ~ 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] & ~ 2) >>> 0)
               break outer;
             case 0x89:
               // 203
               // 137
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] & ~ 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] & ~ 2) >>> 0)
               break outer;
             case 0x8a:
               // 203
               // 138
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] & ~ 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] & ~ 2) >>> 0)
               break outer;
             case 0x8b:
               // 203
               // 139
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] & ~ 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] & ~ 2) >>> 0)
               break outer;
             case 0x8c:
               // 203
               // 140
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] & ~ 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] & ~ 2) >>> 0)
               break outer;
             case 0x8d:
               // 203
               // 141
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] & ~ 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] & ~ 2) >>> 0)
+              break outer;
+            case 0x8e:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 2) >>> 0)
               break outer;
             case 0x8f:
               // 203
               // 143
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] & ~ 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] & ~ 2) >>> 0)
               break outer;
             case 0x90:
               // 203
               // 144
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] & ~ 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] & ~ 4) >>> 0)
               break outer;
             case 0x91:
               // 203
               // 145
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] & ~ 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] & ~ 4) >>> 0)
               break outer;
             case 0x92:
               // 203
               // 146
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] & ~ 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] & ~ 4) >>> 0)
               break outer;
             case 0x93:
               // 203
               // 147
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] & ~ 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] & ~ 4) >>> 0)
               break outer;
             case 0x94:
               // 203
               // 148
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] & ~ 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] & ~ 4) >>> 0)
               break outer;
             case 0x95:
               // 203
               // 149
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] & ~ 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] & ~ 4) >>> 0)
+              break outer;
+            case 0x96:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 4) >>> 0)
               break outer;
             case 0x97:
               // 203
               // 151
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] & ~ 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] & ~ 4) >>> 0)
               break outer;
             case 0x98:
               // 203
               // 152
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] & ~ 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] & ~ 8) >>> 0)
               break outer;
             case 0x99:
               // 203
               // 153
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] & ~ 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] & ~ 8) >>> 0)
               break outer;
             case 0x9a:
               // 203
               // 154
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] & ~ 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] & ~ 8) >>> 0)
               break outer;
             case 0x9b:
               // 203
               // 155
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] & ~ 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] & ~ 8) >>> 0)
               break outer;
             case 0x9c:
               // 203
               // 156
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] & ~ 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] & ~ 8) >>> 0)
               break outer;
             case 0x9d:
               // 203
               // 157
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] & ~ 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] & ~ 8) >>> 0)
+              break outer;
+            case 0x9e:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 8) >>> 0)
               break outer;
             case 0x9f:
               // 203
               // 159
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] & ~ 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] & ~ 8) >>> 0)
               break outer;
             case 0xa0:
               // 203
               // 160
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] & ~ 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] & ~ 16) >>> 0)
               break outer;
             case 0xa1:
               // 203
               // 161
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] & ~ 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] & ~ 16) >>> 0)
               break outer;
             case 0xa2:
               // 203
               // 162
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] & ~ 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] & ~ 16) >>> 0)
               break outer;
             case 0xa3:
               // 203
               // 163
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] & ~ 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] & ~ 16) >>> 0)
               break outer;
             case 0xa4:
               // 203
               // 164
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] & ~ 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] & ~ 16) >>> 0)
               break outer;
             case 0xa5:
               // 203
               // 165
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] & ~ 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] & ~ 16) >>> 0)
+              break outer;
+            case 0xa6:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 16) >>> 0)
               break outer;
             case 0xa7:
               // 203
               // 167
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] & ~ 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] & ~ 16) >>> 0)
               break outer;
             case 0xa8:
               // 203
               // 168
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] & ~ 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] & ~ 32) >>> 0)
               break outer;
             case 0xa9:
               // 203
               // 169
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] & ~ 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] & ~ 32) >>> 0)
               break outer;
             case 0xaa:
               // 203
               // 170
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] & ~ 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] & ~ 32) >>> 0)
               break outer;
             case 0xab:
               // 203
               // 171
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] & ~ 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] & ~ 32) >>> 0)
               break outer;
             case 0xac:
               // 203
               // 172
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] & ~ 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] & ~ 32) >>> 0)
               break outer;
             case 0xad:
               // 203
               // 173
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] & ~ 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] & ~ 32) >>> 0)
+              break outer;
+            case 0xae:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 32) >>> 0)
               break outer;
             case 0xaf:
               // 203
               // 175
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] & ~ 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] & ~ 32) >>> 0)
               break outer;
             case 0xb0:
               // 203
               // 176
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] & ~ 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] & ~ 64) >>> 0)
               break outer;
             case 0xb1:
               // 203
               // 177
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] & ~ 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] & ~ 64) >>> 0)
               break outer;
             case 0xb2:
               // 203
               // 178
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] & ~ 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] & ~ 64) >>> 0)
               break outer;
             case 0xb3:
               // 203
               // 179
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] & ~ 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] & ~ 64) >>> 0)
               break outer;
             case 0xb4:
               // 203
               // 180
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] & ~ 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] & ~ 64) >>> 0)
               break outer;
             case 0xb5:
               // 203
               // 181
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] & ~ 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] & ~ 64) >>> 0)
+              break outer;
+            case 0xb6:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 64) >>> 0)
               break outer;
             case 0xb7:
               // 203
               // 183
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] & ~ 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] & ~ 64) >>> 0)
               break outer;
             case 0xb8:
               // 203
               // 184
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] & ~ 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] & ~ 128) >>> 0)
               break outer;
             case 0xb9:
               // 203
               // 185
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] & ~ 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] & ~ 128) >>> 0)
               break outer;
             case 0xba:
               // 203
               // 186
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] & ~ 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] & ~ 128) >>> 0)
               break outer;
             case 0xbb:
               // 203
               // 187
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] & ~ 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] & ~ 128) >>> 0)
               break outer;
             case 0xbc:
               // 203
               // 188
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] & ~ 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] & ~ 128) >>> 0)
               break outer;
             case 0xbd:
               // 203
               // 189
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] & ~ 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] & ~ 128) >>> 0)
+              break outer;
+            case 0xbe:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 128) >>> 0)
               break outer;
             case 0xbf:
               // 203
               // 191
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] & ~ 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] & ~ 128) >>> 0)
               break outer;
             case 0xc0:
               // 203
               // 192
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] | 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] | 1) >>> 0)
               break outer;
             case 0xc1:
               // 203
               // 193
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] | 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] | 1) >>> 0)
               break outer;
             case 0xc2:
               // 203
               // 194
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] | 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] | 1) >>> 0)
               break outer;
             case 0xc3:
               // 203
               // 195
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] | 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] | 1) >>> 0)
               break outer;
             case 0xc4:
               // 203
               // 196
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] | 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] | 1) >>> 0)
               break outer;
             case 0xc5:
               // 203
               // 197
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] | 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] | 1) >>> 0)
+              break outer;
+            case 0xc6:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 1) >>> 0)
               break outer;
             case 0xc7:
               // 203
               // 199
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] | 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] | 1) >>> 0)
               break outer;
             case 0xc8:
               // 203
               // 200
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] | 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] | 2) >>> 0)
               break outer;
             case 0xc9:
               // 203
               // 201
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] | 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] | 2) >>> 0)
               break outer;
             case 0xca:
               // 203
               // 202
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] | 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] | 2) >>> 0)
               break outer;
             case 0xcb:
               // 203
               // 203
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] | 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] | 2) >>> 0)
               break outer;
             case 0xcc:
               // 203
               // 204
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] | 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] | 2) >>> 0)
               break outer;
             case 0xcd:
               // 203
               // 205
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] | 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] | 2) >>> 0)
+              break outer;
+            case 0xce:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 2) >>> 0)
               break outer;
             case 0xcf:
               // 203
               // 207
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] | 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] | 2) >>> 0)
               break outer;
             case 0xd0:
               // 203
               // 208
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] | 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] | 4) >>> 0)
               break outer;
             case 0xd1:
               // 203
               // 209
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] | 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] | 4) >>> 0)
               break outer;
             case 0xd2:
               // 203
               // 210
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] | 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] | 4) >>> 0)
               break outer;
             case 0xd3:
               // 203
               // 211
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] | 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] | 4) >>> 0)
               break outer;
             case 0xd4:
               // 203
               // 212
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] | 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] | 4) >>> 0)
               break outer;
             case 0xd5:
               // 203
               // 213
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] | 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] | 4) >>> 0)
+              break outer;
+            case 0xd6:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 4) >>> 0)
               break outer;
             case 0xd7:
               // 203
               // 215
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] | 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] | 4) >>> 0)
               break outer;
             case 0xd8:
               // 203
               // 216
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] | 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] | 8) >>> 0)
               break outer;
             case 0xd9:
               // 203
               // 217
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] | 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] | 8) >>> 0)
               break outer;
             case 0xda:
               // 203
               // 218
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] | 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] | 8) >>> 0)
               break outer;
             case 0xdb:
               // 203
               // 219
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] | 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] | 8) >>> 0)
               break outer;
             case 0xdc:
               // 203
               // 220
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] | 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] | 8) >>> 0)
               break outer;
             case 0xdd:
               // 203
               // 221
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] | 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] | 8) >>> 0)
+              break outer;
+            case 0xde:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 8) >>> 0)
               break outer;
             case 0xdf:
               // 203
               // 223
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] | 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] | 8) >>> 0)
               break outer;
             case 0xe0:
               // 203
               // 224
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] | 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] | 16) >>> 0)
               break outer;
             case 0xe1:
               // 203
               // 225
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] | 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] | 16) >>> 0)
               break outer;
             case 0xe2:
               // 203
               // 226
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] | 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] | 16) >>> 0)
               break outer;
             case 0xe3:
               // 203
               // 227
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] | 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] | 16) >>> 0)
               break outer;
             case 0xe4:
               // 203
               // 228
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] | 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] | 16) >>> 0)
               break outer;
             case 0xe5:
               // 203
               // 229
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] | 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] | 16) >>> 0)
+              break outer;
+            case 0xe6:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 16) >>> 0)
               break outer;
             case 0xe7:
               // 203
               // 231
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] | 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] | 16) >>> 0)
               break outer;
             case 0xe8:
               // 203
               // 232
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] | 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] | 32) >>> 0)
               break outer;
             case 0xe9:
               // 203
               // 233
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] | 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] | 32) >>> 0)
               break outer;
             case 0xea:
               // 203
               // 234
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] | 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] | 32) >>> 0)
               break outer;
             case 0xeb:
               // 203
               // 235
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] | 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] | 32) >>> 0)
               break outer;
             case 0xec:
               // 203
               // 236
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] | 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] | 32) >>> 0)
               break outer;
             case 0xed:
               // 203
               // 237
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] | 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] | 32) >>> 0)
+              break outer;
+            case 0xee:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 32) >>> 0)
               break outer;
             case 0xef:
               // 203
               // 239
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] | 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] | 32) >>> 0)
               break outer;
             case 0xf0:
               // 203
               // 240
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] | 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] | 64) >>> 0)
               break outer;
             case 0xf1:
               // 203
               // 241
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] | 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] | 64) >>> 0)
               break outer;
             case 0xf2:
               // 203
               // 242
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] | 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] | 64) >>> 0)
               break outer;
             case 0xf3:
               // 203
               // 243
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] | 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] | 64) >>> 0)
               break outer;
             case 0xf4:
               // 203
               // 244
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] | 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] | 64) >>> 0)
               break outer;
             case 0xf5:
               // 203
               // 245
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] | 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] | 64) >>> 0)
+              break outer;
+            case 0xf6:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 64) >>> 0)
               break outer;
             case 0xf7:
               // 203
               // 247
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] | 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] | 64) >>> 0)
               break outer;
             case 0xf8:
               // 203
               // 248
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[3] = ((this.mem8[3] | 0) >>> 0)
+              this.mem8[3] = ((this.mem8[3] | 128) >>> 0)
               break outer;
             case 0xf9:
               // 203
               // 249
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[2] = ((this.mem8[2] | 0) >>> 0)
+              this.mem8[2] = ((this.mem8[2] | 128) >>> 0)
               break outer;
             case 0xfa:
               // 203
               // 250
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[5] = ((this.mem8[5] | 0) >>> 0)
+              this.mem8[5] = ((this.mem8[5] | 128) >>> 0)
               break outer;
             case 0xfb:
               // 203
               // 251
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[4] = ((this.mem8[4] | 0) >>> 0)
+              this.mem8[4] = ((this.mem8[4] | 128) >>> 0)
               break outer;
             case 0xfc:
               // 203
               // 252
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[7] = ((this.mem8[7] | 0) >>> 0)
+              this.mem8[7] = ((this.mem8[7] | 128) >>> 0)
               break outer;
             case 0xfd:
               // 203
               // 253
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[6] = ((this.mem8[6] | 0) >>> 0)
+              this.mem8[6] = ((this.mem8[6] | 128) >>> 0)
+              break outer;
+            case 0xfe:
+              // 203
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 128) >>> 0)
               break outer;
             case 0xff:
               // 203
               // 255
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[1] = ((this.mem8[1] | 0) >>> 0)
+              this.mem8[1] = ((this.mem8[1] | 128) >>> 0)
               break outer;
             default:
-              if ((b1 & 0xff) === 0x6) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem16[13] = this.mem8[(320 + this.mem16[3])]
-                this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
-                this.mem32[8] = ((((this.mem16[13] << 1) >>> 0) | ((this.mem8[0]) & 0x1)) >>> 0)
-                this.mem8[(320 + this.mem16[3])] = this.mem32[8]
-                this.mem16[18] = 96
-              }
-              else if ((b1 & 0xff) === 0xe) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem16[13] = this.mem8[(320 + this.mem16[3])]
-                this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
-                this.mem32[8] = (((this.mem16[13] >> 1) | ((((this.mem8[0]) & 0x1) << 7) >>> 0)) >>> 0)
-                this.mem8[(320 + this.mem16[3])] = this.mem32[8]
-                this.mem16[18] = 96
-              }
-              else if ((b1 & 0xff) === 0x16) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
-                this.mem16[13] = this.mem8[(320 + this.mem16[3])]
-                this.mem16[19] = ((this.mem8[0]) & 0x1)
-                this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
-                this.mem32[8] = ((((this.mem16[13] << 1) >>> 0) | this.mem16[19]) >>> 0)
-                this.mem8[(320 + this.mem16[3])] = this.mem32[8]
-                this.mem16[18] = 96
-              }
-              else if ((b1 & 0xff) === 0x1e) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
-                this.mem16[13] = this.mem8[(320 + this.mem16[3])]
-                this.mem16[19] = ((this.mem8[0]) & 0x1)
-                this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
-                this.mem32[8] = (((this.mem16[13] >> 1) | ((this.mem16[19] << 7) >>> 0)) >>> 0)
-                this.mem8[(320 + this.mem16[3])] = this.mem32[8]
-                this.mem16[18] = 96
-              }
-              else if ((b1 & 0xff) === 0x26) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem16[13] = this.mem8[(320 + this.mem16[3])]
-                this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
-                this.mem32[8] = ((this.mem16[13] << 1) >>> 0)
-                this.mem8[(320 + this.mem16[3])] = this.mem32[8]
-                this.mem16[18] = 96
-              }
-              else if ((b1 & 0xff) === 0x2e) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem16[13] = this.mem8[(320 + this.mem16[3])]
-                this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
-                this.mem32[8] = ((((this.mem16[13] & 128) >>> 0) | (this.mem16[13] >> 1)) >>> 0)
-                this.mem8[(320 + this.mem16[3])] = this.mem32[8]
-                this.mem16[18] = 96
-              }
-              else if ((b1 & 0xff) === 0x3e) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem16[13] = this.mem8[(320 + this.mem16[3])]
-                this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
-                this.mem32[8] = (this.mem16[13] >> 1)
-                this.mem8[(320 + this.mem16[3])] = this.mem32[8]
-                this.mem16[18] = 96
-              }
-              else if ((b1 & 0xff) === 0x46) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 0) & 1) >>> 0) & 0x1) << 6)
-                this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
-                this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
-                this.mem16[18] = 256
-              }
-              else if ((b1 & 0xff) === 0x4e) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 1) & 1) >>> 0) & 0x1) << 6)
-                this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
-                this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
-                this.mem16[18] = 256
-              }
-              else if ((b1 & 0xff) === 0x56) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 2) & 1) >>> 0) & 0x1) << 6)
-                this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
-                this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
-                this.mem16[18] = 256
-              }
-              else if ((b1 & 0xff) === 0x5e) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 3) & 1) >>> 0) & 0x1) << 6)
-                this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
-                this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
-                this.mem16[18] = 256
-              }
-              else if ((b1 & 0xff) === 0x66) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 4) & 1) >>> 0) & 0x1) << 6)
-                this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
-                this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
-                this.mem16[18] = 256
-              }
-              else if ((b1 & 0xff) === 0x6e) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 5) & 1) >>> 0) & 0x1) << 6)
-                this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
-                this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
-                this.mem16[18] = 256
-              }
-              else if ((b1 & 0xff) === 0x76) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 6) & 1) >>> 0) & 0x1) << 6)
-                this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
-                this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
-                this.mem16[18] = 256
-              }
-              else if ((b1 & 0xff) === 0x7e) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 7) & 1) >>> 0) & 0x1) << 6)
-                this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
-                this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
-                this.mem16[18] = 256
-              }
-              else if ((b1 & 0xff) === 0x86) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0x8e) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0x96) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0x9e) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xa6) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xae) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xb6) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xbe) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] & ~ 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xc6) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xce) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xd6) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xde) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xe6) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xee) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xf6) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 0) >>> 0)
-              }
-              else if ((b1 & 0xff) === 0xfe) {
-                // 203
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem16[3])] = ((this.mem8[(320 + this.mem16[3])] | 0) >>> 0)
-              }
-              else {
-                // undefined
-              }
               break outer;
           }
           break;
@@ -4199,6 +4388,840 @@ export default class Machine {
             this.mem16[5] = v_0
           }
           break outer;
+        case 0xdd:
+          b1 = this.mem8[_ip];
+          _ip++;
+          switch(b1) {
+            case 0x9:
+              // 221
+              // 9
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem16[6]
+              this.mem16[14] = this.mem16[1]
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 20
+              this.mem16[6] = this.mem32[8]
+              break outer;
+            case 0x19:
+              // 221
+              // 25
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem16[6]
+              this.mem16[14] = this.mem16[2]
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 20
+              this.mem16[6] = this.mem32[8]
+              break outer;
+            case 0x21:
+              // 221
+              // 33
+              // IMM_u16
+              b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
+              _ip += 2;
+              v_0 = (b2 & 0xffff); // 2 , 1 , 1 , 4
+              // IP += 0x4
+              this.mem16[5] = this.mem16[5] + 0x4
+              this.mem16[6] = v_0
+              break outer;
+            case 0x22:
+              // 221
+              // 34
+              // IMM_MEM_u16
+              b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
+              _ip += 2;
+              v_0 = (b2 & 0xffff); // 2 , 1 , 1 , 4
+              // IP += 0x4
+              this.mem16[5] = this.mem16[5] + 0x4
+              if ((320 + v_0) & 0x1) { const _value = this.mem16[6]; this.mem8[(320 + v_0)] = _value; this.mem8[((320 + v_0)) + 1] = _value >> 8; } else { this.mem16[((320 + v_0)) >> 1] = this.mem16[6]; }
+              break outer;
+            case 0x23:
+              // 221
+              // 35
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[6] = (this.mem16[6] + 1)
+              break outer;
+            case 0x29:
+              // 221
+              // 41
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem16[6]
+              this.mem16[14] = this.mem16[6]
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 20
+              this.mem16[6] = this.mem32[8]
+              break outer;
+            case 0x2a:
+              // 221
+              // 42
+              // IMM_MEM_u16
+              b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
+              _ip += 2;
+              v_0 = (b2 & 0xffff); // 2 , 1 , 1 , 4
+              // IP += 0x4
+              this.mem16[5] = this.mem16[5] + 0x4
+              this.mem16[6] = ((320 + v_0) & 0x1 ? (this.mem16[((320 + v_0)) >> 1] >> 8) | ((this.mem16[(((320 + v_0)) >> 1) + 1] & 0xff) << 8) : this.mem16[((320 + v_0)) >> 1])
+              break outer;
+            case 0x2b:
+              // 221
+              // 43
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[6] = (this.mem16[6] - 1)
+              break outer;
+            case 0x34:
+              // DD_IX
+              // 52
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              this.mem16[14] = 1
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 80
+              this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem32[8]
+              break outer;
+            case 0x35:
+              // DD_IX
+              // 53
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              this.mem16[14] = 1
+              this.mem32[8] = (this.mem16[13] - this.mem16[14])
+              this.mem16[18] = 88
+              this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem32[8]
+              break outer;
+            case 0x36:
+              // DD_IX
+              // 54
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IMM_u8
+              b3 = this.mem8[_ip];
+              _ip++;
+              v_1 = (b3 & 0xff); // 3 , 1 , 1 , 4
+              // IP += 0x4
+              this.mem16[5] = this.mem16[5] + 0x4
+              this.mem8[(320 + (this.mem16[6] + v_0))] = v_1
+              break outer;
+            case 0x39:
+              // 221
+              // 57
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem16[6]
+              this.mem16[14] = this.mem16[4]
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 20
+              this.mem16[6] = this.mem32[8]
+              break outer;
+            case 0x46:
+              // DD_IX
+              // 70
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[3] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              break outer;
+            case 0x4e:
+              // DD_IX
+              // 78
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[2] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              break outer;
+            case 0x56:
+              // DD_IX
+              // 86
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[5] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              break outer;
+            case 0x5e:
+              // DD_IX
+              // 94
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[4] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              break outer;
+            case 0x66:
+              // DD_IX
+              // 102
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[7] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              break outer;
+            case 0x6e:
+              // DD_IX
+              // 110
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[6] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              break outer;
+            case 0x70:
+              // DD_IX
+              // 112
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem8[3]
+              break outer;
+            case 0x71:
+              // DD_IX
+              // 113
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem8[2]
+              break outer;
+            case 0x72:
+              // DD_IX
+              // 114
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem8[5]
+              break outer;
+            case 0x73:
+              // DD_IX
+              // 115
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem8[4]
+              break outer;
+            case 0x74:
+              // DD_IX
+              // 116
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem8[7]
+              break outer;
+            case 0x75:
+              // DD_IX
+              // 117
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem8[6]
+              break outer;
+            case 0x77:
+              // DD_IX
+              // 119
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem8[1]
+              break outer;
+            case 0x7e:
+              // DD_IX
+              // 126
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[1] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              break outer;
+            case 0x86:
+              // DD_IX
+              // 134
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 16
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0x8e:
+              // DD_IX
+              // 142
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+              this.mem16[14] = (this.mem16[14] + ((this.mem8[0]) & 0x1))
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 17
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0x96:
+              // DD_IX
+              // 150
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              this.mem32[8] = (this.mem16[13] - this.mem16[14])
+              this.mem16[18] = 24
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0x9e:
+              // DD_IX
+              // 158
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+              this.mem16[14] = (this.mem16[14] + ((this.mem8[0]) & 0x1))
+              this.mem32[8] = (this.mem16[13] - this.mem16[14])
+              this.mem16[18] = 25
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0xa6:
+              // DD_IX
+              // 166
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              this.mem32[8] = ((this.mem16[13] & this.mem16[14]) >>> 0)
+              this.mem16[18] = 160
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0xae:
+              // DD_IX
+              // 174
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              this.mem32[8] = (this.mem16[13] ^ this.mem16[14])
+              this.mem16[18] = 32
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0xb6:
+              // DD_IX
+              // 182
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              this.mem32[8] = ((this.mem16[13] | this.mem16[14]) >>> 0)
+              this.mem16[18] = 32
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0xbe:
+              // DD_IX
+              // 190
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[6] + v_0))]
+              this.mem32[8] = (this.mem16[13] - this.mem16[14])
+              this.mem16[18] = 24
+              break outer;
+            case 0xcb:
+              b2 = this.mem8[_ip];
+              _ip++;
+              b3 = this.mem8[_ip];
+              _ip++;
+              switch(b3) {
+                case 0x6:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 6
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[6] + v_0))]
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
+                  this.mem32[8] = ((((this.mem16[13] << 1) >>> 0) | ((this.mem8[0]) & 0x1)) >>> 0)
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0xe:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 14
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[6] + v_0))]
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+                  this.mem32[8] = (((this.mem16[13] >> 1) | ((((this.mem8[0]) & 0x1) << 7) >>> 0)) >>> 0)
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x16:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 22
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[6] + v_0))]
+                  this.mem16[19] = ((this.mem8[0]) & 0x1)
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
+                  this.mem32[8] = ((((this.mem16[13] << 1) >>> 0) | this.mem16[19]) >>> 0)
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x1e:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 30
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[6] + v_0))]
+                  this.mem16[19] = ((this.mem8[0]) & 0x1)
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+                  this.mem32[8] = (((this.mem16[13] >> 1) | ((this.mem16[19] << 7) >>> 0)) >>> 0)
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x26:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 38
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[6] + v_0))]
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
+                  this.mem32[8] = ((this.mem16[13] << 1) >>> 0)
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x2e:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 46
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[6] + v_0))]
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+                  this.mem32[8] = ((((this.mem16[13] & 128) >>> 0) | (this.mem16[13] >> 1)) >>> 0)
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x3e:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 62
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[6] + v_0))]
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+                  this.mem32[8] = (this.mem16[13] >> 1)
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x46:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 70
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 0) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x4e:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 78
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 1) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x56:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 86
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 2) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x5e:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 94
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 3) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x66:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 102
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 4) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x6e:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 110
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 5) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x76:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 118
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 6) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x7e:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 126
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 7) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x86:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 134
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] & ~ 1) >>> 0)
+                  break outer;
+                case 0x8e:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 142
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] & ~ 2) >>> 0)
+                  break outer;
+                case 0x96:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 150
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] & ~ 4) >>> 0)
+                  break outer;
+                case 0x9e:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 158
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] & ~ 8) >>> 0)
+                  break outer;
+                case 0xa6:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 166
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] & ~ 16) >>> 0)
+                  break outer;
+                case 0xae:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 174
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] & ~ 32) >>> 0)
+                  break outer;
+                case 0xb6:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 182
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] & ~ 64) >>> 0)
+                  break outer;
+                case 0xbe:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 190
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] & ~ 128) >>> 0)
+                  break outer;
+                case 0xc6:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 198
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] | 1) >>> 0)
+                  break outer;
+                case 0xce:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 206
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] | 2) >>> 0)
+                  break outer;
+                case 0xd6:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 214
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] | 4) >>> 0)
+                  break outer;
+                case 0xde:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 222
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] | 8) >>> 0)
+                  break outer;
+                case 0xe6:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 230
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] | 16) >>> 0)
+                  break outer;
+                case 0xee:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 238
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] | 32) >>> 0)
+                  break outer;
+                case 0xf6:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 246
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] | 64) >>> 0)
+                  break outer;
+                case 0xfe:
+                  // DD_IX
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 254
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[6] + v_0))] = ((this.mem8[(320 + (this.mem16[6] + v_0))] | 128) >>> 0)
+                  break outer;
+                default:
+                  break outer;
+              }
+              break;
+            case 0xe1:
+              // 221
+              // 225
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[6] = ((320 + this.mem16[4]) & 0x1 ? (this.mem16[((320 + this.mem16[4])) >> 1] >> 8) | ((this.mem16[(((320 + this.mem16[4])) >> 1) + 1] & 0xff) << 8) : this.mem16[((320 + this.mem16[4])) >> 1])
+              this.mem16[4] = (this.mem16[4] + 2)
+              break outer;
+            case 0xe3:
+              // 221
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[19] = ((320 + this.mem16[4]) & 0x1 ? (this.mem16[((320 + this.mem16[4])) >> 1] >> 8) | ((this.mem16[(((320 + this.mem16[4])) >> 1) + 1] & 0xff) << 8) : this.mem16[((320 + this.mem16[4])) >> 1])
+              if ((320 + this.mem16[4]) & 0x1) { const _value = this.mem16[6]; this.mem8[(320 + this.mem16[4])] = _value; this.mem8[((320 + this.mem16[4])) + 1] = _value >> 8; } else { this.mem16[((320 + this.mem16[4])) >> 1] = this.mem16[6]; }
+              this.mem16[6] = this.mem16[19]
+              break outer;
+            case 0xe5:
+              // 221
+              // 229
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[4] = (this.mem16[4] - 2)
+              if ((320 + this.mem16[4]) & 0x1) { const _value = this.mem16[6]; this.mem8[(320 + this.mem16[4])] = _value; this.mem8[((320 + this.mem16[4])) + 1] = _value >> 8; } else { this.mem16[((320 + this.mem16[4])) >> 1] = this.mem16[6]; }
+              break outer;
+            case 0xe9:
+              // 221
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[5] = this.mem16[6]
+              break outer;
+            case 0xf9:
+              // 221
+              // 249
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[4] = this.mem16[6]
+              break outer;
+            default:
+              break outer;
+          }
+          break;
         case 0xde:
           // 222
           // IMM_u8
@@ -4250,6 +5273,13 @@ export default class Machine {
           this.mem16[5] = this.mem16[5] + 0x3
           this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (((this.mem16[13] ^ this.mem32[8]) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
           this.mem16[5] = (((this.mem8[0] >> 2) & 0x1) === 0 ? v_0 : this.mem16[5])
+          break outer;
+        case 0xe3:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[19] = ((320 + this.mem16[4]) & 0x1 ? (this.mem16[((320 + this.mem16[4])) >> 1] >> 8) | ((this.mem16[(((320 + this.mem16[4])) >> 1) + 1] & 0xff) << 8) : this.mem16[((320 + this.mem16[4])) >> 1])
+          if ((320 + this.mem16[4]) & 0x1) { const _value = this.mem16[3]; this.mem8[(320 + this.mem16[4])] = _value; this.mem8[((320 + this.mem16[4])) + 1] = _value >> 8; } else { this.mem16[((320 + this.mem16[4])) >> 1] = this.mem16[3]; }
+          this.mem16[3] = this.mem16[19]
           break outer;
         case 0xe4:
           // 228
@@ -4305,6 +5335,11 @@ export default class Machine {
             this.mem16[4] = (this.mem16[4] + 2)
           }
           break outer;
+        case 0xe9:
+          // IP += 0x1
+          this.mem16[5] = this.mem16[5] + 0x1
+          this.mem16[5] = this.mem16[3]
+          break outer;
         case 0xea:
           // 234
           // IMM_u16
@@ -4343,6 +5378,18 @@ export default class Machine {
           b1 = this.mem8[_ip];
           _ip++;
           switch(b1) {
+            case 0x40:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[3] = this.mem8[(320 + this.mem8[2])]
+              break outer;
+            case 0x41:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem8[2])] = this.mem8[3]
+              break outer;
             case 0x42:
               // 237
               // 66
@@ -4400,6 +5447,18 @@ export default class Machine {
               this.mem16[5] = this.mem16[5] + 0x2
               this.mem8[16] = this.mem8[1]
               break outer;
+            case 0x48:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[2] = this.mem8[(320 + this.mem8[2])]
+              break outer;
+            case 0x49:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem8[2])] = this.mem8[2]
+              break outer;
             case 0x4a:
               // 237
               // 74
@@ -4439,6 +5498,18 @@ export default class Machine {
               this.mem16[5] = this.mem16[5] + 0x2
               this.mem8[17] = this.mem8[1]
               break outer;
+            case 0x50:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[5] = this.mem8[(320 + this.mem8[2])]
+              break outer;
+            case 0x51:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem8[2])] = this.mem8[5]
+              break outer;
             case 0x52:
               // 237
               // 82
@@ -4475,6 +5546,18 @@ export default class Machine {
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
               this.mem8[1] = this.mem8[16]
+              break outer;
+            case 0x58:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[4] = this.mem8[(320 + this.mem8[2])]
+              break outer;
+            case 0x59:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem8[2])] = this.mem8[4]
               break outer;
             case 0x5a:
               // 237
@@ -4513,6 +5596,18 @@ export default class Machine {
               this.mem16[5] = this.mem16[5] + 0x2
               this.mem8[1] = this.mem8[17]
               break outer;
+            case 0x60:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[7] = this.mem8[(320 + this.mem8[2])]
+              break outer;
+            case 0x61:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem8[2])] = this.mem8[7]
+              break outer;
             case 0x62:
               // 237
               // 98
@@ -4542,6 +5637,18 @@ export default class Machine {
               // 103
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
+              break outer;
+            case 0x68:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[6] = this.mem8[(320 + this.mem8[2])]
+              break outer;
+            case 0x69:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem8[2])] = this.mem8[6]
               break outer;
             case 0x6a:
               // 237
@@ -4573,6 +5680,18 @@ export default class Machine {
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
               break outer;
+            case 0x70:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[19] = this.mem8[(320 + this.mem8[2])]
+              break outer;
+            case 0x71:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem8[2])] = 0
+              break outer;
             case 0x72:
               // 237
               // 114
@@ -4596,6 +5715,18 @@ export default class Machine {
               // IP += 0x4
               this.mem16[5] = this.mem16[5] + 0x4
               if ((320 + v_0) & 0x1) { const _value = this.mem16[4]; this.mem8[(320 + v_0)] = _value; this.mem8[((320 + v_0)) + 1] = _value >> 8; } else { this.mem16[((320 + v_0)) >> 1] = this.mem16[4]; }
+              break outer;
+            case 0x78:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[1] = this.mem8[(320 + this.mem8[2])]
+              break outer;
+            case 0x79:
+              // 237
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem8[(320 + this.mem8[2])] = this.mem8[1]
               break outer;
             case 0x7a:
               // 237
@@ -4854,105 +5985,6 @@ export default class Machine {
               this.mem16[5] = (this.mem8[3] !== 0 ? (this.mem16[5] - 2) : this.mem16[5])
               break outer;
             default:
-              if ((b1 & 0xff) === 0x40) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[3] = this.mem8[(320 + this.mem8[2])]
-              }
-              else if ((b1 & 0xff) === 0x48) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[2] = this.mem8[(320 + this.mem8[2])]
-              }
-              else if ((b1 & 0xff) === 0x50) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[5] = this.mem8[(320 + this.mem8[2])]
-              }
-              else if ((b1 & 0xff) === 0x58) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[4] = this.mem8[(320 + this.mem8[2])]
-              }
-              else if ((b1 & 0xff) === 0x60) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[7] = this.mem8[(320 + this.mem8[2])]
-              }
-              else if ((b1 & 0xff) === 0x68) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[6] = this.mem8[(320 + this.mem8[2])]
-              }
-              else if ((b1 & 0xff) === 0x78) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[1] = this.mem8[(320 + this.mem8[2])]
-              }
-              else if ((b1 & 0xff) === 0x70) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem16[19] = this.mem8[(320 + this.mem8[2])]
-              }
-              else if ((b1 & 0xff) === 0x41) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem8[2])] = this.mem8[3]
-              }
-              else if ((b1 & 0xff) === 0x49) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem8[2])] = this.mem8[2]
-              }
-              else if ((b1 & 0xff) === 0x51) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem8[2])] = this.mem8[5]
-              }
-              else if ((b1 & 0xff) === 0x59) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem8[2])] = this.mem8[4]
-              }
-              else if ((b1 & 0xff) === 0x61) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem8[2])] = this.mem8[7]
-              }
-              else if ((b1 & 0xff) === 0x69) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem8[2])] = this.mem8[6]
-              }
-              else if ((b1 & 0xff) === 0x79) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem8[2])] = this.mem8[1]
-              }
-              else if ((b1 & 0xff) === 0x71) {
-                // 237
-                // IP += 0x2
-                this.mem16[5] = this.mem16[5] + 0x2
-                this.mem8[(320 + this.mem8[2])] = 0
-              }
-              else {
-                // undefined
-              }
               break outer;
           }
           break;
@@ -5106,6 +6138,840 @@ export default class Machine {
             this.mem16[5] = v_0
           }
           break outer;
+        case 0xfd:
+          b1 = this.mem8[_ip];
+          _ip++;
+          switch(b1) {
+            case 0x9:
+              // 253
+              // 9
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem16[7]
+              this.mem16[14] = this.mem16[1]
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 20
+              this.mem16[7] = this.mem32[8]
+              break outer;
+            case 0x19:
+              // 253
+              // 25
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem16[7]
+              this.mem16[14] = this.mem16[2]
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 20
+              this.mem16[7] = this.mem32[8]
+              break outer;
+            case 0x21:
+              // 253
+              // 33
+              // IMM_u16
+              b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
+              _ip += 2;
+              v_0 = (b2 & 0xffff); // 2 , 1 , 1 , 4
+              // IP += 0x4
+              this.mem16[5] = this.mem16[5] + 0x4
+              this.mem16[7] = v_0
+              break outer;
+            case 0x22:
+              // 253
+              // 34
+              // IMM_MEM_u16
+              b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
+              _ip += 2;
+              v_0 = (b2 & 0xffff); // 2 , 1 , 1 , 4
+              // IP += 0x4
+              this.mem16[5] = this.mem16[5] + 0x4
+              if ((320 + v_0) & 0x1) { const _value = this.mem16[7]; this.mem8[(320 + v_0)] = _value; this.mem8[((320 + v_0)) + 1] = _value >> 8; } else { this.mem16[((320 + v_0)) >> 1] = this.mem16[7]; }
+              break outer;
+            case 0x23:
+              // 253
+              // 35
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[7] = (this.mem16[7] + 1)
+              break outer;
+            case 0x29:
+              // 253
+              // 41
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem16[7]
+              this.mem16[14] = this.mem16[7]
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 20
+              this.mem16[7] = this.mem32[8]
+              break outer;
+            case 0x2a:
+              // 253
+              // 42
+              // IMM_MEM_u16
+              b2 = (_ip & 0x1 ? (this.mem16[(_ip) >> 1] >> 8) | ((this.mem16[((_ip) >> 1) + 1] & 0xff) << 8) : this.mem16[(_ip) >> 1]);
+              _ip += 2;
+              v_0 = (b2 & 0xffff); // 2 , 1 , 1 , 4
+              // IP += 0x4
+              this.mem16[5] = this.mem16[5] + 0x4
+              this.mem16[7] = ((320 + v_0) & 0x1 ? (this.mem16[((320 + v_0)) >> 1] >> 8) | ((this.mem16[(((320 + v_0)) >> 1) + 1] & 0xff) << 8) : this.mem16[((320 + v_0)) >> 1])
+              break outer;
+            case 0x2b:
+              // 253
+              // 43
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[7] = (this.mem16[7] - 1)
+              break outer;
+            case 0x34:
+              // FD_IY
+              // 52
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              this.mem16[14] = 1
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 80
+              this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem32[8]
+              break outer;
+            case 0x35:
+              // FD_IY
+              // 53
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              this.mem16[14] = 1
+              this.mem32[8] = (this.mem16[13] - this.mem16[14])
+              this.mem16[18] = 88
+              this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem32[8]
+              break outer;
+            case 0x36:
+              // FD_IY
+              // 54
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IMM_u8
+              b3 = this.mem8[_ip];
+              _ip++;
+              v_1 = (b3 & 0xff); // 3 , 1 , 1 , 4
+              // IP += 0x4
+              this.mem16[5] = this.mem16[5] + 0x4
+              this.mem8[(320 + (this.mem16[7] + v_0))] = v_1
+              break outer;
+            case 0x39:
+              // 253
+              // 57
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[13] = this.mem16[7]
+              this.mem16[14] = this.mem16[4]
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 20
+              this.mem16[7] = this.mem32[8]
+              break outer;
+            case 0x46:
+              // FD_IY
+              // 70
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[3] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              break outer;
+            case 0x4e:
+              // FD_IY
+              // 78
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[2] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              break outer;
+            case 0x56:
+              // FD_IY
+              // 86
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[5] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              break outer;
+            case 0x5e:
+              // FD_IY
+              // 94
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[4] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              break outer;
+            case 0x66:
+              // FD_IY
+              // 102
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[7] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              break outer;
+            case 0x6e:
+              // FD_IY
+              // 110
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[6] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              break outer;
+            case 0x70:
+              // FD_IY
+              // 112
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem8[3]
+              break outer;
+            case 0x71:
+              // FD_IY
+              // 113
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem8[2]
+              break outer;
+            case 0x72:
+              // FD_IY
+              // 114
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem8[5]
+              break outer;
+            case 0x73:
+              // FD_IY
+              // 115
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem8[4]
+              break outer;
+            case 0x74:
+              // FD_IY
+              // 116
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem8[7]
+              break outer;
+            case 0x75:
+              // FD_IY
+              // 117
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem8[6]
+              break outer;
+            case 0x77:
+              // FD_IY
+              // 119
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem8[1]
+              break outer;
+            case 0x7e:
+              // FD_IY
+              // 126
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem8[1] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              break outer;
+            case 0x86:
+              // FD_IY
+              // 134
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 16
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0x8e:
+              // FD_IY
+              // 142
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+              this.mem16[14] = (this.mem16[14] + ((this.mem8[0]) & 0x1))
+              this.mem32[8] = (this.mem16[13] + this.mem16[14])
+              this.mem16[18] = 17
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0x96:
+              // FD_IY
+              // 150
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              this.mem32[8] = (this.mem16[13] - this.mem16[14])
+              this.mem16[18] = 24
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0x9e:
+              // FD_IY
+              // 158
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+              this.mem16[14] = (this.mem16[14] + ((this.mem8[0]) & 0x1))
+              this.mem32[8] = (this.mem16[13] - this.mem16[14])
+              this.mem16[18] = 25
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0xa6:
+              // FD_IY
+              // 166
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              this.mem32[8] = ((this.mem16[13] & this.mem16[14]) >>> 0)
+              this.mem16[18] = 160
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0xae:
+              // FD_IY
+              // 174
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              this.mem32[8] = (this.mem16[13] ^ this.mem16[14])
+              this.mem16[18] = 32
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0xb6:
+              // FD_IY
+              // 182
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              this.mem32[8] = ((this.mem16[13] | this.mem16[14]) >>> 0)
+              this.mem16[18] = 32
+              this.mem8[1] = this.mem32[8]
+              break outer;
+            case 0xbe:
+              // FD_IY
+              // 190
+              // DISP_i8
+              b2 = this.mem8[_ip];
+              _ip++;
+              v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 1 , 1 , 3
+              // IP += 0x3
+              this.mem16[5] = this.mem16[5] + 0x3
+              this.mem16[13] = this.mem8[1]
+              this.mem16[14] = this.mem8[(320 + (this.mem16[7] + v_0))]
+              this.mem32[8] = (this.mem16[13] - this.mem16[14])
+              this.mem16[18] = 24
+              break outer;
+            case 0xcb:
+              b2 = this.mem8[_ip];
+              _ip++;
+              b3 = this.mem8[_ip];
+              _ip++;
+              switch(b3) {
+                case 0x6:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 6
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[7] + v_0))]
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
+                  this.mem32[8] = ((((this.mem16[13] << 1) >>> 0) | ((this.mem8[0]) & 0x1)) >>> 0)
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0xe:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 14
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[7] + v_0))]
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+                  this.mem32[8] = (((this.mem16[13] >> 1) | ((((this.mem8[0]) & 0x1) << 7) >>> 0)) >>> 0)
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x16:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 22
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[7] + v_0))]
+                  this.mem16[19] = ((this.mem8[0]) & 0x1)
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
+                  this.mem32[8] = ((((this.mem16[13] << 1) >>> 0) | this.mem16[19]) >>> 0)
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x1e:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 30
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[7] + v_0))]
+                  this.mem16[19] = ((this.mem8[0]) & 0x1)
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+                  this.mem32[8] = (((this.mem16[13] >> 1) | ((this.mem16[19] << 7) >>> 0)) >>> 0)
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x26:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 38
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[7] + v_0))]
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | ((this.mem16[13] >> 7) & 0x1)
+                  this.mem32[8] = ((this.mem16[13] << 1) >>> 0)
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x2e:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 46
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[7] + v_0))]
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+                  this.mem32[8] = ((((this.mem16[13] & 128) >>> 0) | (this.mem16[13] >> 1)) >>> 0)
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x3e:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 62
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem16[13] = this.mem8[(320 + (this.mem16[7] + v_0))]
+                  this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[13] & 1) >>> 0) & 0x1)
+                  this.mem32[8] = (this.mem16[13] >> 1)
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = this.mem32[8]
+                  this.mem16[18] = 96
+                  break outer;
+                case 0x46:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 70
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 0) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x4e:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 78
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 1) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x56:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 86
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 2) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x5e:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 94
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 3) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x66:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 102
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 4) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x6e:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 110
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 5) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x76:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 118
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 6) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x7e:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 126
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 7) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
+                  this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+                  this.mem16[18] = 256
+                  break outer;
+                case 0x86:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 134
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] & ~ 1) >>> 0)
+                  break outer;
+                case 0x8e:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 142
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] & ~ 2) >>> 0)
+                  break outer;
+                case 0x96:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 150
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] & ~ 4) >>> 0)
+                  break outer;
+                case 0x9e:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 158
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] & ~ 8) >>> 0)
+                  break outer;
+                case 0xa6:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 166
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] & ~ 16) >>> 0)
+                  break outer;
+                case 0xae:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 174
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] & ~ 32) >>> 0)
+                  break outer;
+                case 0xb6:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 182
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] & ~ 64) >>> 0)
+                  break outer;
+                case 0xbe:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 190
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] & ~ 128) >>> 0)
+                  break outer;
+                case 0xc6:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 198
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] | 1) >>> 0)
+                  break outer;
+                case 0xce:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 206
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] | 2) >>> 0)
+                  break outer;
+                case 0xd6:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 214
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] | 4) >>> 0)
+                  break outer;
+                case 0xde:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 222
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] | 8) >>> 0)
+                  break outer;
+                case 0xe6:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 230
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] | 16) >>> 0)
+                  break outer;
+                case 0xee:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 238
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] | 32) >>> 0)
+                  break outer;
+                case 0xf6:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 246
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] | 64) >>> 0)
+                  break outer;
+                case 0xfe:
+                  // FD_IY
+                  // 203
+                  // DISP_i8
+                  v_0 = (b2 & 0xff) << 24 >> 24; // 2 , 3 , 3 , 3
+                  // 254
+                  // IP += 0x4
+                  this.mem16[5] = this.mem16[5] + 0x4
+                  this.mem8[(320 + (this.mem16[7] + v_0))] = ((this.mem8[(320 + (this.mem16[7] + v_0))] | 128) >>> 0)
+                  break outer;
+                default:
+                  break outer;
+              }
+              break;
+            case 0xe1:
+              // 253
+              // 225
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[7] = ((320 + this.mem16[4]) & 0x1 ? (this.mem16[((320 + this.mem16[4])) >> 1] >> 8) | ((this.mem16[(((320 + this.mem16[4])) >> 1) + 1] & 0xff) << 8) : this.mem16[((320 + this.mem16[4])) >> 1])
+              this.mem16[4] = (this.mem16[4] + 2)
+              break outer;
+            case 0xe3:
+              // 253
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[19] = ((320 + this.mem16[4]) & 0x1 ? (this.mem16[((320 + this.mem16[4])) >> 1] >> 8) | ((this.mem16[(((320 + this.mem16[4])) >> 1) + 1] & 0xff) << 8) : this.mem16[((320 + this.mem16[4])) >> 1])
+              if ((320 + this.mem16[4]) & 0x1) { const _value = this.mem16[7]; this.mem8[(320 + this.mem16[4])] = _value; this.mem8[((320 + this.mem16[4])) + 1] = _value >> 8; } else { this.mem16[((320 + this.mem16[4])) >> 1] = this.mem16[7]; }
+              this.mem16[7] = this.mem16[19]
+              break outer;
+            case 0xe5:
+              // 253
+              // 229
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[4] = (this.mem16[4] - 2)
+              if ((320 + this.mem16[4]) & 0x1) { const _value = this.mem16[7]; this.mem8[(320 + this.mem16[4])] = _value; this.mem8[((320 + this.mem16[4])) + 1] = _value >> 8; } else { this.mem16[((320 + this.mem16[4])) >> 1] = this.mem16[7]; }
+              break outer;
+            case 0xe9:
+              // 253
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[5] = this.mem16[7]
+              break outer;
+            case 0xf9:
+              // 253
+              // 249
+              // IP += 0x2
+              this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[4] = this.mem16[7]
+              break outer;
+            default:
+              break outer;
+          }
+          break;
         case 0xfe:
           // 254
           // IMM_u8
@@ -5128,213 +6994,6 @@ export default class Machine {
           this.mem16[5] = 56
           break outer;
         default:
-          if ((b0 & 0xff) === 0x46) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[3] = this.mem8[(320 + this.mem16[3])]
-          }
-          else if ((b0 & 0xff) === 0x4e) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[2] = this.mem8[(320 + this.mem16[3])]
-          }
-          else if ((b0 & 0xff) === 0x56) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[5] = this.mem8[(320 + this.mem16[3])]
-          }
-          else if ((b0 & 0xff) === 0x5e) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[4] = this.mem8[(320 + this.mem16[3])]
-          }
-          else if ((b0 & 0xff) === 0x66) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[7] = this.mem8[(320 + this.mem16[3])]
-          }
-          else if ((b0 & 0xff) === 0x6e) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[6] = this.mem8[(320 + this.mem16[3])]
-          }
-          else if ((b0 & 0xff) === 0x70) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[(320 + this.mem16[3])] = this.mem8[3]
-          }
-          else if ((b0 & 0xff) === 0x71) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[(320 + this.mem16[3])] = this.mem8[2]
-          }
-          else if ((b0 & 0xff) === 0x72) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[(320 + this.mem16[3])] = this.mem8[5]
-          }
-          else if ((b0 & 0xff) === 0x73) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[(320 + this.mem16[3])] = this.mem8[4]
-          }
-          else if ((b0 & 0xff) === 0x74) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[(320 + this.mem16[3])] = this.mem8[7]
-          }
-          else if ((b0 & 0xff) === 0x75) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[(320 + this.mem16[3])] = this.mem8[6]
-          }
-          else if ((b0 & 0xff) === 0x77) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[(320 + this.mem16[3])] = this.mem8[1]
-          }
-          else if ((b0 & 0xff) === 0x7e) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[1] = this.mem8[(320 + this.mem16[3])]
-          }
-          else if ((b0 & 0xff) === 0x36) {
-            // IMM_u8
-            b1 = this.mem8[_ip];
-            _ip++;
-            v_0 = (b1 & 0xff); // 1 , 0 , 0 , 2
-            // IP += 0x2
-            this.mem16[5] = this.mem16[5] + 0x2
-            this.mem8[(320 + this.mem16[3])] = v_0
-          }
-          else if ((b0 & 0xff) === 0x2) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[(320 + this.mem16[1])] = this.mem8[1]
-          }
-          else if ((b0 & 0xff) === 0x12) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[(320 + this.mem16[2])] = this.mem8[1]
-          }
-          else if ((b0 & 0xff) === 0xa) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[1] = this.mem8[(320 + this.mem16[1])]
-          }
-          else if ((b0 & 0xff) === 0x1a) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem8[1] = this.mem8[(320 + this.mem16[2])]
-          }
-          else if ((b0 & 0xff) === 0x86) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[13] = this.mem8[1]
-            this.mem16[14] = this.mem8[(320 + this.mem16[3])]
-            this.mem32[8] = (this.mem16[13] + this.mem16[14])
-            this.mem16[18] = 16
-            this.mem8[1] = this.mem32[8]
-          }
-          else if ((b0 & 0xff) === 0x8e) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[13] = this.mem8[1]
-            this.mem16[14] = this.mem8[(320 + this.mem16[3])]
-            this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
-            this.mem16[14] = (this.mem16[14] + ((this.mem8[0]) & 0x1))
-            this.mem32[8] = (this.mem16[13] + this.mem16[14])
-            this.mem16[18] = 17
-            this.mem8[1] = this.mem32[8]
-          }
-          else if ((b0 & 0xff) === 0x96) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[13] = this.mem8[1]
-            this.mem16[14] = this.mem8[(320 + this.mem16[3])]
-            this.mem32[8] = (this.mem16[13] - this.mem16[14])
-            this.mem16[18] = 24
-            this.mem8[1] = this.mem32[8]
-          }
-          else if ((b0 & 0xff) === 0x9e) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[13] = this.mem8[1]
-            this.mem16[14] = this.mem8[(320 + this.mem16[3])]
-            this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
-            this.mem16[14] = (this.mem16[14] + ((this.mem8[0]) & 0x1))
-            this.mem32[8] = (this.mem16[13] - this.mem16[14])
-            this.mem16[18] = 25
-            this.mem8[1] = this.mem32[8]
-          }
-          else if ((b0 & 0xff) === 0x34) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[13] = this.mem8[(320 + this.mem16[3])]
-            this.mem16[14] = 1
-            this.mem32[8] = (this.mem16[13] + this.mem16[14])
-            this.mem16[18] = 80
-            this.mem8[(320 + this.mem16[3])] = this.mem32[8]
-          }
-          else if ((b0 & 0xff) === 0x35) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[13] = this.mem8[(320 + this.mem16[3])]
-            this.mem16[14] = 1
-            this.mem32[8] = (this.mem16[13] - this.mem16[14])
-            this.mem16[18] = 88
-            this.mem8[(320 + this.mem16[3])] = this.mem32[8]
-          }
-          else if ((b0 & 0xff) === 0xa6) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[13] = this.mem8[1]
-            this.mem16[14] = this.mem8[(320 + this.mem16[3])]
-            this.mem32[8] = ((this.mem16[13] & this.mem16[14]) >>> 0)
-            this.mem16[18] = 160
-            this.mem8[1] = this.mem32[8]
-          }
-          else if ((b0 & 0xff) === 0xb6) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[13] = this.mem8[1]
-            this.mem16[14] = this.mem8[(320 + this.mem16[3])]
-            this.mem32[8] = ((this.mem16[13] | this.mem16[14]) >>> 0)
-            this.mem16[18] = 32
-            this.mem8[1] = this.mem32[8]
-          }
-          else if ((b0 & 0xff) === 0xae) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[13] = this.mem8[1]
-            this.mem16[14] = this.mem8[(320 + this.mem16[3])]
-            this.mem32[8] = (this.mem16[13] ^ this.mem16[14])
-            this.mem16[18] = 32
-            this.mem8[1] = this.mem32[8]
-          }
-          else if ((b0 & 0xff) === 0xbe) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[13] = this.mem8[1]
-            this.mem16[14] = this.mem8[(320 + this.mem16[3])]
-            this.mem32[8] = (this.mem16[13] - this.mem16[14])
-            this.mem16[18] = 24
-          }
-          else if ((b0 & 0xff) === 0xe9) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[5] = this.mem16[3]
-          }
-          else if ((b0 & 0xff) === 0xe3) {
-            // IP += 0x1
-            this.mem16[5] = this.mem16[5] + 0x1
-            this.mem16[19] = ((320 + this.mem16[4]) & 0x1 ? (this.mem16[((320 + this.mem16[4])) >> 1] >> 8) | ((this.mem16[(((320 + this.mem16[4])) >> 1) + 1] & 0xff) << 8) : this.mem16[((320 + this.mem16[4])) >> 1])
-            if ((320 + this.mem16[4]) & 0x1) { const _value = this.mem16[3]; this.mem8[(320 + this.mem16[4])] = _value; this.mem8[((320 + this.mem16[4])) + 1] = _value >> 8; } else { this.mem16[((320 + this.mem16[4])) >> 1] = this.mem16[3]; }
-            this.mem16[3] = this.mem16[19]
-          }
-          else {
-            // undefined
-          }
           break outer;
       }
       // never infinitely loop

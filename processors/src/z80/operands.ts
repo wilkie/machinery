@@ -208,4 +208,40 @@ export const operands: OpcodeMatcher[] = [
     size: 8,
     fields: [{ identifier: 'PORT', offset: 0, size: 8 }],
   },
+
+  // DD prefix — selects IX as the memory base register
+  {
+    identifier: 'DD_IX',
+    name: 'DD Prefix (IX)',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 8,
+        match: 0xdd,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['IX'],
+      },
+    ],
+  },
+
+  // FD prefix — selects IY as the memory base register
+  {
+    identifier: 'FD_IY',
+    name: 'FD Prefix (IY)',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 8,
+        match: 0xfd,
+        type: InstructionOperandTypes.Memory,
+        encoding: ['IY'],
+      },
+    ],
+  },
 ];

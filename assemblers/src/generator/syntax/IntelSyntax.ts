@@ -650,7 +650,11 @@ export class IntelSyntax implements Syntax {
   ): void {
     if (!matcher.fields) return;
     for (const field of matcher.fields) {
-      if (field.type !== InstructionOperandTypes.Register) continue;
+      if (
+        field.type !== InstructionOperandTypes.Register &&
+        field.type !== InstructionOperandTypes.Memory
+      )
+        continue;
       if (!field.encoding) continue;
 
       for (const name of field.encoding) {

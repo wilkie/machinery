@@ -33,5 +33,18 @@ export const pop: InstructionInfo = {
       operation: ['AF = RAM:u16[SP]', 'SP = SP + 2'],
       cycles: 10,
     },
+    // POP IX / POP IY
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.POP_HL],
+      operands: ['IX'],
+      operation: ['IX = RAM:u16[SP]', 'SP = SP + 2'],
+      cycles: 14,
+    },
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.POP_HL],
+      operands: ['IY'],
+      operation: ['IY = RAM:u16[SP]', 'SP = SP + 2'],
+      cycles: 14,
+    },
   ],
 };

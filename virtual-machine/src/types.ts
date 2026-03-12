@@ -63,6 +63,11 @@ export interface DecoderPartial {
   map: Partial<DecoderMap>;
 }
 
+export interface DecoderWildcard {
+  matcher: string | OpcodeMatcher;
+  map: DecoderMap;
+}
+
 export interface DecoderMap {
   instruction?: InstructionInfo;
   form?: InstructionForm;
@@ -71,6 +76,7 @@ export interface DecoderMap {
   index?: number;
   exact?: DecoderMap[];
   partial?: DecoderPartial[];
+  wildcard?: DecoderWildcard;
 }
 
 export interface ParsedOperation {

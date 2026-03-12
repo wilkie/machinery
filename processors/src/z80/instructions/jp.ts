@@ -131,5 +131,81 @@ export const jp: InstructionInfo = {
       operation: ['PC = HL'],
       cycles: 4,
     },
+    // JP (IX)
+    {
+      opcode: [
+        Opcodes.DD_PREFIX,
+        {
+          identifier: 'Opcode_JP_xIXx',
+          name: 'JP (IX) Opcode Field',
+          type: InstructionDataTypes.Operand,
+          size: 8,
+          fields: [
+            {
+              identifier: 'opcode_low',
+              offset: 0,
+              size: 3,
+              match: 0b001,
+            },
+            {
+              identifier: 'rm',
+              offset: 3,
+              size: 3,
+              match: 0b101,
+              type: InstructionOperandTypes.Memory,
+              encoding: ['IX'],
+            },
+            {
+              identifier: 'opcode_high',
+              offset: 6,
+              size: 2,
+              match: 0b11,
+            },
+          ],
+        },
+      ],
+      operands: ['rm'],
+      addressing: 'absolute',
+      operation: ['PC = IX'],
+      cycles: 8,
+    },
+    // JP (IY)
+    {
+      opcode: [
+        Opcodes.FD_PREFIX,
+        {
+          identifier: 'Opcode_JP_xIYx',
+          name: 'JP (IY) Opcode Field',
+          type: InstructionDataTypes.Operand,
+          size: 8,
+          fields: [
+            {
+              identifier: 'opcode_low',
+              offset: 0,
+              size: 3,
+              match: 0b001,
+            },
+            {
+              identifier: 'rm',
+              offset: 3,
+              size: 3,
+              match: 0b101,
+              type: InstructionOperandTypes.Memory,
+              encoding: ['IY'],
+            },
+            {
+              identifier: 'opcode_high',
+              offset: 6,
+              size: 2,
+              match: 0b11,
+            },
+          ],
+        },
+      ],
+      operands: ['rm'],
+      addressing: 'absolute',
+      operation: ['PC = IY'],
+      cycles: 8,
+    },
   ],
 };

@@ -62,6 +62,80 @@ export const ex_af: InstructionInfo = {
       operation: ['tmp = RAM:u16[SP]', 'RAM:u16[SP] = HL', 'HL = tmp'],
       cycles: 19,
     },
+    // EX (SP), IX
+    {
+      opcode: [
+        Opcodes.DD_PREFIX,
+        {
+          identifier: 'Opcode_EX_xSPx_IX',
+          name: 'EX (SP), IX Opcode Field',
+          type: InstructionDataTypes.Operand,
+          size: 8,
+          fields: [
+            {
+              identifier: 'opcode_low',
+              offset: 0,
+              size: 3,
+              match: 0b011,
+            },
+            {
+              identifier: 'rm',
+              offset: 3,
+              size: 3,
+              match: 0b100,
+              type: InstructionOperandTypes.Memory,
+              encoding: ['SP'],
+            },
+            {
+              identifier: 'opcode_high',
+              offset: 6,
+              size: 2,
+              match: 0b11,
+            },
+          ],
+        },
+      ],
+      operands: ['rm', 'IX'],
+      operation: ['tmp = RAM:u16[SP]', 'RAM:u16[SP] = IX', 'IX = tmp'],
+      cycles: 23,
+    },
+    // EX (SP), IY
+    {
+      opcode: [
+        Opcodes.FD_PREFIX,
+        {
+          identifier: 'Opcode_EX_xSPx_IY',
+          name: 'EX (SP), IY Opcode Field',
+          type: InstructionDataTypes.Operand,
+          size: 8,
+          fields: [
+            {
+              identifier: 'opcode_low',
+              offset: 0,
+              size: 3,
+              match: 0b011,
+            },
+            {
+              identifier: 'rm',
+              offset: 3,
+              size: 3,
+              match: 0b100,
+              type: InstructionOperandTypes.Memory,
+              encoding: ['SP'],
+            },
+            {
+              identifier: 'opcode_high',
+              offset: 6,
+              size: 2,
+              match: 0b11,
+            },
+          ],
+        },
+      ],
+      operands: ['rm', 'IY'],
+      operation: ['tmp = RAM:u16[SP]', 'RAM:u16[SP] = IY', 'IY = tmp'],
+      cycles: 23,
+    },
   ],
 };
 

@@ -107,6 +107,32 @@ export const dec: InstructionInfo = {
       cycles: 4,
     },
 
+    // DEC (IX+d) / DEC (IY+d)
+    {
+      opcode: ['DD_IX', Opcodes.DEC_xHLx, 'DISP_i8'],
+      operands: ['rm'],
+      operandSize: 8,
+      operation: [
+        'a = RAM:u8[IX + %{DISP}]',
+        'b = 1',
+        '${ALU_OP}',
+        'RAM:u8[IX + %{DISP}] = alu_result',
+      ],
+      cycles: 23,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.DEC_xHLx, 'DISP_i8'],
+      operands: ['rm'],
+      operandSize: 8,
+      operation: [
+        'a = RAM:u8[IY + %{DISP}]',
+        'b = 1',
+        '${ALU_OP}',
+        'RAM:u8[IY + %{DISP}] = alu_result',
+      ],
+      cycles: 23,
+    },
+
     // 16-bit DEC rp (no flags affected)
     {
       opcode: [Opcodes.DEC_BC],
@@ -139,6 +165,22 @@ export const dec: InstructionInfo = {
       modifies: [],
       operation: ['SP = SP - 1'],
       cycles: 6,
+    },
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.DEC_HL],
+      operands: ['IX'],
+      operandSize: 16,
+      modifies: [],
+      operation: ['IX = IX - 1'],
+      cycles: 10,
+    },
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.DEC_HL],
+      operands: ['IY'],
+      operandSize: 16,
+      modifies: [],
+      operation: ['IY = IY - 1'],
+      cycles: 10,
     },
   ],
 };

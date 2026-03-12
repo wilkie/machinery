@@ -834,6 +834,20 @@ class TypeScriptBackend extends Backend {
       indent = indent + '    ';
     }
 
+    // Handle wildcard (consume-any-byte) nodes, e.g., displacement before final opcode
+    if (decoder.wildcard) {
+      // The wildcard byte has already been consumed at this depth
+      // (byteName was read above). Recurse into the wildcard's map to match
+      // the next byte.
+      this.craftDecoderState(
+        decoder.wildcard.map,
+        depth + 1,
+        indent,
+        context,
+        prefix,
+      );
+    }
+
     // Look at partials, if any (prefixes cannot have them)
     let ifword = 'if';
     for (const { mask, and, map } of decoder.partial || []) {

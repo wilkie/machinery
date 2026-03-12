@@ -155,8 +155,20 @@ class Resolver {
         argument instanceof OperandNode &&
         typeof argument.value === 'number'
       ) {
-        const value =
-          node.operator === '|' ? operand.value | argument.value : 0;
+        let value: number;
+        switch (node.operator) {
+          case '|': value = operand.value | argument.value; break;
+          case '&': value = operand.value & argument.value; break;
+          case '^': value = operand.value ^ argument.value; break;
+          case '+': value = operand.value + argument.value; break;
+          case '-': value = operand.value - argument.value; break;
+          case '*': value = operand.value * argument.value; break;
+          case '/': value = (argument.value !== 0) ? (operand.value / argument.value) | 0 : 0; break;
+          case '<<': value = operand.value << argument.value; break;
+          case '>>': value = operand.value >> argument.value; break;
+          case '>>>': value = operand.value >>> argument.value; break;
+          default: value = 0; break;
+        }
         ret = new OperandNode(value);
       } else if (
         operand instanceof OperandNode &&

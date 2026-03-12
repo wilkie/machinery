@@ -117,6 +117,22 @@ export const adc: InstructionInfo = {
       cycles: 7,
     },
 
+    // ADC A, (IX+d) / ADC A, (IY+d)
+    {
+      opcode: ['DD_IX', Opcodes.ADC_A_xHLx, 'DISP_i8'],
+      operands: ['A', 'rm'],
+      operandSize: 8,
+      operation: ['a = A', 'b = RAM:u8[IX + %{DISP}]', '${ALU8_OP}', 'A = alu_result'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.ADC_A_xHLx, 'DISP_i8'],
+      operands: ['A', 'rm'],
+      operandSize: 8,
+      operation: ['a = A', 'b = RAM:u8[IY + %{DISP}]', '${ALU8_OP}', 'A = alu_result'],
+      cycles: 19,
+    },
+
     // ADC HL, rp (ED prefix)
     {
       opcode: [Opcodes.ED_PREFIX, EDOpcodes.ADC_HL_BC],

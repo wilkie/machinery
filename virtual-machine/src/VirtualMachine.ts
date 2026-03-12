@@ -222,9 +222,29 @@ class VirtualMachine {
       for (const form of instruction.forms) {
         variant_index++;
         let pass = decoder;
-        const lastOpcodeIndex = form.opcode.length - 1;
+        // Compute the last opcode index that participates in decoding:
+        // trailing matchers with mask=0 (e.g., DISP, IMM) are operand data
+        // read by craftInstruction, not decoder nodes.
+        let lastOpcodeIndex = form.opcode.length - 1;
+        while (lastOpcodeIndex > 0) {
+          let entry: string | number | OpcodeMatcher | undefined = form.opcode[lastOpcodeIndex];
+          if (typeof entry === 'number') break; // numeric literal = decodable
+          if (typeof entry === 'string') {
+            entry = (machine.operands || []).find(
+              (o) => o.identifier === entry,
+            );
+          }
+          if (typeof entry === 'object' && entry) {
+            let hasMask = false;
+            for (const field of Object.values(entry.fields || {})) {
+              if (field.match !== undefined) { hasMask = true; break; }
+            }
+            if (hasMask) break; // matcher with mask = decodable
+          }
+          lastOpcodeIndex--;
+        }
         const inputs: InputMap = {};
-        for (let i = 0; i < form.opcode.length; i++) {
+        for (let i = 0; i <= lastOpcodeIndex; i++) {
           let matcher: string | number | OpcodeMatcher | undefined =
             form.opcode[i];
           const matcher_name =
@@ -283,8 +303,8 @@ class VirtualMachine {
             }
 
             // No mask matcher means this is an open-ended opcode
-            if (mask === 0x0) {
-              // This is hopefully the only time we are here
+            if (mask === 0x0 && i === lastOpcodeIndex) {
+              // Terminal open-ended opcode — set instruction here
               if (!pass.partial) {
                 console.log(
                   'Error: There is no way to disambiguate two instructions.',
@@ -301,7 +321,36 @@ class VirtualMachine {
               pass.variant = variant_index;
               pass.index = i - 1;
               pass.inputs = { ...inputs };
-              i = lastOpcodeIndex;
+            } else if (mask === 0x0) {
+              // Non-terminal open-ended opcode (e.g., displacement byte before
+              // a final opcode byte). Use a wildcard node: consume any byte
+              // value and continue matching in the next map level.
+              if (!pass.wildcard) {
+                pass.wildcard = {
+                  matcher: matcher!,
+                  map: { exact: new Array(BYTE_MAX), partial: [] },
+                };
+              }
+              pass = pass.wildcard.map;
+            } else if (mask === 0xff) {
+              // Full byte match — treat like a numeric literal so it merges
+              // with other instructions sharing the same prefix byte.
+              pass.exact ||= new Array(BYTE_MAX);
+
+              if (i === lastOpcodeIndex) {
+                pass.exact[and] = {
+                  instruction: instruction,
+                  form: form,
+                  variant: variant_index,
+                  inputs: { ...inputs },
+                  index: i,
+                };
+              } else {
+                pass.exact[and] ||= {
+                  partial: [],
+                };
+                pass = pass.exact[and];
+              }
             } else {
               const sequence: DecoderPartial = {
                 matcher,

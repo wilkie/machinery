@@ -106,6 +106,22 @@ export const add: InstructionInfo = {
       cycles: 7,
     },
 
+    // ADD A, (IX+d) / ADD A, (IY+d)
+    {
+      opcode: ['DD_IX', Opcodes.ADD_A_xHLx, 'DISP_i8'],
+      operands: ['A', 'rm'],
+      operandSize: 8,
+      operation: ['a = A', 'b = RAM:u8[IX + %{DISP}]', '${ALU8_OP}', 'A = alu_result'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.ADD_A_xHLx, 'DISP_i8'],
+      operands: ['A', 'rm'],
+      operandSize: 8,
+      operation: ['a = A', 'b = RAM:u8[IY + %{DISP}]', '${ALU8_OP}', 'A = alu_result'],
+      cycles: 19,
+    },
+
     // ADD HL, rp — 16-bit register pair (only HF, NF, CF affected)
     {
       opcode: [Opcodes.ADD_HL_BC],
@@ -138,6 +154,73 @@ export const add: InstructionInfo = {
       modifies: ['HF', 'NF', 'CF'],
       operation: ['a = HL', 'b = SP', '${ALU16_OP}', 'HL = alu_result'],
       cycles: 11,
+    },
+
+    // ADD IX, rp
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.ADD_HL_BC],
+      operands: ['IX', 'BC'],
+      operandSize: 16,
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = IX', 'b = BC', '${ALU16_OP}', 'IX = alu_result'],
+      cycles: 15,
+    },
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.ADD_HL_DE],
+      operands: ['IX', 'DE'],
+      operandSize: 16,
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = IX', 'b = DE', '${ALU16_OP}', 'IX = alu_result'],
+      cycles: 15,
+    },
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.ADD_HL_HL],
+      operands: ['IX', 'IX'],
+      operandSize: 16,
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = IX', 'b = IX', '${ALU16_OP}', 'IX = alu_result'],
+      cycles: 15,
+    },
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.ADD_HL_SP],
+      operands: ['IX', 'SP'],
+      operandSize: 16,
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = IX', 'b = SP', '${ALU16_OP}', 'IX = alu_result'],
+      cycles: 15,
+    },
+    // ADD IY, rp
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.ADD_HL_BC],
+      operands: ['IY', 'BC'],
+      operandSize: 16,
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = IY', 'b = BC', '${ALU16_OP}', 'IY = alu_result'],
+      cycles: 15,
+    },
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.ADD_HL_DE],
+      operands: ['IY', 'DE'],
+      operandSize: 16,
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = IY', 'b = DE', '${ALU16_OP}', 'IY = alu_result'],
+      cycles: 15,
+    },
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.ADD_HL_HL],
+      operands: ['IY', 'IY'],
+      operandSize: 16,
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = IY', 'b = IY', '${ALU16_OP}', 'IY = alu_result'],
+      cycles: 15,
+    },
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.ADD_HL_SP],
+      operands: ['IY', 'SP'],
+      operandSize: 16,
+      modifies: ['HF', 'NF', 'CF'],
+      operation: ['a = IY', 'b = SP', '${ALU16_OP}', 'IY = alu_result'],
+      cycles: 15,
     },
   ],
 };

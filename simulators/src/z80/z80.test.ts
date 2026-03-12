@@ -81,6 +81,9 @@ const simple = [
   'call',
   'push',
   'ex',
+  'ix',
+  'iy',
+  'bit',
 ];
 
 describe('z80 simple instructions', () => {

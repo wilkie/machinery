@@ -59,6 +59,24 @@ function cbRegForms(
   });
 }
 
+// IX/IY forms for CB-prefix shift/rotate instructions: DD/FD CB d opcode
+function cbIndexedForms(
+  hlOpcode: number,
+  operation: (reg: string) => string[],
+) {
+  const prefixes = [
+    { ref: 'DD_IX', reg: 'IX' },
+    { ref: 'FD_IY', reg: 'IY' },
+  ];
+  return prefixes.map(({ ref, reg }) => ({
+    opcode: [ref, Opcodes.CB_PREFIX, 'DISP_i8', hlOpcode],
+    operands: ['rm'],
+    operandSize: 8 as const,
+    operation: operation(`RAM:u8[${reg} + %{DISP}]`),
+    cycles: 23,
+  }));
+}
+
 // Helper for BIT/SET/RES which take a bit number and register
 function cbBitRegForms(
   baseOpcode: number,
@@ -112,24 +130,56 @@ function cbBitRegForms(
   });
 }
 
+// IX/IY forms for BIT/SET/RES: DD/FD CB d opcode
+function cbBitIndexedForms(
+  hlOpcode: number,
+  bit: number,
+  operation: (bit: number, reg: string) => string[],
+  cycles: number,
+) {
+  const prefixes = [
+    { ref: 'DD_IX', reg: 'IX' },
+    { ref: 'FD_IY', reg: 'IY' },
+  ];
+  return prefixes.map(({ ref, reg }) => ({
+    opcode: [ref, Opcodes.CB_PREFIX, 'DISP_i8', hlOpcode],
+    operands: [bit.toString(), 'rm'],
+    operandSize: 8 as const,
+    operation: operation(bit, `RAM:u8[${reg} + %{DISP}]`),
+    cycles,
+  }));
+}
+
 export const rlc: InstructionInfo = {
   identifier: 'rlc',
   name: 'Rotate Left Circular',
   description: 'Rotates the operand left. Bit 7 is copied to carry and bit 0.',
   modifies: ['SF', 'ZF', 'HF', 'PF', 'NF', 'CF'],
-  forms: cbRegForms(
-    CBOpcodes.RLC_B,
-    'rlc',
-    (r) => [
-      `a = ${r}`,
-      `CF = a >> 7`,
-      `alu_result = (a << 1) | CF`,
-      `${r} = alu_result`,
-      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-    ],
-    8,
-    15,
-  ),
+  forms: [
+    ...cbRegForms(
+      CBOpcodes.RLC_B,
+      'rlc',
+      (r) => [
+        `a = ${r}`,
+        `CF = a >> 7`,
+        `alu_result = (a << 1) | CF`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+      8,
+      15,
+    ),
+    ...cbIndexedForms(
+      CBOpcodes.RLC_xHLx,
+      (r) => [
+        `a = ${r}`,
+        `CF = a >> 7`,
+        `alu_result = (a << 1) | CF`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+    ),
+  ],
 };
 
 export const rrc: InstructionInfo = {
@@ -137,19 +187,31 @@ export const rrc: InstructionInfo = {
   name: 'Rotate Right Circular',
   description: 'Rotates the operand right. Bit 0 is copied to carry and bit 7.',
   modifies: ['SF', 'ZF', 'HF', 'PF', 'NF', 'CF'],
-  forms: cbRegForms(
-    CBOpcodes.RRC_B,
-    'rrc',
-    (r) => [
-      `a = ${r}`,
-      `CF = a & 1`,
-      `alu_result = (a >> 1) | (CF << 7)`,
-      `${r} = alu_result`,
-      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-    ],
-    8,
-    15,
-  ),
+  forms: [
+    ...cbRegForms(
+      CBOpcodes.RRC_B,
+      'rrc',
+      (r) => [
+        `a = ${r}`,
+        `CF = a & 1`,
+        `alu_result = (a >> 1) | (CF << 7)`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+      8,
+      15,
+    ),
+    ...cbIndexedForms(
+      CBOpcodes.RRC_xHLx,
+      (r) => [
+        `a = ${r}`,
+        `CF = a & 1`,
+        `alu_result = (a >> 1) | (CF << 7)`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+    ),
+  ],
 };
 
 export const rl: InstructionInfo = {
@@ -157,21 +219,35 @@ export const rl: InstructionInfo = {
   name: 'Rotate Left through Carry',
   description: 'Rotates the operand left through carry.',
   modifies: ['SF', 'ZF', 'HF', 'PF', 'NF', 'CF'],
-  forms: cbRegForms(
-    CBOpcodes.RL_B,
-    'rl',
-    (r) => [
-      '${RESOLVE_CF}',
-      `a = ${r}`,
-      'tmp = CF',
-      `CF = a >> 7`,
-      `alu_result = (a << 1) | tmp`,
-      `${r} = alu_result`,
-      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-    ],
-    8,
-    15,
-  ),
+  forms: [
+    ...cbRegForms(
+      CBOpcodes.RL_B,
+      'rl',
+      (r) => [
+        '${RESOLVE_CF}',
+        `a = ${r}`,
+        'tmp = CF',
+        `CF = a >> 7`,
+        `alu_result = (a << 1) | tmp`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+      8,
+      15,
+    ),
+    ...cbIndexedForms(
+      CBOpcodes.RL_xHLx,
+      (r) => [
+        '${RESOLVE_CF}',
+        `a = ${r}`,
+        'tmp = CF',
+        `CF = a >> 7`,
+        `alu_result = (a << 1) | tmp`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+    ),
+  ],
 };
 
 export const rr: InstructionInfo = {
@@ -179,21 +255,35 @@ export const rr: InstructionInfo = {
   name: 'Rotate Right through Carry',
   description: 'Rotates the operand right through carry.',
   modifies: ['SF', 'ZF', 'HF', 'PF', 'NF', 'CF'],
-  forms: cbRegForms(
-    CBOpcodes.RR_B,
-    'rr',
-    (r) => [
-      '${RESOLVE_CF}',
-      `a = ${r}`,
-      'tmp = CF',
-      `CF = a & 1`,
-      `alu_result = (a >> 1) | (tmp << 7)`,
-      `${r} = alu_result`,
-      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-    ],
-    8,
-    15,
-  ),
+  forms: [
+    ...cbRegForms(
+      CBOpcodes.RR_B,
+      'rr',
+      (r) => [
+        '${RESOLVE_CF}',
+        `a = ${r}`,
+        'tmp = CF',
+        `CF = a & 1`,
+        `alu_result = (a >> 1) | (tmp << 7)`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+      8,
+      15,
+    ),
+    ...cbIndexedForms(
+      CBOpcodes.RR_xHLx,
+      (r) => [
+        '${RESOLVE_CF}',
+        `a = ${r}`,
+        'tmp = CF',
+        `CF = a & 1`,
+        `alu_result = (a >> 1) | (tmp << 7)`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+    ),
+  ],
 };
 
 export const sla: InstructionInfo = {
@@ -202,19 +292,31 @@ export const sla: InstructionInfo = {
   description:
     'Shifts the operand left by one bit. Bit 0 becomes 0, bit 7 goes to carry.',
   modifies: ['SF', 'ZF', 'HF', 'PF', 'NF', 'CF'],
-  forms: cbRegForms(
-    CBOpcodes.SLA_B,
-    'sla',
-    (r) => [
-      `a = ${r}`,
-      `CF = a >> 7`,
-      `alu_result = a << 1`,
-      `${r} = alu_result`,
-      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-    ],
-    8,
-    15,
-  ),
+  forms: [
+    ...cbRegForms(
+      CBOpcodes.SLA_B,
+      'sla',
+      (r) => [
+        `a = ${r}`,
+        `CF = a >> 7`,
+        `alu_result = a << 1`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+      8,
+      15,
+    ),
+    ...cbIndexedForms(
+      CBOpcodes.SLA_xHLx,
+      (r) => [
+        `a = ${r}`,
+        `CF = a >> 7`,
+        `alu_result = a << 1`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+    ),
+  ],
 };
 
 export const sra: InstructionInfo = {
@@ -223,19 +325,31 @@ export const sra: InstructionInfo = {
   description:
     'Shifts the operand right by one bit. Bit 7 is preserved (sign extension), bit 0 goes to carry.',
   modifies: ['SF', 'ZF', 'HF', 'PF', 'NF', 'CF'],
-  forms: cbRegForms(
-    CBOpcodes.SRA_B,
-    'sra',
-    (r) => [
-      `a = ${r}`,
-      `CF = a & 1`,
-      `alu_result = (a & 0x80) | (a >> 1)`,
-      `${r} = alu_result`,
-      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-    ],
-    8,
-    15,
-  ),
+  forms: [
+    ...cbRegForms(
+      CBOpcodes.SRA_B,
+      'sra',
+      (r) => [
+        `a = ${r}`,
+        `CF = a & 1`,
+        `alu_result = (a & 0x80) | (a >> 1)`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+      8,
+      15,
+    ),
+    ...cbIndexedForms(
+      CBOpcodes.SRA_xHLx,
+      (r) => [
+        `a = ${r}`,
+        `CF = a & 1`,
+        `alu_result = (a & 0x80) | (a >> 1)`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+    ),
+  ],
 };
 
 export const srl: InstructionInfo = {
@@ -244,19 +358,31 @@ export const srl: InstructionInfo = {
   description:
     'Shifts the operand right by one bit. Bit 7 becomes 0, bit 0 goes to carry.',
   modifies: ['SF', 'ZF', 'HF', 'PF', 'NF', 'CF'],
-  forms: cbRegForms(
-    CBOpcodes.SRL_B,
-    'srl',
-    (r) => [
-      `a = ${r}`,
-      `CF = a & 1`,
-      `alu_result = a >> 1`,
-      `${r} = alu_result`,
-      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-    ],
-    8,
-    15,
-  ),
+  forms: [
+    ...cbRegForms(
+      CBOpcodes.SRL_B,
+      'srl',
+      (r) => [
+        `a = ${r}`,
+        `CF = a & 1`,
+        `alu_result = a >> 1`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+      8,
+      15,
+    ),
+    ...cbIndexedForms(
+      CBOpcodes.SRL_xHLx,
+      (r) => [
+        `a = ${r}`,
+        `CF = a & 1`,
+        `alu_result = a >> 1`,
+        `${r} = alu_result`,
+        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+      ],
+    ),
+  ],
 };
 
 export const bit: InstructionInfo = {
@@ -266,102 +392,31 @@ export const bit: InstructionInfo = {
     'Tests the specified bit of the operand. Z flag is set if the bit is 0.',
   modifies: ['SF', 'ZF', 'HF', 'PF', 'NF'],
   forms: [
-    ...cbBitRegForms(
-      CBOpcodes.BIT_0_B,
-      0,
-      (b, r) => [
-        `ZF = ~(${r} >> ${b}) & 1`,
-        'HF = 1',
-        'NF = 0',
-        'flag_op = ${FLAG_OP_RESOLVED}',
-      ],
-      8,
-      12,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.BIT_1_B,
-      1,
-      (b, r) => [
-        `ZF = ~(${r} >> ${b}) & 1`,
-        'HF = 1',
-        'NF = 0',
-        'flag_op = ${FLAG_OP_RESOLVED}',
-      ],
-      8,
-      12,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.BIT_2_B,
-      2,
-      (b, r) => [
-        `ZF = ~(${r} >> ${b}) & 1`,
-        'HF = 1',
-        'NF = 0',
-        'flag_op = ${FLAG_OP_RESOLVED}',
-      ],
-      8,
-      12,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.BIT_3_B,
-      3,
-      (b, r) => [
-        `ZF = ~(${r} >> ${b}) & 1`,
-        'HF = 1',
-        'NF = 0',
-        'flag_op = ${FLAG_OP_RESOLVED}',
-      ],
-      8,
-      12,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.BIT_4_B,
-      4,
-      (b, r) => [
-        `ZF = ~(${r} >> ${b}) & 1`,
-        'HF = 1',
-        'NF = 0',
-        'flag_op = ${FLAG_OP_RESOLVED}',
-      ],
-      8,
-      12,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.BIT_5_B,
-      5,
-      (b, r) => [
-        `ZF = ~(${r} >> ${b}) & 1`,
-        'HF = 1',
-        'NF = 0',
-        'flag_op = ${FLAG_OP_RESOLVED}',
-      ],
-      8,
-      12,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.BIT_6_B,
-      6,
-      (b, r) => [
-        `ZF = ~(${r} >> ${b}) & 1`,
-        'HF = 1',
-        'NF = 0',
-        'flag_op = ${FLAG_OP_RESOLVED}',
-      ],
-      8,
-      12,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.BIT_7_B,
-      7,
-      (b, r) => [
-        `ZF = ~(${r} >> ${b}) & 1`,
-        'HF = 1',
-        'NF = 0',
-        'flag_op = ${FLAG_OP_RESOLVED}',
-      ],
-      8,
-      12,
-    ),
+    ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap((b) => [
+      ...cbBitRegForms(
+        CBOpcodes.BIT_0_B + b * 8,
+        b,
+        (bi, r) => [
+          `ZF = ~(${r} >> ${bi}) & 1`,
+          'HF = 1',
+          'NF = 0',
+          'flag_op = ${FLAG_OP_RESOLVED}',
+        ],
+        8,
+        12,
+      ),
+      ...cbBitIndexedForms(
+        CBOpcodes.BIT_0_xHLx + b * 8,
+        b,
+        (bi, r) => [
+          `ZF = ~(${r} >> ${bi}) & 1`,
+          'HF = 1',
+          'NF = 0',
+          'flag_op = ${FLAG_OP_RESOLVED}',
+        ],
+        20,
+      ),
+    ]),
   ],
 };
 
@@ -371,62 +426,21 @@ export const res: InstructionInfo = {
   description: 'Resets (clears to 0) the specified bit of the operand.',
   modifies: [],
   forms: [
-    ...cbBitRegForms(
-      CBOpcodes.RES_0_B,
-      0,
-      (b, r) => [`${r} = ${r} & ~(1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.RES_1_B,
-      1,
-      (b, r) => [`${r} = ${r} & ~(1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.RES_2_B,
-      2,
-      (b, r) => [`${r} = ${r} & ~(1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.RES_3_B,
-      3,
-      (b, r) => [`${r} = ${r} & ~(1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.RES_4_B,
-      4,
-      (b, r) => [`${r} = ${r} & ~(1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.RES_5_B,
-      5,
-      (b, r) => [`${r} = ${r} & ~(1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.RES_6_B,
-      6,
-      (b, r) => [`${r} = ${r} & ~(1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.RES_7_B,
-      7,
-      (b, r) => [`${r} = ${r} & ~(1 << ${b})`],
-      8,
-      15,
-    ),
+    ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap((b) => [
+      ...cbBitRegForms(
+        CBOpcodes.RES_0_B + b * 8,
+        b,
+        (bi, r) => [`${r} = ${r} & ~(1 << ${bi})`],
+        8,
+        15,
+      ),
+      ...cbBitIndexedForms(
+        CBOpcodes.RES_0_xHLx + b * 8,
+        b,
+        (bi, r) => [`${r} = ${r} & ~(1 << ${bi})`],
+        23,
+      ),
+    ]),
   ],
 };
 
@@ -436,61 +450,20 @@ export const set: InstructionInfo = {
   description: 'Sets (to 1) the specified bit of the operand.',
   modifies: [],
   forms: [
-    ...cbBitRegForms(
-      CBOpcodes.SET_0_B,
-      0,
-      (b, r) => [`${r} = ${r} | (1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.SET_1_B,
-      1,
-      (b, r) => [`${r} = ${r} | (1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.SET_2_B,
-      2,
-      (b, r) => [`${r} = ${r} | (1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.SET_3_B,
-      3,
-      (b, r) => [`${r} = ${r} | (1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.SET_4_B,
-      4,
-      (b, r) => [`${r} = ${r} | (1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.SET_5_B,
-      5,
-      (b, r) => [`${r} = ${r} | (1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.SET_6_B,
-      6,
-      (b, r) => [`${r} = ${r} | (1 << ${b})`],
-      8,
-      15,
-    ),
-    ...cbBitRegForms(
-      CBOpcodes.SET_7_B,
-      7,
-      (b, r) => [`${r} = ${r} | (1 << ${b})`],
-      8,
-      15,
-    ),
+    ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap((b) => [
+      ...cbBitRegForms(
+        CBOpcodes.SET_0_B + b * 8,
+        b,
+        (bi, r) => [`${r} = ${r} | (1 << ${bi})`],
+        8,
+        15,
+      ),
+      ...cbBitIndexedForms(
+        CBOpcodes.SET_0_xHLx + b * 8,
+        b,
+        (bi, r) => [`${r} = ${r} | (1 << ${bi})`],
+        23,
+      ),
+    ]),
   ],
 };

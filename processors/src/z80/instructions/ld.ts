@@ -1078,5 +1078,259 @@ export const ld: InstructionInfo = {
       operation: ['A = R'],
       cycles: 9,
     },
+
+    // --- IX/IY indexed forms (DD/FD prefix) ---
+
+    // LD r, (IX+d) / LD r, (IY+d)
+    {
+      opcode: ['DD_IX', Opcodes.LD_B_xHLx, 'DISP_i8'],
+      operands: ['B', 'rm'],
+      operation: ['B = RAM:u8[IX + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_B_xHLx, 'DISP_i8'],
+      operands: ['B', 'rm'],
+      operation: ['B = RAM:u8[IY + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_C_xHLx, 'DISP_i8'],
+      operands: ['C', 'rm'],
+      operation: ['C = RAM:u8[IX + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_C_xHLx, 'DISP_i8'],
+      operands: ['C', 'rm'],
+      operation: ['C = RAM:u8[IY + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_D_xHLx, 'DISP_i8'],
+      operands: ['D', 'rm'],
+      operation: ['D = RAM:u8[IX + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_D_xHLx, 'DISP_i8'],
+      operands: ['D', 'rm'],
+      operation: ['D = RAM:u8[IY + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_E_xHLx, 'DISP_i8'],
+      operands: ['E', 'rm'],
+      operation: ['E = RAM:u8[IX + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_E_xHLx, 'DISP_i8'],
+      operands: ['E', 'rm'],
+      operation: ['E = RAM:u8[IY + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_H_xHLx, 'DISP_i8'],
+      operands: ['H', 'rm'],
+      operation: ['H = RAM:u8[IX + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_H_xHLx, 'DISP_i8'],
+      operands: ['H', 'rm'],
+      operation: ['H = RAM:u8[IY + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_L_xHLx, 'DISP_i8'],
+      operands: ['L', 'rm'],
+      operation: ['L = RAM:u8[IX + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_L_xHLx, 'DISP_i8'],
+      operands: ['L', 'rm'],
+      operation: ['L = RAM:u8[IY + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_A_xHLx, 'DISP_i8'],
+      operands: ['A', 'rm'],
+      operation: ['A = RAM:u8[IX + %{DISP}]'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_A_xHLx, 'DISP_i8'],
+      operands: ['A', 'rm'],
+      operation: ['A = RAM:u8[IY + %{DISP}]'],
+      cycles: 19,
+    },
+
+    // LD (IX+d), r / LD (IY+d), r
+    {
+      opcode: ['DD_IX', Opcodes.LD_xHLx_B, 'DISP_i8'],
+      operands: ['rm', 'B'],
+      operation: ['RAM:u8[IX + %{DISP}] = B'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_xHLx_B, 'DISP_i8'],
+      operands: ['rm', 'B'],
+      operation: ['RAM:u8[IY + %{DISP}] = B'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_xHLx_C, 'DISP_i8'],
+      operands: ['rm', 'C'],
+      operation: ['RAM:u8[IX + %{DISP}] = C'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_xHLx_C, 'DISP_i8'],
+      operands: ['rm', 'C'],
+      operation: ['RAM:u8[IY + %{DISP}] = C'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_xHLx_D, 'DISP_i8'],
+      operands: ['rm', 'D'],
+      operation: ['RAM:u8[IX + %{DISP}] = D'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_xHLx_D, 'DISP_i8'],
+      operands: ['rm', 'D'],
+      operation: ['RAM:u8[IY + %{DISP}] = D'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_xHLx_E, 'DISP_i8'],
+      operands: ['rm', 'E'],
+      operation: ['RAM:u8[IX + %{DISP}] = E'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_xHLx_E, 'DISP_i8'],
+      operands: ['rm', 'E'],
+      operation: ['RAM:u8[IY + %{DISP}] = E'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_xHLx_H, 'DISP_i8'],
+      operands: ['rm', 'H'],
+      operation: ['RAM:u8[IX + %{DISP}] = H'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_xHLx_H, 'DISP_i8'],
+      operands: ['rm', 'H'],
+      operation: ['RAM:u8[IY + %{DISP}] = H'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_xHLx_L, 'DISP_i8'],
+      operands: ['rm', 'L'],
+      operation: ['RAM:u8[IX + %{DISP}] = L'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_xHLx_L, 'DISP_i8'],
+      operands: ['rm', 'L'],
+      operation: ['RAM:u8[IY + %{DISP}] = L'],
+      cycles: 19,
+    },
+    {
+      opcode: ['DD_IX', Opcodes.LD_xHLx_A, 'DISP_i8'],
+      operands: ['rm', 'A'],
+      operation: ['RAM:u8[IX + %{DISP}] = A'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_xHLx_A, 'DISP_i8'],
+      operands: ['rm', 'A'],
+      operation: ['RAM:u8[IY + %{DISP}] = A'],
+      cycles: 19,
+    },
+
+    // LD (IX+d), n / LD (IY+d), n
+    {
+      opcode: ['DD_IX', Opcodes.LD_xHLx_N, 'DISP_i8', 'IMM_u8'],
+      operands: ['rm', 'imm'],
+      operandSize: 8,
+      operation: ['RAM:u8[IX + %{DISP}] = %{imm}'],
+      cycles: 19,
+    },
+    {
+      opcode: ['FD_IY', Opcodes.LD_xHLx_N, 'DISP_i8', 'IMM_u8'],
+      operands: ['rm', 'imm'],
+      operandSize: 8,
+      operation: ['RAM:u8[IY + %{DISP}] = %{imm}'],
+      cycles: 19,
+    },
+
+    // --- IX/IY 16-bit loads (Category A) ---
+
+    // LD IX, nn / LD IY, nn
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.LD_HL_NN, 'IMM_u16'],
+      operands: ['IX', 'imm'],
+      operandSize: 16,
+      operation: ['IX = %{imm}'],
+      cycles: 14,
+    },
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.LD_HL_NN, 'IMM_u16'],
+      operands: ['IY', 'imm'],
+      operandSize: 16,
+      operation: ['IY = %{imm}'],
+      cycles: 14,
+    },
+
+    // LD (nn), IX / LD (nn), IY
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.LD_xNNx_HL, 'IMM_MEM_u16'],
+      operands: ['mem', 'IX'],
+      operandSize: 16,
+      operation: ['RAM:u16[%{mem}] = IX'],
+      cycles: 20,
+    },
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.LD_xNNx_HL, 'IMM_MEM_u16'],
+      operands: ['mem', 'IY'],
+      operandSize: 16,
+      operation: ['RAM:u16[%{mem}] = IY'],
+      cycles: 20,
+    },
+
+    // LD IX, (nn) / LD IY, (nn)
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.LD_HL_xNNx, 'IMM_MEM_u16'],
+      operands: ['IX', 'mem'],
+      operandSize: 16,
+      operation: ['IX = RAM:u16[%{mem}]'],
+      cycles: 20,
+    },
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.LD_HL_xNNx, 'IMM_MEM_u16'],
+      operands: ['IY', 'mem'],
+      operandSize: 16,
+      operation: ['IY = RAM:u16[%{mem}]'],
+      cycles: 20,
+    },
+
+    // LD SP, IX / LD SP, IY
+    {
+      opcode: [Opcodes.DD_PREFIX, Opcodes.LD_SP_HL],
+      operands: ['SP', 'IX'],
+      operation: ['SP = IX'],
+      cycles: 10,
+    },
+    {
+      opcode: [Opcodes.FD_PREFIX, Opcodes.LD_SP_HL],
+      operands: ['SP', 'IY'],
+      operation: ['SP = IY'],
+      cycles: 10,
+    },
   ],
 };

@@ -70,7 +70,9 @@ function runProgram(program: Uint8Array): { halted: number; pc: number } {
 const simple = [
   'ld',
   'add',
+  'adc',
   'sub',
+  'sbc',
   'and',
   'or',
   'xor',

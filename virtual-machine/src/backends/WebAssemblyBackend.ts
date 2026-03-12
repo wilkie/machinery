@@ -13,6 +13,7 @@ import {
   ComparisonEvaluationNode,
   ComparisonNode,
   ExpressionNode,
+  LocalOperandNode,
   OperandNode,
   NextIfNode,
   IfBlockNode,
@@ -77,9 +78,11 @@ class WebAssemblyBackend extends Backend {
     code.push('  (import "env" "memory" (memory 30 1024))');
     code.push('');
 
-    // Import interrupt callback
+    // Import interrupt callback (returns i32: 1=handled by host, 0=vector through IVT)
     code.push('  ;; Import interrupt callback from host');
-    code.push('  (import "env" "interrupt" (func $interrupt (param i32)))');
+    code.push(
+      '  (import "env" "interrupt" (func $interrupt (param i32) (result i32)))',
+    );
     code.push('');
 
     // Build register local mapping
@@ -132,6 +135,35 @@ class WebAssemblyBackend extends Backend {
     }
     code.push('  )');
     code.push('');
+
+    // Generate interrupt handler function from processor definition
+    if (this.parsed.interrupts?.handler) {
+      const { statement, localMap } = this.parsed.interrupts.handler;
+      if (statement) {
+        const locals: LocalsInfo = {};
+        const { code: handlerCode } = this.fromStatement(statement, {
+          mode: this.target.modes?.[0]?.identifier || 'default',
+          locals,
+          localMap,
+        });
+        const vectorId = localMap.vector?.identifier || 'vector';
+        code.push(
+          '  ;; Interrupt handler: push FLAGS/CS/IP, load from IVT, jump',
+        );
+        code.push(`  (func $interrupt_handler (param $${vectorId} i32)`);
+        for (const [localName, localInfo] of Object.entries(localMap)) {
+          if (localName === 'vector') {
+            continue;
+          }
+          code.push(`    (local $${localInfo.identifier} i32)`);
+        }
+        for (const line of handlerCode) {
+          code.push('    ' + line);
+        }
+        code.push('  )');
+        code.push('');
+      }
+    }
 
     return code;
   }
@@ -229,7 +261,16 @@ class WebAssemblyBackend extends Backend {
     if (typeof node.value === 'number') {
       return [`(i32.const ${node.value})`];
     }
-    return super.fromOperand(generated, node);
+    const result = super.fromOperand(generated, node);
+    // Apply sign extension for locals with signed coercion (e.g., a:i8, a:i16)
+    if (node instanceof LocalOperandNode && node.coercion?.startsWith('i')) {
+      const bits = parseInt(node.coercion.slice(1));
+      if (bits < 32) {
+        const shiftAmount = 32 - bits;
+        return [`(i32.shr_s (i32.shl ${result[0]} (i32.const ${shiftAmount})) (i32.const ${shiftAmount}))`];
+      }
+    }
+    return result;
   }
 
   comment(message: string): string[] {
@@ -241,12 +282,24 @@ class WebAssemblyBackend extends Backend {
     value: string,
     condition?: ComparisonNode,
   ): string[] {
+    const hasHandler = !!this.parsed.interrupts?.handler;
+    if (hasHandler) {
+      // Call JS callback first; if it returns 0 (not handled), do IVT vectoring
+      const call = `(if (i32.eqz (call $interrupt ${value})) (then (call $interrupt_handler ${value})))`;
+      if (condition) {
+        return [
+          `(if ${this.fromComparison(generated, condition)[0]} (then ${call}))`,
+        ];
+      }
+      return [call];
+    }
+    // No interrupt handler defined — just call JS callback (ignore return value)
     if (condition) {
       return [
-        `(if ${this.fromComparison(generated, condition)[0]} (then (call $interrupt ${value})))`,
+        `(if ${this.fromComparison(generated, condition)[0]} (then (drop (call $interrupt ${value}))))`,
       ];
     }
-    return [`(call $interrupt ${value})`];
+    return [`(drop (call $interrupt ${value}))`];
   }
 
   readRegister(
@@ -262,7 +315,9 @@ class WebAssemblyBackend extends Backend {
     else size = 32;
 
     const byteOffset = size === 8 ? index : size === 16 ? index * 2 : index * 4;
-    const load = this.loadOp(size, signed);
+    // When destSize < size and signed, use unsigned load then sign-extend from destSize
+    const needsPostSignExtend = signed && destSize < size;
+    const load = this.loadOp(size, needsPostSignExtend ? false : signed);
 
     let expr = `(${load} (i32.const ${byteOffset}))`;
 
@@ -278,7 +333,12 @@ class WebAssemblyBackend extends Backend {
       expr = `(i32.and ${expr} (i32.const ${(1 << destSize) - 1}))`;
     }
 
-    if (signed && !load.endsWith('_s')) {
+    if (needsPostSignExtend) {
+      // Sign-extend from destSize bits to 32 bits
+      if (destSize < 32) {
+        expr = `(i32.shr_s (i32.shl ${expr} (i32.const ${32 - destSize})) (i32.const ${32 - destSize}))`;
+      }
+    } else if (signed && !load.endsWith('_s')) {
       if (destSize === 32) {
         // already i32
       } else {
@@ -524,6 +584,42 @@ class WebAssemblyBackend extends Backend {
     ];
   }
 
+  /**
+   * Check if a comparison operand has a signed coercion (e.g., :i8, :i16, :i32)
+   * or is a local variable defined with signed: true.
+   */
+  private hasSignedCoercion(
+    node: ComparisonNode | ExpressionNode | OperandNode,
+    generated: GeneratedStatement,
+  ): boolean {
+    if (node instanceof OperandNode) {
+      if (node.coercion?.startsWith('i')) return true;
+      // Check if this is a local with signed: true in its definition
+      if (node instanceof LocalOperandNode) {
+        const localName = node.reference?.mapping?.identifier;
+        if (localName) {
+          // Look up the original local info to check signed flag
+          for (const [key, info] of Object.entries(
+            generated.context.locals || {},
+          )) {
+            if (
+              generated.context.localMap?.[key]?.identifier === localName &&
+              info.signed
+            ) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    if (node instanceof ExpressionNode) {
+      if (node.operand instanceof OperandNode) {
+        return this.hasSignedCoercion(node.operand, generated);
+      }
+    }
+    return false;
+  }
+
   fromComparisonEvaluation(
     generated: GeneratedStatement,
     node: ComparisonEvaluationNode,
@@ -531,14 +627,30 @@ class WebAssemblyBackend extends Backend {
     const left = this.fromComparisonOperand(generated, node.operand)[0];
     const right = this.fromComparisonOperand(generated, node.argument)[0];
 
-    const opMap: Record<string, string> = {
-      '==': 'i32.eq',
-      '!=': 'i32.ne',
-      '<': 'i32.lt_s',
-      '>': 'i32.gt_s',
-      '<=': 'i32.le_s',
-      '>=': 'i32.ge_s',
-    };
+    // Use signed comparison when either operand has a signed coercion (:i8, :i16, :i32)
+    // or is a local defined with signed: true.
+    // Otherwise use unsigned (matches JS behavior with Uint32Array)
+    const signed =
+      this.hasSignedCoercion(node.operand, generated) ||
+      this.hasSignedCoercion(node.argument, generated);
+
+    const opMap: Record<string, string> = signed
+      ? {
+          '==': 'i32.eq',
+          '!=': 'i32.ne',
+          '<': 'i32.lt_s',
+          '>': 'i32.gt_s',
+          '<=': 'i32.le_s',
+          '>=': 'i32.ge_s',
+        }
+      : {
+          '==': 'i32.eq',
+          '!=': 'i32.ne',
+          '<': 'i32.lt_u',
+          '>': 'i32.gt_u',
+          '<=': 'i32.le_u',
+          '>=': 'i32.ge_u',
+        };
 
     const op = opMap[node.operator];
     if (!op) {
@@ -1035,6 +1147,18 @@ class WebAssemblyBackend extends Backend {
       );
     }
 
+    // Check if we need a dispatch wrapper block (when both exact and partial exist)
+    const hasExact = !!decoder.exact;
+    const partials = decoder.partial || [];
+    const hasPartials = partials.length > 0;
+    let dispatchDoneLabel: string | undefined;
+
+    if (hasExact && hasPartials) {
+      const dispatchId = context.labelCounter++;
+      dispatchDoneLabel = `$dispatch_done_${dispatchId}`;
+      context.code.push(`${indent}(block ${dispatchDoneLabel}`);
+    }
+
     // Handle exact matches via br_table
     if (decoder.exact) {
       // Count how many valid entries we have
@@ -1045,23 +1169,12 @@ class WebAssemblyBackend extends Backend {
         }
       }
 
-      // We need a block for each valid entry plus a default
-      // br_table structure:
-      //   (block $case_N
-      //     ...
-      //     (block $case_0
-      //       (block $default
-      //         (br_table $default $case_0 ... $case_N $default (local.get $b0))
-      //       ) ;; default
-      //       ... default code ...
-      //       (br $done_switch)
-      //     ) ;; case_0
-      //     ... case_0 code ...
-      //     (br $done_switch)
-      //   ) ;; case_N
-
       const switchId = context.labelCounter++;
       const doneLabel = `$switch_done_${switchId}`;
+      // When there are partial matches, exact match cases break to the outer
+      // dispatch block to skip past partials. Default case breaks to switch_done
+      // to fall through to partial matching.
+      const caseDoneLabel = dispatchDoneLabel || doneLabel;
 
       // Build the br_table target array (256 entries for a byte)
       const tableSize = 256;
@@ -1148,7 +1261,7 @@ class WebAssemblyBackend extends Backend {
           if (matcher.instruction.prefix) {
             context.code.push(`${indent}  (br $outer)`);
           } else {
-            context.code.push(`${indent}  (br ${doneLabel})`);
+            context.code.push(`${indent}  (br ${caseDoneLabel})`);
           }
         } else if (matcher.exact || matcher.partial) {
           this.craftDecoderState(
@@ -1158,9 +1271,9 @@ class WebAssemblyBackend extends Backend {
             context,
             prefix,
           );
-          context.code.push(`${indent}  (br ${doneLabel})`);
+          context.code.push(`${indent}  (br ${caseDoneLabel})`);
         } else {
-          context.code.push(`${indent}  (br ${doneLabel})`);
+          context.code.push(`${indent}  (br ${caseDoneLabel})`);
         }
       }
 
@@ -1180,41 +1293,60 @@ class WebAssemblyBackend extends Backend {
     }
 
     // Handle partial matches (bit-masked)
-    for (const { mask, and, map } of decoder.partial || []) {
-      const condExpr = `(i32.eq (i32.and (local.get $${byteName}) (i32.const 0x${mask.toString(16)})) (i32.const 0x${and.toString(16)}))`;
+    // Wrap in a block so that once one partial matches, the rest are skipped
+    if (partials.length > 0) {
+      const partialBlockId = context.labelCounter++;
+      const partialDoneLabel = `$partial_done_${partialBlockId}`;
+      context.code.push(`${indent}(block ${partialDoneLabel}`);
 
-      context.code.push(`${indent}(if ${condExpr}`);
-      context.code.push(`${indent}  (then`);
+      for (const { mask, and, map } of partials) {
+        const condExpr = `(i32.eq (i32.and (local.get $${byteName}) (i32.const 0x${mask.toString(16)})) (i32.const 0x${and.toString(16)}))`;
 
-      if (
-        map.instruction &&
-        map.form &&
-        map.index !== undefined &&
-        map.inputs !== undefined &&
-        map.variant !== undefined
-      ) {
-        this.craftInstruction(
-          map.instruction,
-          map.form,
-          map.index,
-          map.inputs,
-          map.variant,
-          depth,
-          indent + '    ',
-          context,
-        );
-      } else {
-        this.craftDecoderState(
-          map,
-          depth + 1,
-          indent + '    ',
-          context,
-          prefix,
-        );
+        context.code.push(`${indent}  (if ${condExpr}`);
+        context.code.push(`${indent}    (then`);
+
+        if (
+          map.instruction &&
+          map.form &&
+          map.index !== undefined &&
+          map.inputs !== undefined &&
+          map.variant !== undefined
+        ) {
+          this.craftInstruction(
+            map.instruction,
+            map.form,
+            map.index,
+            map.inputs,
+            map.variant,
+            depth,
+            indent + '      ',
+            context,
+          );
+          if (map.instruction.prefix) {
+            context.code.push(`${indent}      (br $outer)`);
+          }
+        } else {
+          this.craftDecoderState(
+            map,
+            depth + 1,
+            indent + '      ',
+            context,
+            prefix,
+          );
+        }
+
+        // Break out of partial block after first match
+        context.code.push(`${indent}      (br ${partialDoneLabel})`);
+        context.code.push(`${indent}    )`);
+        context.code.push(`${indent}  )`);
       }
 
-      context.code.push(`${indent}  )`);
-      context.code.push(`${indent})`);
+      context.code.push(`${indent}) ;; ${partialDoneLabel}`);
+    }
+
+    // Close outer dispatch block (wraps exact + partial to prevent double-firing)
+    if (dispatchDoneLabel) {
+      context.code.push(`${indent}) ;; ${dispatchDoneLabel}`);
     }
 
     if (depth === 0 && !prefix) {

@@ -6,3 +6,9 @@ coverage/
 
 # Generated assembler grammar (nearleyc output, rebuilt from .ne)
 assemblers/src/*/*/grammar.ts
+
+# Generated simulator code (rebuilt by build:generate)
+simulators/src/*/Machine.ts
+simulators/src/*/WasmMachine.ts
+simulators/src/*/machine.wat
+simulators/src/*/machine.wasm

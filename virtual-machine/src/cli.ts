@@ -5,16 +5,21 @@ import { parseArgs } from 'node:util';
 import VirtualMachine from './VirtualMachine';
 import Generator from './Generator';
 import type { BackendClass } from './Backend';
-import { TypeScriptBackend, WebAssemblyBackend } from './backends';
+import {
+  TypeScriptBackend,
+  WebAssemblyBackend,
+  WasmMachineBackend,
+} from './backends';
 
 const backends: Record<string, BackendClass> = {
   typescript: TypeScriptBackend,
   webassembly: WebAssemblyBackend as unknown as BackendClass,
+  'wasm-machine': WasmMachineBackend,
 };
 
 function usage(): never {
   console.error(
-    `Usage: machinery-vm --target <name> [--backend <typescript|webassembly>]`,
+    `Usage: machinery-vm --target <name> [--backend <typescript|webassembly|wasm-machine>]`,
   );
   console.error();
   console.error(`Options:`);

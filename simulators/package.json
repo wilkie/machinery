@@ -16,16 +16,21 @@
       "import": "./dist/i286/index.js",
       "require": "./dist/i286/index.cjs"
     },
+    "./i286/machine.wasm": "./dist/i286/machine.wasm",
     "./z80": {
       "types": "./dist/z80/index.d.ts",
       "import": "./dist/z80/index.js",
       "require": "./dist/z80/index.cjs"
-    }
+    },
+    "./z80/machine.wasm": "./dist/z80/machine.wasm"
   },
   "scripts": {
     "build:generate:i286": "machinery-vm --target i286 --backend typescript > src/i286/Machine.ts",
     "build:generate:z80": "machinery-vm --target z80 --backend typescript > src/z80/Machine.ts",
-    "build:generate": "pnpm build:generate:i286 && pnpm build:generate:z80",
+    "build:generate:wasm:i286": "machinery-vm --target i286 --backend webassembly > src/i286/machine.wat && wat2wasm src/i286/machine.wat -o src/i286/machine.wasm && machinery-vm --target i286 --backend wasm-machine > src/i286/WasmMachine.ts",
+    "build:generate:wasm:z80": "machinery-vm --target z80 --backend webassembly > src/z80/machine.wat && wat2wasm src/z80/machine.wat -o src/z80/machine.wasm && machinery-vm --target z80 --backend wasm-machine > src/z80/WasmMachine.ts",
+    "build:generate:wasm": "pnpm build:generate:wasm:i286 && pnpm build:generate:wasm:z80",
+    "build:generate": "pnpm build:generate:i286 && pnpm build:generate:z80 && pnpm build:generate:wasm",
     "build": "pnpm build:generate && tsup",
     "test": "jest --passWithNoTests",
     "build:tests": "pnpm build:tests:i286 && pnpm build:tests:z80",

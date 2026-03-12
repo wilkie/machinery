@@ -14,9 +14,7 @@ export const daa: InstructionInfo = {
       operands: [],
       operation: [
         '${RESOLVE_CF}',
-        // Resolve HF inline: (a ^ b ^ (alu_result & 0xFF)) >> 4 & 1
-        // Must mask alu_result to 8 bits since it may be stored as 32-bit negative
-        'HF = flag_op < ${FLAG_OP_RESOLVED} ? ((a ^ b ^ (alu_result & 0xFF)) >> 4) & 0x1 : HF',
+        '${RESOLVE_HF}',
         '${RESOLVE_NF}',
         'tmp = A',
         // After addition (NF=0):

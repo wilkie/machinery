@@ -73,7 +73,7 @@ export const macros = {
   // Logic OR/XOR: HF = 0
   // ALU: carry out of bit 3 (8-bit) or bit 11 (16-bit)
   RESOLVE_HF: [
-    'HF = flag_op < ${FLAG_OP_RESOLVED} ? ((flag_op & ${FLAG_OP_AND}) > 0 ? 1 : ((flag_op & ${FLAG_OP_LOGIC}) > 0 ? 0 : ((a ^ b ^ alu_result) >> ((flag_op & ${FLAG_OP_16BIT}) == 0 ? 4 : 12)) & 0x1)) : HF',
+    'HF = flag_op < ${FLAG_OP_RESOLVED} ? ((flag_op & ${FLAG_OP_AND}) > 0 ? 1 : ((flag_op & ${FLAG_OP_LOGIC}) > 0 ? 0 : ((a ^ b ^ (alu_result & ((flag_op & ${FLAG_OP_16BIT}) == 0 ? 0xFF : 0xFFFF))) >> ((flag_op & ${FLAG_OP_16BIT}) == 0 ? 4 : 12)) & 0x1)) : HF',
   ],
 
   // PF: parity (logic) or overflow (arithmetic)

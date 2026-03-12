@@ -264,12 +264,12 @@ export class Decoder {
       const next = node.exact[byte];
       if (next) {
         if (next.instruction && next.form) {
-          consumed.push({ value: byte });
+          consumed.push({ value: byte, matcher: next.matcher });
           this.pos++;
           return { instruction: next.instruction, form: next.form };
         }
-        if (next.exact || next.partial) {
-          consumed.push({ value: byte });
+        if (next.exact || next.partial || next.wildcard) {
+          consumed.push({ value: byte, matcher: next.matcher });
           this.pos++;
           return this.walkTrie(next, consumed);
         }
@@ -298,6 +298,17 @@ export class Decoder {
           return this.walkTrie(partial.map as DecoderMap, consumed);
         }
       }
+    }
+
+    // Wildcard: consume any byte and recurse (e.g., displacement before final opcode)
+    if (node.wildcard) {
+      const matcher =
+        typeof node.wildcard.matcher === 'object'
+          ? node.wildcard.matcher
+          : undefined;
+      consumed.push({ value: byte, matcher });
+      this.pos++;
+      return this.walkTrie(node.wildcard.map, consumed);
     }
 
     // Node itself is terminal (open-ended matcher)

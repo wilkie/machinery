@@ -84,6 +84,7 @@ const simple = [
   'ix',
   'iy',
   'bit',
+  'cond',
 ];
 
 describe('z80 simple instructions', () => {

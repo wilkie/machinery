@@ -872,3 +872,299 @@ describe('dsm reference validation', () => {
     expect(matched).toBeGreaterThan(0);
   });
 });
+
+// --- Z80 Decoder Tests ---
+
+let z80target: Target;
+let z80decoderMap: ReturnType<typeof generateDecoderMap>;
+let z80prefixMap: ReturnType<typeof generateDecoderMap>;
+
+beforeAll(async () => {
+  const mod = await import('@machinery/processors/z80');
+  z80target = mod.default;
+  z80decoderMap = generateDecoderMap(z80target, false);
+  z80prefixMap = generateDecoderMap(z80target, true);
+});
+
+function z80decode(bytes: number[]) {
+  const data = new Uint8Array(bytes);
+  const decoder = new Decoder(data, z80decoderMap, z80prefixMap, z80target);
+  return decoder.decode();
+}
+
+function z80decodeAll(bytes: number[]) {
+  const data = new Uint8Array(bytes);
+  return [...disassemble(data, z80decoderMap, z80prefixMap, z80target)];
+}
+
+describe('Z80 Decoder', () => {
+  describe('basic instructions', () => {
+    it.each([
+      [[0x00], 'nop'],
+      [[0x76], 'halt'],
+      [[0xC9], 'ret'],
+      [[0xF3], 'di'],
+      [[0xFB], 'ei'],
+    ])('%s -> %s', (bytes, mnemonic) => {
+      const instr = z80decode(bytes as number[]);
+      expect(instr).not.toBeNull();
+      expect(instr!.mnemonic).toBe(mnemonic);
+    });
+  });
+
+  describe('LD register instructions', () => {
+    it('LD B, 0x42 -> 06 42', () => {
+      const instr = z80decode([0x06, 0x42]);
+      expect(instr!.mnemonic).toBe('ld');
+      expect(instr!.operands).toHaveLength(2);
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'b' });
+      expect(instr!.operands[1]).toMatchObject({ type: 'immediate', value: 0x42 });
+    });
+
+    it('LD HL, 0x1234 -> 21 34 12', () => {
+      const instr = z80decode([0x21, 0x34, 0x12]);
+      expect(instr!.mnemonic).toBe('ld');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'hl' });
+      expect(instr!.operands[1]).toMatchObject({ type: 'immediate', value: 0x1234 });
+    });
+
+    it('LD A, B -> 78', () => {
+      const instr = z80decode([0x78]);
+      expect(instr!.mnemonic).toBe('ld');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'a' });
+      expect(instr!.operands[1]).toMatchObject({ type: 'register', name: 'b' });
+    });
+  });
+
+  describe('conditional JR', () => {
+    it('JR NZ, +5 -> 20 05', () => {
+      const instr = z80decode([0x20, 0x05]);
+      expect(instr!.mnemonic).toBe('jr');
+      expect(instr!.operands).toHaveLength(2);
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'nz' });
+      expect(instr!.operands[1]).toMatchObject({ type: 'relative' });
+    });
+
+    it('JR Z, -3 -> 28 FD', () => {
+      const instr = z80decode([0x28, 0xfd]);
+      expect(instr!.mnemonic).toBe('jr');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'z' });
+      expect(instr!.operands[1]).toMatchObject({ type: 'relative', offset: -3 });
+    });
+
+    it('JR NC, +0 -> 30 00', () => {
+      const instr = z80decode([0x30, 0x00]);
+      expect(instr!.mnemonic).toBe('jr');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'nc' });
+    });
+
+    it('JR C, +10 -> 38 0A', () => {
+      const instr = z80decode([0x38, 0x0a]);
+      expect(instr!.mnemonic).toBe('jr');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'c' });
+      expect(instr!.operands[1]).toMatchObject({ type: 'relative', offset: 10 });
+    });
+
+    it('JR unconditional -> 18 05', () => {
+      const instr = z80decode([0x18, 0x05]);
+      expect(instr!.mnemonic).toBe('jr');
+      expect(instr!.operands).toHaveLength(1);
+      expect(instr!.operands[0]).toMatchObject({ type: 'relative' });
+    });
+  });
+
+  describe('conditional JP', () => {
+    it.each([
+      [[0xC2, 0x00, 0x02], 'nz'],
+      [[0xCA, 0x00, 0x02], 'z'],
+      [[0xD2, 0x00, 0x02], 'nc'],
+      [[0xDA, 0x00, 0x02], 'c'],
+      [[0xE2, 0x00, 0x02], 'po'],
+      [[0xEA, 0x00, 0x02], 'pe'],
+      [[0xF2, 0x00, 0x02], 'p'],
+      [[0xFA, 0x00, 0x02], 'm'],
+    ])('JP %s, 0x0200', (bytes, cc) => {
+      const instr = z80decode(bytes as number[]);
+      expect(instr!.mnemonic).toBe('jp');
+      expect(instr!.operands).toHaveLength(2);
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: cc });
+      expect(instr!.operands[1]).toMatchObject({ type: 'immediate', value: 0x0200 });
+    });
+
+    it('JP unconditional -> C3 00 02', () => {
+      const instr = z80decode([0xC3, 0x00, 0x02]);
+      expect(instr!.mnemonic).toBe('jp');
+      expect(instr!.operands).toHaveLength(1);
+      expect(instr!.operands[0]).toMatchObject({ type: 'immediate', value: 0x0200 });
+    });
+  });
+
+  describe('conditional CALL', () => {
+    it.each([
+      [[0xC4, 0x00, 0x03], 'nz'],
+      [[0xCC, 0x00, 0x03], 'z'],
+      [[0xD4, 0x00, 0x03], 'nc'],
+      [[0xDC, 0x00, 0x03], 'c'],
+      [[0xE4, 0x00, 0x03], 'po'],
+      [[0xEC, 0x00, 0x03], 'pe'],
+      [[0xF4, 0x00, 0x03], 'p'],
+      [[0xFC, 0x00, 0x03], 'm'],
+    ])('CALL %s, 0x0300', (bytes, cc) => {
+      const instr = z80decode(bytes as number[]);
+      expect(instr!.mnemonic).toBe('call');
+      expect(instr!.operands).toHaveLength(2);
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: cc });
+      expect(instr!.operands[1]).toMatchObject({ type: 'immediate', value: 0x0300 });
+    });
+
+    it('CALL unconditional -> CD 00 03', () => {
+      const instr = z80decode([0xCD, 0x00, 0x03]);
+      expect(instr!.mnemonic).toBe('call');
+      expect(instr!.operands).toHaveLength(1);
+      expect(instr!.operands[0]).toMatchObject({ type: 'immediate', value: 0x0300 });
+    });
+  });
+
+  describe('conditional RET', () => {
+    it.each([
+      [[0xC0], 'nz'],
+      [[0xC8], 'z'],
+      [[0xD0], 'nc'],
+      [[0xD8], 'c'],
+      [[0xE0], 'po'],
+      [[0xE8], 'pe'],
+      [[0xF0], 'p'],
+      [[0xF8], 'm'],
+    ])('RET %s', (bytes, cc) => {
+      const instr = z80decode(bytes as number[]);
+      expect(instr!.mnemonic).toBe('ret');
+      expect(instr!.operands).toHaveLength(1);
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: cc });
+    });
+  });
+
+  describe('PUSH/POP', () => {
+    it.each([
+      [[0xC5], 'push', 'bc'],
+      [[0xD5], 'push', 'de'],
+      [[0xE5], 'push', 'hl'],
+      [[0xF5], 'push', 'af'],
+      [[0xC1], 'pop', 'bc'],
+      [[0xD1], 'pop', 'de'],
+      [[0xE1], 'pop', 'hl'],
+      [[0xF1], 'pop', 'af'],
+    ])('%s %s', (bytes, mnemonic, reg) => {
+      const instr = z80decode(bytes as number[]);
+      expect(instr!.mnemonic).toBe(mnemonic);
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: reg });
+    });
+  });
+
+  describe('ALU instructions', () => {
+    it('ADD A, B -> 80', () => {
+      const instr = z80decode([0x80]);
+      expect(instr!.mnemonic).toBe('add');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'a' });
+      expect(instr!.operands[1]).toMatchObject({ type: 'register', name: 'b' });
+    });
+
+    it('SUB 0x10 -> D6 10', () => {
+      const instr = z80decode([0xD6, 0x10]);
+      expect(instr!.mnemonic).toBe('sub');
+      expect(instr!.operands[0]).toMatchObject({ type: 'immediate', value: 0x10 });
+    });
+
+    it('CP A -> BF', () => {
+      const instr = z80decode([0xBF]);
+      expect(instr!.mnemonic).toBe('cp');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'a' });
+    });
+  });
+
+  describe('IX/IY prefix instructions', () => {
+    it('LD IX, 0x1234 -> DD 21 34 12', () => {
+      const instr = z80decode([0xDD, 0x21, 0x34, 0x12]);
+      expect(instr!.mnemonic).toBe('ld');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'ix' });
+      expect(instr!.operands[1]).toMatchObject({ type: 'immediate', value: 0x1234 });
+    });
+
+    it('LD IY, 0x5678 -> FD 21 78 56', () => {
+      const instr = z80decode([0xFD, 0x21, 0x78, 0x56]);
+      expect(instr!.mnemonic).toBe('ld');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'iy' });
+      expect(instr!.operands[1]).toMatchObject({ type: 'immediate', value: 0x5678 });
+    });
+
+    it('ADD IX, BC -> DD 09', () => {
+      const instr = z80decode([0xDD, 0x09]);
+      expect(instr!.mnemonic).toBe('add');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'ix' });
+      expect(instr!.operands[1]).toMatchObject({ type: 'register', name: 'bc' });
+    });
+
+    it('PUSH IX -> DD E5', () => {
+      const instr = z80decode([0xDD, 0xE5]);
+      expect(instr!.mnemonic).toBe('push');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'ix' });
+    });
+  });
+
+  describe('CB prefix bit operations', () => {
+    it('RLC B -> CB 00', () => {
+      const instr = z80decode([0xCB, 0x00]);
+      expect(instr!.mnemonic).toBe('rlc');
+      expect(instr!.operands[0]).toMatchObject({ type: 'register', name: 'b' });
+    });
+
+    it('BIT 3, A -> CB 5F', () => {
+      const instr = z80decode([0xCB, 0x5F]);
+      expect(instr!.mnemonic).toBe('bit');
+      expect(instr!.operands).toHaveLength(2);
+    });
+
+    it('SET 7, A -> CB FF', () => {
+      const instr = z80decode([0xCB, 0xFF]);
+      expect(instr!.mnemonic).toBe('set');
+      expect(instr!.operands).toHaveLength(2);
+    });
+
+    it('RES 0, B -> CB 80', () => {
+      const instr = z80decode([0xCB, 0x80]);
+      expect(instr!.mnemonic).toBe('res');
+      expect(instr!.operands).toHaveLength(2);
+    });
+  });
+
+  describe('DD CB prefix (IX indexed bit ops)', () => {
+    it('RLC (IX+5) -> DD CB 05 06', () => {
+      const instr = z80decode([0xDD, 0xCB, 0x05, 0x06]);
+      expect(instr).not.toBeNull();
+      expect(instr!.mnemonic).toBe('rlc');
+    });
+
+    it('SET 0, (IX+3) -> DD CB 03 C6', () => {
+      const instr = z80decode([0xDD, 0xCB, 0x03, 0xC6]);
+      expect(instr).not.toBeNull();
+      expect(instr!.mnemonic).toBe('set');
+    });
+  });
+
+  describe('multiple instruction decode', () => {
+    it('decodes NOP; LD A,0x42; HALT sequence', () => {
+      const instrs = z80decodeAll([0x00, 0x3E, 0x42, 0x76]);
+      expect(instrs).toHaveLength(3);
+      expect(instrs[0].mnemonic).toBe('nop');
+      expect(instrs[1].mnemonic).toBe('ld');
+      expect(instrs[2].mnemonic).toBe('halt');
+    });
+
+    it('tracks addresses correctly', () => {
+      // LD BC, 0x1234 (3 bytes); NOP (1 byte); HALT (1 byte)
+      const instrs = z80decodeAll([0x01, 0x34, 0x12, 0x00, 0x76]);
+      expect(instrs[0].address).toBe(0);
+      expect(instrs[1].address).toBe(3);
+      expect(instrs[2].address).toBe(4);
+    });
+  });
+});

@@ -26,11 +26,23 @@ export interface DecoderPartial {
 }
 
 /**
+ * A wildcard entry in the decoder trie.
+ * Matches any byte value and continues to the next level.
+ * Used for displacement bytes that appear before a final opcode byte
+ * (e.g., Z80 DD CB dd op format).
+ */
+export interface DecoderWildcard {
+  matcher: string | OpcodeMatcher;
+  map: DecoderMap;
+}
+
+/**
  * A node in the instruction decoder trie.
  *
  * The decoder walks byte-by-byte through the instruction stream.
  * At each byte, it first checks `exact[byte]` for an exact match,
  * then falls through to `partial` entries which use bitmasks.
+ * If a `wildcard` is present, it consumes any byte and recurses.
  *
  * Terminal nodes have `instruction`, `form`, `variant`, and `inputs` set.
  */
@@ -42,6 +54,9 @@ export interface DecoderMap {
   index?: number;
   exact?: DecoderMap[];
   partial?: DecoderPartial[];
+  wildcard?: DecoderWildcard;
+  /** Matcher that produced this exact entry (when mask=0xff promoted to exact). */
+  matcher?: OpcodeMatcher;
 }
 
 /**
@@ -70,10 +85,36 @@ export function generateDecoderMap(
     for (const form of instruction.forms) {
       variantIndex++;
       let pass: Partial<DecoderMap> = decoder;
-      const lastOpcodeIndex = form.opcode.length - 1;
+
+      // Compute the last opcode index that participates in decoding:
+      // trailing matchers with mask=0 (e.g., DISP, IMM) are operand data,
+      // not decoder nodes.
+      let lastOpcodeIndex = form.opcode.length - 1;
+      while (lastOpcodeIndex > 0) {
+        let entry: string | number | OpcodeMatcher | undefined =
+          form.opcode[lastOpcodeIndex];
+        if (typeof entry === 'number') break;
+        if (typeof entry === 'string') {
+          entry = (target.operands || []).find(
+            (o) => o.identifier === entry,
+          );
+        }
+        if (typeof entry === 'object' && entry) {
+          let hasMask = false;
+          for (const field of entry.fields || []) {
+            if (field.match !== undefined) {
+              hasMask = true;
+              break;
+            }
+          }
+          if (hasMask) break;
+        }
+        lastOpcodeIndex--;
+      }
+
       const inputs: InputMap = {};
 
-      for (let i = 0; i < form.opcode.length; i++) {
+      for (let i = 0; i <= lastOpcodeIndex; i++) {
         let matcher: string | number | OpcodeMatcher | undefined =
           form.opcode[i];
         const matcherName =
@@ -128,15 +169,46 @@ export function generateDecoderMap(
             }
           }
 
-          if (mask === 0x0) {
-            // Open-ended opcode — no mask means this matcher accepts all values
+          if (mask === 0x0 && i === lastOpcodeIndex) {
+            // Terminal open-ended opcode
             delete pass.partial;
             pass.instruction = instruction;
             pass.form = form;
             pass.variant = variantIndex;
             pass.index = i - 1;
             pass.inputs = { ...inputs };
-            i = lastOpcodeIndex;
+          } else if (mask === 0x0) {
+            // Non-terminal open-ended opcode (e.g., displacement byte before
+            // a final opcode byte). Use a wildcard node.
+            if (!pass.wildcard) {
+              pass.wildcard = {
+                matcher: matcher!,
+                map: { exact: new Array(BYTE_MAX), partial: [] },
+              };
+            }
+            pass = pass.wildcard.map;
+          } else if (mask === 0xff) {
+            // Full byte match — treat like a numeric literal for merging,
+            // but preserve the matcher so runtime decoders can extract fields.
+            pass.exact ||= new Array(BYTE_MAX);
+            if (i === lastOpcodeIndex) {
+              pass.exact[and] = {
+                instruction,
+                form,
+                variant: variantIndex,
+                inputs: { ...inputs },
+                index: i,
+                matcher: typeof matcher === 'object' ? matcher : undefined,
+              };
+            } else {
+              pass.exact[and] ||= {
+                partial: [],
+              };
+              if (typeof matcher === 'object') {
+                pass.exact[and].matcher = matcher;
+              }
+              pass = pass.exact[and];
+            }
           } else {
             const sequence: DecoderPartial = {
               matcher,

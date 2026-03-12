@@ -1,4 +1,6 @@
 **/Machine.ts
 **/grammar.ts
 **/*.inc
+assemblers/src/targets.ts
 assemblers/src/i286/
+assemblers/src/z80/

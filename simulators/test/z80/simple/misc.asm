@@ -119,4 +119,70 @@ org 0x100
     ld b, 0x05
     rst 0x10
 
+; --- DAA: decimal adjust after addition ---
+
+; Simple BCD add: 0x15 + 0x27 = 0x42
+    ld a, 0x15
+    add a, 0x27         ; A=0x3C (binary)
+    daa                 ; A=0x42 (BCD)
+    ld b, 0x42
+    rst 0x10
+
+; BCD add with low nibble carry: 0x09 + 0x01 = 0x10
+    ld a, 0x09
+    add a, 0x01         ; A=0x0A
+    daa                 ; A=0x10
+    ld b, 0x10
+    rst 0x10
+
+; BCD add with high nibble carry: 0x90 + 0x20 = 0x10 + CF
+    ld a, 0x90
+    add a, 0x20         ; A=0xB0
+    daa                 ; A=0x10, CF=1
+    ld b, 0x10
+    rst 0x10
+    ; verify CF=1
+    jr c, .daa_cf_ok
+    ld a, 0xFF
+    ld b, 0x00
+    rst 0x10
+.daa_cf_ok:
+
+; BCD add both nibbles carry: 0x99 + 0x01 = 0x00 + CF
+    ld a, 0x99
+    add a, 0x01         ; A=0x9A
+    daa                 ; A=0x00, CF=1
+    ld b, 0x00
+    rst 0x10
+
+; BCD add: 0x00 + 0x00 = 0x00
+    ld a, 0x00
+    add a, 0x00
+    daa
+    ld b, 0x00
+    rst 0x10
+
+; --- DAA: decimal adjust after subtraction ---
+
+; BCD sub: 0x42 - 0x15 = 0x27
+    ld a, 0x42
+    sub 0x15            ; A=0x2D (binary)
+    daa                 ; A=0x27 (BCD)
+    ld b, 0x27
+    rst 0x10
+
+; BCD sub with borrow from low nibble: 0x10 - 0x01 = 0x09
+    ld a, 0x10
+    sub 0x01            ; A=0x0F
+    daa                 ; A=0x09
+    ld b, 0x09
+    rst 0x10
+
+; BCD sub: 0x00 - 0x01 = 0x99 (with borrow)
+    ld a, 0x00
+    sub 0x01            ; A=0xFF, CF=1
+    daa                 ; A=0x99, CF=1
+    ld b, 0x99
+    rst 0x10
+
     halt

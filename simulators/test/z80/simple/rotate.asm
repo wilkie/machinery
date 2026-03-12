@@ -114,4 +114,51 @@ org 0x100
     ld b, 0x00
     rst 0x10
 
+; --- RRD: rotate right decimal ---
+; Before: A=0x12, (HL)=0x34 -> A=0x14, (HL)=0x23
+    ld hl, 0x200
+    ld a, 0x34
+    ld [hl], a
+    ld a, 0x12
+    rrd
+    ld b, 0x14          ; low nibble of (HL) -> low nibble of A
+    rst 0x10
+    ld a, [hl]
+    ld b, 0x23          ; A_low -> (HL)_high, (HL)_high -> (HL)_low
+    rst 0x10
+
+; RRD: A=0xAB, (HL)=0xCD -> A=0xAD, (HL)=0xBC
+    ld a, 0xCD
+    ld [hl], a
+    ld a, 0xAB
+    rrd
+    ld b, 0xAD
+    rst 0x10
+    ld a, [hl]
+    ld b, 0xBC
+    rst 0x10
+
+; --- RLD: rotate left decimal ---
+; Before: A=0x12, (HL)=0x34 -> A=0x13, (HL)=0x42
+    ld a, 0x34
+    ld [hl], a
+    ld a, 0x12
+    rld
+    ld b, 0x13          ; high nibble of (HL) -> low nibble of A
+    rst 0x10
+    ld a, [hl]
+    ld b, 0x42          ; (HL)_low -> (HL)_high, A_low -> (HL)_low
+    rst 0x10
+
+; RLD: A=0xAB, (HL)=0xCD -> A=0xAC, (HL)=0xDB
+    ld a, 0xCD
+    ld [hl], a
+    ld a, 0xAB
+    rld
+    ld b, 0xAC
+    rst 0x10
+    ld a, [hl]
+    ld b, 0xDB
+    rst 0x10
+
     halt

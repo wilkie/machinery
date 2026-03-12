@@ -67,7 +67,13 @@ class Tokenizer {
       identifier: /[a-zA-Z_][a-zA-Z0-9_]*'?(?::(?:u|i)\d+)?/,
       // Operators that may appear as symbols
       logical_operator: /&&|[|][|]/,
-      operator: /\/\/|[+*&|/%^-]|~>\[\d+\]|<~\[\d+\]|>>>|>>|<</,
+      op_or: /\|/,
+      op_xor: /\^/,
+      op_and: /&/,
+      op_shift: />>>|>>|<</,
+      op_add: /[+-]/,
+      op_mul: /\/\/|[*/%]/,
+      op_rotate: /~>\[\d+\]|<~\[\d+\]/,
       // An assignment operator which will write a value to the left-hand side
       comparison: /==|!=|>=|<=|>|</,
       assignment: /=/,

@@ -678,6 +678,19 @@ export default class Machine {
           // 39
           // IP += 0x1
           this.mem16[5] = this.mem16[5] + 0x1
+          this.mem8[0] = (this.mem8[0] & ~0x1) | (((this.mem16[18] < 256 && ((this.mem16[18] & 64) >>> 0) === 0) ? (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((this.mem16[18] & 8) >>> 0) > 0 ? (this.mem16[13] < (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)) ? 1 : 0) : (((((((this.mem16[13] & this.mem16[14]) >>> 0) | ((((this.mem16[13] | this.mem16[14]) >>> 0) & ~ this.mem32[8]) >>> 0)) >>> 0) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 7 : 15)) & 1) >>> 0))) : ((this.mem8[0]) & 0x1)) & 0x1)
+          this.mem8[0] = (this.mem8[0] & ~0x10) | (((this.mem16[18] < 256 ? (((((this.mem16[13] ^ this.mem16[14]) ^ ((this.mem32[8] & 255) >>> 0)) >> 4) & 1) >>> 0) : ((this.mem8[0] >> 4) & 0x1)) & 0x1) << 4)
+          this.mem8[0] = (this.mem8[0] & ~0x2) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 8) >>> 0) > 0 ? 1 : 0) : ((this.mem8[0] >> 1) & 0x1)) & 0x1) << 1)
+          this.mem16[19] = this.mem8[1]
+          this.mem16[13] = (((this.mem8[0] >> 1) & 0x1) === 0 ? ((((this.mem8[1] & 15) >>> 0) > 9 || ((this.mem8[0] >> 4) & 0x1) === 1) ? 6 : 0) : (((this.mem8[0] >> 4) & 0x1) === 1 ? 6 : 0))
+          this.mem16[14] = (((this.mem8[0] >> 1) & 0x1) === 0 ? ((this.mem8[1] > 153 || ((this.mem8[0]) & 0x1) === 1) ? 96 : 0) : (((this.mem8[0]) & 0x1) === 1 ? 96 : 0))
+          this.mem8[1] = (((this.mem8[0] >> 1) & 0x1) === 0 ? ((this.mem8[1] + this.mem16[13]) + this.mem16[14]) : ((this.mem8[1] - this.mem16[13]) - this.mem16[14]))
+          this.mem8[0] = (this.mem8[0] & ~0x1) | (((((this.mem8[0]) & 0x1) === 1 || (((this.mem8[0] >> 1) & 0x1) === 0 && this.mem16[19] > 153)) ? 1 : 0) & 0x1)
+          this.mem8[0] = (this.mem8[0] & ~0x10) | (((((this.mem8[0] >> 1) & 0x1) === 0 ? (((this.mem16[19] & 15) >>> 0) > 9 ? 1 : 0) : ((((this.mem16[19] ^ this.mem8[1]) & 16) >>> 0) > 0 ? 1 : 0)) & 0x1) << 4)
+          this.mem8[0] = (this.mem8[0] & ~0x80) | (((((this.mem8[1] & 128) >>> 0) > 0 ? 1 : 0) & 0x1) << 7)
+          this.mem8[0] = (this.mem8[0] & ~0x40) | (((((this.mem8[1] & 255) >>> 0) === 0 ? 1 : 0) & 0x1) << 6)
+          this.mem8[0] = (this.mem8[0] & ~0x4) | ((this.mem8[(64 + ((this.mem8[1] & 255) >>> 0))] & 0x1) << 2)
+          this.mem16[18] = 256
           break outer;
         case 0x28:
           // 40
@@ -2684,7 +2697,7 @@ export default class Machine {
               // 64
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[3] >> 0) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[3] >> 0) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2694,7 +2707,7 @@ export default class Machine {
               // 65
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[2] >> 0) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[2] >> 0) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2704,7 +2717,7 @@ export default class Machine {
               // 66
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[5] >> 0) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[5] >> 0) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2714,7 +2727,7 @@ export default class Machine {
               // 67
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[4] >> 0) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[4] >> 0) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2724,7 +2737,7 @@ export default class Machine {
               // 68
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[7] >> 0) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[7] >> 0) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2734,7 +2747,7 @@ export default class Machine {
               // 69
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 0) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[6] >> 0) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2743,7 +2756,7 @@ export default class Machine {
               // 203
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 0) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + this.mem16[3])] >> 0) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2753,7 +2766,7 @@ export default class Machine {
               // 71
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[1] >> 0) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[1] >> 0) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2763,7 +2776,7 @@ export default class Machine {
               // 72
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[3] >> 1) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[3] >> 1) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2773,7 +2786,7 @@ export default class Machine {
               // 73
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[2] >> 1) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[2] >> 1) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2783,7 +2796,7 @@ export default class Machine {
               // 74
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[5] >> 1) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[5] >> 1) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2793,7 +2806,7 @@ export default class Machine {
               // 75
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[4] >> 1) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[4] >> 1) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2803,7 +2816,7 @@ export default class Machine {
               // 76
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[7] >> 1) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[7] >> 1) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2813,7 +2826,7 @@ export default class Machine {
               // 77
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 1) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[6] >> 1) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2822,7 +2835,7 @@ export default class Machine {
               // 203
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 1) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + this.mem16[3])] >> 1) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2832,7 +2845,7 @@ export default class Machine {
               // 79
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[1] >> 1) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[1] >> 1) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2842,7 +2855,7 @@ export default class Machine {
               // 80
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[3] >> 2) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[3] >> 2) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2852,7 +2865,7 @@ export default class Machine {
               // 81
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[2] >> 2) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[2] >> 2) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2862,7 +2875,7 @@ export default class Machine {
               // 82
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[5] >> 2) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[5] >> 2) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2872,7 +2885,7 @@ export default class Machine {
               // 83
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[4] >> 2) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[4] >> 2) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2882,7 +2895,7 @@ export default class Machine {
               // 84
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[7] >> 2) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[7] >> 2) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2892,7 +2905,7 @@ export default class Machine {
               // 85
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 2) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[6] >> 2) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2901,7 +2914,7 @@ export default class Machine {
               // 203
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 2) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + this.mem16[3])] >> 2) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2911,7 +2924,7 @@ export default class Machine {
               // 87
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[1] >> 2) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[1] >> 2) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2921,7 +2934,7 @@ export default class Machine {
               // 88
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[3] >> 3) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[3] >> 3) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2931,7 +2944,7 @@ export default class Machine {
               // 89
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[2] >> 3) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[2] >> 3) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2941,7 +2954,7 @@ export default class Machine {
               // 90
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[5] >> 3) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[5] >> 3) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2951,7 +2964,7 @@ export default class Machine {
               // 91
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[4] >> 3) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[4] >> 3) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2961,7 +2974,7 @@ export default class Machine {
               // 92
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[7] >> 3) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[7] >> 3) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2971,7 +2984,7 @@ export default class Machine {
               // 93
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 3) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[6] >> 3) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2980,7 +2993,7 @@ export default class Machine {
               // 203
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 3) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + this.mem16[3])] >> 3) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -2990,7 +3003,7 @@ export default class Machine {
               // 95
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[1] >> 3) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[1] >> 3) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3000,7 +3013,7 @@ export default class Machine {
               // 96
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[3] >> 4) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[3] >> 4) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3010,7 +3023,7 @@ export default class Machine {
               // 97
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[2] >> 4) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[2] >> 4) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3020,7 +3033,7 @@ export default class Machine {
               // 98
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[5] >> 4) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[5] >> 4) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3030,7 +3043,7 @@ export default class Machine {
               // 99
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[4] >> 4) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[4] >> 4) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3040,7 +3053,7 @@ export default class Machine {
               // 100
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[7] >> 4) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[7] >> 4) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3050,7 +3063,7 @@ export default class Machine {
               // 101
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 4) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[6] >> 4) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3059,7 +3072,7 @@ export default class Machine {
               // 203
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 4) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + this.mem16[3])] >> 4) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3069,7 +3082,7 @@ export default class Machine {
               // 103
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[1] >> 4) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[1] >> 4) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3079,7 +3092,7 @@ export default class Machine {
               // 104
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[3] >> 5) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[3] >> 5) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3089,7 +3102,7 @@ export default class Machine {
               // 105
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[2] >> 5) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[2] >> 5) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3099,7 +3112,7 @@ export default class Machine {
               // 106
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[5] >> 5) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[5] >> 5) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3109,7 +3122,7 @@ export default class Machine {
               // 107
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[4] >> 5) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[4] >> 5) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3119,7 +3132,7 @@ export default class Machine {
               // 108
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[7] >> 5) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[7] >> 5) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3129,7 +3142,7 @@ export default class Machine {
               // 109
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 5) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[6] >> 5) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3138,7 +3151,7 @@ export default class Machine {
               // 203
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 5) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + this.mem16[3])] >> 5) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3148,7 +3161,7 @@ export default class Machine {
               // 111
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[1] >> 5) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[1] >> 5) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3158,7 +3171,7 @@ export default class Machine {
               // 112
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[3] >> 6) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[3] >> 6) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3168,7 +3181,7 @@ export default class Machine {
               // 113
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[2] >> 6) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[2] >> 6) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3178,7 +3191,7 @@ export default class Machine {
               // 114
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[5] >> 6) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[5] >> 6) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3188,7 +3201,7 @@ export default class Machine {
               // 115
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[4] >> 6) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[4] >> 6) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3198,7 +3211,7 @@ export default class Machine {
               // 116
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[7] >> 6) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[7] >> 6) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3208,7 +3221,7 @@ export default class Machine {
               // 117
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 6) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[6] >> 6) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3217,7 +3230,7 @@ export default class Machine {
               // 203
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 6) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + this.mem16[3])] >> 6) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3227,7 +3240,7 @@ export default class Machine {
               // 119
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[1] >> 6) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[1] >> 6) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3237,7 +3250,7 @@ export default class Machine {
               // 120
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[3] >> 7) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[3] >> 7) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3247,7 +3260,7 @@ export default class Machine {
               // 121
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[2] >> 7) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[2] >> 7) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3257,7 +3270,7 @@ export default class Machine {
               // 122
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[5] >> 7) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[5] >> 7) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3267,7 +3280,7 @@ export default class Machine {
               // 123
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[4] >> 7) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[4] >> 7) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3277,7 +3290,7 @@ export default class Machine {
               // 124
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[7] >> 7) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[7] >> 7) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3287,7 +3300,7 @@ export default class Machine {
               // 125
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[6] >> 7) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[6] >> 7) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3296,7 +3309,7 @@ export default class Machine {
               // 203
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + this.mem16[3])] >> 7) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + this.mem16[3])] >> 7) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -3306,7 +3319,7 @@ export default class Machine {
               // 127
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
-              this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[1] >> 7) & 1) >>> 0) & 0x1) << 6)
+              this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[1] >> 7) & 1) >>> 0) & 0x1) << 6)
               this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
               this.mem16[18] = 256
@@ -4921,7 +4934,7 @@ export default class Machine {
                   // 70
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 0) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[6] + v_0))] >> 0) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -4934,7 +4947,7 @@ export default class Machine {
                   // 78
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 1) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[6] + v_0))] >> 1) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -4947,7 +4960,7 @@ export default class Machine {
                   // 86
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 2) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[6] + v_0))] >> 2) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -4960,7 +4973,7 @@ export default class Machine {
                   // 94
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 3) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[6] + v_0))] >> 3) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -4973,7 +4986,7 @@ export default class Machine {
                   // 102
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 4) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[6] + v_0))] >> 4) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -4986,7 +4999,7 @@ export default class Machine {
                   // 110
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 5) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[6] + v_0))] >> 5) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -4999,7 +5012,7 @@ export default class Machine {
                   // 118
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 6) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[6] + v_0))] >> 6) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -5012,7 +5025,7 @@ export default class Machine {
                   // 126
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[6] + v_0))] >> 7) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[6] + v_0))] >> 7) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -5250,7 +5263,7 @@ export default class Machine {
           // 224
           // IP += 0x1
           this.mem16[5] = this.mem16[5] + 0x1
-          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (((this.mem16[13] ^ this.mem32[8]) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
+          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (this.mem16[13] ^ this.mem32[8])) >>> 0) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
           if (((this.mem8[0] >> 2) & 0x1) === 0) {
             this.mem16[5] = ((320 + this.mem16[4]) & 0x1 ? (this.mem16[((320 + this.mem16[4])) >> 1] >> 8) | ((this.mem16[(((320 + this.mem16[4])) >> 1) + 1] & 0xff) << 8) : this.mem16[((320 + this.mem16[4])) >> 1])
             this.mem16[4] = (this.mem16[4] + 2)
@@ -5271,7 +5284,7 @@ export default class Machine {
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
           // IP += 0x3
           this.mem16[5] = this.mem16[5] + 0x3
-          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (((this.mem16[13] ^ this.mem32[8]) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
+          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (this.mem16[13] ^ this.mem32[8])) >>> 0) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
           this.mem16[5] = (((this.mem8[0] >> 2) & 0x1) === 0 ? v_0 : this.mem16[5])
           break outer;
         case 0xe3:
@@ -5289,7 +5302,7 @@ export default class Machine {
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
           // IP += 0x3
           this.mem16[5] = this.mem16[5] + 0x3
-          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (((this.mem16[13] ^ this.mem32[8]) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
+          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (this.mem16[13] ^ this.mem32[8])) >>> 0) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
           if (((this.mem8[0] >> 2) & 0x1) === 0) {
             this.mem16[4] = (this.mem16[4] - 2)
             if ((320 + this.mem16[4]) & 0x1) { const _value = this.mem16[5]; this.mem8[(320 + this.mem16[4])] = _value; this.mem8[((320 + this.mem16[4])) + 1] = _value >> 8; } else { this.mem16[((320 + this.mem16[4])) >> 1] = this.mem16[5]; }
@@ -5329,7 +5342,7 @@ export default class Machine {
           // 232
           // IP += 0x1
           this.mem16[5] = this.mem16[5] + 0x1
-          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (((this.mem16[13] ^ this.mem32[8]) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
+          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (this.mem16[13] ^ this.mem32[8])) >>> 0) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
           if (((this.mem8[0] >> 2) & 0x1) === 1) {
             this.mem16[5] = ((320 + this.mem16[4]) & 0x1 ? (this.mem16[((320 + this.mem16[4])) >> 1] >> 8) | ((this.mem16[(((320 + this.mem16[4])) >> 1) + 1] & 0xff) << 8) : this.mem16[((320 + this.mem16[4])) >> 1])
             this.mem16[4] = (this.mem16[4] + 2)
@@ -5348,7 +5361,7 @@ export default class Machine {
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
           // IP += 0x3
           this.mem16[5] = this.mem16[5] + 0x3
-          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (((this.mem16[13] ^ this.mem32[8]) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
+          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (this.mem16[13] ^ this.mem32[8])) >>> 0) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
           this.mem16[5] = (((this.mem8[0] >> 2) & 0x1) === 1 ? v_0 : this.mem16[5])
           break outer;
         case 0xeb:
@@ -5367,7 +5380,7 @@ export default class Machine {
           v_0 = (b1 & 0xffff); // 1 , 0 , 0 , 3
           // IP += 0x3
           this.mem16[5] = this.mem16[5] + 0x3
-          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (((this.mem16[13] ^ this.mem32[8]) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
+          this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[18] < 256 ? ((((this.mem16[18] & 32) >>> 0) > 0 ? this.mem8[(64 + ((this.mem32[8] & 255) >>> 0))] : (((((((this.mem16[18] & 4) >>> 0) === 0 ? 128 : 32768) & (this.mem16[13] ^ this.mem32[8])) >>> 0) & ((((this.mem16[18] & 8) >>> 0) > 0 ? this.mem16[13] : this.mem32[8]) ^ (this.mem16[14] + ((this.mem16[18] & 1) >>> 0)))) >>> 0)) > 0 ? 1 : 0) : ((this.mem8[0] >> 2) & 0x1)) & 0x1) << 2)
           if (((this.mem8[0] >> 2) & 0x1) === 1) {
             this.mem16[4] = (this.mem16[4] - 2)
             if ((320 + this.mem16[4]) & 0x1) { const _value = this.mem16[5]; this.mem8[(320 + this.mem16[4])] = _value; this.mem8[((320 + this.mem16[4])) + 1] = _value >> 8; } else { this.mem16[((320 + this.mem16[4])) >> 1] = this.mem16[5]; }
@@ -5637,6 +5650,14 @@ export default class Machine {
               // 103
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[19] = this.mem8[(320 + this.mem16[3])]
+              this.mem8[(320 + this.mem16[3])] = ((((((this.mem8[1] & 15) >>> 0) << 4) >>> 0) | (((this.mem16[19] >> 4) & 15) >>> 0)) >>> 0)
+              this.mem16[13] = this.mem8[1]
+              this.mem32[8] = ((((this.mem8[1] & 240) >>> 0) | ((this.mem16[19] & 15) >>> 0)) >>> 0)
+              this.mem8[1] = this.mem32[8]
+              this.mem8[0] = (this.mem8[0] & ~0x10) | ((0 & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+              this.mem16[18] = 96
               break outer;
             case 0x68:
               // 237
@@ -5679,6 +5700,14 @@ export default class Machine {
               // 111
               // IP += 0x2
               this.mem16[5] = this.mem16[5] + 0x2
+              this.mem16[19] = this.mem8[(320 + this.mem16[3])]
+              this.mem8[(320 + this.mem16[3])] = ((((((this.mem16[19] & 15) >>> 0) << 4) >>> 0) | ((this.mem8[1] & 15) >>> 0)) >>> 0)
+              this.mem16[13] = this.mem8[1]
+              this.mem32[8] = ((((this.mem8[1] & 240) >>> 0) | (((this.mem16[19] >> 4) & 15) >>> 0)) >>> 0)
+              this.mem8[1] = this.mem32[8]
+              this.mem8[0] = (this.mem8[0] & ~0x10) | ((0 & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
+              this.mem16[18] = 96
               break outer;
             case 0x70:
               // 237
@@ -5779,7 +5808,7 @@ export default class Machine {
               this.mem16[1] = (this.mem16[1] - 1)
               this.mem8[0] = (this.mem8[0] & ~0x80) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 4) >>> 0) === 0 ? (((this.mem32[8] & 128) >>> 0) >> 7) : (((this.mem32[8] & 32768) >>> 0) >> 15)) : ((this.mem8[0] >> 7) & 0x1)) & 0x1) << 7)
               this.mem8[0] = (this.mem8[0] & ~0x40) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 4) >>> 0) === 0 ? (((this.mem32[8] & 255) >>> 0) === 0 ? 1 : 0) : (((this.mem32[8] & 65535) >>> 0) === 0 ? 1 : 0)) : ((this.mem8[0] >> 6) & 0x1)) & 0x1) << 6)
-              this.mem8[0] = (this.mem8[0] & ~0x10) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 128) >>> 0) > 0 ? 1 : (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : ((((this.mem16[13] ^ (this.mem16[14] ^ this.mem32[8])) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 4 : 12)) & 1) >>> 0))) : ((this.mem8[0] >> 4) & 0x1)) & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 128) >>> 0) > 0 ? 1 : (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((((this.mem16[13] ^ this.mem16[14]) ^ this.mem32[8]) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 4 : 12)) & 1) >>> 0))) : ((this.mem8[0] >> 4) & 0x1)) & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 8) >>> 0) > 0 ? 1 : 0) : ((this.mem8[0] >> 1) & 0x1)) & 0x1) << 1)
               this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[1] !== 0 ? 1 : 0) & 0x1) << 2)
               this.mem16[18] = 256
@@ -5835,7 +5864,7 @@ export default class Machine {
               this.mem16[1] = (this.mem16[1] - 1)
               this.mem8[0] = (this.mem8[0] & ~0x80) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 4) >>> 0) === 0 ? (((this.mem32[8] & 128) >>> 0) >> 7) : (((this.mem32[8] & 32768) >>> 0) >> 15)) : ((this.mem8[0] >> 7) & 0x1)) & 0x1) << 7)
               this.mem8[0] = (this.mem8[0] & ~0x40) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 4) >>> 0) === 0 ? (((this.mem32[8] & 255) >>> 0) === 0 ? 1 : 0) : (((this.mem32[8] & 65535) >>> 0) === 0 ? 1 : 0)) : ((this.mem8[0] >> 6) & 0x1)) & 0x1) << 6)
-              this.mem8[0] = (this.mem8[0] & ~0x10) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 128) >>> 0) > 0 ? 1 : (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : ((((this.mem16[13] ^ (this.mem16[14] ^ this.mem32[8])) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 4 : 12)) & 1) >>> 0))) : ((this.mem8[0] >> 4) & 0x1)) & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 128) >>> 0) > 0 ? 1 : (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((((this.mem16[13] ^ this.mem16[14]) ^ this.mem32[8]) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 4 : 12)) & 1) >>> 0))) : ((this.mem8[0] >> 4) & 0x1)) & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 8) >>> 0) > 0 ? 1 : 0) : ((this.mem8[0] >> 1) & 0x1)) & 0x1) << 1)
               this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[1] !== 0 ? 1 : 0) & 0x1) << 2)
               this.mem16[18] = 256
@@ -5892,7 +5921,7 @@ export default class Machine {
               this.mem16[1] = (this.mem16[1] - 1)
               this.mem8[0] = (this.mem8[0] & ~0x80) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 4) >>> 0) === 0 ? (((this.mem32[8] & 128) >>> 0) >> 7) : (((this.mem32[8] & 32768) >>> 0) >> 15)) : ((this.mem8[0] >> 7) & 0x1)) & 0x1) << 7)
               this.mem8[0] = (this.mem8[0] & ~0x40) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 4) >>> 0) === 0 ? (((this.mem32[8] & 255) >>> 0) === 0 ? 1 : 0) : (((this.mem32[8] & 65535) >>> 0) === 0 ? 1 : 0)) : ((this.mem8[0] >> 6) & 0x1)) & 0x1) << 6)
-              this.mem8[0] = (this.mem8[0] & ~0x10) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 128) >>> 0) > 0 ? 1 : (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : ((((this.mem16[13] ^ (this.mem16[14] ^ this.mem32[8])) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 4 : 12)) & 1) >>> 0))) : ((this.mem8[0] >> 4) & 0x1)) & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 128) >>> 0) > 0 ? 1 : (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((((this.mem16[13] ^ this.mem16[14]) ^ this.mem32[8]) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 4 : 12)) & 1) >>> 0))) : ((this.mem8[0] >> 4) & 0x1)) & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 8) >>> 0) > 0 ? 1 : 0) : ((this.mem8[0] >> 1) & 0x1)) & 0x1) << 1)
               this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[1] !== 0 ? 1 : 0) & 0x1) << 2)
               this.mem16[18] = 256
@@ -5952,7 +5981,7 @@ export default class Machine {
               this.mem16[1] = (this.mem16[1] - 1)
               this.mem8[0] = (this.mem8[0] & ~0x80) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 4) >>> 0) === 0 ? (((this.mem32[8] & 128) >>> 0) >> 7) : (((this.mem32[8] & 32768) >>> 0) >> 15)) : ((this.mem8[0] >> 7) & 0x1)) & 0x1) << 7)
               this.mem8[0] = (this.mem8[0] & ~0x40) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 4) >>> 0) === 0 ? (((this.mem32[8] & 255) >>> 0) === 0 ? 1 : 0) : (((this.mem32[8] & 65535) >>> 0) === 0 ? 1 : 0)) : ((this.mem8[0] >> 6) & 0x1)) & 0x1) << 6)
-              this.mem8[0] = (this.mem8[0] & ~0x10) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 128) >>> 0) > 0 ? 1 : (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : ((((this.mem16[13] ^ (this.mem16[14] ^ this.mem32[8])) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 4 : 12)) & 1) >>> 0))) : ((this.mem8[0] >> 4) & 0x1)) & 0x1) << 4)
+              this.mem8[0] = (this.mem8[0] & ~0x10) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 128) >>> 0) > 0 ? 1 : (((this.mem16[18] & 32) >>> 0) > 0 ? 0 : (((((this.mem16[13] ^ this.mem16[14]) ^ this.mem32[8]) >> (((this.mem16[18] & 4) >>> 0) === 0 ? 4 : 12)) & 1) >>> 0))) : ((this.mem8[0] >> 4) & 0x1)) & 0x1) << 4)
               this.mem8[0] = (this.mem8[0] & ~0x2) | (((this.mem16[18] < 256 ? (((this.mem16[18] & 8) >>> 0) > 0 ? 1 : 0) : ((this.mem8[0] >> 1) & 0x1)) & 0x1) << 1)
               this.mem8[0] = (this.mem8[0] & ~0x4) | (((this.mem16[1] !== 0 ? 1 : 0) & 0x1) << 2)
               this.mem16[18] = 256
@@ -6671,7 +6700,7 @@ export default class Machine {
                   // 70
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 0) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[7] + v_0))] >> 0) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -6684,7 +6713,7 @@ export default class Machine {
                   // 78
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 1) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[7] + v_0))] >> 1) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -6697,7 +6726,7 @@ export default class Machine {
                   // 86
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 2) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[7] + v_0))] >> 2) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -6710,7 +6739,7 @@ export default class Machine {
                   // 94
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 3) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[7] + v_0))] >> 3) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -6723,7 +6752,7 @@ export default class Machine {
                   // 102
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 4) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[7] + v_0))] >> 4) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -6736,7 +6765,7 @@ export default class Machine {
                   // 110
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 5) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[7] + v_0))] >> 5) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -6749,7 +6778,7 @@ export default class Machine {
                   // 118
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 6) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[7] + v_0))] >> 6) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256
@@ -6762,7 +6791,7 @@ export default class Machine {
                   // 126
                   // IP += 0x4
                   this.mem16[5] = this.mem16[5] + 0x4
-                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((~ (((this.mem8[(320 + (this.mem16[7] + v_0))] >> 7) & 1) >>> 0) & 0x1) << 6)
+                  this.mem8[0] = (this.mem8[0] & ~0x40) | ((((~ (this.mem8[(320 + (this.mem16[7] + v_0))] >> 7) & 1) >>> 0) & 0x1) << 6)
                   this.mem8[0] = (this.mem8[0] & ~0x10) | ((1 & 0x1) << 4)
                   this.mem8[0] = (this.mem8[0] & ~0x2) | ((0 & 0x1) << 1)
                   this.mem16[18] = 256

@@ -40,7 +40,13 @@ const identifier = { test: (x: Token) => x.type === 'identifier' };
 const number = { test: (x: Token) => x.type === 'number' };
 const comparison = { test: (x: Token) => x.type === 'comparison' };
 const logical_operator = { test: (x: Token) => x.type === 'logical_operator' };
-const operator = { test: (x: Token) => x.type === 'operator' };
+const op_or = { test: (x: Token) => x.type === 'op_or' };
+const op_xor = { test: (x: Token) => x.type === 'op_xor' };
+const op_and = { test: (x: Token) => x.type === 'op_and' };
+const op_shift = { test: (x: Token) => x.type === 'op_shift' };
+const op_add = { test: (x: Token) => x.type === 'op_add' };
+const op_mul = { test: (x: Token) => x.type === 'op_mul' };
+const op_rotate = { test: (x: Token) => x.type === 'op_rotate' };
 const unary_operator = { test: (x: Token) => x.type === 'unary_operator' };
 const unary_logic_operator = { test: (x: Token) => x.type === 'unary_logic_operator' };
 const assignment = { test: (x: Token) => x.type === 'assignment' };
@@ -148,21 +154,36 @@ const grammar: Grammar = {
     {"name": "assignment$ebnf$1$subexpression$1", "symbols": [list_delimiter, "operand"]},
     {"name": "assignment$ebnf$1", "symbols": ["assignment$ebnf$1", "assignment$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
     {"name": "assignment", "symbols": [macro_start, list_start, "operand", "assignment$ebnf$1", list_end, list_start, "expression", list_end, macro_end, assignment, "expression"], "postprocess": (data) => new AssignmentNode(new ChoiceExpressionNode([data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))], data[6], data[7].coercion), data[10])},
-    {"name": "expression", "symbols": [left_paren, "expression", right_paren], "postprocess": (data) => new ExpressionNode(data[1])},
     {"name": "expression", "symbols": ["comparison", ternary_if, "expression", ternary_else, "expression"], "postprocess": (data) => new TernaryExpressionNode(data[0], data[2], data[4])},
-    {"name": "expression", "symbols": ["expression", operator, "expression"], "postprocess": (data) => new BinaryExpressionNode(data[0], data[1].value.toString(), data[2])},
-    {"name": "expression", "symbols": [unary_operator, "expression"], "postprocess": (data) => new UnaryExpressionNode(data[1], data[0].value.toString())},
-    {"name": "expression$ebnf$1", "symbols": []},
-    {"name": "expression$ebnf$1$subexpression$1", "symbols": [list_delimiter, "expression"]},
-    {"name": "expression$ebnf$1", "symbols": ["expression$ebnf$1", "expression$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "expression", "symbols": ["named", left_paren, "expression", "expression$ebnf$1", right_paren], "postprocess": (data) => new CallExpressionNode(data[0].value.toString(), [data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))])},
-    {"name": "expression", "symbols": [raise, "operand"], "postprocess": (data) => new RaiseExpressionNode(data[1])},
-    {"name": "expression", "symbols": [macro_start, identifier, macro_end], "postprocess": (data) => new OperandNode(data[1].value, data[1].coercion)},
-    {"name": "expression$ebnf$2", "symbols": []},
-    {"name": "expression$ebnf$2$subexpression$1", "symbols": [list_delimiter, "operand"]},
-    {"name": "expression$ebnf$2", "symbols": ["expression$ebnf$2", "expression$ebnf$2$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "expression", "symbols": [macro_start, list_start, "operand", "expression$ebnf$2", list_end, list_start, "expression", list_end, macro_end], "postprocess": (data) => new ChoiceExpressionNode([data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))], data[6], data[7].coercion)},
-    {"name": "expression", "symbols": ["operand"], "postprocess": (data) => new ExpressionNode(data[0])},
+    {"name": "expression", "symbols": ["expr_or"], "postprocess": (data) => data[0]},
+    {"name": "expr_or", "symbols": ["expr_or", op_or, "expr_xor"], "postprocess": (data) => new BinaryExpressionNode(data[0], data[1].value.toString(), data[2])},
+    {"name": "expr_or", "symbols": ["expr_xor"], "postprocess": (data) => data[0]},
+    {"name": "expr_xor", "symbols": ["expr_xor", op_xor, "expr_and"], "postprocess": (data) => new BinaryExpressionNode(data[0], data[1].value.toString(), data[2])},
+    {"name": "expr_xor", "symbols": ["expr_and"], "postprocess": (data) => data[0]},
+    {"name": "expr_and", "symbols": ["expr_and", op_and, "expr_shift"], "postprocess": (data) => new BinaryExpressionNode(data[0], data[1].value.toString(), data[2])},
+    {"name": "expr_and", "symbols": ["expr_shift"], "postprocess": (data) => data[0]},
+    {"name": "expr_shift", "symbols": ["expr_shift", op_shift, "expr_add"], "postprocess": (data) => new BinaryExpressionNode(data[0], data[1].value.toString(), data[2])},
+    {"name": "expr_shift", "symbols": ["expr_add"], "postprocess": (data) => data[0]},
+    {"name": "expr_add", "symbols": ["expr_add", op_add, "expr_mul"], "postprocess": (data) => new BinaryExpressionNode(data[0], data[1].value.toString(), data[2])},
+    {"name": "expr_add", "symbols": ["expr_mul"], "postprocess": (data) => data[0]},
+    {"name": "expr_mul", "symbols": ["expr_mul", op_mul, "expr_rotate"], "postprocess": (data) => new BinaryExpressionNode(data[0], data[1].value.toString(), data[2])},
+    {"name": "expr_mul", "symbols": ["expr_rotate"], "postprocess": (data) => data[0]},
+    {"name": "expr_rotate", "symbols": ["expr_rotate", op_rotate, "expr_unary"], "postprocess": (data) => new BinaryExpressionNode(data[0], data[1].value.toString(), data[2])},
+    {"name": "expr_rotate", "symbols": ["expr_unary"], "postprocess": (data) => data[0]},
+    {"name": "expr_unary", "symbols": [unary_operator, "expr_unary"], "postprocess": (data) => new UnaryExpressionNode(data[1], data[0].value.toString())},
+    {"name": "expr_unary", "symbols": ["expr_atom"], "postprocess": (data) => data[0]},
+    {"name": "expr_atom", "symbols": [left_paren, "expression", right_paren], "postprocess": (data) => new ExpressionNode(data[1])},
+    {"name": "expr_atom$ebnf$1", "symbols": []},
+    {"name": "expr_atom$ebnf$1$subexpression$1", "symbols": [list_delimiter, "expression"]},
+    {"name": "expr_atom$ebnf$1", "symbols": ["expr_atom$ebnf$1", "expr_atom$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
+    {"name": "expr_atom", "symbols": ["named", left_paren, "expression", "expr_atom$ebnf$1", right_paren], "postprocess": (data) => new CallExpressionNode(data[0].value.toString(), [data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))])},
+    {"name": "expr_atom", "symbols": [raise, "operand"], "postprocess": (data) => new RaiseExpressionNode(data[1])},
+    {"name": "expr_atom", "symbols": [macro_start, identifier, macro_end], "postprocess": (data) => new OperandNode(data[1].value, data[1].coercion)},
+    {"name": "expr_atom$ebnf$2", "symbols": []},
+    {"name": "expr_atom$ebnf$2$subexpression$1", "symbols": [list_delimiter, "operand"]},
+    {"name": "expr_atom$ebnf$2", "symbols": ["expr_atom$ebnf$2", "expr_atom$ebnf$2$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
+    {"name": "expr_atom", "symbols": [macro_start, list_start, "operand", "expr_atom$ebnf$2", list_end, list_start, "expression", list_end, macro_end], "postprocess": (data) => new ChoiceExpressionNode([data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))], data[6], data[7].coercion)},
+    {"name": "expr_atom", "symbols": ["operand"], "postprocess": (data) => new ExpressionNode(data[0])},
     {"name": "comparison", "symbols": [left_paren, "comparison", right_paren], "postprocess": (data) => new ComparisonNode(data[1])},
     {"name": "comparison", "symbols": [unary_logic_operator, "comparison"], "postprocess": (data) => new UnaryLogicNode(data[0].value.toString(), data[1])},
     {"name": "comparison", "symbols": ["comparison_operand", comparison, "comparison_operand"], "postprocess": (data) => new ComparisonEvaluationNode(data[0][0], data[1].value.toString(), data[2][0])},

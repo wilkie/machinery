@@ -12,6 +12,23 @@ const caseInsensitiveKeywords = (map: Record<string, string[]>) => {
 };
 
 const registerMap: Record<string, { type: string; name: string; size: number }> = {
+  '(imm)': { type: 'register', name: '(imm)', size: 0 },
+  '0': { type: 'register', name: '0', size: 0 },
+  '0x00': { type: 'register', name: '0x00', size: 0 },
+  '0x08': { type: 'register', name: '0x08', size: 0 },
+  '0x10': { type: 'register', name: '0x10', size: 0 },
+  '0x18': { type: 'register', name: '0x18', size: 0 },
+  '0x20': { type: 'register', name: '0x20', size: 0 },
+  '0x28': { type: 'register', name: '0x28', size: 0 },
+  '0x30': { type: 'register', name: '0x30', size: 0 },
+  '0x38': { type: 'register', name: '0x38', size: 0 },
+  '1': { type: 'register', name: '1', size: 0 },
+  '2': { type: 'register', name: '2', size: 0 },
+  '3': { type: 'register', name: '3', size: 0 },
+  '4': { type: 'register', name: '4', size: 0 },
+  '5': { type: 'register', name: '5', size: 0 },
+  '6': { type: 'register', name: '6', size: 0 },
+  '7': { type: 'register', name: '7', size: 0 },
   'A': { type: 'register', name: 'A', size: 8 },
   'AF': { type: 'register', name: 'AF', size: 16 },
   'AF\'': { type: 'register', name: 'AF\'', size: 16 },
@@ -27,8 +44,15 @@ const registerMap: Record<string, { type: string; name: string; size: number }> 
   'IX': { type: 'register', name: 'IX', size: 16 },
   'IY': { type: 'register', name: 'IY', size: 16 },
   'L': { type: 'register', name: 'L', size: 8 },
+  'M': { type: 'register', name: 'M', size: 0 },
+  'NC': { type: 'register', name: 'NC', size: 0 },
+  'NZ': { type: 'register', name: 'NZ', size: 0 },
+  'P': { type: 'register', name: 'P', size: 0 },
+  'PE': { type: 'register', name: 'PE', size: 0 },
+  'PO': { type: 'register', name: 'PO', size: 0 },
   'R': { type: 'register', name: 'R', size: 8 },
   'SP': { type: 'register', name: 'SP', size: 16 },
+  'Z': { type: 'register', name: 'Z', size: 0 },
 };
 
 const segmentRegisters = new Set<string>([]);
@@ -59,8 +83,8 @@ const lexer = moo.compile({
   ident: {
     match: /[a-zA-Z_][a-zA-Z0-9_]*'?/,
     type: caseInsensitiveKeywords({
-      mnemonic: ['ADC', 'ADD', 'AND', 'BIT', 'CALL', 'CALL C', 'CALL M', 'CALL NC', 'CALL NZ', 'CALL P', 'CALL PE', 'CALL PO', 'CALL Z', 'CCF', 'CP', 'CPD', 'CPDR', 'CPI', 'CPIR', 'CPL', 'DAA', 'DEC', 'DI', 'DJNZ', 'EI', 'EX', 'EXX', 'HALT', 'IM', 'IN', 'INC', 'IND', 'INDR', 'INI', 'INIR', 'JP', 'JP C', 'JP M', 'JP NC', 'JP NZ', 'JP P', 'JP PE', 'JP PO', 'JP Z', 'JR', 'JR C', 'JR NC', 'JR NZ', 'JR Z', 'LD', 'LDD', 'LDDR', 'LDI', 'LDIR', 'NEG', 'NOP', 'OR', 'OTDR', 'OTIR', 'OUT', 'OUTD', 'OUTI', 'POP', 'PUSH', 'RES', 'RET', 'RET C', 'RET M', 'RET NC', 'RET NZ', 'RET P', 'RET PE', 'RET PO', 'RET Z', 'RETF', 'RETI', 'RETN', 'RL', 'RLA', 'RLC', 'RLCA', 'RLD', 'RR', 'RRA', 'RRC', 'RRCA', 'RRD', 'RST', 'SBC', 'SCF', 'SET', 'SLA', 'SRA', 'SRL', 'SUB', 'XOR'],
-      register: ['A', 'AF', 'AF\'', 'B', 'BC', 'C', 'D', 'DE', 'E', 'H', 'HL', 'I', 'IX', 'IY', 'L', 'R', 'SP'],
+      mnemonic: ['ADC', 'ADD', 'AND', 'BIT', 'CALL', 'CCF', 'CP', 'CPD', 'CPDR', 'CPI', 'CPIR', 'CPL', 'DAA', 'DEC', 'DI', 'DJNZ', 'EI', 'EX', 'EXX', 'HALT', 'IM', 'IN', 'INC', 'IND', 'INDR', 'INI', 'INIR', 'JP', 'JR', 'LD', 'LDD', 'LDDR', 'LDI', 'LDIR', 'NEG', 'NOP', 'OR', 'OTDR', 'OTIR', 'OUT', 'OUTD', 'OUTI', 'POP', 'PUSH', 'RES', 'RET', 'RETF', 'RETI', 'RETN', 'RL', 'RLA', 'RLC', 'RLCA', 'RLD', 'RR', 'RRA', 'RRC', 'RRCA', 'RRD', 'RST', 'SBC', 'SCF', 'SET', 'SLA', 'SRA', 'SRL', 'SUB', 'XOR'],
+      register: ['(imm)', '0', '0x00', '0x08', '0x10', '0x18', '0x20', '0x28', '0x30', '0x38', '1', '2', '3', '4', '5', '6', '7', 'A', 'AF', 'AF\'', 'B', 'BC', 'C', 'D', 'DE', 'E', 'H', 'HL', 'I', 'IX', 'IY', 'L', 'M', 'NC', 'NZ', 'P', 'PE', 'PO', 'R', 'SP', 'Z'],
       kw_byte: ['BYTE'],
       kw_word: ['WORD'],
       kw_ptr: ['PTR'],

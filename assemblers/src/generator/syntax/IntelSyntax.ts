@@ -637,7 +637,11 @@ export class IntelSyntax implements Syntax {
     const result = new Map<string, RegisterEntry>();
     for (const name of encodedNames) {
       const size = sizeMap.get(name);
-      if (size === undefined) continue; // Not a known register
+      if (size === undefined) {
+        // Not a known register — treat as a keyword literal (e.g., condition code)
+        result.set(name, { name, size: 0 });
+        continue;
+      }
       result.set(name, { name, size });
     }
 

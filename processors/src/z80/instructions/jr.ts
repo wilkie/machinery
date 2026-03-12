@@ -21,8 +21,7 @@ export const jr: InstructionInfo = {
     // JR cc, e — conditional
     {
       opcode: [Opcodes.JR_NZ, 'REL_i8'],
-      operands: ['rel'],
-      aliases: ['jr nz'],
+      operands: ['NZ', 'rel'],
       addressing: 'relative',
       distance: 'short',
       operation: ['${RESOLVE_ZF}', 'PC = (ZF == 0) ? PC + %{rel} : PC'],
@@ -30,8 +29,7 @@ export const jr: InstructionInfo = {
     },
     {
       opcode: [Opcodes.JR_Z, 'REL_i8'],
-      operands: ['rel'],
-      aliases: ['jr z'],
+      operands: ['Z', 'rel'],
       addressing: 'relative',
       distance: 'short',
       operation: ['${RESOLVE_ZF}', 'PC = (ZF == 1) ? PC + %{rel} : PC'],
@@ -39,8 +37,7 @@ export const jr: InstructionInfo = {
     },
     {
       opcode: [Opcodes.JR_NC, 'REL_i8'],
-      operands: ['rel'],
-      aliases: ['jr nc'],
+      operands: ['NC', 'rel'],
       addressing: 'relative',
       distance: 'short',
       operation: ['${RESOLVE_CF}', 'PC = (CF == 0) ? PC + %{rel} : PC'],
@@ -48,8 +45,7 @@ export const jr: InstructionInfo = {
     },
     {
       opcode: [Opcodes.JR_C, 'REL_i8'],
-      operands: ['rel'],
-      aliases: ['jr c'],
+      operands: ['C', 'rel'],
       addressing: 'relative',
       distance: 'short',
       operation: ['${RESOLVE_CF}', 'PC = (CF == 1) ? PC + %{rel} : PC'],

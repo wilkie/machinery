@@ -785,6 +785,12 @@ export class Decoder {
       return { type: 'register', name: name.toLowerCase(), size: regSize };
     }
 
+    // Unknown literal (e.g., condition code like 'NZ', 'C', 'PO')
+    // Emit as a register operand with size 0 so formatters can output the name.
+    if (/^[A-Za-z]\w*$/.test(name)) {
+      return { type: 'register', name: name.toLowerCase(), size: 0 };
+    }
+
     return null;
   }
 

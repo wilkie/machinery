@@ -95,9 +95,7 @@ export function generateDecoderMap(
           form.opcode[lastOpcodeIndex];
         if (typeof entry === 'number') break;
         if (typeof entry === 'string') {
-          entry = (target.operands || []).find(
-            (o) => o.identifier === entry,
-          );
+          entry = (target.operands || []).find((o) => o.identifier === entry);
         }
         if (typeof entry === 'object' && entry) {
           let hasMask = false;

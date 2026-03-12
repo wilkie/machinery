@@ -227,7 +227,8 @@ class VirtualMachine {
         // read by craftInstruction, not decoder nodes.
         let lastOpcodeIndex = form.opcode.length - 1;
         while (lastOpcodeIndex > 0) {
-          let entry: string | number | OpcodeMatcher | undefined = form.opcode[lastOpcodeIndex];
+          let entry: string | number | OpcodeMatcher | undefined =
+            form.opcode[lastOpcodeIndex];
           if (typeof entry === 'number') break; // numeric literal = decodable
           if (typeof entry === 'string') {
             entry = (machine.operands || []).find(
@@ -237,7 +238,10 @@ class VirtualMachine {
           if (typeof entry === 'object' && entry) {
             let hasMask = false;
             for (const field of Object.values(entry.fields || {})) {
-              if (field.match !== undefined) { hasMask = true; break; }
+              if (field.match !== undefined) {
+                hasMask = true;
+                break;
+              }
             }
             if (hasMask) break; // matcher with mask = decodable
           }

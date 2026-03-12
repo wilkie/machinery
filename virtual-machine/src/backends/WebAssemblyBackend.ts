@@ -64,8 +64,7 @@ class WebAssemblyBackend extends Backend {
   private registerLocals: Map<string, { local: string; size: number }> =
     new Map();
   /** Track state/ALU locals */
-  private stateLocals: Map<string, { local: string; size: number }> =
-    new Map();
+  private stateLocals: Map<string, { local: string; size: number }> = new Map();
 
   prologue(): string[] {
     const code: string[] = [];
@@ -107,20 +106,10 @@ class WebAssemblyBackend extends Backend {
       else if (size <= 16) size = 16;
       else size = 32;
       const storeOp =
-        size === 8
-          ? 'i32.store8'
-          : size === 16
-            ? 'i32.store16'
-            : 'i32.store';
+        size === 8 ? 'i32.store8' : size === 16 ? 'i32.store16' : 'i32.store';
       const byteOffset =
-        size === 8
-          ? info.index
-          : size === 16
-            ? info.index * 2
-            : info.index * 4;
-      code.push(
-        `    ;; ${name} = 0x${info.initialValue.toString(16)}`,
-      );
+        size === 8 ? info.index : size === 16 ? info.index * 2 : info.index * 4;
+      code.push(`    ;; ${name} = 0x${info.initialValue.toString(16)}`);
       code.push(
         `    (${storeOp} (i32.const ${byteOffset}) (i32.const ${info.initialValue}))`,
       );
@@ -272,8 +261,7 @@ class WebAssemblyBackend extends Backend {
     else if (size <= 16) size = 16;
     else size = 32;
 
-    const byteOffset =
-      size === 8 ? index : size === 16 ? index * 2 : index * 4;
+    const byteOffset = size === 8 ? index : size === 16 ? index * 2 : index * 4;
     const load = this.loadOp(size, signed);
 
     let expr = `(${load} (i32.const ${byteOffset}))`;
@@ -384,8 +372,7 @@ class WebAssemblyBackend extends Backend {
     else if (size <= 16) size = 16;
     else size = 32;
 
-    const byteOffset =
-      size === 8 ? index : size === 16 ? index * 2 : index * 4;
+    const byteOffset = size === 8 ? index : size === 16 ? index * 2 : index * 4;
     const store = this.storeOp(size);
     const load = this.loadOp(size);
 
@@ -393,7 +380,8 @@ class WebAssemblyBackend extends Backend {
       // Bit field: read-modify-write
       const mask = (1 << length) - 1;
       const shiftedMask = mask << offset;
-      const clearMask = ~shiftedMask & (size === 8 ? 0xff : size === 16 ? 0xffff : 0xffffffff);
+      const clearMask =
+        ~shiftedMask & (size === 8 ? 0xff : size === 16 ? 0xffff : 0xffffffff);
       const maskedValue =
         offset === 0
           ? `(i32.and ${value} (i32.const ${mask}))`
@@ -953,9 +941,7 @@ class WebAssemblyBackend extends Backend {
       context.code.push(
         `${indent}(local.set $_finalize_id (i32.const 0x${context.prefixCount.toString(16)}))`,
       );
-      context.code.push(
-        `${indent}(local.set $_has_finalize (i32.const 1))`,
-      );
+      context.code.push(`${indent}(local.set $_has_finalize (i32.const 1))`);
       context.prefixMap.push({ instruction, variant });
       context.prefixCount++;
     }
@@ -1026,9 +1012,7 @@ class WebAssemblyBackend extends Backend {
       context.code.push(
         `${indent}(local.set $_ip (i32.add ${this.readRegister(generated, ipReference)[0]} (i32.const 0x${(start || 0).toString(16)})))`,
       );
-      context.code.push(
-        `${indent}(local.set $_has_finalize (i32.const 0))`,
-      );
+      context.code.push(`${indent}(local.set $_has_finalize (i32.const 0))`);
 
       // Prefix loop
       context.code.push(`${indent}(block $done`);
@@ -1140,7 +1124,9 @@ class WebAssemblyBackend extends Backend {
       // Now emit each case's code
       for (let vi = 0; vi < validEntries.length; vi++) {
         const { index: opcodeVal, entry: matcher } = validEntries[vi];
-        context.code.push(`${indent}  ) ;; ${blockLabels[vi]} (0x${opcodeVal.toString(16)})`);
+        context.code.push(
+          `${indent}  ) ;; ${blockLabels[vi]} (0x${opcodeVal.toString(16)})`,
+        );
 
         if (
           matcher.instruction &&
@@ -1283,7 +1269,8 @@ class WebAssemblyBackend extends Backend {
       // Write in local declarations at the placeholder
       let declCode = '';
       // Always include _ip, _has_finalize, _finalize_id
-      declCode += '    (local $_ip i32) (local $_has_finalize i32) (local $_finalize_id i32)';
+      declCode +=
+        '    (local $_ip i32) (local $_has_finalize i32) (local $_finalize_id i32)';
       context.variables.sort().forEach((name) => {
         declCode += ` (local $${name} i32)`;
       });
@@ -1311,8 +1298,12 @@ class WebAssemblyBackend extends Backend {
       (info) => info.identifier === mode,
     );
 
-    context.code.push(`  ;; Decode and execute one instruction in '${mode}' mode`);
-    context.code.push(`  (func $decode_${mode} (export "decode_${mode}") (result i32)`);
+    context.code.push(
+      `  ;; Decode and execute one instruction in '${mode}' mode`,
+    );
+    context.code.push(
+      `  (func $decode_${mode} (export "decode_${mode}") (result i32)`,
+    );
 
     if (modeInfo?.decode) {
       this.craftDecoderState(decoder, 0, '    ', context);
@@ -1324,7 +1315,9 @@ class WebAssemblyBackend extends Backend {
     context.code.push('');
 
     // run(maxCycles) function
-    context.code.push(`  ;; Execute instructions until cycle budget exhausted in '${mode}' mode`);
+    context.code.push(
+      `  ;; Execute instructions until cycle budget exhausted in '${mode}' mode`,
+    );
     context.code.push(
       `  (func $run_${mode} (export "run_${mode}") (param $max_cycles i32) (result i32)`,
     );

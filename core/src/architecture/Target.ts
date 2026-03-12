@@ -285,7 +285,11 @@ export interface InstructionForm {
   /**
    * A set of pseudo-code that describes the operation being performed.
    */
-  operation?: Operation;
+  operation?:
+    | Operation
+    | {
+        [mode: string]: Operation;
+      };
   /**
    * A set of pseudo-code that describes what to do after the operation has finished.
    */

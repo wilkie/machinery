@@ -111,14 +111,24 @@ export const add: InstructionInfo = {
       opcode: ['DD_IX', Opcodes.ADD_A_xHLx, 'DISP_i8'],
       operands: ['A', 'rm'],
       operandSize: 8,
-      operation: ['a = A', 'b = RAM:u8[IX + %{DISP}]', '${ALU8_OP}', 'A = alu_result'],
+      operation: [
+        'a = A',
+        'b = RAM:u8[IX + %{DISP}]',
+        '${ALU8_OP}',
+        'A = alu_result',
+      ],
       cycles: 19,
     },
     {
       opcode: ['FD_IY', Opcodes.ADD_A_xHLx, 'DISP_i8'],
       operands: ['A', 'rm'],
       operandSize: 8,
-      operation: ['a = A', 'b = RAM:u8[IY + %{DISP}]', '${ALU8_OP}', 'A = alu_result'],
+      operation: [
+        'a = A',
+        'b = RAM:u8[IY + %{DISP}]',
+        '${ALU8_OP}',
+        'A = alu_result',
+      ],
       cycles: 19,
     },
 

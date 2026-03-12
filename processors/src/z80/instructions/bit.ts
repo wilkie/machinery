@@ -169,16 +169,13 @@ export const rlc: InstructionInfo = {
       8,
       15,
     ),
-    ...cbIndexedForms(
-      CBOpcodes.RLC_xHLx,
-      (r) => [
-        `a = ${r}`,
-        `CF = a >> 7`,
-        `alu_result = (a << 1) | CF`,
-        `${r} = alu_result`,
-        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-      ],
-    ),
+    ...cbIndexedForms(CBOpcodes.RLC_xHLx, (r) => [
+      `a = ${r}`,
+      `CF = a >> 7`,
+      `alu_result = (a << 1) | CF`,
+      `${r} = alu_result`,
+      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+    ]),
   ],
 };
 
@@ -201,16 +198,13 @@ export const rrc: InstructionInfo = {
       8,
       15,
     ),
-    ...cbIndexedForms(
-      CBOpcodes.RRC_xHLx,
-      (r) => [
-        `a = ${r}`,
-        `CF = a & 1`,
-        `alu_result = (a >> 1) | (CF << 7)`,
-        `${r} = alu_result`,
-        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-      ],
-    ),
+    ...cbIndexedForms(CBOpcodes.RRC_xHLx, (r) => [
+      `a = ${r}`,
+      `CF = a & 1`,
+      `alu_result = (a >> 1) | (CF << 7)`,
+      `${r} = alu_result`,
+      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+    ]),
   ],
 };
 
@@ -235,18 +229,15 @@ export const rl: InstructionInfo = {
       8,
       15,
     ),
-    ...cbIndexedForms(
-      CBOpcodes.RL_xHLx,
-      (r) => [
-        '${RESOLVE_CF}',
-        `a = ${r}`,
-        'tmp = CF',
-        `CF = a >> 7`,
-        `alu_result = (a << 1) | tmp`,
-        `${r} = alu_result`,
-        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-      ],
-    ),
+    ...cbIndexedForms(CBOpcodes.RL_xHLx, (r) => [
+      '${RESOLVE_CF}',
+      `a = ${r}`,
+      'tmp = CF',
+      `CF = a >> 7`,
+      `alu_result = (a << 1) | tmp`,
+      `${r} = alu_result`,
+      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+    ]),
   ],
 };
 
@@ -271,18 +262,15 @@ export const rr: InstructionInfo = {
       8,
       15,
     ),
-    ...cbIndexedForms(
-      CBOpcodes.RR_xHLx,
-      (r) => [
-        '${RESOLVE_CF}',
-        `a = ${r}`,
-        'tmp = CF',
-        `CF = a & 1`,
-        `alu_result = (a >> 1) | (tmp << 7)`,
-        `${r} = alu_result`,
-        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-      ],
-    ),
+    ...cbIndexedForms(CBOpcodes.RR_xHLx, (r) => [
+      '${RESOLVE_CF}',
+      `a = ${r}`,
+      'tmp = CF',
+      `CF = a & 1`,
+      `alu_result = (a >> 1) | (tmp << 7)`,
+      `${r} = alu_result`,
+      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+    ]),
   ],
 };
 
@@ -306,16 +294,13 @@ export const sla: InstructionInfo = {
       8,
       15,
     ),
-    ...cbIndexedForms(
-      CBOpcodes.SLA_xHLx,
-      (r) => [
-        `a = ${r}`,
-        `CF = a >> 7`,
-        `alu_result = a << 1`,
-        `${r} = alu_result`,
-        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-      ],
-    ),
+    ...cbIndexedForms(CBOpcodes.SLA_xHLx, (r) => [
+      `a = ${r}`,
+      `CF = a >> 7`,
+      `alu_result = a << 1`,
+      `${r} = alu_result`,
+      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+    ]),
   ],
 };
 
@@ -339,16 +324,13 @@ export const sra: InstructionInfo = {
       8,
       15,
     ),
-    ...cbIndexedForms(
-      CBOpcodes.SRA_xHLx,
-      (r) => [
-        `a = ${r}`,
-        `CF = a & 1`,
-        `alu_result = (a & 0x80) | (a >> 1)`,
-        `${r} = alu_result`,
-        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-      ],
-    ),
+    ...cbIndexedForms(CBOpcodes.SRA_xHLx, (r) => [
+      `a = ${r}`,
+      `CF = a & 1`,
+      `alu_result = (a & 0x80) | (a >> 1)`,
+      `${r} = alu_result`,
+      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+    ]),
   ],
 };
 
@@ -372,16 +354,13 @@ export const srl: InstructionInfo = {
       8,
       15,
     ),
-    ...cbIndexedForms(
-      CBOpcodes.SRL_xHLx,
-      (r) => [
-        `a = ${r}`,
-        `CF = a & 1`,
-        `alu_result = a >> 1`,
-        `${r} = alu_result`,
-        'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
-      ],
-    ),
+    ...cbIndexedForms(CBOpcodes.SRL_xHLx, (r) => [
+      `a = ${r}`,
+      `CF = a & 1`,
+      `alu_result = a >> 1`,
+      `${r} = alu_result`,
+      'flag_op = ${FLAG_OP_LOGIC} | ${FLAG_OP_NOCF}',
+    ]),
   ],
 };
 

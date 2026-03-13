@@ -9,7 +9,7 @@ class TestMachine extends Machine {
 
   constructor(program: Uint8Array) {
     super();
-    this.mem8.set(program, 0x100 + 0x1a0);
+    this.mem8.set(program, 0x100 + Machine.RAM_OFFSET);
     this.CS = 0x0;
     this.IP = 0x100;
   }
@@ -31,7 +31,7 @@ class TestMachine extends Machine {
       const DX = this.DX;
       if (AH === 0x25) {
         // Set interrupt vector
-        const base = AL * 4 + 0x1a0;
+        const base = AL * 4 + Machine.RAM_OFFSET;
         this.mem16[base >> 1] = this.DS;
         this.mem16[(base >> 1) + 1] = DX;
       } else if (AH === 0x4c || AH === 0) {

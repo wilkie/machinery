@@ -229,7 +229,11 @@ export const registers: RegisterInfo[] = [
     set: {
       modes: {
         real: {
-          operation: ['ES_BASE = ES << 4'],
+          operation: [
+            'ES_BASE = ES << 4',
+            'ES_LIMIT_MIN = 0',
+            'ES_LIMIT_MAX = 0xffff',
+          ],
         },
       },
     },
@@ -254,6 +258,33 @@ export const registers: RegisterInfo[] = [
             'IP = FETCH_IP - CS_BASE',
             'CS_BASE = CS << 4',
             'FETCH_IP = CS_BASE + IP',
+            'CS_LIMIT_MIN = 0',
+            'CS_LIMIT_MAX = 0xffff',
+          ],
+        },
+        protected: {
+          locals: [
+            {
+              identifier: 'index',
+              name: 'Temporary value to hold the GDT entry index',
+              size: 16,
+            },
+            {
+              identifier: 'inverted',
+              name: 'Temporary value to hold whether or not the selected segment expands down',
+              size: 1,
+            },
+          ],
+          operation: [
+            'index = CS >> 3',
+            '#GP if index == 0',
+            '#GP if (index * 8) > GDTR.limit',
+            'inverted = ((RAM.GDT.gates[index].SD.type & 0b110) == 0b010) ? 1 : 0',
+            'IP = FETCH_IP - CS_BASE',
+            'CS_BASE = RAM.GDT.gates[index].SD.base',
+            'FETCH_IP = CS_BASE + IP',
+            'CS_LIMIT_MIN = inverted == 1 ? RAM.GDT.gates[index].SD.limit + 1 : 0',
+            'CS_LIMIT_MAX = inverted == 1 ? 0xffff : RAM.GDT.gates[index].SD.limit',
           ],
         },
       },
@@ -277,8 +308,43 @@ export const registers: RegisterInfo[] = [
         real: {
           operation: [
             'SS_BASE = SS << 4',
-            'SS_BASE1 = SS << 4',
-            'SS_BASE2 = SS << 4',
+            'SS_LIMIT_MIN = 0',
+            'SS_LIMIT_MAX = 0xffff',
+            'SS_BASE1 = SS_BASE',
+            'SS_BASE2 = SS_BASE',
+            'SS_LIMIT_MIN1 = SS_LIMIT_MIN',
+            'SS_LIMIT_MIN2 = SS_LIMIT_MIN',
+            'SS_LIMIT_MAX1 = SS_LIMIT_MAX',
+            'SS_LIMIT_MAX2 = SS_LIMIT_MAX',
+          ],
+        },
+        protected: {
+          locals: [
+            {
+              identifier: 'index',
+              name: 'Temporary value to hold the GDT entry index',
+              size: 16,
+            },
+            {
+              identifier: 'inverted',
+              name: 'Temporary value to hold whether or not the selected segment expands down',
+              size: 1,
+            },
+          ],
+          operation: [
+            'index = SS >> 3',
+            '#GP if index == 0',
+            '#GP if (index * 8) > GDTR.limit',
+            'inverted = ((RAM.GDT.gates[index].SD.type & 0b110) == 0b010) ? 1 : 0',
+            'SS_BASE = RAM.GDT.gates[index].SD.base',
+            'SS_LIMIT_MIN = inverted == 1 ? RAM.GDT.gates[index].SD.limit + 1 : 0',
+            'SS_LIMIT_MAX = inverted == 1 ? 0xffff : RAM.GDT.gates[index].SD.limit',
+            'SS_BASE1 = SS_BASE',
+            'SS_BASE2 = SS_BASE',
+            'SS_LIMIT_MIN1 = SS_LIMIT_MIN',
+            'SS_LIMIT_MIN2 = SS_LIMIT_MIN',
+            'SS_LIMIT_MAX1 = SS_LIMIT_MAX',
+            'SS_LIMIT_MAX2 = SS_LIMIT_MAX',
           ],
         },
       },
@@ -302,33 +368,92 @@ export const registers: RegisterInfo[] = [
         real: {
           operation: [
             'DS_BASE = DS << 4',
-            'DS_BASE1 = DS << 4',
-            'DS_BASE2 = DS << 4',
-            'DS_BASE3 = DS << 4',
-            'DS_BASE4 = DS << 4',
+            'DS_LIMIT_MIN = 0',
+            'DS_LIMIT_MAX = 0xffff',
+            'DS_BASE1 = DS_BASE',
+            'DS_BASE2 = DS_BASE',
+            'DS_BASE3 = DS_BASE',
+            'DS_BASE4 = DS_BASE',
+            'DS_LIMIT_MIN1 = DS_LIMIT_MIN',
+            'DS_LIMIT_MIN2 = DS_LIMIT_MIN',
+            'DS_LIMIT_MIN3 = DS_LIMIT_MIN',
+            'DS_LIMIT_MIN4 = DS_LIMIT_MIN',
+            'DS_LIMIT_MAX1 = DS_LIMIT_MAX',
+            'DS_LIMIT_MAX2 = DS_LIMIT_MAX',
+            'DS_LIMIT_MAX3 = DS_LIMIT_MAX',
+            'DS_LIMIT_MAX4 = DS_LIMIT_MAX',
+          ],
+        },
+        protected: {
+          locals: [
+            {
+              identifier: 'index',
+              name: 'Temporary value to hold the GDT entry index',
+              size: 16,
+            },
+            {
+              identifier: 'inverted',
+              name: 'Temporary value to hold whether or not the selected segment expands down',
+              size: 1,
+            },
+          ],
+          operation: [
+            'index = DS >> 3',
+            '#GP if index == 0',
+            '#GP if (index * 8) > GDTR.limit',
+            'inverted = ((RAM.GDT.gates[index].SD.type & 0b110) == 0b010) ? 1 : 0',
+            'DS_BASE = RAM.GDT.gates[index].SD.base',
+            'DS_LIMIT_MIN = inverted == 1 ? RAM.GDT.gates[index].SD.limit + 1 : 0',
+            'DS_LIMIT_MAX = inverted == 1 ? 0xffff : RAM.GDT.gates[index].SD.limit',
+            'DS_BASE1 = DS_BASE',
+            'DS_BASE2 = DS_BASE',
+            'DS_BASE3 = DS_BASE',
+            'DS_BASE4 = DS_BASE',
+            'DS_LIMIT_MIN1 = DS_LIMIT_MIN',
+            'DS_LIMIT_MIN2 = DS_LIMIT_MIN',
+            'DS_LIMIT_MIN3 = DS_LIMIT_MIN',
+            'DS_LIMIT_MIN4 = DS_LIMIT_MIN',
+            'DS_LIMIT_MAX1 = DS_LIMIT_MAX',
+            'DS_LIMIT_MAX2 = DS_LIMIT_MAX',
+            'DS_LIMIT_MAX3 = DS_LIMIT_MAX',
+            'DS_LIMIT_MAX4 = DS_LIMIT_MAX',
           ],
         },
       },
     },
   },
   // 386-extended segment selectors which are still 'available' in 286 real modes
+  // We mark their use as to trigger the Invalid Opcode exception
   {
     identifier: 'FS',
     name: 'F Segment Selector',
     size: 16,
     type: RegisterTypes.Segment,
-    fields: [
-      {
-        identifier: 'RPL',
-        name: 'Requestor Protection Level',
-        offset: 0,
-        size: 2,
+    get: {
+      modes: {
+        real: {
+          operation: [
+            '#UD'
+          ],
+        },
+        protected: {
+          operation: [
+            '#UD',
+          ],
+        },
       },
-    ],
+    },
     set: {
       modes: {
         real: {
-          operation: ['FS_BASE = FS << 4'],
+          operation: [
+            '#UD'
+          ],
+        },
+        protected: {
+          operation: [
+            '#UD',
+          ],
         },
       },
     },
@@ -338,34 +463,104 @@ export const registers: RegisterInfo[] = [
     name: 'G Segment Selector',
     size: 16,
     type: RegisterTypes.Segment,
-    fields: [
-      {
-        identifier: 'RPL',
-        name: 'Requestor Protection Level',
-        offset: 0,
-        size: 2,
+    get: {
+      modes: {
+        real: {
+          operation: [
+            '#UD',
+          ],
+        },
+        protected: {
+          operation: [
+            '#UD',
+          ],
+        },
       },
-    ],
+    },
     set: {
       modes: {
         real: {
-          operation: ['GS_BASE = GS << 4'],
+          operation: [
+            '#UD',
+          ],
+        },
+        protected: {
+          operation: [
+            '#UD',
+          ],
         },
       },
     },
   },
   // These are padding to make segment selector register calculation more efficient
+  // We obvious mark their use as to trigger the Invalid Opcode (#UD) exception
   {
     identifier: 'HS',
     name: 'Extra Register 1',
     size: 16,
     type: RegisterTypes.Integer,
+    get: {
+      modes: {
+        real: {
+          operation: [
+            '#UD',
+          ],
+        },
+        protected: {
+          operation: [
+            '#UD',
+          ],
+        },
+      },
+    },
+    set: {
+      modes: {
+        real: {
+          operation: [
+            '#UD',
+          ],
+        },
+        protected: {
+          operation: [
+            '#UD',
+          ],
+        },
+      },
+    },
   },
   {
     identifier: 'IS',
     name: 'Extra Register 2',
     size: 16,
     type: RegisterTypes.Integer,
+    get: {
+      modes: {
+        real: {
+          operation: [
+            '#UD',
+          ],
+        },
+        protected: {
+          operation: [
+            '#UD',
+          ],
+        },
+      },
+    },
+    set: {
+      modes: {
+        real: {
+          operation: [
+            '#UD',
+          ],
+        },
+        protected: {
+          operation: [
+            '#UD',
+          ],
+        },
+      },
+    },
   },
   // System registers
   // Machine Status Word (sometimes referred to as CR0)

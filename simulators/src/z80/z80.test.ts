@@ -4,16 +4,13 @@ import Machine from './Machine';
 
 const testDir = resolve(__dirname, '../../test/z80');
 
-// RAM starts at this byte offset in the flat WebAssembly memory
-const RAM_OFFSET = 0x140;
-
 class TestMachine extends Machine {
   halted = 0;
 
   constructor(program: Uint8Array) {
     super();
     // Load program at address 0x100 in Z80 address space
-    this.mem8.set(program, 0x100 + RAM_OFFSET);
+    this.mem8.set(program, 0x100 + Machine.RAM_OFFSET);
     this.PC = 0x100;
     this.SP = 0xfffe;
   }
@@ -29,7 +26,8 @@ class TestMachine extends Machine {
       // Simulate RET: pop return address from stack
       const sp = this.SP;
       this.PC =
-        this.mem8[sp + RAM_OFFSET] | (this.mem8[sp + 1 + RAM_OFFSET] << 8);
+        this.mem8[sp + Machine.RAM_OFFSET] |
+        (this.mem8[sp + 1 + Machine.RAM_OFFSET] << 8);
       this.SP = sp + 2;
       return;
     }
@@ -42,7 +40,8 @@ class TestMachine extends Machine {
       // Simulate RET
       const sp = this.SP;
       this.PC =
-        this.mem8[sp + RAM_OFFSET] | (this.mem8[sp + 1 + RAM_OFFSET] << 8);
+        this.mem8[sp + Machine.RAM_OFFSET] |
+        (this.mem8[sp + 1 + Machine.RAM_OFFSET] << 8);
       this.SP = sp + 2;
       return;
     }

@@ -127,13 +127,16 @@ class Generator {
               : info.get.operation?.flat(3).join(' ; ');
           if (code) {
             map.registers[name].get ||= {};
-            map.registers[name].get[mode] = this.parser.parse(
-              code + ' ;',
-              {},
-              locals,
-            );
-            map.registers[name].get[mode] = this.resolver.resolve(
-              map.registers[name].get[mode],
+            map.registers[name].get[mode] = {
+              statement: this.parser.parse(
+                code + ' ;',
+                {},
+                locals,
+              ),
+              localMap,
+            };
+            map.registers[name].get[mode].statement = this.resolver.resolve(
+              map.registers[name].get[mode].statement,
               locals,
               localMap,
             );
@@ -163,13 +166,16 @@ class Generator {
               : info.set.operation?.flat(3).join(' ; ') || '';
           if (code) {
             map.registers[name].set ||= {};
-            map.registers[name].set[mode] = this.parser.parse(
-              code + ' ;',
-              {},
-              locals,
-            );
-            map.registers[name].set[mode] = this.resolver.resolve(
-              map.registers[name].set[mode],
+            map.registers[name].set[mode] = {
+              statement: this.parser.parse(
+                code + ' ;',
+                {},
+                locals,
+              ),
+              localMap,
+            };
+            map.registers[name].set[mode].statement = this.resolver.resolve(
+              map.registers[name].set[mode].statement,
               locals,
               localMap,
             );

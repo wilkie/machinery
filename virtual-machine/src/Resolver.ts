@@ -578,15 +578,16 @@ class Resolver {
     };
 
     ret.size = ret.references.size || 0;
+    ret.offset = fieldInfo.offset % 8;
 
     // TODO: handle non-byte aligned accesses
-    ret.address = new ExpressionNode(new OperandNode(fieldInfo.offset / 8));
+    ret.address = new ExpressionNode(new OperandNode((fieldInfo.offset - (fieldInfo.offset % 8)) / 8));
 
     if (!operand.next) {
       return ret;
     }
 
-    const next: OperandNode | ArrayAccessNode = operand.next;
+    let next: OperandNode | ArrayAccessNode = operand.next;
 
     // Cell access
     if (next instanceof ArrayAccessNode) {
@@ -595,7 +596,7 @@ class Resolver {
         throw new Error(`Memory access ${fieldName} not indexable.`);
       }
 
-      const cellInfo = arrayInfo.cell;
+      let cellInfo = arrayInfo.cell;
       if (!cellInfo) {
         throw new Error(`Memory access ${fieldName} has no cell description.`);
       }
@@ -610,6 +611,14 @@ class Resolver {
       };
 
       if (next.next) {
+        // If the cell has multiple possible fields, this must be disambiguated by
+        // the next identifier
+        const index = next.index;
+        if (Array.isArray(cellInfo)) {
+          cellInfo = cellInfo.find(cellFieldInfo => cellFieldInfo.identifier === next.next.value);
+          next = next.next;
+        }
+
         // Further dereferencing
         if (next.next instanceof ArrayAccessNode) {
           // Multi-dimensional cells...
@@ -630,7 +639,7 @@ class Resolver {
 
         ret.address = new BinaryExpressionNode(
           new BinaryExpressionNode(
-            next.index,
+            index,
             '*',
             new ExpressionNode(new OperandNode(fieldInfo.size / 8)),
           ),
@@ -639,7 +648,7 @@ class Resolver {
         );
       } else {
         ret.address = new BinaryExpressionNode(
-          next.index,
+          index,
           '*',
           new ExpressionNode(new OperandNode(fieldInfo.size / 8)),
         );
@@ -900,7 +909,6 @@ class Resolver {
       this.locateLocalOperand(operand, context);
 
     if (ret === undefined) {
-      console.log(operand);
       throw new Error(`Local ${operand.value} cannot be found.`);
     }
 

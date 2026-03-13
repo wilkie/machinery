@@ -532,15 +532,19 @@ export interface MemoryRegionBaseField {
   offset: number;
   /** The number of bits the field is wide. */
   size: number;
+  /** A disambiguating field value. */
+  equals?: number;
 }
 
 export interface MemoryRegionSubdividedField extends MemoryRegionBaseField {
   fields?: MemoryRegionBaseField[];
 }
 
+export type MemoryRegionArrayFieldCell = Omit<MemoryRegionSubdividedField, 'offset' | 'size'>;
+
 export interface MemoryRegionArrayField extends MemoryRegionBaseField {
   count: number;
-  cell: Omit<MemoryRegionSubdividedField, 'offset' | 'size'>;
+  cell: MemoryRegionArrayFieldCell | MemoryRegionArrayFieldCell[];
 }
 
 export type MemoryRegionField =

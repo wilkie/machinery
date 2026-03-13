@@ -30,6 +30,7 @@ import type {
   GeneratedStatement,
   MemoryReference,
   RegisterReference,
+  LocalMap,
   LocalReference,
   LocalsInfo,
   Reference,
@@ -69,6 +70,9 @@ class TypeScriptBackend extends Backend {
     code.push('/* eslint-disable */');
     code.push('');
     code.push('export default class Machine {');
+    code.push(
+      `  static readonly RAM_OFFSET = 0x${this.linearStart.toString(16)};`,
+    );
     code.push('  memory: WebAssembly.Memory;');
     code.push('  mem8: Uint8Array;');
     code.push('  mem16: Uint16Array;');
@@ -191,6 +195,13 @@ class TypeScriptBackend extends Backend {
             code.push('    else { // default');
           }
           if (getModes.includes(mode) || mode === 'default') {
+            const { localMap }: { localMap: LocalMap } = parsedRegister?.get?.[mode] || { localMap: {} };
+            for (const [localName, localInfo] of Object.entries(localMap)) {
+              if (localName === 'vector') {
+                continue;
+              }
+              code.push(`      let ${localInfo.identifier};`);
+            }
             const generated: GeneratedStatement = {
               accesses: [name],
               modifies: [],
@@ -238,6 +249,13 @@ class TypeScriptBackend extends Backend {
             code.push('    else { // default');
           }
           if (setModes.includes(mode) || mode === 'default') {
+            const { localMap }: { localMap: LocalMap } = parsedRegister?.set?.[mode] || { localMap: {} };
+            for (const [localName, localInfo] of Object.entries(localMap)) {
+              if (localName === 'vector') {
+                continue;
+              }
+              code.push(`      let ${localInfo.identifier};`);
+            }
             const generated2: GeneratedStatement = {
               accesses: [],
               modifies: [name],
@@ -985,6 +1003,18 @@ class TypeScriptBackend extends Backend {
     return [`// ${message}`];
   }
 
+  wrapConditional(
+    indexExpr: string,
+    registerIndex: number,
+    code: string[],
+  ): string[] {
+    return [
+      `if (${indexExpr} === ${registerIndex}) {`,
+      ...code.map((line) => `  ${line}`),
+      `}`,
+    ];
+  }
+
   fromTernaryExpression(
     generated: GeneratedStatement,
     node: TernaryExpressionNode,
@@ -1057,31 +1087,31 @@ class TypeScriptBackend extends Backend {
     reference: MemoryReference,
     address: ExpressionNode,
   ): string[] {
-    let { size } = reference;
-    const { signed } = reference;
+    const { size, signed, offset } = reference;
 
     // Normalize to valid TypedArray width (8, 16, or 32)
-    if (size <= 8) size = 8;
-    else if (size <= 16) size = 16;
-    else size = 32;
+    let width = size;
+    if (width <= 8) width = 8;
+    else if (width <= 16) width = 16;
+    else width = 32;
 
     const effective = this.fromExpression(generated, address)[0];
 
-    if (size === 8) {
+    if (width === 8) {
       return [
-        `${signed ? '(' : ''}this.mem8[${effective}]${signed ? ` << ${32 - size} >> ${32 - size})` : ''}`,
+        `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}this.mem8[${effective}]${signed ? ` << ${32 - width} >> ${32 - width})` : ''}${offset ? ` >> ${offset})` : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
       ];
-    } else if (size === 16) {
+    } else if (width === 16) {
       return [
-        `${signed ? '(' : ''}(${effective} & 0x1 ? (this.mem16[(${effective}) >> 1] >> 8) | ((this.mem16[((${effective}) >> 1) + 1] & 0xff) << 8) : this.mem16[(${effective}) >> 1])${signed ? ` << ${32 - size} >> ${32 - size})` : ''}`,
+        `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x1 ? (this.mem16[(${effective}) >> 1] >> 8) | ((this.mem16[((${effective}) >> 1) + 1] & 0xff) << 8) : this.mem16[(${effective}) >> 1])${signed ? ` << ${32 - width} >> ${32 - width})` : ''}${offset ? ` >> ${offset})` : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
       ];
-    } else if (size === 32) {
+    } else if (width === 32) {
       return [
-        `${signed ? '(' : ''}(${effective} & 0x3 ? ((this.mem32[(${effective}) >> 2] >> (8 * (${effective} % 4))) | (this.mem32[((${effective}) >> 1) + 1] << (8 * (4 - ${effective} % 4))) & 0xffffffff) : this.mem32[(${effective}) >> 2])${signed ? ' | 0)' : ''}`,
+        `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x3 ? ((this.mem32[(${effective}) >> 2] >> (8 * (${effective} % 4))) | (this.mem32[((${effective}) >> 1) + 1] << (8 * (4 - ${effective} % 4))) & 0xffffffff) : this.mem32[(${effective}) >> 2])${signed ? ' | 0)' : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
       ];
     }
 
-    return [`this.mem${size}[${effective}]`];
+    return [`this.mem${width}[${effective}]`];
   }
 
   readLocal(

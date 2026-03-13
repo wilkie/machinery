@@ -5,8 +5,6 @@ import WasmMachine from './WasmMachine';
 const testDir = resolve(__dirname, '../../test/i286');
 const wasmPath = resolve(__dirname, 'machine.wasm');
 
-const RAM_OFFSET = 0x1a0;
-
 class TestWasmMachine extends WasmMachine {
   halted = 0;
 
@@ -29,7 +27,7 @@ class TestWasmMachine extends WasmMachine {
       const DX = this.DX;
       if (AH === 0x25) {
         // Set interrupt vector
-        const base = AL * 4 + RAM_OFFSET;
+        const base = AL * 4 + WasmMachine.RAM_OFFSET;
         this.mem16[base >> 1] = this.DS;
         this.mem16[(base >> 1) + 1] = DX;
       } else if (AH === 0x4c || AH === 0) {
@@ -52,7 +50,7 @@ async function runProgram(
 ): Promise<{ halted: number; ip: number }> {
   const m = new TestWasmMachine();
   await m.init(wasmBinary);
-  m.mem8.set(program, 0x100 + RAM_OFFSET);
+  m.mem8.set(program, 0x100 + WasmMachine.RAM_OFFSET);
   m.CS = 0x0;
   m.IP = 0x100;
   for (let i = 0; i < 100000; i++) {

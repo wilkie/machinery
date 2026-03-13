@@ -277,6 +277,18 @@ class WebAssemblyBackend extends Backend {
     return [`(;; ${message} ;;)`];
   }
 
+  wrapConditional(
+    indexExpr: string,
+    registerIndex: number,
+    code: string[],
+  ): string[] {
+    return [
+      `(if (i32.eq ${indexExpr} (i32.const ${registerIndex})) (then`,
+      ...code.map((line) => `  ${line}`),
+      `))`,
+    ];
+  }
+
   raise(
     generated: GeneratedStatement,
     value: string,

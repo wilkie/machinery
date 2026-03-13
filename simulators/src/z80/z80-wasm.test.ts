@@ -5,9 +5,6 @@ import WasmMachine from './WasmMachine';
 const testDir = resolve(__dirname, '../../test/z80');
 const wasmPath = resolve(__dirname, 'machine.wasm');
 
-// RAM starts at this byte offset in the flat WebAssembly memory
-const RAM_OFFSET = 0x140;
-
 class TestWasmMachine extends WasmMachine {
   halted = 0;
 
@@ -22,7 +19,8 @@ class TestWasmMachine extends WasmMachine {
       // Simulate RET: pop return address from stack
       const sp = this.SP;
       this.PC =
-        this.mem8[sp + RAM_OFFSET] | (this.mem8[sp + 1 + RAM_OFFSET] << 8);
+        this.mem8[sp + WasmMachine.RAM_OFFSET] |
+        (this.mem8[sp + 1 + WasmMachine.RAM_OFFSET] << 8);
       this.SP = sp + 2;
       return;
     }
@@ -35,7 +33,8 @@ class TestWasmMachine extends WasmMachine {
       // Simulate RET
       const sp = this.SP;
       this.PC =
-        this.mem8[sp + RAM_OFFSET] | (this.mem8[sp + 1 + RAM_OFFSET] << 8);
+        this.mem8[sp + WasmMachine.RAM_OFFSET] |
+        (this.mem8[sp + 1 + WasmMachine.RAM_OFFSET] << 8);
       this.SP = sp + 2;
       return;
     }
@@ -61,7 +60,7 @@ async function runProgram(
   const m = new TestWasmMachine();
   await m.init(wasmBinary);
   // Load program at address 0x100 in Z80 address space
-  m.mem8.set(program, 0x100 + RAM_OFFSET);
+  m.mem8.set(program, 0x100 + WasmMachine.RAM_OFFSET);
   m.PC = 0x100;
   m.SP = 0xfffe;
   for (let i = 0; i < 10000; i++) {

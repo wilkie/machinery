@@ -137,48 +137,58 @@ export const memory: MemoryInfo[] = [
             count: 256,
             offset: 0,
             size: 64,
-            cell: {
-              identifier: 'IGD',
-              name: 'Gate Descriptor',
-              fields: [
-                {
-                  identifier: 'offset',
-                  name: 'Destination Offset',
-                  offset: 0,
-                  size: 16,
-                },
-                {
-                  identifier: 'segment',
-                  name: 'Destination Segment Selector',
-                  offset: 16,
-                  size: 16,
-                },
-                {
-                  identifier: 'type',
-                  name: 'Gate type',
-                  offset: 40,
-                  size: 4,
-                },
-                {
-                  identifier: 'count',
-                  name: 'Word Count (Call Gates)',
-                  offset: 32,
-                  size: 5,
-                },
-                {
-                  identifier: 'DPL',
-                  name: 'Destination Protection Level',
-                  offset: 45,
-                  size: 2,
-                },
-                {
-                  identifier: 'P',
-                  name: 'Present Bit',
-                  offset: 47,
-                  size: 1,
-                },
-              ],
-            },
+            cell: [
+              {
+                identifier: 'SD',
+                name: 'Segment Descriptor',
+                fields: [
+                  {
+                    identifier: 'limit',
+                    name: 'Segment Limit',
+                    offset: 0,
+                    size: 16,
+                  },
+                  {
+                    identifier: 'base',
+                    name: 'Segment Base',
+                    offset: 16,
+                    size: 24,
+                  },
+                  {
+                    identifier: 'A',
+                    name: 'Accessed',
+                    offset: 40,
+                    size: 1,
+                  },
+                  {
+                    identifier: 'type',
+                    name: 'Gate type',
+                    offset: 41,
+                    size: 3,
+                  },
+                  {
+                    // Marks this field as a segment descriptor and not a call gate */
+                    identifier: 'S',
+                    name: 'Segment Descriptor',
+                    offset: 44,
+                    size: 1,
+                    equals: 1,
+                  },
+                  {
+                    identifier: 'DPL',
+                    name: 'Destination Protection Level',
+                    offset: 45,
+                    size: 2,
+                  },
+                  {
+                    identifier: 'P',
+                    name: 'Present Bit',
+                    offset: 47,
+                    size: 1,
+                  },
+                ],
+              },
+            ],
           },
         ],
       },

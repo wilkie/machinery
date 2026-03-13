@@ -105,10 +105,10 @@ export interface IntermediateRepresentation {
   registers: {
     [key: string]: {
       get?: {
-        [mode: string]: StatementNode;
+        [mode: string]: ParsedOperation;
       };
       set?: {
-        [mode: string]: StatementNode;
+        [mode: string]: ParsedOperation;
       };
     };
   };
@@ -153,6 +153,7 @@ export interface MemoryReference extends BaseReference {
   type: 'memory';
   mapping: MemoryMapping;
   address: ExpressionNode;
+  offset?: number;
   size: number;
   signed?: boolean;
   references?: MemoryAccessReference | MemoryFieldReference;
@@ -233,6 +234,11 @@ export interface GeneratorContext {
  * Contains the generated code for a StatementNode and information about how it
  * affects state.
  */
+export interface RegisterChoiceInfo {
+  indexExpr: string;
+  registerIndex: number;
+}
+
 export interface GeneratedStatement {
   /**
    * Contains a list of accessed registers.
@@ -242,6 +248,13 @@ export interface GeneratedStatement {
    * Contains a list of modified registers.
    */
   modifies: string[];
+  /**
+   * Registers from choice expressions that need conditional get/set guards.
+   * Maps register name to the index expression and the register's expected
+   * index value. When present, get/set side effects for these registers are
+   * only emitted inside a conditional check (indexExpr === registerIndex).
+   */
+  choiceIndexes?: { [name: string]: RegisterChoiceInfo };
   /**
    * Contains the code that was generated.
    */

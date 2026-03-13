@@ -59,7 +59,8 @@ class VirtualMachine {
     this.memoryMap = memoryMap;
 
     // Unallocated memory (or flexible RAM) is located at the end of the defined memory
-    this.linearStart = this.registerMap.size + romSize;
+    // romSize is already an absolute position (generateMemoryMap starts from registerMap.size)
+    this.linearStart = romSize;
 
     // Align linearStart to 64-bit word size
     // (it will be divisible evenly by 2, 4 and 8)

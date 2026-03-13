@@ -69,6 +69,10 @@ class Backend {
     return this.machine.decoderMap;
   }
 
+  get linearStart(): number {
+    return this.machine.linearStart;
+  }
+
   prologue(): string[] {
     return [];
   }
@@ -145,17 +149,23 @@ class Backend {
       const parsedRegister = this.parsed.registers[name];
       if (parsedRegister?.get) {
         this.suppressRegisterOperation = true;
-        // TODO: handle get() for accessors listed in here that aren't in the current list
         const node =
-          parsedRegister.get[generated.context.mode] ||
-          parsedRegister.get.default;
+          parsedRegister.get[generated.context.mode]?.statement ||
+          parsedRegister.get.default?.statement;
         if (node) {
           const getStatement = this.fromStatement(node);
-          for (const line of this.comment(`${name}.get()`)) {
-            ret.push(line);
-          }
-          for (const line of getStatement.code) {
-            ret.push(line);
+          const choiceInfo = generated.choiceIndexes?.[name];
+          if (choiceInfo) {
+            // Guard with conditional: only emit when the choice index selects this register
+            ret.push(...this.comment(`${name}.get()`));
+            ret.push(...this.wrapConditional(
+              choiceInfo.indexExpr,
+              choiceInfo.registerIndex,
+              getStatement.code,
+            ));
+          } else {
+            ret.push(...this.comment(`${name}.get()`));
+            ret.push(...getStatement.code);
           }
         }
         this.suppressRegisterOperation = false;
@@ -171,17 +181,27 @@ class Backend {
       const parsedRegister = this.parsed.registers[name];
       if (parsedRegister?.set) {
         this.suppressRegisterOperation = true;
-        // TODO: handle get/set() for accessors listed in here that aren't in the current list
         const node =
-          parsedRegister.set[generated.context.mode] ||
-          parsedRegister.set.default;
+          parsedRegister.set[generated.context.mode]?.statement ||
+          parsedRegister.set.default?.statement;
         if (node) {
           const setStatement = this.fromStatement(node);
-          for (const line of this.comment(`${name}.set()`)) {
-            ret.push(line);
-          }
-          for (const line of setStatement.code) {
-            ret.push(line);
+          const choiceInfo = generated.choiceIndexes?.[name];
+          if (choiceInfo) {
+            // Guard with conditional: only emit when the choice index selects this register
+            ret.push(...this.comment(`${name}.set()`));
+            ret.push(...this.wrapConditional(
+              choiceInfo.indexExpr,
+              choiceInfo.registerIndex,
+              setStatement.code,
+            ));
+          } else {
+            for (const line of this.comment(`${name}.set()`)) {
+              ret.push(line);
+            }
+            for (const line of setStatement.code) {
+              ret.push(line);
+            }
           }
         }
         this.suppressRegisterOperation = false;
@@ -189,6 +209,18 @@ class Backend {
     }
 
     return ret;
+  }
+
+  /**
+   * Wrap code in a conditional that checks if indexExpr equals registerIndex.
+   * Backends override this to emit the appropriate conditional syntax.
+   */
+  wrapConditional(
+    indexExpr: string,
+    registerIndex: number,
+    code: string[],
+  ): string[] {
+    return code;
   }
 
   fromStatement(
@@ -502,11 +534,23 @@ class Backend {
       const choices: RegisterOperandNode[] =
         choice.choices as RegisterOperandNode[];
 
-      // TODO: if there is a pattern, we should try to conditionally handle it
-      for (const entry of choices) {
+      // Resolve the effective index expression for conditional guarding
+      const indexExpr = this.fromExpression(generated, choice.index)[0];
+
+      for (let i = 0; i < choices.length; i++) {
+        const entry = choices[i];
         if (entry.reference.type === 'register') {
-          if (!generated.modifies.includes(entry.reference.identifier)) {
-            generated.modifies.push(entry.reference.identifier);
+          const name = entry.reference.identifier;
+          if (!generated.modifies.includes(name)) {
+            generated.modifies.push(name);
+          }
+          // If this register has a set() operation, record the choice info
+          // so that fromModifies can guard it with a conditional check
+          const parsedReg = this.parsed.registers[name];
+          if (parsedReg?.set) {
+            if (!generated.choiceIndexes) generated.choiceIndexes = {};
+            const registerIndex = entry.reference.mapping.index;
+            generated.choiceIndexes[name] = { indexExpr, registerIndex };
           }
         }
       }
@@ -595,11 +639,23 @@ class Backend {
     const choices: RegisterOperandNode[] =
       node.choices as RegisterOperandNode[];
 
-    // TODO: if there is a pattern, we should try to conditionally handle it
-    for (const entry of choices) {
+    // Resolve the effective index expression for conditional guarding
+    const indexExpr = this.fromExpression(generated, node.index)[0];
+
+    for (let i = 0; i < choices.length; i++) {
+      const entry = choices[i];
       if (entry.reference.type === 'register') {
-        if (!generated.accesses.includes(entry.reference.identifier)) {
-          generated.accesses.push(entry.reference.identifier);
+        const name = entry.reference.identifier;
+        if (!generated.accesses.includes(name)) {
+          generated.accesses.push(name);
+        }
+        // If this register has a get() operation, record the choice info
+        // so that fromAccessors can guard it with a conditional check
+        const parsedReg = this.parsed.registers[name];
+        if (parsedReg?.get) {
+          if (!generated.choiceIndexes) generated.choiceIndexes = {};
+          const registerIndex = entry.reference.mapping.index;
+          generated.choiceIndexes[name] = { indexExpr, registerIndex };
         }
       }
     }

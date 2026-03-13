@@ -39,6 +39,39 @@ export interface RegisterField {
   fields?: RegisterField[];
 }
 
+export interface OperationViaMode {
+  /**
+   * We might specify different operations depending on mode.
+   */
+  modes?: {
+    [mode: string]: {
+      /**
+       * The local variables and state that are used as named by identifier in the
+       * operation.
+       */
+      locals?: LocalInfo[];
+      /**
+       * The code to run for this mode.
+       */
+      operation: Operation;
+    };
+  };
+}
+
+export interface OperationNotViaMode {
+  /**
+   * The local variables and state that are used as named by identifier in the
+   * operation.
+   */
+  locals?: LocalInfo[];
+  /**
+   * The code to run just prior to when the register is accessed.
+   */
+  operation: Operation;
+}
+
+export type OperationMaybeModes = OperationNotViaMode | OperationViaMode;
+
 /**
  * Describes a specific register for a machine target.
  */
@@ -60,61 +93,9 @@ export interface RegisterInfo {
   /** Optionally, what the initial value of the register should be. Defaults to 0 for integer types. */
   initialValue?: number;
   /** Some optional code that runs before this register is accessed */
-  get?: {
-    /**
-     * The local variables and state that are used as named by identifier in the
-     * operation.
-     */
-    locals?: LocalInfo[];
-    /**
-     * The code to run just prior to when the register is accessed.
-     */
-    operation?: Operation;
-    /**
-     * We might specify different operations depending on mode.
-     */
-    modes?: {
-      [mode: string]: {
-        /**
-         * The local variables and state that are used as named by identifier in the
-         * operation.
-         */
-        locals?: LocalInfo[];
-        /**
-         * The code to run just after the register is modified.
-         */
-        operation: Operation;
-      };
-    };
-  };
+  get?: OperationMaybeModes;
   /** Some optional code that runs after this register is written */
-  set?: {
-    /**
-     * The local variables and state that are used as named by identifier in the
-     * operation.
-     */
-    locals?: LocalInfo[];
-    /**
-     * The code to run just after the register is modified.
-     */
-    operation?: Operation;
-    /**
-     * We might specify different operations depending on mode.
-     */
-    modes?: {
-      [mode: string]: {
-        /**
-         * The local variables and state that are used as named by identifier in the
-         * operation.
-         */
-        locals?: LocalInfo[];
-        /**
-         * The code to run just after the register is modified.
-         */
-        operation: Operation;
-      };
-    };
-  };
+  set?: OperationMaybeModes;
 }
 
 /**
@@ -625,17 +606,7 @@ export interface InterruptsInfo {
   /**
    * Describes a handler routine that would run when an interrupt occurs.
    */
-  handler: {
-    /**
-     * The local variables and state that are used as named by identifier in the
-     * operation.
-     */
-    locals?: LocalInfo[];
-    /**
-     * The code to run to handle a generic interrupt.
-     */
-    operation: Operation;
-  };
+  handler: OperationMaybeModes;
   vectors: InterruptInfo[];
 }
 

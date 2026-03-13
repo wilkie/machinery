@@ -149,32 +149,37 @@ class TypeScriptBackend extends Backend {
     const locals: LocalsInfo = {};
     code.push('');
     if (this.parsed.interrupts.handler) {
-      const { statement, localMap } = this.parsed.interrupts.handler;
+      ((target.modes as Pick<ModeInfo, 'identifier'>[]) || [])
+        .concat([{ identifier: 'default' }])
+        .forEach((modeInfo) => {
+          const mode = modeInfo.identifier;
+          const { statement, localMap } = this.parsed.interrupts.handler?.[mode] || this.parsed.interrupts.handler?.default || {};
 
-      // Transpile the statement node for this instruction form
-      if (statement) {
-        const { code: handlerCode } = this.fromStatement(statement, {
-          mode: this.target.modes?.[0]?.identifier || 'default',
-          locals,
-          localMap,
-        });
-        code.push(`  interrupt(${localMap.vector.identifier}: number) {`);
-        for (const [localName, localInfo] of Object.entries(localMap)) {
-          if (localName === 'vector') {
-            continue;
+          // Transpile the statement node for this instruction form
+          if (statement && localMap) {
+            const { code: handlerCode } = this.fromStatement(statement, {
+              mode: this.target.modes?.[0]?.identifier || 'default',
+              locals,
+              localMap,
+            });
+            code.push(`  interrupt_${mode}(${localMap.vector?.identifier || '_'}: number) {`);
+            for (const [localName, localInfo] of Object.entries(localMap)) {
+              if (localName === 'vector') {
+                continue;
+              }
+              code.push(`    let ${localInfo.identifier};`);
+            }
+            for (const line of handlerCode) {
+              code.push('    ' + line);
+            }
+          } else {
+            code.push(`  interrupt_${mode}(vector: number) {`);
+            code.push('    console.log("INT", vector);');
           }
-          code.push(`    let ${localInfo.identifier};`);
-        }
-        for (const line of handlerCode) {
-          code.push('    ' + line);
-        }
-      }
-    } else {
-      code.push('  interrupt(vector: number) {');
-      code.push('    console.log("INT", vector);');
+          code.push('  }');
+          code.push('');
+        })
     }
-    code.push('  }');
-    code.push('');
 
     // Create functions for accessing registers
     for (const info of target.registers) {
@@ -244,7 +249,7 @@ class TypeScriptBackend extends Backend {
         .forEach((modeInfo, i) => {
           const mode = modeInfo.identifier;
           if (mode !== 'default' && setModes.includes(mode)) {
-            code.push(`    ${i !== 0 ? 'else ' : ''}if (this.mode === ${i}) {`);
+            code.push(`    ${i !== 0 ? 'else ' : ''}if (this.mode === ${i}) { // mode: ${mode}`);
           } else if (mode === 'default' && !setOnlyDefault) {
             code.push('    else { // default');
           }
@@ -1037,11 +1042,11 @@ class TypeScriptBackend extends Backend {
   ): string[] {
     if (condition) {
       return [
-        `if (${this.fromComparison(generated, condition)[0]}) { this.interrupt(${value}); }`,
+        `if (${this.fromComparison(generated, condition)[0]}) { this.interrupt_${generated.context.mode}(${value}); }`,
       ];
     }
 
-    return [`this.interrupt(${value})`];
+    return [`this.interrupt_${generated.context.mode}(${value})`];
   }
 
   readRegister(

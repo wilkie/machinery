@@ -1,3 +1,7 @@
+import type {
+  ModeInfo,
+} from '@machinery/core';
+
 import TypeScriptBackend from './TypeScriptBackend';
 
 import type { LocalMap } from '../types';
@@ -57,9 +61,14 @@ class WasmMachineBackend extends TypeScriptBackend {
     );
     code.push('      env: {');
     code.push('        memory: this.memory,');
-    code.push(
-      '        interrupt: (vector: number) => this.interrupt(vector),',
-    );
+    ((this.target.modes as Pick<ModeInfo, 'identifier'>[]) || [])
+      .concat(this.target.modes?.find(modeInfo => modeInfo.identifier === 'default') === undefined ? [{ identifier: 'default' }] : [])
+      .forEach((modeInfo) => {
+        const mode = modeInfo.identifier;
+        code.push(
+          `        interrupt_${mode}: (vector: number) => this.interrupt_${mode}(vector),`,
+        );
+      });
     code.push('      },');
     code.push('    });');
     code.push('    this.instance = instance;');
@@ -73,21 +82,17 @@ class WasmMachineBackend extends TypeScriptBackend {
     code.push('  }');
     code.push('');
 
-    // interrupt() — overridable callback, returns 1 (handled) by default
-    // The wasm module calls this; if it returns 0, wasm does IVT vectoring.
-    if (this.parsed.interrupts?.handler) {
-      code.push(
-        '  interrupt(vector: number): number {',
-      );
-      code.push('    return 0;');
-    } else {
-      code.push(
-        '  interrupt(vector: number): number {',
-      );
-      code.push('    return 0;');
-    }
-    code.push('  }');
-    code.push('');
+    // interrupt_<mode>() — overridable callback, returns 1 (handled) by default
+    // The wasm module calls this; if it returns 0, wasm does default handler vectoring.
+    ((this.target.modes as Pick<ModeInfo, 'identifier'>[]) || [])
+      .concat(this.target.modes?.find(modeInfo => modeInfo.identifier === 'default') === undefined ? [{ identifier: 'default' }] : [])
+      .forEach((modeInfo) => {
+        const mode = modeInfo.identifier;
+        code.push(`  interrupt_${mode}(_: number): number {`);
+        code.push('    return 0;');
+        code.push('  }');
+        code.push('');
+      })
 
     // Register getters/setters — reuse the TypeScriptBackend logic
     // (these just read/write from shared WebAssembly.Memory)

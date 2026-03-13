@@ -193,32 +193,48 @@ class Generator {
 
     // Parse interrupt vector handlers
     if (machine.target.interrupts?.handler) {
-      const handler = machine.target.interrupts.handler;
+      for (const modeInfo of [{ identifier: 'default' }].concat(
+        machine.target.modes || [],
+      )) {
+        const mode = modeInfo.identifier;
 
-      const locals: LocalsInfo = {};
-      const localMap: LocalMap = {};
+        const locals: LocalsInfo = {};
+        const localMap: LocalMap = {};
 
-      for (const local of handler.locals || []) {
-        locals[local.identifier] = local;
+        for (const local of [...(machine.target.interrupts.handler.locals || []), ...(machine.target.interrupts.handler.modes?.[mode]?.locals || [])]) {
+          locals[local.identifier] = local;
+        }
+
+        // Add the 'vector' identifier
+        locals['vector'] = {
+          identifier: 'vector',
+          name: 'Interrupt Vector Index',
+          size: 16,
+        };
+
+        const code =
+          mode !== 'default'
+            ? machine.target.interrupts.handler.modes?.[mode]?.operation?.flat(3).join(' ; ')
+            : machine.target.interrupts.handler.operation?.flat(3).join(' ; ');
+        const parsed = this.parser.parse(
+          (code || '') + ' ;',
+          {},
+          locals,
+        );
+        const statement = this.resolver.resolve(parsed, locals, localMap);
+        map.interrupts.handler ||= {};
+        map.interrupts.handler[mode] = {
+          statement,
+          localMap,
+        };
+
+        if (
+          machine.target.interrupts.handler?.modes?.[mode]?.operation === undefined &&
+          mode !== 'default'
+        ) {
+          map.interrupts.handler.default = map.interrupts.handler[mode];
+        }
       }
-
-      // Add the 'vector' identifier
-      locals['vector'] = {
-        identifier: 'vector',
-        name: 'Interrupt Vector Index',
-        size: 8,
-      };
-
-      const parsed = this.parser.parse(
-        handler.operation.flat(3).join(' ; ') + ' ;',
-        {},
-        locals,
-      );
-      const statement = this.resolver.resolve(parsed, locals, localMap);
-      map.interrupts.handler = {
-        statement,
-        localMap,
-      };
     }
 
     this.map = map;

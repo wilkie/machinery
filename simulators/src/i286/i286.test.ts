@@ -14,7 +14,7 @@ class TestMachine extends Machine {
     this.IP = 0x100;
   }
 
-  interrupt(vector: number) {
+  interrupt_real(vector: number) {
     if (vector === 0x23) {
       // Assert AX === BX
       if (this.AX !== this.BX) {
@@ -38,7 +38,7 @@ class TestMachine extends Machine {
         this.halted = 1;
       }
     } else {
-      super.interrupt(vector);
+      super.interrupt_real(vector);
     }
   }
 }

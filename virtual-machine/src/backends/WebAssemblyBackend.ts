@@ -1,6 +1,7 @@
 import type {
   InstructionForm,
   InstructionInfo,
+  ModeInfo,
   OpcodeMatcher,
   OpcodeMatcherField,
 } from '@machinery/core';
@@ -79,10 +80,15 @@ class WebAssemblyBackend extends Backend {
     code.push('');
 
     // Import interrupt callback (returns i32: 1=handled by host, 0=vector through IVT)
-    code.push('  ;; Import interrupt callback from host');
-    code.push(
-      '  (import "env" "interrupt" (func $interrupt (param i32) (result i32)))',
-    );
+    code.push('  ;; Import interrupt callback(s) from host');
+    ((this.target.modes as Pick<ModeInfo, 'identifier'>[]) || [])
+      .concat(this.target.modes?.find(modeInfo => modeInfo.identifier === 'default') === undefined ? [{ identifier: 'default' }] : [])
+      .forEach((modeInfo) => {
+        const mode = modeInfo.identifier;
+        code.push(
+          `  (import "env" "interrupt_${mode}" (func $interrupt_${mode} (param i32) (result i32)))`,
+        );
+      });
     code.push('');
 
     // Build register local mapping
@@ -137,32 +143,40 @@ class WebAssemblyBackend extends Backend {
     code.push('');
 
     // Generate interrupt handler function from processor definition
+    const locals: LocalsInfo = {};
     if (this.parsed.interrupts?.handler) {
-      const { statement, localMap } = this.parsed.interrupts.handler;
-      if (statement) {
-        const locals: LocalsInfo = {};
-        const { code: handlerCode } = this.fromStatement(statement, {
-          mode: this.target.modes?.[0]?.identifier || 'default',
-          locals,
-          localMap,
-        });
-        const vectorId = localMap.vector?.identifier || 'vector';
-        code.push(
-          '  ;; Interrupt handler: push FLAGS/CS/IP, load from IVT, jump',
-        );
-        code.push(`  (func $interrupt_handler (param $${vectorId} i32)`);
-        for (const [localName, localInfo] of Object.entries(localMap)) {
-          if (localName === 'vector') {
-            continue;
+      ((this.target.modes as Pick<ModeInfo, 'identifier'>[]) || [])
+        .concat([{ identifier: 'default' }])
+        .forEach((modeInfo) => {
+          const mode = modeInfo.identifier;
+          const { statement, localMap } = this.parsed.interrupts.handler?.[mode] || {};
+
+          // Transpile the statement node for this instruction form
+          code.push('  ;; Interrupt handler');
+          if (statement && localMap) {
+            const vectorId = localMap.vector?.identifier || 'vector';
+            const { code: handlerCode } = this.fromStatement(statement, {
+              mode: this.target.modes?.[0]?.identifier || 'default',
+              locals,
+              localMap,
+            });
+            code.push(`  (func $interrupt_${mode}_handler (param $${vectorId} i32)`);
+            for (const [localName, localInfo] of Object.entries(localMap)) {
+              if (localName === 'vector') {
+                continue;
+              }
+              code.push(`    (local $${localInfo.identifier} i32)`);
+            }
+            for (const line of handlerCode) {
+              code.push('    ' + line);
+            }
+          } else {
+            code.push(`  (func $interrupt_${mode}_handler (param $_ i32)`);
+            code.push(`    ;; Empty handler for this mode`);
           }
-          code.push(`    (local $${localInfo.identifier} i32)`);
-        }
-        for (const line of handlerCode) {
-          code.push('    ' + line);
-        }
-        code.push('  )');
-        code.push('');
-      }
+          code.push('  )');
+          code.push('');
+        })
     }
 
     return code;
@@ -297,7 +311,7 @@ class WebAssemblyBackend extends Backend {
     const hasHandler = !!this.parsed.interrupts?.handler;
     if (hasHandler) {
       // Call JS callback first; if it returns 0 (not handled), do IVT vectoring
-      const call = `(if (i32.eqz (call $interrupt ${value})) (then (call $interrupt_handler ${value})))`;
+      const call = `(if (i32.eqz (call $interrupt_${generated.context.mode} ${value})) (then (call $interrupt_${generated.context.mode}_handler ${value})))`;
       if (condition) {
         return [
           `(if ${this.fromComparison(generated, condition)[0]} (then ${call}))`,
@@ -308,7 +322,7 @@ class WebAssemblyBackend extends Backend {
     // No interrupt handler defined — just call JS callback (ignore return value)
     if (condition) {
       return [
-        `(if ${this.fromComparison(generated, condition)[0]} (then (drop (call $interrupt ${value}))))`,
+        `(if ${this.fromComparison(generated, condition)[0]} (then (drop (call $interrupt_${generated.context.mode} ${value}))))`,
       ];
     }
     return [`(drop (call $interrupt ${value}))`];

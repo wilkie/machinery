@@ -113,7 +113,9 @@ export interface IntermediateRepresentation {
     };
   };
   interrupts: {
-    handler?: ParsedOperation;
+    handler?: {
+      [mode: string]: ParsedOperation;
+    };
     vectors: {
       [key: string]: {
         vector: number;

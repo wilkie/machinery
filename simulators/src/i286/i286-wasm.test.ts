@@ -8,7 +8,7 @@ const wasmPath = resolve(__dirname, 'machine.wasm');
 class TestWasmMachine extends WasmMachine {
   halted = 0;
 
-  interrupt(vector: number): number {
+  interrupt_real(vector: number): number {
     if (vector === 0x23) {
       // Assert AX === BX
       if (this.AX !== this.BX) {

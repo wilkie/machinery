@@ -235,6 +235,29 @@ export const registers: RegisterInfo[] = [
             'ES_LIMIT_MAX = 0xffff',
           ],
         },
+        protected: {
+          locals: [
+            {
+              identifier: 'index',
+              name: 'Temporary value to hold the GDT entry index',
+              size: 16,
+            },
+            {
+              identifier: 'inverted',
+              name: 'Temporary value to hold whether or not the selected segment expands down',
+              size: 1,
+            },
+          ],
+          operation: [
+            'index = ES >> 3',
+            '#GP if index == 0',
+            '#GP if (index * 8) > GDTR.limit',
+            'inverted = ((RAM.GDT.gates[index].SD.type & 0b110) == 0b010) ? 1 : 0',
+            'ES_BASE = RAM.GDT.gates[index].SD.base',
+            'ES_LIMIT_MIN = inverted == 1 ? RAM.GDT.gates[index].SD.limit + 1 : 0',
+            'ES_LIMIT_MAX = inverted == 1 ? 0xffff : RAM.GDT.gates[index].SD.limit',
+          ],
+        },
       },
     },
   },

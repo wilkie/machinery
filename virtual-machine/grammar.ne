@@ -68,7 +68,7 @@ statement -> assignment %terminator %terminator:* statement:? {% (data) => new S
            | %loop %if_ comparison %terminator %terminator:* statement:? %repeat %terminator:* statement:? {% (data) => new StatementNode(new LoopBlockNode('', new LoopIfNode(data[2]), data[5] || undefined), data[8] || undefined) %}
            | %if_ comparison %terminator:* statement:? %end %if_ %terminator:* statement:? {% (data) => new StatementNode(new IfBlockNode(data[1], data[3]), data[7] || undefined) %}
            | %raise operand %if_ comparison %terminator:* statement:? {% (data) => new StatementNode(new RaiseExpressionNode(data[1], data[3]), data[5] || undefined) %}
-           | %comment %not_terminator:* %terminator %terminator:* statement:? {% (data) => new StatementNode(new CommentNode(data[1]), data[4] || undefined) %}
+           | %comment %terminator:* statement:? {% (data) => new StatementNode(new CommentNode(data[0].value), data[2] || undefined) %}
            | %terminator {% () => new StatementNode(new EmptyNode()) %}
 
 # An assignment has a left-hand identifier and then some expression that

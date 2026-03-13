@@ -938,7 +938,7 @@ class WebAssemblyBackend extends Backend {
       modifies: [],
       code: [],
       context: {
-        mode: this.target.modes?.[0]?.identifier || 'default',
+        mode: context.mode || this.target.modes?.[0]?.identifier || 'default',
         locals: {},
         localMap: { _ip: { identifier: '_ip' } },
       },
@@ -947,6 +947,8 @@ class WebAssemblyBackend extends Backend {
     const { statement, localMap } =
       this.parsed.instructions[instruction.identifier][variant][context.mode]
         .operation;
+
+    context.code.push(`${indent}(;; ${instruction.identifier}[${variant}] ;;)`);
 
     // Read the rest of the data for the instruction
     let bytesRead = 0;
@@ -1087,7 +1089,7 @@ class WebAssemblyBackend extends Backend {
     // Transpile the instruction body
     if (statement) {
       const { code } = this.fromStatement(statement, {
-        mode: this.target.modes?.[0]?.identifier || 'default',
+        mode: context.mode || this.target.modes?.[0]?.identifier || 'default',
         locals,
         localMap,
       });

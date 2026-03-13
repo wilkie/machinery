@@ -365,15 +365,8 @@ class TypeScriptBackend extends Backend {
     indent: string,
     context: DecoderContext,
   ) {
-    if (instruction.identifier !== 'neg') {
-      //return;
-    }
-
     const target = this.target;
     const prefix = !!instruction.prefix;
-    //context.code.push(
-    //  `${indent}console.debug("${instruction.identifier}_${variant}");`,
-    //);
 
     const ip =
       target.fetch?.effectiveRegister ||
@@ -407,7 +400,7 @@ class TypeScriptBackend extends Backend {
       modifies: [],
       code: [],
       context: {
-        mode: this.target.modes?.[0]?.identifier || 'default',
+        mode: context.mode || this.target.modes?.[0]?.identifier || 'default',
         locals: {},
         localMap: { _ip: { identifier: '_ip' } },
       },
@@ -419,6 +412,7 @@ class TypeScriptBackend extends Backend {
 
     // Read the rest of the data for the instruction before going to the execute phase
     let bytesRead = 0;
+    context.code.push(`${indent}// ${instruction.identifier}[${variant}]`);
     for (let i = 0; i < form.opcode.length; i++) {
       let matcher: string | number | OpcodeMatcher | undefined = form.opcode[i];
       const matcher_name =
@@ -429,7 +423,7 @@ class TypeScriptBackend extends Backend {
             : matcher.identifier;
       if (typeof matcher === 'string') {
         // this is expanded to another named operand
-        context.code.push(indent + '// ' + matcher_name);
+        //context.code.push(indent + '// ' + matcher_name);
         matcher = (target.operands || ([] as OpcodeMatcher[])).find(
           (operand) => operand.identifier === matcher_name,
         );
@@ -450,7 +444,7 @@ class TypeScriptBackend extends Backend {
 
       if (typeof matcher === 'number') {
         // ignore this
-        context.code.push(indent + '// ' + matcher);
+        //context.code.push(indent + '// ' + matcher);
         bytesRead++;
         continue;
       }
@@ -707,7 +701,7 @@ class TypeScriptBackend extends Backend {
     // Transpile the statement node for this instruction form
     if (statement) {
       const { code } = this.fromStatement(statement, {
-        mode: this.target.modes?.[0]?.identifier || 'default',
+        mode: context.mode || this.target.modes?.[0]?.identifier || 'default',
         locals,
         localMap,
       });

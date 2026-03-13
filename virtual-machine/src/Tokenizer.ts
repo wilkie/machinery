@@ -37,7 +37,10 @@ class Tokenizer {
       list_end: /\](?::(?:u|i)\d+)?/,
       list_delimiter: /,/,
       // Starts a comment (until a terminator)
-      comment: /;;/,
+      comment: {
+        match: /;;[^;]+\s;\s/,
+        value: (data) => data.substring(2, data.length - 3),
+      },
       // Ends a statement
       terminator: /;/,
       // A macro starts with a dollar sign and is encapsulated in curly braces

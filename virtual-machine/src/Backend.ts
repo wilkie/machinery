@@ -133,7 +133,7 @@ class Backend {
     } else if (node instanceof NextIfNode) {
       return this.fromNextIf(generated, node);
     } else if (node instanceof CommentNode) {
-      return this.comment('');
+      return this.comment(node.message.trim());
     }
 
     return [];
@@ -153,7 +153,7 @@ class Backend {
           parsedRegister.get[generated.context.mode]?.statement ||
           parsedRegister.get.default?.statement;
         if (node) {
-          const getStatement = this.fromStatement(node);
+          const getStatement = this.fromStatement(node, generated.context);
           const choiceInfo = generated.choiceIndexes?.[name];
           if (choiceInfo) {
             // Guard with conditional: only emit when the choice index selects this register
@@ -185,7 +185,7 @@ class Backend {
           parsedRegister.set[generated.context.mode]?.statement ||
           parsedRegister.set.default?.statement;
         if (node) {
-          const setStatement = this.fromStatement(node);
+          const setStatement = this.fromStatement(node, generated.context);
           const choiceInfo = generated.choiceIndexes?.[name];
           if (choiceInfo) {
             // Guard with conditional: only emit when the choice index selects this register

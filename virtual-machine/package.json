@@ -20,7 +20,8 @@
     "build": "pnpm build:grammar && tsup",
     "test": "jest --passWithNoTests",
     "lint": "eslint src",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@machinery/core": "workspace:*",

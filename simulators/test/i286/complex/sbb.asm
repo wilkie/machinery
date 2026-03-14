@@ -287,6 +287,7 @@ start:
     CHECK_ZF 1
     CHECK_PF 1
 
+    lea bx, [m8_bx]
     mov byte [bx], 0x01
     stc
     sbb byte [bx], 0x01
@@ -360,6 +361,7 @@ start:
     CHECK_ZF 1
     CHECK_PF 1
 
+    lea bx, [base8bd]
     mov byte [bx + (m8_bxd - base8bd)], 0x00
     stc
     sbb byte [bx + (m8_bxd - base8bd)], 0x00
@@ -389,6 +391,7 @@ start:
     CHECK_OF 0
     CHECK_AF 0
 
+    lea bx, [base8]
     mov byte [bx+si + (m8_bxsi - base8 - index8)], 0x80
     stc
     sbb byte [bx+si + (m8_bxsi - base8 - index8)], 0x80
@@ -650,6 +653,7 @@ start:
     CHECK_PF 1
     CHECK_SF 1
 
+    lea bx, [m16_bx]
     mov word [bx], 0x0000
     stc
     sbb word [bx], 0x0001
@@ -725,6 +729,7 @@ start:
     CHECK_SF 1
     CHECK_AF 0
 
+    lea bx, [base16bd]
     mov word [bx + (m16_bxd - base16bd)], 0x8000
     stc
     sbb word [bx + (m16_bxd - base16bd)], 0x0000
@@ -754,6 +759,7 @@ start:
     CHECK_OF 0
     CHECK_AF 0
 
+    lea bx, [base16]
     mov word [bx+si + (m16_bxsi - base16 - index16)], 0x8000
     stc
     sbb word [bx+si + (m16_bxsi - base16 - index16)], 0x8000

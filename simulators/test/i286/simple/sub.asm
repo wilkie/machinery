@@ -108,7 +108,7 @@ sub_rw_ew_w db 0x90, 0x90, 0x90, 0x90
     ; SUB ew, rw (mod 0x1 with constant signed DISP, reg is AL,...BH, result is an overflow)
     mov bp, sub_rw_ew_b
     mov si, 9
-    rep_macro_5w sub_ew_rw, ax, word [bp + si - 9], 0xffff, 0x0, 0x1
+    rep_macro_5w sub_ew_rw, ax, word [bp + si - 9], 0xfffe, 0x0, 0x2
 
     ; SUB rw, ew
  ; sub_rw_ew %1, %2 (sub %3 - %4 and test that it equals %5)

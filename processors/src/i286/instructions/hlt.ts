@@ -19,6 +19,7 @@ export const hlt: InstructionInfo = {
         'HALTED = 1',
         'HALTED_CS = CS',
         'HALTED_IP = IP',
+        ';; switch to halted mode',
         '@mode = @modes.halted',
       ],
       cycles: 2,

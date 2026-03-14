@@ -10,6 +10,7 @@ import type {
 
 import {
   ArrayAccessNode,
+  AssignmentNode,
   BinaryExpressionNode,
   BinaryLogicNode,
   CallExpressionNode,
@@ -713,7 +714,8 @@ class TypeScriptBackend extends Backend {
             this.readRegister(generated, ipReference) +
               ' + 0x' +
               bytesRead.toString(16),
-          ),
+          ) +
+          ';',
       );
       //context.code.push(indent + this.readGlobal(generated, ip) + " += 0x" + bytesRead.toString(16) + ";");
     }
@@ -1443,7 +1445,7 @@ class TypeScriptBackend extends Backend {
     return [
       `if (${this.fromComparison(generated, node.condition)[0]}) {`,
       ...(body?.code.map((line) => `  ${line}`) || []),
-      `}`,
+      `} // end if`,
     ];
   }
 
@@ -1465,6 +1467,15 @@ class TypeScriptBackend extends Backend {
       ...(body?.code.map((line) => `  ${line}`) || []),
       `}${node.condition?.condition ? ` while (${this.fromComparison(generated, node.condition.condition)[0]}) // end ${node.name}` : ''}`,
     ];
+  }
+
+  fromAssignment(
+    generated: GeneratedStatement,
+    node: AssignmentNode,
+  ): string[] {
+    const ret = super.fromAssignment(generated, node);
+    ret[ret.length - 1] += ';';
+    return ret;
   }
 
   fromUnaryExpression(

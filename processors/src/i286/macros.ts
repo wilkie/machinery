@@ -2,6 +2,10 @@ export const macros = {
   // Mod/RM byte expansion helper macros
   MOD_RM_SEGMENT:
     '(DATA_SEG_BASE == 0xffff ? ${[DS_BASE,DS_BASE1,SS_BASE,SS_BASE1,DS_BASE2,DS_BASE3,SS_BASE2,DS_BASE4][%{rm}]} : DATA_SEG_BASE)',
+  MOD_RM_SEGMENT_LIMIT_MIN:
+    '(DATA_SEG_BASE == 0xffff ? ${[DS_LIMIT_MIN,DS_LIMIT_MIN1,SS_LIMIT_MIN,SS_LIMIT_MIN1,DS_LIMIT_MIN2,DS_LIMIT_MIN3,SS_LIMIT_MIN2,DS_LIMIT_MIN4][%{rm}]} : DATA_SEG_LIMIT_MIN)',
+  MOD_RM_SEGMENT_LIMIT_MAX:
+    '(DATA_SEG_BASE == 0xffff ? ${[DS_LIMIT_MAX,DS_LIMIT_MAX1,SS_LIMIT_MAX,SS_LIMIT_MAX1,DS_LIMIT_MAX2,DS_LIMIT_MAX3,SS_LIMIT_MAX2,DS_LIMIT_MAX4][%{rm}]} : DATA_SEG_LIMIT_MAX)',
   // [BX,BX,BP,BP,x,x,BP,BX][rm] -> [BX,BP][ is rm in [0, 1, 7] or not? ]
   MOD_RM_BASE:
     '((%{rm} & 0x6) == 0x4) ? 0 : ${[BX,BP][(((%{rm} + 1) & 7) + 5) >> 3]}',
@@ -105,6 +109,25 @@ export const macros = {
   // Depending on the operation, understand the auxiliary carry flag
   RESOLVE_AF: [
     'AF = ((flag_op < ${FLAG_OP_RESOLVED}) && (flag_op & ${FLAG_OP_NOAF} == 0)) ? ((a ^ b ^ alu_result) & 0x10) >> 4 : AF',
+  ],
+
+  SEGMENT_LIMIT_CHECK_REAL: [
+    '#GP if offset == 0xffff',
+  ],
+
+  SEGMENT_LIMIT_CHECK_PROTECTED8: [
+    '#GP if offset < ${MOD_RM_SEGMENT_LIMIT_MIN}',
+    '#GP if offset > ${MOD_RM_SEGMENT_LIMIT_MAX}',
+  ],
+
+  SEGMENT_LIMIT_CHECK_PROTECTED16: [
+    '#GP if (offset + 1) < ${MOD_RM_SEGMENT_LIMIT_MIN}',
+    '#GP if (offset + 1) > ${MOD_RM_SEGMENT_LIMIT_MAX}',
+  ],
+
+  SEGMENT_LIMIT_CHECK_PROTECTED32: [
+    '#GP if (offset + 3) < ${MOD_RM_SEGMENT_LIMIT_MIN}',
+    '#GP if (offset + 3) > ${MOD_RM_SEGMENT_LIMIT_MAX}',
   ],
 
   // Raises exceptions

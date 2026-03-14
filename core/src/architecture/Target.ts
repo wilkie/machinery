@@ -39,25 +39,6 @@ export interface RegisterField {
   fields?: RegisterField[];
 }
 
-export interface OperationViaMode {
-  /**
-   * We might specify different operations depending on mode.
-   */
-  modes?: {
-    [mode: string]: {
-      /**
-       * The local variables and state that are used as named by identifier in the
-       * operation.
-       */
-      locals?: LocalInfo[];
-      /**
-       * The code to run for this mode.
-       */
-      operation: Operation;
-    };
-  };
-}
-
 export interface OperationNotViaMode {
   /**
    * The local variables and state that are used as named by identifier in the
@@ -68,6 +49,15 @@ export interface OperationNotViaMode {
    * The code to run just prior to when the register is accessed.
    */
   operation: Operation;
+}
+
+export interface OperationViaMode {
+  /**
+   * We might specify different operations depending on mode.
+   */
+  modes?: {
+    [mode: string]: OperationNotViaMode;
+  };
 }
 
 export type OperationMaybeModes = OperationNotViaMode | OperationViaMode;
@@ -237,11 +227,23 @@ export interface LocalInfo {
   signed?: boolean;
 }
 
-/**
- * Describes a variant of an instruction. Useful within the context of an
- * InstructionInfo description.
- */
-export interface InstructionForm {
+export interface FinalizableOperationNotViaMode extends OperationNotViaMode {
+  /**
+   * A set of pseudo-code that describes what to do after the operation has finished.
+   */
+  finalize?: string[];
+}
+
+export interface FinalizableOperationViaMode<T = FinalizableOperationNotViaMode> {
+  /**
+   * We might specify different operations depending on mode.
+   */
+  modes?: {
+    [mode: string]: T;
+  };
+}
+
+export interface InstructionFormBase {
   /**
    * The byte code or codes that represents this instruction.
    *
@@ -258,23 +260,6 @@ export interface InstructionForm {
   modifies?: string[];
   /** Overrides for any flags left undefined, if any */
   undefined?: string[];
-  /**
-   * The local variables and state that are used as named by identifier in the
-   * operation.
-   */
-  locals?: LocalInfo[];
-  /**
-   * A set of pseudo-code that describes the operation being performed.
-   */
-  operation?:
-    | Operation
-    | {
-        [mode: string]: Operation;
-      };
-  /**
-   * A set of pseudo-code that describes what to do after the operation has finished.
-   */
-  finalize?: string[];
   /**
    * If known, the number of cycles this instruction takes to complete.
    */
@@ -321,13 +306,13 @@ export interface InstructionForm {
    * byte count. Lower values are preferred. Defaults to 0 if not specified.
    */
   encodingPriority?: number;
-  /**
-   * We might specify different values depending on mode.
-   */
-  modes?: {
-    [mode: string]: Omit<InstructionForm, 'opcode'>;
-  };
 }
+
+/**
+ * Describes a variant of an instruction. Useful within the context of an
+ * InstructionInfo description.
+ */
+export type InstructionForm = InstructionFormBase & (FinalizableOperationNotViaMode | FinalizableOperationViaMode<Omit<InstructionFormBase, 'opcode'> & FinalizableOperationNotViaMode>);
 
 /**
  * Describes a single type of instruction.

@@ -60,6 +60,18 @@ export const state: RegisterInfo[] = [
     initialValue: 0xffff,
   },
   {
+    identifier: 'DATA_SEG_LIMIT_MIN',
+    name: 'Segment Override Segment Limit (lower)',
+    size: 16,
+    type: RegisterTypes.Integer,
+  },
+  {
+    identifier: 'DATA_SEG_LIMIT_MAX',
+    name: 'Segment Override Segment Limit (upper)',
+    size: 16,
+    type: RegisterTypes.Integer,
+  },
+  {
     identifier: 'ES_BASE',
     name: 'Cached E Segment Base Address',
     size: 32,

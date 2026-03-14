@@ -152,6 +152,8 @@ export const interrupts = {
             'if (desc_type & 0b010) != 0b010 && new_cpl < (CS & 0x0003)',
             [
               ';; read new SS:SP from TSS for target privilege level',
+              'new_ss = SS',
+              'new_sp = SP',
               'if new_cpl == 0',
               ['new_sp = RAM.TSS.SP0', 'new_ss = RAM.TSS.SS0'],
               'end if',
@@ -204,7 +206,7 @@ export const interrupts = {
             'EXCEPTION_DEPTH = 0',
             ';; load new IP',
             'IP = NEW_IP',
-            ';; interrupt gates (T=0) clear IF; trap gates (T=1) leave IF',
+            ';; interrupt gates (T=0) clear IF ... trap gates (T=1) leave IF',
             'if RAM.IDT.gates[vector].T == 0',
             ['IF = 0'],
             'end if',

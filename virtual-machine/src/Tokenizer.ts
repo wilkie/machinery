@@ -38,7 +38,7 @@ class Tokenizer {
       list_delimiter: /,/,
       // Starts a comment (until a terminator)
       comment: {
-        match: /;;[^;]+\s;\s/,
+        match: /;;.+?\s;\s/,
         value: (data) => data.substring(2, data.length - 3),
       },
       // Ends a statement
@@ -161,7 +161,7 @@ class Tokenizer {
           }
         }
 
-        const coercion = token.value.includes(':')
+        const coercion = (token.type !== 'comment' && token.value.includes(':'))
           ? token.value.split(':')[1]
           : undefined;
         token.value = coercion ? token.value.split(':')[0] : token.value;

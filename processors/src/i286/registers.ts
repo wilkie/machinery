@@ -739,8 +739,22 @@ export const registers: RegisterInfo[] = [
   {
     identifier: 'TR',
     name: 'Task Register',
-    size: 16,
+    size: 64,
     type: RegisterTypes.Integer,
+    fields: [
+      {
+        identifier: 'limit',
+        name: 'IDT Limit Register',
+        offset: 0,
+        size: 16,
+      },
+      {
+        identifier: 'base',
+        name: 'IDT Base Offset Register',
+        offset: 32,
+        size: 24,
+      },
+    ],
   },
   // Data structure addresses
   {

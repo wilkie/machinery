@@ -22,7 +22,8 @@ class Parser {
       // able to pass an array of tokens
       parser.feed(tokens);
     } catch (e) {
-      console.log(tokens);
+      console.log('offending code:', code);
+      console.log('tokens:', JSON.stringify(tokens, null, 2));
       throw e;
     }
 

@@ -136,7 +136,7 @@ class Tokenizer {
           for (const operation of Array.isArray(macro) ? macro : [macro]) {
             ret = ret.concat(
               this.tokenize(
-                operation.toString() + (Array.isArray(macro) ? ';' : ''),
+                operation.toString() + (Array.isArray(macro) ? ' ; ' : ''),
                 macros,
                 locals,
               ),

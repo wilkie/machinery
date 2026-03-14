@@ -114,7 +114,9 @@ adc_rw_ew_w db 0x90, 0x90, 0x90, 0x90
     ; ADC ew, rw (mod 0x1 with constant signed DISP, reg is AX..., result is an overflow)
     mov bp, adc_rw_ew_b
     mov si, 9
-    rep_macro_5w adc_ew_rw, ax, word [bp + si - 9], 0xffff, 0xffff, 0xfffe
+    ; [add] -2 + -2 = -4 (C = 1)
+    ; [adc] -4 + -2 + 1 = -5
+    rep_macro_5w adc_ew_rw, ax, word [bp + si - 9], 0xfffe, 0xfffe, 0xfffb
 
     ; ADC rw, ew
  ; adc_rw_ew %1, %2 (adc %3 + %4 and test that it equals %5)

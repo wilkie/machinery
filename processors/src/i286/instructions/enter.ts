@@ -17,6 +17,11 @@ export const enter: InstructionInfo = {
       size: 32,
     },
     {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
+    {
       identifier: 'frame_ptr',
       name: 'Frame Pointer',
       size: 16,
@@ -32,38 +37,96 @@ export const enter: InstructionInfo = {
     // 0xC8 dw 01 - ENTER dw, 1   (15 cycles)
     // 0xC8 dw db - ENTER dw, db  (12 + 4(db) cycles)
     {
-      operation: [
-        'level = %{level} % 32',
-        // Push BP
-        'SP = SP - 2',
-        'stack_address = SS_BASE + SP',
-        'RAM:u16[stack_address] = BP',
-        // Initialize frame_ptr
-        'frame_ptr = SP',
-        // When the level is specified
-        'if level > 0',
-        [
-          // We wind the stack for larger levels
-          'loop if level > 1',
-          [
-            'BP = BP - 2',
+      modes: {
+        real: {
+          operation: [
+            'level = %{level} % 32',
+            // Push BP
             'SP = SP - 2',
-            'stack_address = stack_address - 2',
-            'RAM:u16[stack_address] = RAM:u16[SS_BASE + BP]',
-            'level = level - 1',
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if offset == 0xffff',
+            'RAM:u16[stack_address] = BP',
+            // Initialize frame_ptr
+            'frame_ptr = SP',
+            // When the level is specified
+            'if level > 0',
+            [
+              // We wind the stack for larger levels
+              'loop if level > 1',
+              [
+                'BP = BP - 2',
+                'SP = SP - 2',
+                'stack_address = stack_address - 2',
+                'offset = BP',
+                '#GP if offset == 0xffff',
+                'offset = SP',
+                '#GP if offset == 0xffff',
+                'RAM:u16[stack_address] = RAM:u16[SS_BASE + BP]',
+                'level = level - 1',
+              ],
+              'repeat',
+              // We always push the initial value of SP (frame_ptr + 2)
+              'SP = SP - 2',
+              'stack_address = stack_address - 2',
+              'offset = SP',
+              '#GP if offset == 0xffff',
+              'RAM:u16[stack_address] = frame_ptr + 2',
+            ],
+            'end if',
+            // Maintain frame_ptr into BP
+            'BP = frame_ptr',
+            // Allocate requested space on the stack
+            'SP = SP - %{imm}',
           ],
-          'repeat',
-          // We always push the initial value of SP (frame_ptr + 2)
-          'SP = SP - 2',
-          'stack_address = stack_address - 2',
-          'RAM:u16[stack_address] = frame_ptr + 2',
-        ],
-        'end if',
-        // Maintain frame_ptr into BP
-        'BP = frame_ptr',
-        // Allocate requested space on the stack
-        'SP = SP - %{imm}',
-      ],
+        },
+        protected: {
+          operation: [
+            'level = %{level} % 32',
+            // Push BP
+            'SP = SP - 2',
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if (offset + 1) < SS_LIMIT_MIN',
+            '#GP if (offset + 1) > SS_LIMIT_MAX',
+            'RAM:u16[stack_address] = BP',
+            // Initialize frame_ptr
+            'frame_ptr = SP',
+            // When the level is specified
+            'if level > 0',
+            [
+              // We wind the stack for larger levels
+              'loop if level > 1',
+              [
+                'BP = BP - 2',
+                'SP = SP - 2',
+                'stack_address = stack_address - 2',
+                'offset = BP',
+                '#GP if (offset + 1) < SS_LIMIT_MIN',
+                '#GP if (offset + 1) > SS_LIMIT_MAX',
+                'offset = SP',
+                '#GP if (offset + 1) < SS_LIMIT_MIN',
+                '#GP if (offset + 1) > SS_LIMIT_MAX',
+                'RAM:u16[stack_address] = RAM:u16[SS_BASE + BP]',
+                'level = level - 1',
+              ],
+              'repeat',
+              // We always push the initial value of SP (frame_ptr + 2)
+              'SP = SP - 2',
+              'stack_address = stack_address - 2',
+              'offset = SP',
+              '#GP if (offset + 1) < SS_LIMIT_MIN',
+              '#GP if (offset + 1) > SS_LIMIT_MAX',
+              'RAM:u16[stack_address] = frame_ptr + 2',
+            ],
+            'end if',
+            // Maintain frame_ptr into BP
+            'BP = frame_ptr',
+            // Allocate requested space on the stack
+            'SP = SP - %{imm}',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ENTER,
         'IMM_u16',

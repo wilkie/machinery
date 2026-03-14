@@ -19,15 +19,36 @@ export const ret: InstructionInfo = {
       name: 'Effective Stack Address',
       size: 32,
     },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
   ],
   forms: [
     // 0xC3 - RET near
     {
-      operation: [
-        'stack_address = SS_BASE + SP',
-        'IP = RAM:u16[stack_address]',
-        'SP = SP + 2',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if offset == 0xffff',
+            'IP = RAM:u16[stack_address]',
+            'SP = SP + 2',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if (offset + 1) < SS_LIMIT_MIN',
+            '#GP if (offset + 1) > SS_LIMIT_MAX',
+            'IP = RAM:u16[stack_address]',
+            'SP = SP + 2',
+          ],
+        },
+      },
       opcode: [Opcodes.RET],
       operands: [],
       operandSize: 16,
@@ -37,12 +58,30 @@ export const ret: InstructionInfo = {
     // 0xCB - RET far
     // 0xCB - RET to lesser privilege
     {
-      operation: [
-        'stack_address = SS_BASE + SP',
-        'IP = RAM:u16[stack_address]',
-        'CS = RAM:u16[stack_address + 2]',
-        'SP = SP + 4',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if offset == 0xffff',
+            '#GP if (offset + 2) == 0xffff',
+            'IP = RAM:u16[stack_address]',
+            'CS = RAM:u16[stack_address + 2]',
+            'SP = SP + 4',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if (offset + 3) < SS_LIMIT_MIN',
+            '#GP if (offset + 3) > SS_LIMIT_MAX',
+            'IP = RAM:u16[stack_address]',
+            'CS = RAM:u16[stack_address + 2]',
+            'SP = SP + 4',
+          ],
+        },
+      },
       opcode: [Opcodes.RETF],
       operands: [],
       operandSize: 16,
@@ -51,11 +90,27 @@ export const ret: InstructionInfo = {
     },
     // 0xC2 dw - RET near dw
     {
-      operation: [
-        'stack_address = SS_BASE + SP',
-        'IP = RAM:u16[stack_address]',
-        'SP = SP + 2 + %{imm}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if offset == 0xffff',
+            'IP = RAM:u16[stack_address]',
+            'SP = SP + 2 + %{imm}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if (offset + 1) < SS_LIMIT_MIN',
+            '#GP if (offset + 1) > SS_LIMIT_MAX',
+            'IP = RAM:u16[stack_address]',
+            'SP = SP + 2 + %{imm}',
+          ],
+        },
+      },
       opcode: [Opcodes.RET_DW, 'IMM_u16'],
       operands: ['imm'],
       operandSize: 16,
@@ -65,12 +120,30 @@ export const ret: InstructionInfo = {
     // 0xCA dw - RET far dw
     // 0xCA dw - RET to lesser privilege dw
     {
-      operation: [
-        'stack_address = SS_BASE + SP',
-        'IP = RAM:u16[stack_address]',
-        'CS = RAM:u16[stack_address + 2]',
-        'SP = SP + 4 + %{imm}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if offset == 0xffff',
+            '#GP if (offset + 2) == 0xffff',
+            'IP = RAM:u16[stack_address]',
+            'CS = RAM:u16[stack_address + 2]',
+            'SP = SP + 4 + %{imm}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if (offset + 3) < SS_LIMIT_MIN',
+            '#GP if (offset + 3) > SS_LIMIT_MAX',
+            'IP = RAM:u16[stack_address]',
+            'CS = RAM:u16[stack_address + 2]',
+            'SP = SP + 4 + %{imm}',
+          ],
+        },
+      },
       opcode: [Opcodes.RETF_DW, 'IMM_u16'],
       operands: ['imm'],
       operandSize: 16,

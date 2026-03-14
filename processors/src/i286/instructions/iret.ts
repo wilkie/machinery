@@ -84,17 +84,42 @@ export const iret: InstructionInfo = {
       name: 'Effective Stack Address',
       size: 32,
     },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
   ],
   forms: [
     // 0xCF - IRET
     {
-      operation: [
-        'stack_address = SS_BASE + SP',
-        'IP = RAM:u16[stack_address]',
-        'CS = RAM:u16[stack_address + 2]',
-        'FLAGS = RAM:u16[stack_address + 4] | 0b10',
-        'SP = SP + 6',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if offset == 0xffff',
+            '#GP if (offset + 2) == 0xffff',
+            '#GP if (offset + 4) == 0xffff',
+            'IP = RAM:u16[stack_address]',
+            'CS = RAM:u16[stack_address + 2]',
+            'FLAGS = RAM:u16[stack_address + 4] | 0b10',
+            'SP = SP + 6',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if (offset + 5) < SS_LIMIT_MIN',
+            '#GP if (offset + 5) > SS_LIMIT_MAX',
+            'IP = RAM:u16[stack_address]',
+            'CS = RAM:u16[stack_address + 2]',
+            'FLAGS = RAM:u16[stack_address + 4] | 0b10',
+            'SP = SP + 6',
+          ],
+        },
+      },
       opcode: [Opcodes.IRET],
       operands: [],
       operandSize: 16,

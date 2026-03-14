@@ -59,7 +59,7 @@ JUMP FAR:
       Task State Segment must be PRESENT else #NP (TSS selector)
       SWITCH_TASKS with nesting to TS.
       IP must be in code segment limit else #GP(0)
-    Else GP (selector) 
+    Else GP (selector)
 `;
 
 export const jmp: InstructionInfo = {
@@ -76,6 +76,11 @@ export const jmp: InstructionInfo = {
     {
       identifier: 'effective_address',
       name: 'Effective Address',
+      size: 32,
+    },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
       size: 32,
     },
   ],
@@ -126,10 +131,24 @@ export const jmp: InstructionInfo = {
     },
     // 0xFF /4 - JMP NEAR ew (absolute offset)
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'IP = RAM:u16[effective_address]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'IP = RAM:u16[effective_address]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'IP = RAM:u16[effective_address]',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_110_100_00', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
@@ -138,10 +157,24 @@ export const jmp: InstructionInfo = {
       cycles: 11,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'IP = RAM:u16[effective_address]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'IP = RAM:u16[effective_address]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'IP = RAM:u16[effective_address]',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_100_00'],
       operands: ['rm'],
       operandSize: 16,
@@ -150,10 +183,24 @@ export const jmp: InstructionInfo = {
       cycles: 11,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'IP = RAM:u16[effective_address]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'IP = RAM:u16[effective_address]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'IP = RAM:u16[effective_address]',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_100_01', 'DISP_i8'],
       operands: ['rm'],
       operandSize: 16,
@@ -162,10 +209,24 @@ export const jmp: InstructionInfo = {
       cycles: 11,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'IP = RAM:u16[effective_address]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'IP = RAM:u16[effective_address]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'IP = RAM:u16[effective_address]',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_100_10', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
@@ -184,11 +245,26 @@ export const jmp: InstructionInfo = {
     },
     // 0xFF /5 - JMP FAR ed
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'IP = RAM:u16[effective_address]',
-        'CS = RAM:u16[effective_address + 2]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'IP = RAM:u16[effective_address]',
+            'CS = RAM:u16[effective_address + 2]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'IP = RAM:u16[effective_address]',
+            'CS = RAM:u16[effective_address + 2]',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_110_101_00', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
@@ -197,11 +273,26 @@ export const jmp: InstructionInfo = {
       cycles: 15, // 26 in protected-mode, 41 via same-privilege call gate, 178 via tss, 183 via task gate
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'IP = RAM:u16[effective_address]',
-        'CS = RAM:u16[effective_address + 2]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'IP = RAM:u16[effective_address]',
+            'CS = RAM:u16[effective_address + 2]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'IP = RAM:u16[effective_address]',
+            'CS = RAM:u16[effective_address + 2]',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_101_00'],
       operands: ['rm'],
       operandSize: 16,
@@ -210,11 +301,26 @@ export const jmp: InstructionInfo = {
       cycles: 11,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'IP = RAM:u16[effective_address]',
-        'CS = RAM:u16[effective_address + 2]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'IP = RAM:u16[effective_address]',
+            'CS = RAM:u16[effective_address + 2]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'IP = RAM:u16[effective_address]',
+            'CS = RAM:u16[effective_address + 2]',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_101_01', 'DISP_i8'],
       operands: ['rm'],
       operandSize: 16,
@@ -223,11 +329,26 @@ export const jmp: InstructionInfo = {
       cycles: 11,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'IP = RAM:u16[effective_address]',
-        'CS = RAM:u16[effective_address + 2]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'IP = RAM:u16[effective_address]',
+            'CS = RAM:u16[effective_address + 2]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'IP = RAM:u16[effective_address]',
+            'CS = RAM:u16[effective_address + 2]',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_101_10', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,

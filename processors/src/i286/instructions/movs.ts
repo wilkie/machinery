@@ -20,23 +20,54 @@ export const movs: InstructionInfo = {
       name: 'Effective Address',
       size: 32,
     },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
   ],
   forms: [
     // 0xA4 MOVS mb, mb
     // 0xA4 MOVSB
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + SI',
-          'RAM:u8[ES_BASE + DI] = RAM:u8[effective_address]',
-          'SI = SI + (DF == 1 ? -1 : 1)',
-          'DI = DI + (DF == 1 ? -1 : 1)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + SI',
+              'RAM:u8[ES_BASE + DI] = RAM:u8[effective_address]',
+              'SI = SI + (DF == 1 ? -1 : 1)',
+              'DI = DI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + offset',
+              '#GP if offset < (DATA_SEG_BASE == 0xffff ? DS_LIMIT_MIN : DATA_SEG_LIMIT_MIN)',
+              '#GP if offset > (DATA_SEG_BASE == 0xffff ? DS_LIMIT_MAX : DATA_SEG_LIMIT_MAX)',
+              'offset = DI',
+              'effective_address = ES_BASE + offset',
+              '#GP if offset < ES_LIMIT_MIN',
+              '#GP if offset > ES_LIMIT_MAX',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + SI',
+              'RAM:u8[ES_BASE + DI] = RAM:u8[effective_address]',
+              'SI = SI + (DF == 1 ? -1 : 1)',
+              'DI = DI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+      },
       opcode: [Opcodes.MOVS_MB_MB],
       operands: [],
       operandSize: 8,
@@ -46,18 +77,50 @@ export const movs: InstructionInfo = {
     // 0xA5 MOVS mw, mw
     // 0xA5 MOVSW
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + SI',
-          'RAM:u16[ES_BASE + DI] = RAM:u16[effective_address]',
-          'SI = SI + (DF == 1 ? -2 : 2)',
-          'DI = DI + (DF == 1 ? -2 : 2)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + offset',
+              '${SEGMENT_LIMIT_CHECK_REAL}',
+              'offset = DI',
+              'effective_address = ES_BASE + offset',
+              '${SEGMENT_LIMIT_CHECK_REAL}',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + SI',
+              'RAM:u16[ES_BASE + DI] = RAM:u16[effective_address]',
+              'SI = SI + (DF == 1 ? -2 : 2)',
+              'DI = DI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + offset',
+              '#GP if (offset + 1) < (DATA_SEG_BASE == 0xffff ? DS_LIMIT_MIN : DATA_SEG_LIMIT_MIN)',
+              '#GP if (offset + 1) > (DATA_SEG_BASE == 0xffff ? DS_LIMIT_MAX : DATA_SEG_LIMIT_MAX)',
+              'offset = DI',
+              'effective_address = ES_BASE + offset',
+              '#GP if (offset + 1) < ES_LIMIT_MIN',
+              '#GP if (offset + 1) > ES_LIMIT_MAX',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + SI',
+              'RAM:u16[ES_BASE + DI] = RAM:u16[effective_address]',
+              'SI = SI + (DF == 1 ? -2 : 2)',
+              'DI = DI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+      },
       opcode: [Opcodes.MOVS_MW_MW],
       operands: [],
       operandSize: 16,

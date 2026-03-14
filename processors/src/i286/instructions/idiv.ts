@@ -31,56 +31,121 @@ export const idiv: InstructionInfo = {
       name: 'Effective Address',
       size: 32,
     },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
   ],
   forms: [
     // 0xF6 /7 - IDIV eb
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'a = AX',
-        'b = RAM:i8[effective_address]',
-        '${ALU8_OP}',
-        'AL = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'a = AX',
+            'b = RAM:i8[effective_address]',
+            '${ALU8_OP}',
+            'AL = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = AX',
+            'b = RAM:i8[effective_address]',
+            '${ALU8_OP}',
+            'AL = alu_result',
+          ],
+        },
+      },
       opcode: [Opcodes.ALU_LOGIC_EB, 'ModRM_110_111_00', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 8,
       cycles: 20,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'a = AX',
-        'b = RAM:i8[effective_address]',
-        '${ALU8_OP}',
-        'AL = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'a = AX',
+            'b = RAM:i8[effective_address]',
+            '${ALU8_OP}',
+            'AL = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = AX',
+            'b = RAM:i8[effective_address]',
+            '${ALU8_OP}',
+            'AL = alu_result',
+          ],
+        },
+      },
       opcode: [Opcodes.ALU_LOGIC_EB, 'ModRM_rm_111_00'],
       operands: ['rm'],
       operandSize: 8,
       cycles: 20,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = AX',
-        'b = RAM:i8[effective_address]',
-        '${ALU8_OP}',
-        'AL = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'a = AX',
+            'b = RAM:i8[effective_address]',
+            '${ALU8_OP}',
+            'AL = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = AX',
+            'b = RAM:i8[effective_address]',
+            '${ALU8_OP}',
+            'AL = alu_result',
+          ],
+        },
+      },
       opcode: [Opcodes.ALU_LOGIC_EB, 'ModRM_rm_111_01', 'DISP_i8'],
       operands: ['rm'],
       operandSize: 8,
       cycles: 20,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = AX',
-        'b = RAM:i8[effective_address]',
-        '${ALU8_OP}',
-        'AL = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'a = AX',
+            'b = RAM:i8[effective_address]',
+            '${ALU8_OP}',
+            'AL = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = AX',
+            'b = RAM:i8[effective_address]',
+            '${ALU8_OP}',
+            'AL = alu_result',
+          ],
+        },
+      },
       opcode: [Opcodes.ALU_LOGIC_EB, 'ModRM_rm_111_10', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 8,
@@ -100,52 +165,120 @@ export const idiv: InstructionInfo = {
     },
     // 0xF7 /7 - IDIV ew
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'div_a = (DX << 16) | AX',
-        'b = RAM:i16[effective_address]',
-        '${ALU16_OP}',
-        'AX = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'div_a = (DX << 16) | AX',
+            'b = RAM:i16[effective_address]',
+            '${ALU16_OP}',
+            'AX = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'div_a = (DX << 16) | AX',
+            'b = RAM:i16[effective_address]',
+            '${ALU16_OP}',
+            'AX = alu_result',
+          ],
+        },
+      },
       opcode: [Opcodes.ALU_LOGIC_EW, 'ModRM_110_111_00', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
       cycles: 28,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'div_a = (DX << 16) | AX',
-        'b = RAM:i16[effective_address]',
-        '${ALU16_OP}',
-        'AX = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'div_a = (DX << 16) | AX',
+            'b = RAM:i16[effective_address]',
+            '${ALU16_OP}',
+            'AX = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'div_a = (DX << 16) | AX',
+            'b = RAM:i16[effective_address]',
+            '${ALU16_OP}',
+            'AX = alu_result',
+          ],
+        },
+      },
       opcode: [Opcodes.ALU_LOGIC_EW, 'ModRM_rm_111_00'],
       operands: ['rm'],
       operandSize: 16,
       cycles: 28,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'div_a = (DX << 16) | AX',
-        'b = RAM:i16[effective_address]',
-        '${ALU16_OP}',
-        'AX = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'div_a = (DX << 16) | AX',
+            'b = RAM:i16[effective_address]',
+            '${ALU16_OP}',
+            'AX = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'div_a = (DX << 16) | AX',
+            'b = RAM:i16[effective_address]',
+            '${ALU16_OP}',
+            'AX = alu_result',
+          ],
+        },
+      },
       opcode: [Opcodes.ALU_LOGIC_EW, 'ModRM_rm_111_01', 'DISP_i8'],
       operands: ['rm'],
       operandSize: 16,
       cycles: 28,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'div_a = (DX << 16) | AX',
-        'b = RAM:i16[effective_address]',
-        '${ALU16_OP}',
-        'AX = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'div_a = (DX << 16) | AX',
+            'b = RAM:i16[effective_address]',
+            '${ALU16_OP}',
+            'AX = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'div_a = (DX << 16) | AX',
+            'b = RAM:i16[effective_address]',
+            '${ALU16_OP}',
+            'AX = alu_result',
+          ],
+        },
+      },
       opcode: [Opcodes.ALU_LOGIC_EW, 'ModRM_rm_111_10', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,

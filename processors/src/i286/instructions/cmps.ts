@@ -25,25 +25,58 @@ export const cmps: InstructionInfo = {
       name: 'Effective Address',
       size: 32,
     },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
   ],
   forms: [
     // 0xA6 CMPS mb, mb
     // 0xA6 CMPSB
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'effective_address = (DATA_SEG_BASE == 0xffff ? ES_BASE : DATA_SEG_BASE) + SI',
-          'a = RAM:u8[effective_address]',
-          'b = RAM:u8[ES_BASE + DI]',
-          '${ALU8_OP}',
-          'DI = DI + (DF == 1 ? -1 : 1)',
-          'SI = SI + (DF == 1 ? -1 : 1)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0 && ((alu_result & 0xff) == 0 ? 0 : 1) == REP_CHECK',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? ES_BASE : DATA_SEG_BASE) + SI',
+              'a = RAM:u8[effective_address]',
+              'b = RAM:u8[ES_BASE + DI]',
+              '${ALU8_OP}',
+              'DI = DI + (DF == 1 ? -1 : 1)',
+              'SI = SI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0 && ((alu_result & 0xff) == 0 ? 0 : 1) == REP_CHECK',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? ES_BASE : DATA_SEG_BASE) + offset',
+              '#GP if offset < (DATA_SEG_BASE == 0xffff ? ES_LIMIT_MIN : DATA_SEG_LIMIT_MIN)',
+              '#GP if offset > (DATA_SEG_BASE == 0xffff ? ES_LIMIT_MAX : DATA_SEG_LIMIT_MAX)',
+              'offset = DI',
+              'effective_address = ES_BASE + offset',
+              '#GP if offset < ES_LIMIT_MIN',
+              '#GP if offset > ES_LIMIT_MAX',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? ES_BASE : DATA_SEG_BASE) + SI',
+              'a = RAM:u8[effective_address]',
+              'b = RAM:u8[ES_BASE + DI]',
+              '${ALU8_OP}',
+              'DI = DI + (DF == 1 ? -1 : 1)',
+              'SI = SI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0 && ((alu_result & 0xff) == 0 ? 0 : 1) == REP_CHECK',
+          ],
+        },
+      },
       opcode: [Opcodes.CMPS_MB_MB],
       operands: [],
       operandSize: 8,
@@ -53,20 +86,54 @@ export const cmps: InstructionInfo = {
     // 0xA7 CMPS mw, mw
     // 0xA7 CMPSW
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'effective_address = (DATA_SEG_BASE == 0xffff ? ES_BASE : DATA_SEG_BASE) + SI',
-          'a = RAM:u16[effective_address]',
-          'b = RAM:u16[ES_BASE + DI]',
-          '${ALU16_OP}',
-          'DI = DI + (DF == 1 ? -2 : 2)',
-          'SI = SI + (DF == 1 ? -2 : 2)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0 && ((alu_result & 0xffff) == 0 ? 0 : 1) == REP_CHECK',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? ES_BASE : DATA_SEG_BASE) + offset',
+              '${SEGMENT_LIMIT_CHECK_REAL}',
+              'offset = DI',
+              'effective_address = ES_BASE + offset',
+              '${SEGMENT_LIMIT_CHECK_REAL}',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? ES_BASE : DATA_SEG_BASE) + SI',
+              'a = RAM:u16[effective_address]',
+              'b = RAM:u16[ES_BASE + DI]',
+              '${ALU16_OP}',
+              'DI = DI + (DF == 1 ? -2 : 2)',
+              'SI = SI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0 && ((alu_result & 0xffff) == 0 ? 0 : 1) == REP_CHECK',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? ES_BASE : DATA_SEG_BASE) + offset',
+              '#GP if (offset + 1) < (DATA_SEG_BASE == 0xffff ? ES_LIMIT_MIN : DATA_SEG_LIMIT_MIN)',
+              '#GP if (offset + 1) > (DATA_SEG_BASE == 0xffff ? ES_LIMIT_MAX : DATA_SEG_LIMIT_MAX)',
+              'offset = DI',
+              'effective_address = ES_BASE + offset',
+              '#GP if (offset + 1) < ES_LIMIT_MIN',
+              '#GP if (offset + 1) > ES_LIMIT_MAX',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? ES_BASE : DATA_SEG_BASE) + SI',
+              'a = RAM:u16[effective_address]',
+              'b = RAM:u16[ES_BASE + DI]',
+              '${ALU16_OP}',
+              'DI = DI + (DF == 1 ? -2 : 2)',
+              'SI = SI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0 && ((alu_result & 0xffff) == 0 ? 0 : 1) == REP_CHECK',
+          ],
+        },
+      },
       opcode: [Opcodes.CMPS_MW_MW],
       operands: [],
       operandSize: 16,

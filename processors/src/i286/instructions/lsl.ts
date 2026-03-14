@@ -25,6 +25,11 @@ export const lsl: InstructionInfo = {
       size: 32,
     },
     {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
+    {
       identifier: 'tmp',
       name: 'Temporary Value',
       size: 16,
@@ -33,11 +38,26 @@ export const lsl: InstructionInfo = {
   forms: [
     // 0x0F 0x03 /r - LSL rw, ew
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'tmp = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LSL,
@@ -49,22 +69,52 @@ export const lsl: InstructionInfo = {
       cycles: 16,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'tmp = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [Opcodes.SYSTEM, SystemOpcodes.LSL, 'ModRM_rm_reg16_00'],
       operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 16,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LSL,
@@ -76,11 +126,26 @@ export const lsl: InstructionInfo = {
       cycles: 16,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LSL,

@@ -15,22 +15,47 @@ export const ins: InstructionInfo = {
       name: 'Effective Address',
       size: 32,
     },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
   ],
   forms: [
     // 0x6C - INS eb, DX
     // 0x6C - INSB
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'effective_address = ES_BASE + DI',
-          'RAM:u8[effective_address] = IO.read(1, DX)',
-          'DI = DI + (DF == 1 ? -1 : 1)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'effective_address = ES_BASE + DI',
+              'RAM:u8[effective_address] = IO.read(1, DX)',
+              'DI = DI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = DI',
+              'effective_address = ES_BASE + offset',
+              '#GP if offset < ES_LIMIT_MIN',
+              '#GP if offset > ES_LIMIT_MAX',
+              'RAM:u8[effective_address] = IO.read(1, DX)',
+              'DI = DI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+      },
       opcode: [Opcodes.INS_EB_DX],
       operands: [],
       operandSize: 8,
@@ -40,17 +65,39 @@ export const ins: InstructionInfo = {
     // 0x6D - INS ew, DX
     // 0x6D - INSW
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'effective_address = ES_BASE + DI',
-          'RAM:u16[effective_address] = IO.read(2, DX)',
-          'DI = DI + (DF == 1 ? -2 : 2)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = DI',
+              'effective_address = ES_BASE + offset',
+              '${SEGMENT_LIMIT_CHECK_REAL}',
+              'RAM:u16[effective_address] = IO.read(2, DX)',
+              'DI = DI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = DI',
+              'effective_address = ES_BASE + offset',
+              '#GP if (offset + 1) < ES_LIMIT_MIN',
+              '#GP if (offset + 1) > ES_LIMIT_MAX',
+              'RAM:u16[effective_address] = IO.read(2, DX)',
+              'DI = DI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+      },
       opcode: [Opcodes.INS_EW_DX],
       operands: [],
       operandSize: 8,

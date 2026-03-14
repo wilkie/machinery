@@ -19,22 +19,56 @@ export const scas: InstructionInfo = {
       'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_SUB} | ${FLAG_OP_16BIT}',
     ],
   },
+  locals: [
+    {
+      identifier: 'effective_address',
+      name: 'Effective Address',
+      size: 32,
+    },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
+  ],
   forms: [
     // 0xAE SCAS mb
     // 0xAE SCASB
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'a = AL',
-          'b = RAM:u8[ES_BASE + DI]',
-          '${ALU8_OP}',
-          'DI = DI + (DF == 1 ? -1 : 1)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0 && ((alu_result & 0xff) == 0 ? 0 : 1) == REP_CHECK',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'a = AL',
+              'b = RAM:u8[ES_BASE + DI]',
+              '${ALU8_OP}',
+              'DI = DI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0 && ((alu_result & 0xff) == 0 ? 0 : 1) == REP_CHECK',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = DI',
+              'effective_address = ES_BASE + offset',
+              '#GP if offset < ES_LIMIT_MIN',
+              '#GP if offset > ES_LIMIT_MAX',
+              'a = AL',
+              'b = RAM:u8[ES_BASE + DI]',
+              '${ALU8_OP}',
+              'DI = DI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0 && ((alu_result & 0xff) == 0 ? 0 : 1) == REP_CHECK',
+          ],
+        },
+      },
       opcode: [Opcodes.SCAS_MB],
       operands: [],
       operandSize: 8,
@@ -44,18 +78,40 @@ export const scas: InstructionInfo = {
     // 0xAF SCAS mw
     // 0xAF SCASW
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'a = AX',
-          'b = RAM:u16[ES_BASE + DI]',
-          '${ALU16_OP}',
-          'DI = DI + (DF == 1 ? -2 : 2)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0 && ((alu_result & 0xffff) == 0 ? 0 : 1) == REP_CHECK',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'a = AX',
+              'b = RAM:u16[ES_BASE + DI]',
+              '${ALU16_OP}',
+              'DI = DI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0 && ((alu_result & 0xffff) == 0 ? 0 : 1) == REP_CHECK',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = DI',
+              'effective_address = ES_BASE + offset',
+              '#GP if (offset + 1) < ES_LIMIT_MIN',
+              '#GP if (offset + 1) > ES_LIMIT_MAX',
+              'a = AX',
+              'b = RAM:u16[ES_BASE + DI]',
+              '${ALU16_OP}',
+              'DI = DI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0 && ((alu_result & 0xffff) == 0 ? 0 : 1) == REP_CHECK',
+          ],
+        },
+      },
       opcode: [Opcodes.SCAS_MW],
       operands: [],
       operandSize: 16,

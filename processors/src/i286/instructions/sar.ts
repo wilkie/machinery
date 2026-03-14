@@ -25,17 +25,37 @@ export const sar: InstructionInfo = {
       name: 'Effective Address',
       size: 32,
     },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
   ],
   forms: [
     // 0xD0 /7 - SAR eb, 1
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'a = RAM:u8[effective_address]',
-        'b = 1',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'a = RAM:u8[effective_address]',
+            'b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB,
@@ -47,13 +67,28 @@ export const sar: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'a = RAM:u8[effective_address]',
-        'b = 1',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'a = RAM:u8[effective_address]',
+            'b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB, 'ModRM_rm_111_00'],
       operands: ['rm'],
@@ -61,13 +96,28 @@ export const sar: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u8[effective_address]',
-        'b = 1',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'a = RAM:u8[effective_address]',
+            'b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB,
@@ -79,13 +129,28 @@ export const sar: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u8[effective_address]',
-        'b = 1',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'a = RAM:u8[effective_address]',
+            'b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB,
@@ -111,14 +176,30 @@ export const sar: InstructionInfo = {
     },
     // 0xD2 /7 - SAR eb, CL
     {
-      operation: [
-        'next if (CL & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'a = RAM:u8[effective_address]',
-        'b = CL & 0x1f',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'a = RAM:u8[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_CL,
@@ -130,14 +211,30 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (CL & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'a = RAM:u8[effective_address]',
-        'b = CL & 0x1f',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'a = RAM:u8[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_CL, 'ModRM_rm_111_00'],
       operands: ['rm', 'CL'],
@@ -145,14 +242,30 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (CL & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u8[effective_address]',
-        'b = CL & 0x1f',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'a = RAM:u8[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_CL,
@@ -164,14 +277,30 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (CL & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u8[effective_address]',
-        'b = CL & 0x1f',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'a = RAM:u8[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_CL,
@@ -198,14 +327,30 @@ export const sar: InstructionInfo = {
     },
     // 0xC0 /7 - SAR eb, db
     {
-      operation: [
-        'next if (%{imm} & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'a = RAM:u8[effective_address]',
-        'b = %{imm} & 0x1f',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'a = RAM:u8[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_DB,
@@ -218,14 +363,30 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (%{imm} & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'a = RAM:u8[effective_address]',
-        'b = %{imm} & 0x1f',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'a = RAM:u8[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_DB,
@@ -237,14 +398,30 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (%{imm} & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u8[effective_address]',
-        'b = %{imm} & 0x1f',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'a = RAM:u8[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_DB,
@@ -257,14 +434,30 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (%{imm} & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u8[effective_address]',
-        'b = %{imm} & 0x1f',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'a = RAM:u8[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'a = RAM:u8[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_DB,
@@ -296,13 +489,30 @@ export const sar: InstructionInfo = {
     },
     // 0xD1 /7 - SAR ew, 1
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'a = RAM:u16[effective_address]',
-        'b = 1',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW,
@@ -314,13 +524,30 @@ export const sar: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'a = RAM:u16[effective_address]',
-        'b = 1',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW, 'ModRM_rm_111_00'],
       operands: ['rm'],
@@ -328,13 +555,30 @@ export const sar: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u16[effective_address]',
-        'b = 1',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW,
@@ -346,13 +590,30 @@ export const sar: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u16[effective_address]',
-        'b = 1',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW,
@@ -378,14 +639,32 @@ export const sar: InstructionInfo = {
     },
     // 0xD3 /7 - SAR ew, CL
     {
-      operation: [
-        'next if (CL & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'a = RAM:u16[effective_address]',
-        'b = CL & 0x1f',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_CL,
@@ -397,14 +676,32 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (CL & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'a = RAM:u16[effective_address]',
-        'b = CL & 0x1f',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_CL, 'ModRM_rm_111_00'],
       operands: ['rm', 'CL'],
@@ -412,14 +709,32 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (CL & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u16[effective_address]',
-        'b = CL & 0x1f',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_CL,
@@ -431,14 +746,32 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (CL & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u16[effective_address]',
-        'b = CL & 0x1f',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (CL & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = CL & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_CL,
@@ -465,14 +798,32 @@ export const sar: InstructionInfo = {
     },
     // 0xC1 /7 - SAR ew, db
     {
-      operation: [
-        'next if (%{imm} & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'a = RAM:u16[effective_address]',
-        'b = %{imm} & 0x1f',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_DB,
@@ -485,14 +836,32 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (%{imm} & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'a = RAM:u16[effective_address]',
-        'b = %{imm} & 0x1f',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_DB,
@@ -504,14 +873,32 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (%{imm} & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u16[effective_address]',
-        'b = %{imm} & 0x1f',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_DB,
@@ -524,14 +911,32 @@ export const sar: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'next if (%{imm} & 0x1f) == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'a = RAM:u16[effective_address]',
-        'b = %{imm} & 0x1f',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            'next if (%{imm} & 0x1f) == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = %{imm} & 0x1f',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
       undefined: ['AF', 'OF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_DB,

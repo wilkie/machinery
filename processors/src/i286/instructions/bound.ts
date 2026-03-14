@@ -23,6 +23,11 @@ export const bound: InstructionInfo = {
       size: 32,
     },
     {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
+    {
       identifier: 'tmp',
       name: 'Temporary Value',
       size: 16,
@@ -44,56 +49,128 @@ export const bound: InstructionInfo = {
   forms: [
     // 0x62 /r - BOUND rw, md
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        '${OP}',
-        'if tmp < lower_bound || tmp > upper_bound',
-        '  FETCH_IP = FETCH_IP - 4',
-        '  #5',
-        'end if',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '${OP}',
+            'if tmp < lower_bound || tmp > upper_bound',
+            '  FETCH_IP = FETCH_IP - 4',
+            '  #5',
+            'end if',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            '${OP}',
+            'if tmp < lower_bound || tmp > upper_bound',
+            '  FETCH_IP = FETCH_IP - 4',
+            '  #5',
+            'end if',
+          ],
+        },
+      },
       opcode: [Opcodes.BOUND, 'ModRM_110_reg16_00', 'DISP_i16'],
       operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 13,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        '${OP}',
-        'if tmp < lower_bound || tmp > upper_bound',
-        '  FETCH_IP = FETCH_IP - 2',
-        '  #5',
-        'end if',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '${OP}',
+            'if tmp < lower_bound || tmp > upper_bound',
+            '  FETCH_IP = FETCH_IP - 2',
+            '  #5',
+            'end if',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            '${OP}',
+            'if tmp < lower_bound || tmp > upper_bound',
+            '  FETCH_IP = FETCH_IP - 2',
+            '  #5',
+            'end if',
+          ],
+        },
+      },
       opcode: [Opcodes.BOUND, 'ModRM_rm_reg16_00'],
       operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 13,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        '${OP}',
-        'if tmp < lower_bound || tmp > upper_bound',
-        '  FETCH_IP = FETCH_IP - 3',
-        '  #5',
-        'end if',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '${OP}',
+            'if tmp < lower_bound || tmp > upper_bound',
+            '  FETCH_IP = FETCH_IP - 3',
+            '  #5',
+            'end if',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            '${OP}',
+            'if tmp < lower_bound || tmp > upper_bound',
+            '  FETCH_IP = FETCH_IP - 3',
+            '  #5',
+            'end if',
+          ],
+        },
+      },
       opcode: [Opcodes.BOUND, 'ModRM_rm_reg16_01', 'DISP_i8'],
       operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 13,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        '${OP}',
-        'if tmp < lower_bound || tmp > upper_bound',
-        '  FETCH_IP = FETCH_IP - 4',
-        '  #5',
-        'end if',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '${OP}',
+            'if tmp < lower_bound || tmp > upper_bound',
+            '  FETCH_IP = FETCH_IP - 4',
+            '  #5',
+            'end if',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            '${OP}',
+            'if tmp < lower_bound || tmp > upper_bound',
+            '  FETCH_IP = FETCH_IP - 4',
+            '  #5',
+            'end if',
+          ],
+        },
+      },
       opcode: [Opcodes.BOUND, 'ModRM_rm_reg16_10', 'DISP_i16'],
       operands: ['reg', 'rm'],
       operandSize: 16,

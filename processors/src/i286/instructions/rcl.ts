@@ -35,6 +35,11 @@ export const rcl: InstructionInfo = {
       size: 32,
     },
     {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
+    {
       identifier: 'tmp',
       name: 'Temporary Shift Result',
       size: 32,
@@ -53,13 +58,28 @@ export const rcl: InstructionInfo = {
   forms: [
     // 0xD0 /2 - RCL eb, 1
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'tmp_a = RAM:u8[effective_address]',
-        'tmp_b = 1',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'tmp_a = RAM:u8[effective_address]',
+            'tmp_b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            'tmp_b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       modifies: ['OF', 'CF'],
       undefined: [],
       opcode: [
@@ -72,13 +92,28 @@ export const rcl: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'tmp_a = RAM:u8[effective_address]',
-        'tmp_b = 1',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'tmp_a = RAM:u8[effective_address]',
+            'tmp_b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            'tmp_b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       modifies: ['OF', 'CF'],
       undefined: [],
       opcode: [Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB, 'ModRM_rm_010_00'],
@@ -87,13 +122,28 @@ export const rcl: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u8[effective_address]',
-        'tmp_b = 1',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'tmp_a = RAM:u8[effective_address]',
+            'tmp_b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            'tmp_b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       modifies: ['OF', 'CF'],
       undefined: [],
       opcode: [
@@ -106,13 +156,28 @@ export const rcl: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u8[effective_address]',
-        'tmp_b = 1',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'tmp_a = RAM:u8[effective_address]',
+            'tmp_b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            'tmp_b = 1',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       modifies: ['OF', 'CF'],
       undefined: [],
       opcode: [
@@ -140,14 +205,30 @@ export const rcl: InstructionInfo = {
     },
     // 0xD2 /2 - RCL eb, CL
     {
-      operation: [
-        'tmp_b = (CL & 0x1f) % 9',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'tmp_a = RAM:u8[effective_address]',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_CL,
         'ModRM_110_010_00',
@@ -158,28 +239,60 @@ export const rcl: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (CL & 0x1f) % 9',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'tmp_a = RAM:u8[effective_address]',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_CL, 'ModRM_rm_010_00'],
       operands: ['rm', 'CL'],
       operandSize: 8,
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (CL & 0x1f) % 9',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u8[effective_address]',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_CL,
         'ModRM_rm_010_01',
@@ -190,14 +303,30 @@ export const rcl: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (CL & 0x1f) % 9',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u8[effective_address]',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_CL,
         'ModRM_rm_010_10',
@@ -222,14 +351,30 @@ export const rcl: InstructionInfo = {
     },
     // 0xC0 /2 - RCL eb, db
     {
-      operation: [
-        'tmp_b = (%{imm} & 0x1f) % 9',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'tmp_a = RAM:u8[effective_address]',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_DB,
         'ModRM_110_010_00',
@@ -241,14 +386,30 @@ export const rcl: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (%{imm} & 0x1f) % 9',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'tmp_a = RAM:u8[effective_address]',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_DB,
         'ModRM_rm_010_00',
@@ -259,14 +420,30 @@ export const rcl: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (%{imm} & 0x1f) % 9',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u8[effective_address]',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_DB,
         'ModRM_rm_010_01',
@@ -278,14 +455,30 @@ export const rcl: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (%{imm} & 0x1f) % 9',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u8[effective_address]',
-        '${ALU8_OP}',
-        'RAM:u8[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 9',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
+            'tmp_a = RAM:u8[effective_address]',
+            '${ALU8_OP}',
+            'RAM:u8[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EB_DB,
         'ModRM_rm_010_10',
@@ -315,13 +508,30 @@ export const rcl: InstructionInfo = {
     },
     // 0xD1 /2 - RCL ew, 1
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'tmp_a = RAM:u16[effective_address]',
-        'tmp_b = 1',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            'tmp_b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            'tmp_b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW,
@@ -333,13 +543,30 @@ export const rcl: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'tmp_a = RAM:u16[effective_address]',
-        'tmp_b = 1',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            'tmp_b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            'tmp_b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW, 'ModRM_rm_010_00'],
       operands: ['rm'],
@@ -347,13 +574,30 @@ export const rcl: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u16[effective_address]',
-        'tmp_b = 1',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            'tmp_b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            'tmp_b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW,
@@ -365,13 +609,30 @@ export const rcl: InstructionInfo = {
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u16[effective_address]',
-        'tmp_b = 1',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            'tmp_b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            'tmp_b = 1',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       modifies: ['OF', 'CF', 'ZF', 'PF', 'SF'],
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW,
@@ -397,14 +658,32 @@ export const rcl: InstructionInfo = {
     },
     // 0xD3 /2 - RCL ew, CL
     {
-      operation: [
-        'tmp_b = (CL & 0x1f) % 17',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'tmp_a = RAM:u16[effective_address]',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_CL,
         'ModRM_110_010_00',
@@ -415,28 +694,64 @@ export const rcl: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (CL & 0x1f) % 17',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'tmp_a = RAM:u16[effective_address]',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_CL, 'ModRM_rm_010_00'],
       operands: ['rm', 'CL'],
       operandSize: 16,
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (CL & 0x1f) % 17',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u16[effective_address]',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_CL,
         'ModRM_rm_010_01',
@@ -447,14 +762,32 @@ export const rcl: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (CL & 0x1f) % 17',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u16[effective_address]',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (CL & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_CL,
         'ModRM_rm_010_10',
@@ -479,14 +812,32 @@ export const rcl: InstructionInfo = {
     },
     // 0xC1 /2 - RCL ew, db
     {
-      operation: [
-        'tmp_b = (%{imm} & 0x1f) % 17',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'tmp_a = RAM:u16[effective_address]',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_DB,
         'ModRM_110_010_00',
@@ -498,14 +849,32 @@ export const rcl: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (%{imm} & 0x1f) % 17',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'tmp_a = RAM:u16[effective_address]',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_DB,
         'ModRM_rm_010_00',
@@ -516,14 +885,32 @@ export const rcl: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (%{imm} & 0x1f) % 17',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u16[effective_address]',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_DB,
         'ModRM_rm_010_01',
@@ -535,14 +922,32 @@ export const rcl: InstructionInfo = {
       cycles: 8,
     },
     {
-      operation: [
-        'tmp_b = (%{imm} & 0x1f) % 17',
-        'next if tmp_b == 0',
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp_a = RAM:u16[effective_address]',
-        '${ALU16_OP}',
-        'RAM:u16[effective_address] = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp_b = (%{imm} & 0x1f) % 17',
+            'next if tmp_b == 0',
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp_a = RAM:u16[effective_address]',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = tmp',
+          ],
+        },
+      },
       opcode: [
         Opcodes.ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_DB,
         'ModRM_rm_010_10',

@@ -17,48 +17,113 @@ export const lds: InstructionInfo = {
       name: 'Effective Address',
       size: 32,
     },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
   ],
   forms: [
     // 0xC5 /r - LDS rw, ed
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        '${MOD_RM_REG16} = RAM:u16[effective_address]',
-        'DS = RAM:u16[effective_address + 2]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '${MOD_RM_REG16} = RAM:u16[effective_address]',
+            'DS = RAM:u16[effective_address + 2]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            '${MOD_RM_REG16} = RAM:u16[effective_address]',
+            'DS = RAM:u16[effective_address + 2]',
+          ],
+        },
+      },
       opcode: [Opcodes.LDS, 'ModRM_110_reg16_00', 'DISP_i16'],
       operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        '${MOD_RM_REG16} = RAM:u16[effective_address]',
-        'DS = RAM:u16[effective_address + 2]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '${MOD_RM_REG16} = RAM:u16[effective_address]',
+            'DS = RAM:u16[effective_address + 2]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            '${MOD_RM_REG16} = RAM:u16[effective_address]',
+            'DS = RAM:u16[effective_address + 2]',
+          ],
+        },
+      },
       opcode: [Opcodes.LDS, 'ModRM_rm_reg16_00'],
       operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        '${MOD_RM_REG16} = RAM:u16[effective_address]',
-        'DS = RAM:u16[effective_address + 2]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '${MOD_RM_REG16} = RAM:u16[effective_address]',
+            'DS = RAM:u16[effective_address + 2]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            '${MOD_RM_REG16} = RAM:u16[effective_address]',
+            'DS = RAM:u16[effective_address + 2]',
+          ],
+        },
+      },
       opcode: [Opcodes.LDS, 'ModRM_rm_reg16_01', 'DISP_i8'],
       operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 7,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        '${MOD_RM_REG16} = RAM:u16[effective_address]',
-        'DS = RAM:u16[effective_address + 2]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '${MOD_RM_REG16} = RAM:u16[effective_address]',
+            'DS = RAM:u16[effective_address + 2]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            '${MOD_RM_REG16} = RAM:u16[effective_address]',
+            'DS = RAM:u16[effective_address + 2]',
+          ],
+        },
+      },
       opcode: [Opcodes.LDS, 'ModRM_rm_reg16_10', 'DISP_i16'],
       operands: ['reg', 'rm'],
       operandSize: 16,

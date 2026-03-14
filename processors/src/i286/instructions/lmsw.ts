@@ -16,14 +16,33 @@ export const lmsw: InstructionInfo = {
       name: 'Effective Address',
       size: 32,
     },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
   ],
   forms: [
     // 0x0F 0x01 /6 - LMSW ew
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'MSW = RAM:u16[effective_address]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'MSW = RAM:u16[effective_address]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'MSW = RAM:u16[effective_address]',
+          ],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.SGDT_SIDT_LMSW_SMSW_LGDT_LIDT,
@@ -35,10 +54,24 @@ export const lmsw: InstructionInfo = {
       cycles: 6,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'MSW = RAM:u16[effective_address]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'MSW = RAM:u16[effective_address]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'MSW = RAM:u16[effective_address]',
+          ],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.SGDT_SIDT_LMSW_SMSW_LGDT_LIDT,
@@ -49,10 +82,24 @@ export const lmsw: InstructionInfo = {
       cycles: 6,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'MSW = RAM:u16[effective_address]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'MSW = RAM:u16[effective_address]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'MSW = RAM:u16[effective_address]',
+          ],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.SGDT_SIDT_LMSW_SMSW_LGDT_LIDT,
@@ -64,10 +111,24 @@ export const lmsw: InstructionInfo = {
       cycles: 6,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'MSW = RAM:u16[effective_address]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'MSW = RAM:u16[effective_address]',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'MSW = RAM:u16[effective_address]',
+          ],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.SGDT_SIDT_LMSW_SMSW_LGDT_LIDT,

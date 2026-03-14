@@ -15,22 +15,47 @@ export const outs: InstructionInfo = {
       name: 'Effective Address',
       size: 32,
     },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
   ],
   forms: [
     // 0x6E - OUTS DX, eb
     // 0x6E - OUTSB
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'effective_address = DATA_SEG_BASE + SI',
-          'IO:u8[DX] = RAM:u8[effective_address]',
-          'SI = SI + (DF == 1 ? -1 : 1)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'effective_address = DATA_SEG_BASE + SI',
+              'IO:u8[DX] = RAM:u8[effective_address]',
+              'SI = SI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = DATA_SEG_BASE + offset',
+              '#GP if offset < DATA_SEG_LIMIT_MIN',
+              '#GP if offset > DATA_SEG_LIMIT_MAX',
+              'IO:u8[DX] = RAM:u8[effective_address]',
+              'SI = SI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+      },
       opcode: [Opcodes.OUTS_DX_EB],
       operands: [],
       operandSize: 8,
@@ -40,17 +65,39 @@ export const outs: InstructionInfo = {
     // 0x6F - OUTS DX, ew
     // 0x6F - OUTSW
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'effective_address = DATA_SEG_BASE + SI',
-          'IO:u16[DX] = RAM:u16[effective_address]',
-          'SI = SI + (DF == 1 ? -2 : 2)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = DATA_SEG_BASE + offset',
+              '${SEGMENT_LIMIT_CHECK_REAL}',
+              'IO:u16[DX] = RAM:u16[effective_address]',
+              'SI = SI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = DATA_SEG_BASE + offset',
+              '#GP if (offset + 1) < DATA_SEG_LIMIT_MIN',
+              '#GP if (offset + 1) > DATA_SEG_LIMIT_MAX',
+              'IO:u16[DX] = RAM:u16[effective_address]',
+              'SI = SI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+      },
       opcode: [Opcodes.OUTS_DX_EW],
       operands: [],
       operandSize: 8,

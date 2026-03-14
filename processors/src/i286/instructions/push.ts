@@ -26,6 +26,11 @@ export const push: InstructionInfo = {
       size: 32,
     },
     {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
+    {
       identifier: 'stack_address',
       name: 'Effective Stack Address',
       size: 32,
@@ -116,44 +121,104 @@ export const push: InstructionInfo = {
     },
     // 0xFF /6 - PUSH mw
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'value = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'value = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'value = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_110_110_00', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'value = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'value = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'value = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_110_00'],
       operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'value = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'value = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'value = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_110_01', 'DISP_i8'],
       operands: ['rm'],
       operandSize: 16,
       cycles: 5,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'value = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'value = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'value = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm_110_10', 'DISP_i16'],
       operands: ['rm'],
       operandSize: 16,

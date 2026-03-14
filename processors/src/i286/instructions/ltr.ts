@@ -25,6 +25,11 @@ export const ltr: InstructionInfo = {
       size: 32,
     },
     {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
+    {
       identifier: 'tmp',
       name: 'Temporary Value',
       size: 16,
@@ -33,11 +38,26 @@ export const ltr: InstructionInfo = {
   forms: [
     // 0x0F 0x00 /3 - LTR ew
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
-        'tmp = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LTR_STR_LLDT_SLDT_VERR_VERW,
@@ -49,11 +69,26 @@ export const ltr: InstructionInfo = {
       cycles: 19,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
-        'tmp = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LTR_STR_LLDT_SLDT_VERR_VERW,
@@ -64,11 +99,26 @@ export const ltr: InstructionInfo = {
       cycles: 19,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LTR_STR_LLDT_SLDT_VERR_VERW,
@@ -80,11 +130,26 @@ export const ltr: InstructionInfo = {
       cycles: 19,
     },
     {
-      operation: [
-        'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
-        'tmp = RAM:u16[effective_address]',
-        '${OP}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'tmp = RAM:u16[effective_address]',
+            '${OP}',
+          ],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LTR_STR_LLDT_SLDT_VERR_VERW,

@@ -15,22 +15,47 @@ export const lods: InstructionInfo = {
       name: 'Effective Address',
       size: 32,
     },
+    {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
   ],
   forms: [
     // 0xAC LODS mb
     // 0xAC LODSB
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + SI',
-          'AL = RAM:u8[effective_address]',
-          'SI = SI + (DF == 1 ? -1 : 1)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + SI',
+              'AL = RAM:u8[effective_address]',
+              'SI = SI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + offset',
+              '#GP if offset < (DATA_SEG_BASE == 0xffff ? DS_LIMIT_MIN : DATA_SEG_LIMIT_MIN)',
+              '#GP if offset > (DATA_SEG_BASE == 0xffff ? DS_LIMIT_MAX : DATA_SEG_LIMIT_MAX)',
+              'AL = RAM:u8[effective_address]',
+              'SI = SI + (DF == 1 ? -1 : 1)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+      },
       opcode: [Opcodes.LODS_MB],
       operands: [],
       operandSize: 8,
@@ -40,17 +65,39 @@ export const lods: InstructionInfo = {
     // 0xAD LODS mw
     // 0xAD LODSW
     {
-      operation: [
-        'loop',
-        [
-          'next if REP != 0 && CX == 0',
-          'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + SI',
-          'AX = RAM:u16[effective_address]',
-          'SI = SI + (DF == 1 ? -2 : 2)',
-          'CX = REP != 0 ? CX - 1 : CX',
-        ],
-        'repeat if REP != 0',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + offset',
+              '${SEGMENT_LIMIT_CHECK_REAL}',
+              'AX = RAM:u16[effective_address]',
+              'SI = SI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+        protected: {
+          operation: [
+            'loop',
+            [
+              'next if REP != 0 && CX == 0',
+              'offset = SI',
+              'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + offset',
+              '#GP if (offset + 1) < (DATA_SEG_BASE == 0xffff ? DS_LIMIT_MIN : DATA_SEG_LIMIT_MIN)',
+              '#GP if (offset + 1) > (DATA_SEG_BASE == 0xffff ? DS_LIMIT_MAX : DATA_SEG_LIMIT_MAX)',
+              'AX = RAM:u16[effective_address]',
+              'SI = SI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
+            ],
+            'repeat if REP != 0',
+          ],
+        },
+      },
       opcode: [Opcodes.LODS_MW],
       operands: [],
       operandSize: 16,

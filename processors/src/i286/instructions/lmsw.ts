@@ -45,9 +45,9 @@ export const lmsw: InstructionInfo = {
             'end if',
           ],
         },
-        // TODO: #GP if CS.RPL != 0
         protected: {
           operation: [
+            '#GP if CS.RPL != 0',
             'offset = %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -83,6 +83,7 @@ export const lmsw: InstructionInfo = {
         },
         protected: {
           operation: [
+            '#GP if CS.RPL != 0',
             'offset = ${MOD_RM_OFFSET}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -116,6 +117,7 @@ export const lmsw: InstructionInfo = {
         },
         protected: {
           operation: [
+            '#GP if CS.RPL != 0',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -150,6 +152,7 @@ export const lmsw: InstructionInfo = {
         },
         protected: {
           operation: [
+            '#GP if CS.RPL != 0',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -181,6 +184,7 @@ export const lmsw: InstructionInfo = {
         },
         protected: {
           operation: [
+            '#GP if CS.RPL != 0',
             'value = ${MOD_RM_RM16}',
             'MSW = (MSW & 0xFFF0) | (value & 0x000F) | 0x0001',
           ],

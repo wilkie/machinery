@@ -14,14 +14,29 @@ export const hlt: InstructionInfo = {
     {
       opcode: [Opcodes.HLT],
       operands: [],
-      operation: [
-        '${RESOLVE_FLAGS}',
-        'HALTED = 1',
-        'HALTED_CS = CS',
-        'HALTED_IP = IP',
-        ';; switch to halted mode',
-        '@mode = @modes.halted',
-      ],
+      modes: {
+        real: {
+          operation: [
+            '${RESOLVE_FLAGS}',
+            'HALTED = 1',
+            'HALTED_CS = CS',
+            'HALTED_IP = IP',
+            ';; switch to halted mode',
+            '@mode = @modes.halted',
+          ],
+        },
+        protected: {
+          operation: [
+            '#GP if CS.RPL != 0',
+            '${RESOLVE_FLAGS}',
+            'HALTED = 1',
+            'HALTED_CS = CS',
+            'HALTED_IP = IP',
+            ';; switch to halted mode',
+            '@mode = @modes.halted',
+          ],
+        },
+      },
       cycles: 2,
     },
   ],

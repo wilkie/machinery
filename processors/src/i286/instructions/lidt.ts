@@ -55,9 +55,9 @@ export const lidt: InstructionInfo = {
             'IDTR.base = (base_hi << 16) | base_lo',
           ],
         },
-        // TODO: #GP if CPL != 0
         protected: {
           operation: [
+            '#GP if CS.RPL != 0',
             'offset = %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '#GP if (offset + 5) < ${MOD_RM_SEGMENT_LIMIT_MIN}',
@@ -94,6 +94,7 @@ export const lidt: InstructionInfo = {
         },
         protected: {
           operation: [
+            '#GP if CS.RPL != 0',
             'offset = ${MOD_RM_OFFSET}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '#GP if (offset + 5) < ${MOD_RM_SEGMENT_LIMIT_MIN}',
@@ -131,6 +132,7 @@ export const lidt: InstructionInfo = {
         },
         protected: {
           operation: [
+            '#GP if CS.RPL != 0',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '#GP if (offset + 5) < ${MOD_RM_SEGMENT_LIMIT_MIN}',
@@ -168,6 +170,7 @@ export const lidt: InstructionInfo = {
         },
         protected: {
           operation: [
+            '#GP if CS.RPL != 0',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '#GP if (offset + 5) < ${MOD_RM_SEGMENT_LIMIT_MIN}',

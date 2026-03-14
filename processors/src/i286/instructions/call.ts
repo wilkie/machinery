@@ -34,13 +34,29 @@ export const call: InstructionInfo = {
   forms: [
     // 0xe8 cw - CALL cw
     {
-      operation: [
-        'tmp = SP - 2',
-        'stack_address = SS_BASE + tmp',
-        'RAM:u16[stack_address] = IP',
-        'SP = tmp',
-        'IP = IP + %{imm}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp = SP - 2',
+            'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            'RAM:u16[stack_address] = IP',
+            'SP = tmp',
+            'IP = IP + %{imm}',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp = SP - 2',
+            'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 1) < SS_LIMIT_MIN',
+            '#GP if (tmp + 1) > SS_LIMIT_MAX',
+            'RAM:u16[stack_address] = IP',
+            'SP = tmp',
+            'IP = IP + %{imm}',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_CW, 'IMM_i16'],
       operands: ['rel'],
       operandSize: 8,
@@ -55,6 +71,7 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 2',
             'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
             'RAM:u16[stack_address] = IP',
             'SP = tmp',
             'offset = %{DISP}',
@@ -67,6 +84,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 2',
             'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 1) < SS_LIMIT_MIN',
+            '#GP if (tmp + 1) > SS_LIMIT_MAX',
             'RAM:u16[stack_address] = IP',
             'SP = tmp',
             'offset = %{DISP}',
@@ -89,6 +108,7 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 2',
             'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
             'RAM:u16[stack_address] = IP',
             'SP = tmp',
             'offset = ${MOD_RM_OFFSET}',
@@ -101,6 +121,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 2',
             'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 1) < SS_LIMIT_MIN',
+            '#GP if (tmp + 1) > SS_LIMIT_MAX',
             'RAM:u16[stack_address] = IP',
             'SP = tmp',
             'offset = ${MOD_RM_OFFSET}',
@@ -123,6 +145,7 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 2',
             'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
             'RAM:u16[stack_address] = IP',
             'SP = tmp',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
@@ -135,6 +158,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 2',
             'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 1) < SS_LIMIT_MIN',
+            '#GP if (tmp + 1) > SS_LIMIT_MAX',
             'RAM:u16[stack_address] = IP',
             'SP = tmp',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
@@ -157,6 +182,7 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 2',
             'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
             'RAM:u16[stack_address] = IP',
             'SP = tmp',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
@@ -169,6 +195,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 2',
             'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 1) < SS_LIMIT_MIN',
+            '#GP if (tmp + 1) > SS_LIMIT_MAX',
             'RAM:u16[stack_address] = IP',
             'SP = tmp',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
@@ -186,13 +214,29 @@ export const call: InstructionInfo = {
       cycles: 11,
     },
     {
-      operation: [
-        'tmp = SP - 2',
-        'stack_address = SS_BASE + tmp',
-        'RAM:u16[stack_address] = IP',
-        'SP = tmp',
-        'IP = ${MOD_RM_RM16}',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp = SP - 2',
+            'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            'RAM:u16[stack_address] = IP',
+            'SP = tmp',
+            'IP = ${MOD_RM_RM16}',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp = SP - 2',
+            'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 1) < SS_LIMIT_MIN',
+            '#GP if (tmp + 1) > SS_LIMIT_MAX',
+            'RAM:u16[stack_address] = IP',
+            'SP = tmp',
+            'IP = ${MOD_RM_RM16}',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_010_11'],
       operands: ['rm'],
       operandSize: 16,
@@ -204,15 +248,34 @@ export const call: InstructionInfo = {
     // TODO: deal with selector access rights bits (AR)
     // TODO: use a setter for the segment selector so we can get the base and raise exceptions
     {
-      operation: [
-        'tmp = SP - 4',
-        'stack_address = SS_BASE + tmp',
-        'RAM:u16[stack_address] = IP',
-        'RAM:u16[stack_address + 2] = CS',
-        'SP = tmp',
-        'CS = NEW_CS',
-        'IP = NEW_IP',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp = SP - 4',
+            'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            '#GP if (tmp + 2) == 0xffff',
+            'RAM:u16[stack_address] = IP',
+            'RAM:u16[stack_address + 2] = CS',
+            'SP = tmp',
+            'CS = NEW_CS',
+            'IP = NEW_IP',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp = SP - 4',
+            'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 3) < SS_LIMIT_MIN',
+            '#GP if (tmp + 3) > SS_LIMIT_MAX',
+            'RAM:u16[stack_address] = IP',
+            'RAM:u16[stack_address + 2] = CS',
+            'SP = tmp',
+            'CS = NEW_CS',
+            'IP = NEW_IP',
+          ],
+        },
+      },
       opcode: [
         Opcodes.CALL_CD,
         {
@@ -243,6 +306,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 4',
             'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            '#GP if (tmp + 2) == 0xffff',
             'RAM:u16[stack_address] = IP',
             'RAM:u16[stack_address + 2] = CS',
             'SP = tmp',
@@ -257,6 +322,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 4',
             'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 3) < SS_LIMIT_MIN',
+            '#GP if (tmp + 3) > SS_LIMIT_MAX',
             'RAM:u16[stack_address] = IP',
             'RAM:u16[stack_address + 2] = CS',
             'SP = tmp',
@@ -281,6 +348,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 4',
             'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            '#GP if (tmp + 2) == 0xffff',
             'RAM:u16[stack_address] = IP',
             'RAM:u16[stack_address + 2] = CS',
             'SP = tmp',
@@ -295,6 +364,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 4',
             'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 3) < SS_LIMIT_MIN',
+            '#GP if (tmp + 3) > SS_LIMIT_MAX',
             'RAM:u16[stack_address] = IP',
             'RAM:u16[stack_address + 2] = CS',
             'SP = tmp',
@@ -319,6 +390,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 4',
             'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            '#GP if (tmp + 2) == 0xffff',
             'RAM:u16[stack_address] = IP',
             'RAM:u16[stack_address + 2] = CS',
             'SP = tmp',
@@ -333,6 +406,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 4',
             'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 3) < SS_LIMIT_MIN',
+            '#GP if (tmp + 3) > SS_LIMIT_MAX',
             'RAM:u16[stack_address] = IP',
             'RAM:u16[stack_address + 2] = CS',
             'SP = tmp',
@@ -357,6 +432,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 4',
             'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            '#GP if (tmp + 2) == 0xffff',
             'RAM:u16[stack_address] = IP',
             'RAM:u16[stack_address + 2] = CS',
             'SP = tmp',
@@ -371,6 +448,8 @@ export const call: InstructionInfo = {
           operation: [
             'tmp = SP - 4',
             'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 3) < SS_LIMIT_MIN',
+            '#GP if (tmp + 3) > SS_LIMIT_MAX',
             'RAM:u16[stack_address] = IP',
             'RAM:u16[stack_address + 2] = CS',
             'SP = tmp',
@@ -390,16 +469,36 @@ export const call: InstructionInfo = {
       cycles: 11,
     },
     {
-      operation: [
-        'tmp = SP - 4',
-        'stack_address = SS_BASE + tmp',
-        'RAM:u16[stack_address] = IP',
-        'RAM:u16[stack_address + 2] = CS',
-        'SP = tmp',
-        'effective_address = ${MOD_RM_RM16}',
-        'IP = RAM:u16[effective_address]',
-        'CS = RAM:u16[effective_address + 2]',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'tmp = SP - 4',
+            'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            '#GP if (tmp + 2) == 0xffff',
+            'RAM:u16[stack_address] = IP',
+            'RAM:u16[stack_address + 2] = CS',
+            'SP = tmp',
+            'effective_address = ${MOD_RM_RM16}',
+            'IP = RAM:u16[effective_address]',
+            'CS = RAM:u16[effective_address + 2]',
+          ],
+        },
+        protected: {
+          operation: [
+            'tmp = SP - 4',
+            'stack_address = SS_BASE + tmp',
+            '#GP if (tmp + 3) < SS_LIMIT_MIN',
+            '#GP if (tmp + 3) > SS_LIMIT_MAX',
+            'RAM:u16[stack_address] = IP',
+            'RAM:u16[stack_address + 2] = CS',
+            'SP = tmp',
+            'effective_address = ${MOD_RM_RM16}',
+            'IP = RAM:u16[effective_address]',
+            'CS = RAM:u16[effective_address + 2]',
+          ],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_011_11'],
       operands: ['rm'],
       operandSize: 16,

@@ -12,8 +12,18 @@ export const pop: InstructionInfo = {
   modifies: [],
   undefined: [],
   macros: {
-    OP: [
-      'effective_address = SS_BASE + SP',
+    OP_REAL: [
+      'offset = SP',
+      'effective_address = SS_BASE + offset',
+      '#GP if offset == 0xffff',
+      'value = RAM:u16[effective_address]',
+      'SP = SP + 2',
+    ],
+    OP_PROTECTED: [
+      'offset = SP',
+      'effective_address = SS_BASE + offset',
+      '#GP if (offset + 1) < SS_LIMIT_MIN',
+      '#GP if (offset + 1) > SS_LIMIT_MAX',
       'value = RAM:u16[effective_address]',
       'SP = SP + 2',
     ],
@@ -40,45 +50,90 @@ export const pop: InstructionInfo = {
     {
       opcode: [Opcodes.POP_ES],
       operands: ['ES'],
-      operation: ['${OP}', 'ES = value'],
+      modes: {
+        real: {
+          operation: ['${OP_REAL}', 'ES = value'],
+        },
+        protected: {
+          operation: ['${OP_PROTECTED}', 'ES = value'],
+        },
+      },
       cycles: 5, // protected-mode: 20
     },
     // 0x17 - POP SS
     {
       opcode: [Opcodes.POP_SS],
       operands: ['SS'],
-      operation: [
-        '${OP}',
-        'SS = value',
-        // TODO: Inhibit interrupts...including NMI... for the next instruction somehow
-        // ----  Basically, do not allow them when the current instruction is immediately after a pop ss?
-      ],
+      modes: {
+        real: {
+          operation: [
+            '${OP_REAL}',
+            'SS = value',
+            // TODO: Inhibit interrupts...including NMI... for the next instruction somehow
+            // ----  Basically, do not allow them when the current instruction is immediately after a pop ss?
+          ],
+        },
+        protected: {
+          operation: [
+            '${OP_PROTECTED}',
+            'SS = value',
+          ],
+        },
+      },
       cycles: 5, // protected-mode: 20
     },
     // 0x1F - POP DS
     {
       opcode: [Opcodes.POP_DS],
       operands: ['DS'],
-      operation: ['${OP}', 'DS = value'],
+      modes: {
+        real: {
+          operation: ['${OP_REAL}', 'DS = value'],
+        },
+        protected: {
+          operation: ['${OP_PROTECTED}', 'DS = value'],
+        },
+      },
       cycles: 5, // protected-mode: 20
     },
     // 0x0F 0xA1 - POP FS
     {
       opcode: [Opcodes.SYSTEM, SystemOpcodes.POP_FS],
       operands: ['FS'],
-      operation: ['${OP}', 'FS = value'],
+      modes: {
+        real: {
+          operation: ['${OP_REAL}', 'FS = value'],
+        },
+        protected: {
+          operation: ['${OP_PROTECTED}', 'FS = value'],
+        },
+      },
       cycles: 5,
     },
     // 0x0F 0xA9 - POP GS
     {
       opcode: [Opcodes.SYSTEM, SystemOpcodes.POP_GS],
       operands: ['GS'],
-      operation: ['${OP}', 'GS = value'],
+      modes: {
+        real: {
+          operation: ['${OP_REAL}', 'GS = value'],
+        },
+        protected: {
+          operation: ['${OP_PROTECTED}', 'GS = value'],
+        },
+      },
       cycles: 5,
     },
     // 0x58+rw - POP rw
     {
-      operation: ['${OP}', '${MOD_RM_RM16} = value'],
+      modes: {
+        real: {
+          operation: ['${OP_REAL}', '${MOD_RM_RM16} = value'],
+        },
+        protected: {
+          operation: ['${OP_PROTECTED}', '${MOD_RM_RM16} = value'],
+        },
+      },
       opcode: [
         {
           identifier: 'OpcodeRM',
@@ -111,7 +166,7 @@ export const pop: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            '${OP}',
+            '${OP_REAL}',
             'offset = %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
@@ -120,7 +175,7 @@ export const pop: InstructionInfo = {
         },
         protected: {
           operation: [
-            '${OP}',
+            '${OP_PROTECTED}',
             'offset = %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -137,7 +192,7 @@ export const pop: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            '${OP}',
+            '${OP_REAL}',
             'offset = ${MOD_RM_OFFSET}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
@@ -146,7 +201,7 @@ export const pop: InstructionInfo = {
         },
         protected: {
           operation: [
-            '${OP}',
+            '${OP_PROTECTED}',
             'offset = ${MOD_RM_OFFSET}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -163,7 +218,7 @@ export const pop: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            '${OP}',
+            '${OP_REAL}',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
@@ -172,7 +227,7 @@ export const pop: InstructionInfo = {
         },
         protected: {
           operation: [
-            '${OP}',
+            '${OP_PROTECTED}',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -189,7 +244,7 @@ export const pop: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            '${OP}',
+            '${OP_REAL}',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
@@ -198,7 +253,7 @@ export const pop: InstructionInfo = {
         },
         protected: {
           operation: [
-            '${OP}',
+            '${OP_PROTECTED}',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -212,7 +267,14 @@ export const pop: InstructionInfo = {
       cycles: 5,
     },
     {
-      operation: ['${OP}', '${MOD_RM_RM16} = value'],
+      modes: {
+        real: {
+          operation: ['${OP_REAL}', '${MOD_RM_RM16} = value'],
+        },
+        protected: {
+          operation: ['${OP_PROTECTED}', '${MOD_RM_RM16} = value'],
+        },
+      },
       opcode: [Opcodes.POP_MW, 'ModRM_rm16_000_11'],
       operands: ['rm'],
       operandSize: 16,

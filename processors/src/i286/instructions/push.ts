@@ -12,9 +12,20 @@ export const push: InstructionInfo = {
   modifies: [],
   undefined: [],
   macros: {
-    OP: [
+    OP_REAL: [
       'tmp = SP - 2',
-      'stack_address = SS_BASE + tmp',
+      'offset = tmp',
+      'stack_address = SS_BASE + offset',
+      '#GP if offset == 0xffff',
+      'RAM:u16[stack_address] = value',
+      'SP = tmp',
+    ],
+    OP_PROTECTED: [
+      'tmp = SP - 2',
+      'offset = tmp',
+      'stack_address = SS_BASE + offset',
+      '#GP if (offset + 1) < SS_LIMIT_MIN',
+      '#GP if (offset + 1) > SS_LIMIT_MAX',
       'RAM:u16[stack_address] = value',
       'SP = tmp',
     ],
@@ -51,47 +62,96 @@ export const push: InstructionInfo = {
     {
       opcode: [Opcodes.PUSH_ES],
       operands: ['ES'],
-      operation: ['value = ES', '${OP}'],
+      modes: {
+        real: {
+          operation: ['value = ES', '${OP_REAL}'],
+        },
+        protected: {
+          operation: ['value = ES', '${OP_PROTECTED}'],
+        },
+      },
       cycles: 3,
     },
     // 0x0E - PUSH CS
     {
       opcode: [Opcodes.PUSH_CS],
       operands: ['CS'],
-      operation: ['value = CS', '${OP}'],
+      modes: {
+        real: {
+          operation: ['value = CS', '${OP_REAL}'],
+        },
+        protected: {
+          operation: ['value = CS', '${OP_PROTECTED}'],
+        },
+      },
       cycles: 3,
     },
     // 0x16 - PUSH SS
     {
       opcode: [Opcodes.PUSH_SS],
       operands: ['SS'],
-      operation: ['value = SS', '${OP}'],
+      modes: {
+        real: {
+          operation: ['value = SS', '${OP_REAL}'],
+        },
+        protected: {
+          operation: ['value = SS', '${OP_PROTECTED}'],
+        },
+      },
       cycles: 3,
     },
     // 0x1E - PUSH DS
     {
       opcode: [Opcodes.PUSH_DS],
       operands: ['DS'],
-      operation: ['value = DS', '${OP}'],
+      modes: {
+        real: {
+          operation: ['value = DS', '${OP_REAL}'],
+        },
+        protected: {
+          operation: ['value = DS', '${OP_PROTECTED}'],
+        },
+      },
       cycles: 3,
     },
     // 0x0F 0xA0 - PUSH FS
     {
       opcode: [Opcodes.SYSTEM, SystemOpcodes.PUSH_FS],
       operands: ['FS'],
-      operation: ['value = FS', '${OP}'],
+      modes: {
+        real: {
+          operation: ['value = FS', '${OP_REAL}'],
+        },
+        protected: {
+          operation: ['value = FS', '${OP_PROTECTED}'],
+        },
+      },
       cycles: 3,
     },
     // 0x0F 0xA8 - PUSH GS
     {
       opcode: [Opcodes.SYSTEM, SystemOpcodes.PUSH_GS],
       operands: ['GS'],
-      operation: ['value = GS', '${OP}'],
+      modes: {
+        real: {
+          operation: ['value = GS', '${OP_REAL}'],
+        },
+        protected: {
+          operation: ['value = GS', '${OP_PROTECTED}'],
+        },
+      },
       cycles: 3,
     },
     // 0x50+rw - PUSH rw
     {
-      operation: ['value = ${MOD_RM_RM16}', '${OP}'],
+      modes: {
+        real: {
+          operation: ['value = ${MOD_RM_RM16}', '${OP_REAL}'],
+        },
+        protected: {
+          operation: ['value = ${MOD_RM_RM16}', '${OP_PROTECTED}'],
+        },
+      },
       opcode: [
         {
           identifier: 'OpcodeRM',
@@ -128,7 +188,7 @@ export const push: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'value = RAM:u16[effective_address]',
-            '${OP}',
+            '${OP_REAL}',
           ],
         },
         protected: {
@@ -137,7 +197,7 @@ export const push: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'value = RAM:u16[effective_address]',
-            '${OP}',
+            '${OP_PROTECTED}',
           ],
         },
       },
@@ -154,7 +214,7 @@ export const push: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'value = RAM:u16[effective_address]',
-            '${OP}',
+            '${OP_REAL}',
           ],
         },
         protected: {
@@ -163,7 +223,7 @@ export const push: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'value = RAM:u16[effective_address]',
-            '${OP}',
+            '${OP_PROTECTED}',
           ],
         },
       },
@@ -180,7 +240,7 @@ export const push: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'value = RAM:u16[effective_address]',
-            '${OP}',
+            '${OP_REAL}',
           ],
         },
         protected: {
@@ -189,7 +249,7 @@ export const push: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'value = RAM:u16[effective_address]',
-            '${OP}',
+            '${OP_PROTECTED}',
           ],
         },
       },
@@ -206,7 +266,7 @@ export const push: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'value = RAM:u16[effective_address]',
-            '${OP}',
+            '${OP_REAL}',
           ],
         },
         protected: {
@@ -215,7 +275,7 @@ export const push: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'value = RAM:u16[effective_address]',
-            '${OP}',
+            '${OP_PROTECTED}',
           ],
         },
       },
@@ -225,7 +285,14 @@ export const push: InstructionInfo = {
       cycles: 5,
     },
     {
-      operation: ['value = ${MOD_RM_RM16}', '${OP}'],
+      modes: {
+        real: {
+          operation: ['value = ${MOD_RM_RM16}', '${OP_REAL}'],
+        },
+        protected: {
+          operation: ['value = ${MOD_RM_RM16}', '${OP_PROTECTED}'],
+        },
+      },
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_110_11'],
       operands: ['rm'],
       operandSize: 16,
@@ -233,7 +300,14 @@ export const push: InstructionInfo = {
     },
     // 0x68 dw - PUSH dw
     {
-      operation: ['value = %{imm}', '${OP}'],
+      modes: {
+        real: {
+          operation: ['value = %{imm}', '${OP_REAL}'],
+        },
+        protected: {
+          operation: ['value = %{imm}', '${OP_PROTECTED}'],
+        },
+      },
       opcode: [Opcodes.PUSH_DW, 'IMM_u16'],
       operands: ['imm'],
       operandSize: 16,
@@ -241,7 +315,14 @@ export const push: InstructionInfo = {
     },
     // 0x6A db - PUSH db
     {
-      operation: ['value = %{imm}', '${OP}'],
+      modes: {
+        real: {
+          operation: ['value = %{imm}', '${OP_REAL}'],
+        },
+        protected: {
+          operation: ['value = %{imm}', '${OP_PROTECTED}'],
+        },
+      },
       opcode: [Opcodes.PUSH_DB, 'IMM_i8'],
       operands: ['imm'],
       operandSize: 16,

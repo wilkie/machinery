@@ -376,6 +376,12 @@ export const state: RegisterInfo[] = [
     type: RegisterTypes.Integer,
   },
   {
+    identifier: 'EXCEPTION_DEPTH',
+    name: 'Exception Delivery Nesting Depth',
+    size: 8,
+    type: RegisterTypes.Integer,
+  },
+  {
     identifier: 'HALTED',
     name: 'Machine Halt Status',
     size: 1,

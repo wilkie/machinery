@@ -94,6 +94,15 @@ org 0x100
     ld de, 0x2000
     rst 0x18
 
+; ADD IX, SP
+    ld ix, 0x1000
+    add ix, sp
+    ; SP is 0xFFFE, so IX = 0x1000 + 0xFFFE = 0x0FFE (wraps)
+    push ix
+    pop hl
+    ld de, 0x0FFE
+    rst 0x18
+
 ; LD r, (IX+d) - indexed memory reads
     ld ix, data_area
     ld [ix+0], 0x42
@@ -197,6 +206,97 @@ org 0x100
     pop hl
     ld de, 0x2222
     rst 0x18
+
+; ADC A, (IX+d)
+    scf                   ; set carry
+    ld a, 0x10
+    ld [ix+0], 0x20
+    adc a, [ix+0]
+    ld b, 0x31            ; 0x10 + 0x20 + carry(1) = 0x31
+    rst 0x10
+
+; SBC A, (IX+d)
+    scf                   ; set carry
+    ld a, 0x50
+    ld [ix+0], 0x20
+    sbc a, [ix+0]
+    ld b, 0x2F            ; 0x50 - 0x20 - carry(1) = 0x2F
+    rst 0x10
+
+; LD r, (IX+d) - all registers
+    ld [ix+0], 0x42
+    ld b, [ix+0]
+    ld a, b
+    ld b, 0x42
+    rst 0x10
+
+    ld [ix+0], 0x43
+    ld c, [ix+0]
+    ld a, c
+    ld b, 0x43
+    rst 0x10
+
+    ld [ix+0], 0x44
+    ld d, [ix+0]
+    ld a, d
+    ld b, 0x44
+    rst 0x10
+
+    ld [ix+0], 0x45
+    ld e, [ix+0]
+    ld a, e
+    ld b, 0x45
+    rst 0x10
+
+    ld [ix+0], 0x46
+    ld h, [ix+0]
+    ld a, h
+    ld b, 0x46
+    rst 0x10
+
+    ld [ix+0], 0x47
+    ld l, [ix+0]
+    ld a, l
+    ld b, 0x47
+    rst 0x10
+
+; LD (IX+d), r - all registers
+    ld ix, data_area
+    ld b, 0x51
+    ld [ix+0], b
+    ld a, [ix+0]
+    ld b, 0x51
+    rst 0x10
+
+    ld c, 0x52
+    ld [ix+1], c
+    ld a, [ix+1]
+    ld b, 0x52
+    rst 0x10
+
+    ld d, 0x53
+    ld [ix+2], d
+    ld a, [ix+2]
+    ld b, 0x53
+    rst 0x10
+
+    ld e, 0x54
+    ld [ix+3], e
+    ld a, [ix+3]
+    ld b, 0x54
+    rst 0x10
+
+    ld h, 0x55
+    ld [ix+4], h
+    ld a, [ix+4]
+    ld b, 0x55
+    rst 0x10
+
+    ld l, 0x56
+    ld [ix+5], l
+    ld a, [ix+5]
+    ld b, 0x56
+    rst 0x10
 
 ; JP (IX)
     ld ix, .jp_target

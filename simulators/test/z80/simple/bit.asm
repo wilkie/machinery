@@ -361,6 +361,159 @@ org 0x100
     ld b, 0x09
     rst 0x10
 
+; --- BIT n, (IX+d) ---
+
+    ld ix, data_bit
+
+    ; BIT tests set Z flag if bit is 0
+    ld [ix+0], 0x00
+    bit 0, [ix+0]        ; bit 0 is 0, Z should be set
+    jr z, .ix_bit0_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.ix_bit0_ok:
+
+    ld [ix+0], 0x08       ; bit 3 set
+    bit 3, [ix+0]         ; bit 3 is 1, Z should be clear
+    jr nz, .ix_bit3_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.ix_bit3_ok:
+
+    bit 7, [ix+0]         ; bit 7 is 0 in 0x08, Z should be set
+    jr z, .ix_bit7_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.ix_bit7_ok:
+
+    ld [ix+0], 0x80
+    bit 7, [ix+0]         ; bit 7 is 1, Z should be clear
+    jr nz, .ix_bit7b_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.ix_bit7b_ok:
+
+    ; BIT with displacement
+    ld [ix+4], 0x20        ; bit 5 set
+    bit 5, [ix+4]
+    jr nz, .ix_bit5d_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.ix_bit5d_ok:
+
+    bit 0, [ix+4]         ; bit 0 is 0 in 0x20
+    jr z, .ix_bit0d_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.ix_bit0d_ok:
+
+; --- BIT n, (IY+d) ---
+
+    ld iy, data_bit
+
+    ld [iy+0], 0x00
+    bit 4, [iy+0]         ; bit 4 is 0, Z should be set
+    jr z, .iy_bit4_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.iy_bit4_ok:
+
+    ld [iy+0], 0x10        ; bit 4 set
+    bit 4, [iy+0]          ; bit 4 is 1, Z should be clear
+    jr nz, .iy_bit4b_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.iy_bit4b_ok:
+
+    ld [iy+2], 0x42        ; bits 1 and 6 set
+    bit 1, [iy+2]
+    jr nz, .iy_bit1d_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.iy_bit1d_ok:
+
+    bit 6, [iy+2]
+    jr nz, .iy_bit6d_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.iy_bit6d_ok:
+
+    bit 2, [iy+2]          ; bit 2 is 0 in 0x42
+    jr z, .iy_bit2d_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.iy_bit2d_ok:
+
+; --- BIT n, (HL) ---
+
+    ld hl, data_bit
+    ld [hl], 0xA5          ; bits 0,2,5,7 set
+
+    bit 0, [hl]
+    jr nz, .hl_bit0_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.hl_bit0_ok:
+
+    bit 1, [hl]            ; bit 1 is 0
+    jr z, .hl_bit1_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.hl_bit1_ok:
+
+    bit 5, [hl]
+    jr nz, .hl_bit5_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.hl_bit5_ok:
+
+    bit 7, [hl]
+    jr nz, .hl_bit7_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.hl_bit7_ok:
+
+; --- BIT n, r (register) ---
+
+    ld a, 0x81             ; bits 0 and 7 set
+    bit 0, a
+    jr nz, .r_bit0_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.r_bit0_ok:
+
+    ld a, 0x81
+    bit 3, a               ; bit 3 is 0
+    jr z, .r_bit3_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.r_bit3_ok:
+
+    ld a, 0x81
+    bit 7, a
+    jr nz, .r_bit7_ok
+    ld a, 0x01
+    ld b, 0x00
+    rst 0x10
+.r_bit7_ok:
+
     halt
 
 data_bit:

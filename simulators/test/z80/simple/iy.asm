@@ -119,6 +119,52 @@ org 0x100
     ld b, 0x55
     rst 0x10
 
+; SUB (IY+d)
+    ld a, 0x80
+    ld [iy+0], 0x30
+    sub [iy+0]
+    ld b, 0x50
+    rst 0x10
+
+; CP (IY+d) - compare (A unchanged)
+    ld [iy+0], 0x33
+    ld a, 0x33
+    cp [iy+0]
+    ; A is unchanged after CP
+    ld b, 0x33
+    rst 0x10
+
+; ADC A, (IY+d)
+    scf
+    ld a, 0x10
+    ld [iy+0], 0x05
+    adc a, [iy+0]
+    ld b, 0x16            ; 0x10 + 0x05 + carry(1) = 0x16
+    rst 0x10
+
+; SBC A, (IY+d)
+    scf
+    ld a, 0x40
+    ld [iy+0], 0x10
+    sbc a, [iy+0]
+    ld b, 0x2F            ; 0x40 - 0x10 - carry(1) = 0x2F
+    rst 0x10
+
+; LD (IY+d), n - immediate to indexed memory
+    ld [iy+3], 0xBB
+    ld a, [iy+3]
+    ld b, 0xBB
+    rst 0x10
+
+; Negative displacement
+    ld iy, data_iy + 4
+    ld [iy-4], 0x77
+    ld a, [data_iy]
+    ld b, 0x77
+    rst 0x10
+
+    ld iy, data_iy        ; restore
+
 ; INC (IY+d)
     ld [iy+0], 0xFF
     inc [iy+0]
@@ -131,6 +177,44 @@ org 0x100
     dec [iy+0]
     ld a, [iy+0]
     ld b, 0xFF
+    rst 0x10
+
+; LD r, (IY+d) - multiple registers
+    ld [iy+0], 0x61
+    ld b, [iy+0]
+    ld a, b
+    ld b, 0x61
+    rst 0x10
+
+    ld [iy+0], 0x62
+    ld c, [iy+0]
+    ld a, c
+    ld b, 0x62
+    rst 0x10
+
+    ld [iy+0], 0x63
+    ld d, [iy+0]
+    ld a, d
+    ld b, 0x63
+    rst 0x10
+
+    ld [iy+0], 0x64
+    ld e, [iy+0]
+    ld a, e
+    ld b, 0x64
+    rst 0x10
+
+; LD (IY+d), r - multiple registers
+    ld b, 0x71
+    ld [iy+1], b
+    ld a, [iy+1]
+    ld b, 0x71
+    rst 0x10
+
+    ld d, 0x72
+    ld [iy+2], d
+    ld a, [iy+2]
+    ld b, 0x72
     rst 0x10
 
 ; EX (SP), IY

@@ -234,7 +234,9 @@ export interface FinalizableOperationNotViaMode extends OperationNotViaMode {
   finalize?: string[];
 }
 
-export interface FinalizableOperationViaMode<T = FinalizableOperationNotViaMode> {
+export interface FinalizableOperationViaMode<
+  T = FinalizableOperationNotViaMode,
+> {
   /**
    * We might specify different operations depending on mode.
    */
@@ -308,11 +310,18 @@ export interface InstructionFormBase {
   encodingPriority?: number;
 }
 
+export type InstructionFormFlat = InstructionFormBase &
+  FinalizableOperationNotViaMode;
+export type InstructionFormModes = InstructionFormBase &
+  FinalizableOperationViaMode<
+    Omit<InstructionFormBase, 'opcode'> & FinalizableOperationNotViaMode
+  >;
+
 /**
  * Describes a variant of an instruction. Useful within the context of an
  * InstructionInfo description.
  */
-export type InstructionForm = InstructionFormBase & (FinalizableOperationNotViaMode | FinalizableOperationViaMode<Omit<InstructionFormBase, 'opcode'> & FinalizableOperationNotViaMode>);
+export type InstructionForm = InstructionFormFlat | InstructionFormModes;
 
 /**
  * Describes a single type of instruction.
@@ -506,7 +515,10 @@ export interface MemoryRegionSubdividedField extends MemoryRegionBaseField {
   fields?: MemoryRegionBaseField[];
 }
 
-export type MemoryRegionArrayFieldCell = Omit<MemoryRegionSubdividedField, 'offset' | 'size'>;
+export type MemoryRegionArrayFieldCell = Omit<
+  MemoryRegionSubdividedField,
+  'offset' | 'size'
+>;
 
 export interface MemoryRegionArrayField extends MemoryRegionBaseField {
   count: number;
@@ -521,6 +533,8 @@ export interface BaseMemoryRegion {
   identifier: string;
   name: string;
   size?: number;
+  /** Whether or not this region (without fields) is interpreted as signed (2's complement). */
+  signed?: boolean;
 }
 
 export interface BaseOffsettableMemoryRegion extends BaseMemoryRegion {

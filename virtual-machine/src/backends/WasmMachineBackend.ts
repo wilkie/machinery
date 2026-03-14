@@ -1,6 +1,4 @@
-import type {
-  ModeInfo,
-} from '@machinery/core';
+import type { ModeInfo } from '@machinery/core';
 
 import TypeScriptBackend from './TypeScriptBackend';
 
@@ -28,7 +26,6 @@ class WasmMachineBackend extends TypeScriptBackend {
     code.push('  mem8: Uint8Array;');
     code.push('  mem16: Uint16Array;');
     code.push('  mem32: Uint32Array;');
-    code.push('  mode: number;');
     code.push('  private instance!: WebAssembly.Instance;');
     code.push('');
 
@@ -56,13 +53,17 @@ class WasmMachineBackend extends TypeScriptBackend {
 
     // init() — instantiates the wasm module with shared memory
     code.push('  async init(wasm: BufferSource) {');
-    code.push(
-      '    const { instance } = await WebAssembly.instantiate(wasm, {',
-    );
+    code.push('    const { instance } = await WebAssembly.instantiate(wasm, {');
     code.push('      env: {');
     code.push('        memory: this.memory,');
     ((this.target.modes as Pick<ModeInfo, 'identifier'>[]) || [])
-      .concat(this.target.modes?.find(modeInfo => modeInfo.identifier === 'default') === undefined ? [{ identifier: 'default' }] : [])
+      .concat(
+        this.target.modes?.find(
+          (modeInfo) => modeInfo.identifier === 'default',
+        ) === undefined
+          ? [{ identifier: 'default' }]
+          : [],
+      )
       .forEach((modeInfo) => {
         const mode = modeInfo.identifier;
         code.push(
@@ -85,14 +86,46 @@ class WasmMachineBackend extends TypeScriptBackend {
     // interrupt_<mode>() — overridable callback, returns 1 (handled) by default
     // The wasm module calls this; if it returns 0, wasm does default handler vectoring.
     ((this.target.modes as Pick<ModeInfo, 'identifier'>[]) || [])
-      .concat(this.target.modes?.find(modeInfo => modeInfo.identifier === 'default') === undefined ? [{ identifier: 'default' }] : [])
+      .concat(
+        this.target.modes?.find(
+          (modeInfo) => modeInfo.identifier === 'default',
+        ) === undefined
+          ? [{ identifier: 'default' }]
+          : [],
+      )
       .forEach((modeInfo) => {
         const mode = modeInfo.identifier;
         code.push(`  interrupt_${mode}(_: number): number {`);
         code.push('    return 0;');
         code.push('  }');
         code.push('');
-      })
+      });
+
+    // Create functions for accessing system state
+    const generatedDummy = {
+      accesses: [],
+      modifies: [],
+      code: [],
+      context: {
+        mode: 'default',
+        locals: {},
+        localMap: { _ip: { identifier: '_ip' } },
+      },
+    };
+    if (this.parsed.system.mode) {
+      code.push(`  get mode(): number {`);
+      code.push(
+        `    return ${this.readMemory(generatedDummy, this.parsed.system.mode, this.parsed.system.mode.address)};`,
+      );
+      code.push(`  }`);
+      code.push('');
+      code.push(`  set mode(value: number) {`);
+      code.push(
+        `    ${this.writeMemory(generatedDummy, this.parsed.system.mode, this.parsed.system.mode.address, 'value')};`,
+      );
+      code.push(`  }`);
+      code.push('');
+    }
 
     // Register getters/setters — reuse the TypeScriptBackend logic
     // (these just read/write from shared WebAssembly.Memory)
@@ -122,21 +155,19 @@ class WasmMachineBackend extends TypeScriptBackend {
       // Getter
       const jsN = name.replace(/'/g, '_');
       code.push(`  get ${jsN}() {`);
-      (
-        (target.modes as { identifier: string }[]) || []
-      )
+      ((target.modes as { identifier: string }[]) || [])
         .concat([{ identifier: 'default' }])
         .forEach((modeInfo, i) => {
           const mode = modeInfo.identifier;
           if (mode !== 'default' && getModes.includes(mode)) {
-            code.push(
-              `    ${i !== 0 ? 'else ' : ''}if (this.mode === ${i}) {`,
-            );
+            code.push(`    ${i !== 0 ? 'else ' : ''}if (this.mode === ${i}) {`);
           } else if (mode === 'default' && !getOnlyDefault) {
             code.push('    else { // default');
           }
           if (getModes.includes(mode) || mode === 'default') {
-            const { localMap }: { localMap: LocalMap } = parsedRegister?.get?.[mode] || { localMap: {} };
+            const { localMap }: { localMap: LocalMap } = parsedRegister?.get?.[
+              mode
+            ] || { localMap: {} };
             for (const [localName, localInfo] of Object.entries(localMap)) {
               if (localName === 'vector') {
                 continue;
@@ -182,21 +213,19 @@ class WasmMachineBackend extends TypeScriptBackend {
         setModes.length === 0 ||
         (setModes.length === 1 && setModes[0] === 'default');
       code.push(`  set ${jsN}(value: number) {`);
-      (
-        (target.modes as { identifier: string }[]) || []
-      )
+      ((target.modes as { identifier: string }[]) || [])
         .concat([{ identifier: 'default' }])
         .forEach((modeInfo, i) => {
           const mode = modeInfo.identifier;
           if (mode !== 'default' && setModes.includes(mode)) {
-            code.push(
-              `    ${i !== 0 ? 'else ' : ''}if (this.mode === ${i}) {`,
-            );
+            code.push(`    ${i !== 0 ? 'else ' : ''}if (this.mode === ${i}) {`);
           } else if (mode === 'default' && !setOnlyDefault) {
             code.push('    else { // default');
           }
           if (setModes.includes(mode) || mode === 'default') {
-            const { localMap }: { localMap: LocalMap } = parsedRegister?.set?.[mode] || { localMap: {} };
+            const { localMap }: { localMap: LocalMap } = parsedRegister?.set?.[
+              mode
+            ] || { localMap: {} };
             for (const [localName, localInfo] of Object.entries(localMap)) {
               if (localName === 'vector') {
                 continue;
@@ -267,9 +296,7 @@ class WasmMachineBackend extends TypeScriptBackend {
         for (const line of readSubCode.slice(0, readSubCode.length - 1)) {
           code.push(`    ${line};`);
         }
-        code.push(
-          '    return ' + readSubCode[readSubCode.length - 1] + ';',
-        );
+        code.push('    return ' + readSubCode[readSubCode.length - 1] + ';');
         code.push('  }');
         code.push('');
         const writeSubCode = this.writeRegister(

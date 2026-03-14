@@ -84,46 +84,6 @@ export interface ParsedOperation {
   statement: StatementNode;
 }
 
-/**
- * Contains the parsed code for a target.
- */
-export interface IntermediateRepresentation {
-  /**
-   * Each instruction form expanded into an AST form
-   *
-   * For each instruction, there is an AST root node in an array conforming to
-   * the array of instruction forms described in the target.
-   */
-  instructions: {
-    [key: string]: {
-      [mode: string]: {
-        operation: ParsedOperation;
-        finalize?: ParsedOperation;
-      };
-    }[];
-  };
-  registers: {
-    [key: string]: {
-      get?: {
-        [mode: string]: ParsedOperation;
-      };
-      set?: {
-        [mode: string]: ParsedOperation;
-      };
-    };
-  };
-  interrupts: {
-    handler?: {
-      [mode: string]: ParsedOperation;
-    };
-    vectors: {
-      [key: string]: {
-        vector: number;
-      };
-    };
-  };
-}
-
 export interface BaseReference {
   identifier: string;
 }
@@ -164,6 +124,11 @@ export interface MemoryReference extends BaseReference {
 export interface LocalReference extends BaseReference {
   type: 'local';
   mapping: LocalMapping;
+}
+
+export interface SystemReference extends BaseReference {
+  type: 'system';
+  tags: string[];
 }
 
 /**
@@ -217,7 +182,8 @@ export type Reference =
   | RegisterReference
   | MemoryReference
   | MemoryAccessReference
-  | LocalReference;
+  | LocalReference
+  | SystemReference;
 
 export interface GeneratorContext {
   /** The current mode we are generating for */
@@ -265,4 +231,50 @@ export interface GeneratedStatement {
    * Contains parsing context.
    */
   context: GeneratorContext;
+}
+
+/**
+ * Contains the parsed code for a target.
+ */
+export interface IntermediateRepresentation {
+  /**
+   * Each instruction form expanded into an AST form
+   *
+   * For each instruction, there is an AST root node in an array conforming to
+   * the array of instruction forms described in the target.
+   */
+  instructions: {
+    [key: string]: {
+      [mode: string]: {
+        operation: ParsedOperation;
+        finalize?: ParsedOperation;
+      };
+    }[];
+  };
+  /** Parsed and resolved register get/set operations */
+  registers: {
+    [key: string]: {
+      get?: {
+        [mode: string]: ParsedOperation;
+      };
+      set?: {
+        [mode: string]: ParsedOperation;
+      };
+    };
+  };
+  /** Parsed and resolved interrupt handlers */
+  interrupts: {
+    handler?: {
+      [mode: string]: ParsedOperation;
+    };
+    vectors: {
+      [key: string]: {
+        vector: number;
+      };
+    };
+  };
+  /** The system state that is embedded in the machine linear memory */
+  system: {
+    mode?: MemoryReference;
+  };
 }

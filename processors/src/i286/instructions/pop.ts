@@ -74,10 +74,7 @@ export const pop: InstructionInfo = {
           ],
         },
         protected: {
-          operation: [
-            '${OP_PROTECTED}',
-            'SS = value',
-          ],
+          operation: ['${OP_PROTECTED}', 'SS = value'],
         },
       },
       cycles: 5, // protected-mode: 20

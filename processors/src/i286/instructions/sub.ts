@@ -2,7 +2,6 @@ import type { InstructionInfo } from '@machinery/core';
 
 import { Opcodes } from '../opcodes';
 
-// #13 for offset 0xffff
 export const sub: InstructionInfo = {
   identifier: 'sub',
   name: 'Integer Subtraction',

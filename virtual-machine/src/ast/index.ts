@@ -22,6 +22,7 @@ export { default as RegisterChoiceExpressionNode } from './RegisterChoiceExpress
 export { default as RegisterOperandNode } from './RegisterOperandNode';
 export { default as RepeatIfNode } from './RepeatIfNode';
 export { default as StatementNode } from './StatementNode';
+export { default as SystemOperandNode } from './SystemOperandNode';
 export { default as TernaryExpressionNode } from './TernaryExpressionNode';
 export { default as UnaryExpressionNode } from './UnaryExpressionNode';
 export { default as UnaryLogicNode } from './UnaryLogicNode';

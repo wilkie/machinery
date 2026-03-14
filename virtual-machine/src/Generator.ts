@@ -2,9 +2,14 @@ import type {
   Target,
   InstructionInfo,
   InstructionForm,
+  InstructionFormFlat,
+  InstructionFormModes,
   MacrosInfo,
+  OperationViaMode,
+  OperationNotViaMode,
 } from '@machinery/core';
 
+import { OperandNode } from './ast';
 import type Backend from './Backend';
 import type { BackendClass } from './Backend';
 import Parser from './Parser';
@@ -45,7 +50,18 @@ class Generator {
       interrupts: {
         vectors: {},
       },
+      system: {},
     };
+
+    // Generate the system references
+    map.system.mode = this.resolver.locateMemoryOperand(
+      new OperandNode('@system', undefined, new OperandNode('mode')),
+      {
+        mode: 'default',
+        locals: {},
+        localMap: {},
+      },
+    );
 
     // Generate all instruction ASTs
     for (const info of this.target.instructions || []) {
@@ -81,7 +97,7 @@ class Generator {
           ret[mode] = {
             operation,
             finalize:
-              form.finalize !== undefined
+              (form as InstructionFormFlat).finalize !== undefined
                 ? this.parseInstructionForm(
                     info,
                     form,
@@ -115,24 +131,25 @@ class Generator {
           const locals: LocalsInfo = {};
           const localMap: LocalMap = {};
 
-          for (const local of info.get.modes?.[mode]?.locals ||
-            info.get.locals ||
+          for (const local of (info.get as OperationViaMode).modes?.[mode]
+            ?.locals ||
+            (info.get as OperationNotViaMode).locals ||
             []) {
             locals[local.identifier] = local;
           }
 
           const code =
             mode !== 'default'
-              ? info.get.modes?.[mode]?.operation?.flat(3).join(' ; ')
-              : info.get.operation?.flat(3).join(' ; ');
+              ? (info.get as OperationViaMode).modes?.[mode]?.operation
+                  ?.flat(3)
+                  .join(' ; ')
+              : (info.get as OperationNotViaMode).operation
+                  ?.flat(3)
+                  .join(' ; ');
           if (code) {
             map.registers[name].get ||= {};
             map.registers[name].get[mode] = {
-              statement: this.parser.parse(
-                code + ' ;',
-                {},
-                locals,
-              ),
+              statement: this.parser.parse(code + ' ;', {}, locals),
               localMap,
             };
             map.registers[name].get[mode].statement = this.resolver.resolve(
@@ -142,7 +159,8 @@ class Generator {
             );
 
             if (
-              info.get.modes?.[mode]?.operation === undefined &&
+              (info.get as OperationViaMode).modes?.[mode]?.operation ===
+                undefined &&
               mode !== 'default'
             ) {
               map.registers[name].get.default = map.registers[name].get[mode];
@@ -155,23 +173,24 @@ class Generator {
           const locals: LocalsInfo = {};
           const localMap: LocalMap = {};
 
-          for (const local of info.set.modes?.[mode]?.locals ||
-            info.set.locals ||
+          for (const local of (info.set as OperationViaMode).modes?.[mode]
+            ?.locals ||
+            (info.set as OperationNotViaMode).locals ||
             []) {
             locals[local.identifier] = local;
           }
           const code =
             mode !== 'default'
-              ? info.set.modes?.[mode]?.operation?.flat(3).join(' ; ')
-              : info.set.operation?.flat(3).join(' ; ') || '';
+              ? (info.set as OperationViaMode).modes?.[mode]?.operation
+                  ?.flat(3)
+                  .join(' ; ')
+              : (info.set as OperationNotViaMode).operation
+                  ?.flat(3)
+                  .join(' ; ') || '';
           if (code) {
             map.registers[name].set ||= {};
             map.registers[name].set[mode] = {
-              statement: this.parser.parse(
-                code + ' ;',
-                {},
-                locals,
-              ),
+              statement: this.parser.parse(code + ' ;', {}, locals),
               localMap,
             };
             map.registers[name].set[mode].statement = this.resolver.resolve(
@@ -181,7 +200,8 @@ class Generator {
             );
 
             if (
-              info.set.modes?.[mode]?.operation === undefined &&
+              (info.set as OperationViaMode).modes?.[mode]?.operation ===
+                undefined &&
               mode !== 'default'
             ) {
               map.registers[name].set.default = map.registers[name].set[mode];
@@ -201,7 +221,13 @@ class Generator {
         const locals: LocalsInfo = {};
         const localMap: LocalMap = {};
 
-        for (const local of [...(machine.target.interrupts.handler.locals || []), ...(machine.target.interrupts.handler.modes?.[mode]?.locals || [])]) {
+        for (const local of [
+          ...((machine.target.interrupts.handler as OperationNotViaMode)
+            .locals || []),
+          ...((machine.target.interrupts.handler as OperationViaMode).modes?.[
+            mode
+          ]?.locals || []),
+        ]) {
           locals[local.identifier] = local;
         }
 
@@ -214,13 +240,17 @@ class Generator {
 
         const code =
           mode !== 'default'
-            ? machine.target.interrupts.handler.modes?.[mode]?.operation?.flat(3).join(' ; ')
-            : machine.target.interrupts.handler.operation?.flat(3).join(' ; ');
-        const parsed = this.parser.parse(
-          (code || '') + ' ;',
-          {},
-          locals,
-        );
+            ? (machine.target.interrupts.handler as OperationViaMode).modes?.[
+                mode
+              ]?.operation
+                ?.flat(3)
+                .join(' ; ')
+            : (
+                machine.target.interrupts.handler as OperationNotViaMode
+              ).operation
+                ?.flat(3)
+                .join(' ; ');
+        const parsed = this.parser.parse((code || '') + ' ;', {}, locals);
         const statement = this.resolver.resolve(parsed, locals, localMap);
         map.interrupts.handler ||= {};
         map.interrupts.handler[mode] = {
@@ -229,7 +259,8 @@ class Generator {
         };
 
         if (
-          machine.target.interrupts.handler?.modes?.[mode]?.operation === undefined &&
+          (machine.target.interrupts.handler as OperationViaMode | undefined)
+            ?.modes?.[mode]?.operation === undefined &&
           mode !== 'default'
         ) {
           map.interrupts.handler.default = map.interrupts.handler[mode];
@@ -270,7 +301,7 @@ class Generator {
       throw new Error(`Instruction ${name} form ${formIndex} not found.`);
     }
 
-    if (finalize && form.finalize === undefined) {
+    if (finalize && (form as InstructionFormFlat).finalize === undefined) {
       return;
     }
 
@@ -300,7 +331,9 @@ class Generator {
       locals[local.identifier] = local;
     }
 
-    for (const local of form.modes?.[mode]?.locals || form.locals || []) {
+    for (const local of (form as InstructionFormModes).modes?.[mode]?.locals ||
+      (form as InstructionFormFlat).locals ||
+      []) {
       if (local.identifier in locals) {
         // We allow redefining the same local in a form
         if (
@@ -367,8 +400,12 @@ class Generator {
       //console.log("PARSING", info.identifier, variant);
       const result = this.parser.parse(
         (finalize
-          ? form.modes?.[mode]?.finalize || form.finalize || []
-          : form.modes?.[mode]?.operation || form.operation || []
+          ? (form as InstructionFormModes).modes?.[mode]?.finalize ||
+            (form as InstructionFormFlat).finalize ||
+            []
+          : (form as InstructionFormModes).modes?.[mode]?.operation ||
+            (form as InstructionFormFlat).operation ||
+            []
         )
           .flat(3)
           .join(' ; ') + ' ;',

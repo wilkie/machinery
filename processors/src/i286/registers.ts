@@ -455,28 +455,20 @@ export const registers: RegisterInfo[] = [
     get: {
       modes: {
         real: {
-          operation: [
-            '#UD'
-          ],
+          operation: ['#UD'],
         },
         protected: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
       },
     },
     set: {
       modes: {
         real: {
-          operation: [
-            '#UD'
-          ],
+          operation: ['#UD'],
         },
         protected: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
       },
     },
@@ -489,28 +481,20 @@ export const registers: RegisterInfo[] = [
     get: {
       modes: {
         real: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
         protected: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
       },
     },
     set: {
       modes: {
         real: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
         protected: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
       },
     },
@@ -525,28 +509,20 @@ export const registers: RegisterInfo[] = [
     get: {
       modes: {
         real: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
         protected: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
       },
     },
     set: {
       modes: {
         real: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
         protected: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
       },
     },
@@ -559,28 +535,20 @@ export const registers: RegisterInfo[] = [
     get: {
       modes: {
         real: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
         protected: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
       },
     },
     set: {
       modes: {
         real: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
         protected: {
-          operation: [
-            '#UD',
-          ],
+          operation: ['#UD'],
         },
       },
     },
@@ -626,7 +594,7 @@ export const registers: RegisterInfo[] = [
   {
     identifier: 'IDTR',
     name: 'IDT Register',
-    size: 40,
+    size: 64,
     type: RegisterTypes.Integer,
     fields: [
       {
@@ -638,7 +606,7 @@ export const registers: RegisterInfo[] = [
       {
         identifier: 'base',
         name: 'IDT Base Offset Register',
-        offset: 16,
+        offset: 32,
         size: 24,
       },
     ],
@@ -646,7 +614,7 @@ export const registers: RegisterInfo[] = [
   {
     identifier: 'GDTR',
     name: 'GDT Register',
-    size: 40,
+    size: 64,
     type: RegisterTypes.Integer,
     fields: [
       {
@@ -658,7 +626,7 @@ export const registers: RegisterInfo[] = [
       {
         identifier: 'base',
         name: 'GDT Base Offset Register',
-        offset: 16,
+        offset: 32,
         size: 24,
       },
     ],
@@ -666,7 +634,7 @@ export const registers: RegisterInfo[] = [
   {
     identifier: 'LDTR',
     name: 'LDT Register',
-    size: 40,
+    size: 64,
     type: RegisterTypes.Integer,
     fields: [
       {
@@ -678,7 +646,7 @@ export const registers: RegisterInfo[] = [
       {
         identifier: 'base',
         name: 'LDT Base Offset Register',
-        offset: 16,
+        offset: 32,
         size: 24,
       },
     ],

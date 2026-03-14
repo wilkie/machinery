@@ -26,7 +26,7 @@ import LoopBlockNode from './ast/LoopBlockNode';
 import LoopIfNode from './ast/LoopIfNode';
 import RepeatIfNode from './ast/RepeatIfNode';
 import NextIfNode from './ast/NextIfNode';
-import type Token from './Token';
+import type { Token } from './Token';
 
 const if_ = { test: (x: Token) => x.type === 'if' };
 const dot = { test: (x: Token) => x.type === 'dot' };
@@ -36,6 +36,7 @@ const end = { test: (x: Token) => x.type === 'end' };
 const next = { test: (x: Token) => x.type === 'next' };
 const loop = { test: (x: Token) => x.type === 'loop' };
 const repeat = { test: (x: Token) => x.type === 'repeat' };
+const system = { test: (x: Token) => x.type === 'system' };
 const identifier = { test: (x: Token) => x.type === 'identifier' };
 const number = { test: (x: Token) => x.type === 'number' };
 const comparison = { test: (x: Token) => x.type === 'comparison' };
@@ -196,6 +197,10 @@ const grammar: Grammar = {
     {"name": "named$ebnf$2", "symbols": ["named$ebnf$2$subexpression$1"], "postprocess": id},
     {"name": "named$ebnf$2", "symbols": [], "postprocess": () => null},
     {"name": "named", "symbols": [identifier, list_start, "expression", list_end, "named$ebnf$2"], "postprocess": (data) => new OperandNode(data[0].value, data[0].coercion, new ArrayAccessNode(data[2], data[4]?.[1]))},
+    {"name": "named$ebnf$3$subexpression$1", "symbols": [dot, "named"]},
+    {"name": "named$ebnf$3", "symbols": ["named$ebnf$3$subexpression$1"], "postprocess": id},
+    {"name": "named$ebnf$3", "symbols": [], "postprocess": () => null},
+    {"name": "named", "symbols": [system, "named$ebnf$3"], "postprocess": (data) => new OperandNode(data[0].value, data[0].coercion, data[1]?.[1])},
     {"name": "operand", "symbols": ["named"], "postprocess": (data) => data[0]},
     {"name": "operand", "symbols": [local], "postprocess": (data) => new OperandNode(data[0].value, data[0].coercion)},
     {"name": "operand", "symbols": [number], "postprocess": (data) => new OperandNode(data[0].value, data[0].coercion)}

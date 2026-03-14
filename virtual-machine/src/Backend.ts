@@ -25,6 +25,7 @@ import {
   RegisterChoiceExpressionNode,
   RegisterOperandNode,
   StatementNode,
+  SystemOperandNode,
   TernaryExpressionNode,
   UnaryExpressionNode,
 } from './ast';
@@ -158,11 +159,13 @@ class Backend {
           if (choiceInfo) {
             // Guard with conditional: only emit when the choice index selects this register
             ret.push(...this.comment(`${name}.get()`));
-            ret.push(...this.wrapConditional(
-              choiceInfo.indexExpr,
-              choiceInfo.registerIndex,
-              getStatement.code,
-            ));
+            ret.push(
+              ...this.wrapConditional(
+                choiceInfo.indexExpr,
+                choiceInfo.registerIndex,
+                getStatement.code,
+              ),
+            );
           } else {
             ret.push(...this.comment(`${name}.get()`));
             ret.push(...getStatement.code);
@@ -190,11 +193,13 @@ class Backend {
           if (choiceInfo) {
             // Guard with conditional: only emit when the choice index selects this register
             ret.push(...this.comment(`${name}.set()`));
-            ret.push(...this.wrapConditional(
-              choiceInfo.indexExpr,
-              choiceInfo.registerIndex,
-              setStatement.code,
-            ));
+            ret.push(
+              ...this.wrapConditional(
+                choiceInfo.indexExpr,
+                choiceInfo.registerIndex,
+                setStatement.code,
+              ),
+            );
           } else {
             for (const line of this.comment(`${name}.set()`)) {
               ret.push(line);
@@ -346,6 +351,10 @@ class Backend {
     return [`${reference.mapping.identifier}`];
   }
 
+  readSystem(_generated: GeneratedStatement, identifier: string): string[] {
+    return [`${identifier}`];
+  }
+
   readGlobals(
     _generated: GeneratedStatement,
     entries: (number | string)[],
@@ -388,6 +397,14 @@ class Backend {
     return [`${reference.mapping.identifier} = ${value}`];
   }
 
+  writeSystem(
+    _generated: GeneratedStatement,
+    identifier: string,
+    value: string,
+  ): string[] {
+    return [`${identifier} = ${value}`];
+  }
+
   write(
     generated: GeneratedStatement,
     node: OperandNode,
@@ -416,6 +433,9 @@ class Backend {
       }
 
       return this.writeRegister(generated, node.reference, value);
+    } else if (node instanceof SystemOperandNode) {
+      const { identifier } = node.reference;
+      return this.writeSystem(generated, identifier, value);
     }
 
     console.log(node);
@@ -460,6 +480,9 @@ class Backend {
         generated.accesses.push(identifier);
       }
       return this.readRegister(generated, node.reference);
+    } else if (node instanceof SystemOperandNode) {
+      const { identifier } = node.reference;
+      return this.readSystem(generated, identifier);
     }
 
     console.log(node);

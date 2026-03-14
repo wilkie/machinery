@@ -672,7 +672,7 @@ export const add: InstructionInfo = {
             '${ALU8_OP}',
             'RAM:u8[effective_address] = alu_result',
           ],
-        }
+        },
       },
       opcode: [Opcodes.ALU_EB_DB, 'ModRM_rm_000_10', 'DISP_i16', 'IMM_u8'],
       operands: ['rm', 'imm'],

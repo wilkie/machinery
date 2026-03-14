@@ -65,6 +65,8 @@ class Tokenizer {
         /[+-]?0x[0-9a-fA-F]+(?::(?:u|i)\d+)?/,
         /[+-]?[0-9]+(?::(?:u|i)\d+)?/,
       ],
+      // A system identifier is something specifically named that starts with an at (@)
+      system: /@[a-zA-Z_][a-zA-Z0-9_]*'?(?::(?:u|i)\d+)?/,
       // An identifier is something specifically named, like a register or local value
       // ex: 'AX'
       identifier: /[a-zA-Z_][a-zA-Z0-9_]*'?(?::(?:u|i)\d+)?/,

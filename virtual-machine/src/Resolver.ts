@@ -3,6 +3,7 @@ import type {
   MemoryRegion,
   MemoryRegionField,
   MemoryRegionArrayField,
+  MemoryRegionArrayFieldCell,
   MemoryRegionSubdividedField,
   BaseOffsettableMemoryRegion,
   Target,
@@ -34,11 +35,12 @@ import {
   RegisterChoiceExpressionNode,
   RegisterOperandNode,
   StatementNode,
+  SystemOperandNode,
   TernaryExpressionNode,
   UnaryExpressionNode,
 } from './ast';
 import type {
-  RegisterReference,
+  GeneratorContext,
   LocalMap,
   LocalReference,
   LocalsInfo,
@@ -47,7 +49,8 @@ import type {
   MemoryReference,
   Reference,
   RegisterMap,
-  GeneratorContext,
+  RegisterReference,
+  SystemReference,
 } from './types';
 
 //const foo: Node[] = [];
@@ -103,8 +106,13 @@ class Resolver {
     if (node instanceof CommentNode) {
       ret = node;
     } else if (node instanceof AssignmentNode) {
+      const left = this.resolveNode(
+        node.destination,
+        locals,
+        localMap,
+      ) as OperandNode;
       ret = new AssignmentNode(
-        this.resolveNode(node.destination, locals, localMap) as OperandNode,
+        left,
         this.resolveNode(
           node.expression,
           locals,
@@ -467,6 +475,32 @@ class Resolver {
         node,
         coercion || node.coercion,
       );
+    } else if (reference.type === 'system') {
+      // Parse @modes
+      if (reference.identifier === '@modes') {
+        // Turn the @modes.<tag> into a number
+        if (reference.tags.length !== 1) {
+          throw new Error(
+            '@modes must be followed by just one identifier; e.g. @modes.halted',
+          );
+        }
+
+        const mode = reference.tags[0];
+        const modeIndex = (this.target.modes || []).findIndex(
+          (modeInfo) => modeInfo.identifier === mode,
+        );
+        if (modeIndex === -1) {
+          throw new Error(`Cannot find mode ${mode}`);
+        }
+
+        return new OperandNode(modeIndex);
+      } else {
+        return new SystemOperandNode(
+          reference,
+          node,
+          coercion || node.coercion,
+        );
+      }
     }
 
     throw new Error(`Cannot dereference operand ${node.value}`);
@@ -536,10 +570,13 @@ class Resolver {
   dereferenceMemoryField(
     operand: OperandNode,
     regionInfo: MemoryRegion | MemoryRegionSubdividedField,
-  ): Pick<MemoryReference, 'address' | 'references' | 'size' | 'signed'> {
+  ): Pick<
+    MemoryReference,
+    'address' | 'offset' | 'references' | 'size' | 'signed'
+  > {
     let ret: Pick<
       MemoryReference,
-      'address' | 'references' | 'size' | 'signed'
+      'address' | 'offset' | 'references' | 'size' | 'signed'
     > = {
       address: new ExpressionNode(new OperandNode(0)),
       size: 0,
@@ -581,7 +618,9 @@ class Resolver {
     ret.offset = fieldInfo.offset % 8;
 
     // TODO: handle non-byte aligned accesses
-    ret.address = new ExpressionNode(new OperandNode((fieldInfo.offset - (fieldInfo.offset % 8)) / 8));
+    ret.address = new ExpressionNode(
+      new OperandNode((fieldInfo.offset - (fieldInfo.offset % 8)) / 8),
+    );
 
     if (!operand.next) {
       return ret;
@@ -596,29 +635,46 @@ class Resolver {
         throw new Error(`Memory access ${fieldName} not indexable.`);
       }
 
-      let cellInfo = arrayInfo.cell;
+      let cellInfo:
+        | MemoryRegionArrayFieldCell
+        | MemoryRegionArrayFieldCell[]
+        | undefined = arrayInfo.cell;
       if (!cellInfo) {
         throw new Error(`Memory access ${fieldName} has no cell description.`);
       }
 
       //tag += `[<${cellInfo.identifier}>]`;
 
+      const index = next.index;
+      if (next.next) {
+        // If the cell has multiple possible fields, this must be disambiguated by
+        // the next identifier
+        if (Array.isArray(cellInfo)) {
+          cellInfo = cellInfo.find(
+            (cellFieldInfo) =>
+              cellFieldInfo.identifier ===
+              (next.next as OperandNode | undefined)?.value,
+          );
+          next = next.next;
+        }
+      }
+
+      if (Array.isArray(cellInfo)) {
+        throw new Error(`Memory field ${fieldName} cannot be multidimensional`);
+      }
+
+      if (!cellInfo) {
+        throw new Error(`Memory field ${fieldName} cannot determine cell type`);
+      }
+
       ret.references = {
         type: 'memory',
         identifier: cellInfo.identifier,
         size: fieldInfo.size,
-        index: next.index,
+        index,
       };
 
       if (next.next) {
-        // If the cell has multiple possible fields, this must be disambiguated by
-        // the next identifier
-        const index = next.index;
-        if (Array.isArray(cellInfo)) {
-          cellInfo = cellInfo.find(cellFieldInfo => cellFieldInfo.identifier === next.next.value);
-          next = next.next;
-        }
-
         // Further dereferencing
         if (next.next instanceof ArrayAccessNode) {
           // Multi-dimensional cells...
@@ -668,7 +724,10 @@ class Resolver {
     operand: OperandNode,
     memoryInfo: MemoryInfo,
     mapping: MemoryMapping,
-  ): Pick<MemoryReference, 'address' | 'references' | 'size' | 'signed'> {
+  ): Pick<
+    MemoryReference,
+    'address' | 'offset' | 'references' | 'size' | 'signed'
+  > {
     const name = memoryInfo.identifier;
 
     let ret: Pick<
@@ -697,6 +756,10 @@ class Resolver {
         `Cannot find memory region ${name}.${regionName} in the target.`,
       );
     }
+
+    // Update size to at least the region size
+    ret.size = regionInfo.size || 0;
+    ret.signed = regionInfo.signed || false;
 
     // Keep track of the fully qualified reference name.
     const tag = `${name}.${regionInfo.identifier}`;
@@ -894,6 +957,57 @@ class Resolver {
     return ret;
   }
 
+  locateSystemOperand(
+    operand: OperandNode,
+    context: GeneratorContext,
+  ): SystemReference | MemoryReference | undefined {
+    if (typeof operand.value !== 'string') {
+      return;
+    }
+
+    const name: string = operand.value;
+
+    if (!name.startsWith('@')) {
+      return;
+    }
+
+    let ret: SystemReference | undefined;
+
+    // Determine if this operand refers to a known system word
+    if (['@mode', '@modes'].includes(name)) {
+      // Gather tags (dotted content)
+      const tags = [];
+
+      let current = operand.next;
+      while (current) {
+        if (current instanceof ArrayAccessNode) {
+          tags.push(`[${current.index}]`);
+        } else {
+          tags.push(current.value.toString());
+        }
+        current = current.next;
+      }
+
+      ret = {
+        type: 'system',
+        identifier: name,
+        tags,
+      };
+
+      // Dereference system state
+      if (name === '@mode') {
+        return this.locateMemoryOperand(
+          new OperandNode('@system', undefined, new OperandNode('mode')),
+          context,
+        );
+      }
+    } else {
+      throw new Error(`System word ${name} cannot be found.`);
+    }
+
+    return ret;
+  }
+
   /**
    * Resolves an OperandNode into a Reference, or throws an error if it cannot
    * understand how.
@@ -906,7 +1020,8 @@ class Resolver {
     const ret: Reference | undefined =
       this.locateRegisterOperand(operand, context) ||
       this.locateMemoryOperand(operand, context) ||
-      this.locateLocalOperand(operand, context);
+      this.locateLocalOperand(operand, context) ||
+      this.locateSystemOperand(operand, context);
 
     if (ret === undefined) {
       throw new Error(`Local ${operand.value} cannot be found.`);

@@ -1,5 +1,7 @@
 import type {
   InstructionForm,
+  InstructionFormFlat,
+  InstructionFormModes,
   InstructionInfo,
   ModeInfo,
   OpcodeMatcher,
@@ -82,7 +84,13 @@ class WebAssemblyBackend extends Backend {
     // Import interrupt callback (returns i32: 1=handled by host, 0=vector through IVT)
     code.push('  ;; Import interrupt callback(s) from host');
     ((this.target.modes as Pick<ModeInfo, 'identifier'>[]) || [])
-      .concat(this.target.modes?.find(modeInfo => modeInfo.identifier === 'default') === undefined ? [{ identifier: 'default' }] : [])
+      .concat(
+        this.target.modes?.find(
+          (modeInfo) => modeInfo.identifier === 'default',
+        ) === undefined
+          ? [{ identifier: 'default' }]
+          : [],
+      )
       .forEach((modeInfo) => {
         const mode = modeInfo.identifier;
         code.push(
@@ -149,7 +157,8 @@ class WebAssemblyBackend extends Backend {
         .concat([{ identifier: 'default' }])
         .forEach((modeInfo) => {
           const mode = modeInfo.identifier;
-          const { statement, localMap } = this.parsed.interrupts.handler?.[mode] || {};
+          const { statement, localMap } =
+            this.parsed.interrupts.handler?.[mode] || {};
 
           // Transpile the statement node for this instruction form
           code.push('  ;; Interrupt handler');
@@ -160,7 +169,9 @@ class WebAssemblyBackend extends Backend {
               locals,
               localMap,
             });
-            code.push(`  (func $interrupt_${mode}_handler (param $${vectorId} i32)`);
+            code.push(
+              `  (func $interrupt_${mode}_handler (param $${vectorId} i32)`,
+            );
             for (const [localName, localInfo] of Object.entries(localMap)) {
               if (localName === 'vector') {
                 continue;
@@ -176,7 +187,7 @@ class WebAssemblyBackend extends Backend {
           }
           code.push('  )');
           code.push('');
-        })
+        });
     }
 
     return code;
@@ -281,7 +292,9 @@ class WebAssemblyBackend extends Backend {
       const bits = parseInt(node.coercion.slice(1));
       if (bits < 32) {
         const shiftAmount = 32 - bits;
-        return [`(i32.shr_s (i32.shl ${result[0]} (i32.const ${shiftAmount})) (i32.const ${shiftAmount}))`];
+        return [
+          `(i32.shr_s (i32.shl ${result[0]} (i32.const ${shiftAmount})) (i32.const ${shiftAmount}))`,
+        ];
       }
     }
     return result;
@@ -926,10 +939,7 @@ class WebAssemblyBackend extends Backend {
     };
 
     const locals: LocalsInfo = {};
-    for (const localInfo of [
-      ...(instruction.locals || []),
-      ...(form.locals || []),
-    ]) {
+    for (const localInfo of instruction.locals || []) {
       locals[localInfo.identifier] = localInfo;
     }
 
@@ -1077,7 +1087,11 @@ class WebAssemblyBackend extends Backend {
     }
 
     // Handle prefix finalize
-    if (prefix && form.finalize) {
+    if (
+      prefix &&
+      ((form as InstructionFormFlat).finalize ||
+        (form as InstructionFormModes).modes?.[context.mode]?.finalize)
+    ) {
       context.code.push(
         `${indent}(local.set $_finalize_id (i32.const 0x${context.prefixCount.toString(16)}))`,
       );

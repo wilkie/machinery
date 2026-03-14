@@ -111,9 +111,7 @@ export const macros = {
     'AF = ((flag_op < ${FLAG_OP_RESOLVED}) && (flag_op & ${FLAG_OP_NOAF} == 0)) ? ((a ^ b ^ alu_result) & 0x10) >> 4 : AF',
   ],
 
-  SEGMENT_LIMIT_CHECK_REAL: [
-    '#GP if offset == 0xffff',
-  ],
+  SEGMENT_LIMIT_CHECK_REAL: ['#GP if offset == 0xffff'],
 
   SEGMENT_LIMIT_CHECK_PROTECTED8: [
     '#GP if offset < ${MOD_RM_SEGMENT_LIMIT_MIN}',

@@ -23,7 +23,7 @@ import LoopBlockNode from './ast/LoopBlockNode';
 import LoopIfNode from './ast/LoopIfNode';
 import RepeatIfNode from './ast/RepeatIfNode';
 import NextIfNode from './ast/NextIfNode';
-import type Token from './Token';
+import type { Token } from './Token';
 
 const if_ = { test: (x: Token) => x.type === 'if' };
 const dot = { test: (x: Token) => x.type === 'dot' };
@@ -33,6 +33,7 @@ const end = { test: (x: Token) => x.type === 'end' };
 const next = { test: (x: Token) => x.type === 'next' };
 const loop = { test: (x: Token) => x.type === 'loop' };
 const repeat = { test: (x: Token) => x.type === 'repeat' };
+const system = { test: (x: Token) => x.type === 'system' };
 const identifier = { test: (x: Token) => x.type === 'identifier' };
 const number = { test: (x: Token) => x.type === 'number' };
 const comparison = { test: (x: Token) => x.type === 'comparison' };
@@ -71,7 +72,7 @@ statement -> assignment %terminator %terminator:* statement:? {% (data) => new S
            | %comment %terminator:* statement:? {% (data) => new StatementNode(new CommentNode(data[0].value), data[2] || undefined) %}
            | %terminator {% () => new StatementNode(new EmptyNode()) %}
 
-# An assignment has a left-hand identifier and then some expression that
+# An assignment has a left-hand identifier (or system identifier) and then some expression that
 # we will write to it.
 assignment -> named %assignment expression
             {% (data) => new AssignmentNode(data[0], data[2]) %}
@@ -162,6 +163,8 @@ named -> %identifier (%dot named):?
        {% (data) => new OperandNode(data[0].value, data[0].coercion, data[1]?.[1]) %}
        | %identifier %list_start expression %list_end (%dot named):?
        {% (data) => new OperandNode(data[0].value, data[0].coercion, new ArrayAccessNode(data[2], data[4]?.[1])) %}
+       | %system (%dot named):?
+       {% (data) => new OperandNode(data[0].value, data[0].coercion, data[1]?.[1]) %}
 
 # An operand that can be used as inputs to expressions and calls
 operand -> named

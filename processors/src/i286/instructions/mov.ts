@@ -551,6 +551,7 @@ export const mov: InstructionInfo = {
         },
         protected: {
           operation: [
+            '#UD if %{seg} == 1',
             'offset = %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -575,6 +576,7 @@ export const mov: InstructionInfo = {
         },
         protected: {
           operation: [
+            '#UD if %{seg} == 1',
             'offset = ${MOD_RM_OFFSET}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -599,6 +601,7 @@ export const mov: InstructionInfo = {
         },
         protected: {
           operation: [
+            '#UD if %{seg} == 1',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -623,6 +626,7 @@ export const mov: InstructionInfo = {
         },
         protected: {
           operation: [
+            '#UD if %{seg} == 1',
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
@@ -636,7 +640,17 @@ export const mov: InstructionInfo = {
       cycles: 3,
     },
     {
-      operation: ['${MOD_RM_REGS16} = ${MOD_RM_RM16}'],
+      modes: {
+        real: {
+          operation: ['${MOD_RM_REGS16} = ${MOD_RM_RM16}'],
+        },
+        protected: {
+          operation: [
+            '#UD if %{seg} == 1',
+            '${MOD_RM_REGS16} = ${MOD_RM_RM16}',
+          ],
+        },
+      },
       opcode: [Opcodes.MOV_SR_EW, 'ModRM_rm_seg_11'],
       operands: ['seg', 'rm'],
       operandSize: 16,

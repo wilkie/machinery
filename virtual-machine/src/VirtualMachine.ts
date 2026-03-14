@@ -1,7 +1,11 @@
 import Tokenizer from './Tokenizer';
 
-import type { Target } from '@machinery/core';
-import type { InstructionInfo, OpcodeMatcher } from '@machinery/core';
+import type {
+  Target,
+  MemoryInfo,
+  InstructionInfo,
+  OpcodeMatcher,
+} from '@machinery/core';
 
 import Generator from './Generator';
 import type { BackendClass } from './Backend';
@@ -53,18 +57,14 @@ class VirtualMachine {
     // Generate register space and memory map
     this.registerMap = this.generateRegisterMap();
 
-    const { map: memoryMap, size: romSize } = this.generateMemoryMap(
+    const { map: memoryMap, linearStart: ramStart } = this.generateMemoryMap(
       this.registerMap.size,
     );
     this.memoryMap = memoryMap;
 
     // Unallocated memory (or flexible RAM) is located at the end of the defined memory
     // romSize is already an absolute position (generateMemoryMap starts from registerMap.size)
-    this.linearStart = romSize;
-
-    // Align linearStart to 64-bit word size
-    // (it will be divisible evenly by 2, 4 and 8)
-    this.linearStart = (this.linearStart + 7) & -8;
+    this.linearStart = ramStart;
 
     this.decoderMap = this.generateDecoderMap();
   }
@@ -80,14 +80,38 @@ class VirtualMachine {
 
   generateMemoryMap(memoryStart: number): {
     map: MemoryMap;
+    linearStart: number;
     size: number;
   } {
     const machine = this.machine;
     const ret: MemoryMap = {};
     let position = memoryStart;
+    let linearStart: number | undefined;
+
+    // Align next memory start to 64-bit word size
+    // (it will be divisible evenly by 2, 4 and 8)
+    memoryStart = (memoryStart + 7) & -8;
+
+    const systemMemory: MemoryInfo[] = [
+      {
+        identifier: '@system',
+        name: 'System State',
+        type: 'ram',
+        length: 4,
+        endian: 'little',
+        regions: [
+          {
+            identifier: 'mode',
+            name: 'System Mode',
+            offset: 0,
+            size: 8,
+          },
+        ],
+      },
+    ];
 
     // Embed Memory
-    for (const memoryInfo of machine.memory || []) {
+    for (const memoryInfo of systemMemory.concat(machine.memory || [])) {
       const memoryName = memoryInfo.identifier;
       ret[memoryName] = {
         start: position,
@@ -97,6 +121,10 @@ class VirtualMachine {
         type: memoryInfo.type,
         info: memoryInfo,
       };
+
+      if (memoryInfo.type === 'ram' && memoryInfo.length === undefined) {
+        linearStart ??= position;
+      }
 
       for (const info of memoryInfo.regions || []) {
         const name = info.identifier;
@@ -112,11 +140,22 @@ class VirtualMachine {
         this.mem8.set(ret[tag].data, ret[tag].start);
         position += ret[tag].length;
       }
+
+      if (memoryInfo.type === 'ram' && memoryInfo.length !== undefined) {
+        position += memoryInfo.length;
+
+        // Align next memory start to 64-bit word size
+        // (it will be divisible evenly by 2, 4 and 8)
+        position = (position + 7) & -8;
+      }
     }
+
+    linearStart ??= 0;
 
     return {
       map: ret,
       size: position,
+      linearStart,
     };
   }
 

@@ -1,6 +1,8 @@
 import type {
   ModeInfo,
   InstructionForm,
+  InstructionFormFlat,
+  InstructionFormModes,
   InstructionInfo,
   OpcodeMatcher,
   OpcodeMatcherField,
@@ -77,7 +79,6 @@ class TypeScriptBackend extends Backend {
     code.push('  mem8: Uint8Array;');
     code.push('  mem16: Uint16Array;');
     code.push('  mem32: Uint32Array;');
-    code.push('  mode: number;');
     code.push('');
     code.push('  constructor() {');
     code.push(
@@ -153,7 +154,10 @@ class TypeScriptBackend extends Backend {
         .concat([{ identifier: 'default' }])
         .forEach((modeInfo) => {
           const mode = modeInfo.identifier;
-          const { statement, localMap } = this.parsed.interrupts.handler?.[mode] || this.parsed.interrupts.handler?.default || {};
+          const { statement, localMap } =
+            this.parsed.interrupts.handler?.[mode] ||
+            this.parsed.interrupts.handler?.default ||
+            {};
 
           // Transpile the statement node for this instruction form
           if (statement && localMap) {
@@ -162,7 +166,9 @@ class TypeScriptBackend extends Backend {
               locals,
               localMap,
             });
-            code.push(`  interrupt_${mode}(${localMap.vector?.identifier || '_'}: number) {`);
+            code.push(
+              `  interrupt_${mode}(${localMap.vector?.identifier || '_'}: number) {`,
+            );
             for (const [localName, localInfo] of Object.entries(localMap)) {
               if (localName === 'vector') {
                 continue;
@@ -178,7 +184,33 @@ class TypeScriptBackend extends Backend {
           }
           code.push('  }');
           code.push('');
-        })
+        });
+    }
+
+    // Create functions for accessing system state
+    const generatedDummy: GeneratedStatement = {
+      accesses: [],
+      modifies: [],
+      code: [],
+      context: {
+        mode: 'default',
+        locals: {},
+        localMap: { _ip: { identifier: '_ip' } },
+      },
+    };
+    if (this.parsed.system.mode) {
+      code.push(`  get mode(): number {`);
+      code.push(
+        `    return ${this.readMemory(generatedDummy, this.parsed.system.mode, this.parsed.system.mode.address)};`,
+      );
+      code.push(`  }`);
+      code.push('');
+      code.push(`  set mode(value: number) {`);
+      code.push(
+        `    ${this.writeMemory(generatedDummy, this.parsed.system.mode, this.parsed.system.mode.address, 'value')};`,
+      );
+      code.push(`  }`);
+      code.push('');
     }
 
     // Create functions for accessing registers
@@ -200,7 +232,9 @@ class TypeScriptBackend extends Backend {
             code.push('    else { // default');
           }
           if (getModes.includes(mode) || mode === 'default') {
-            const { localMap }: { localMap: LocalMap } = parsedRegister?.get?.[mode] || { localMap: {} };
+            const { localMap }: { localMap: LocalMap } = parsedRegister?.get?.[
+              mode
+            ] || { localMap: {} };
             for (const [localName, localInfo] of Object.entries(localMap)) {
               if (localName === 'vector') {
                 continue;
@@ -249,12 +283,16 @@ class TypeScriptBackend extends Backend {
         .forEach((modeInfo, i) => {
           const mode = modeInfo.identifier;
           if (mode !== 'default' && setModes.includes(mode)) {
-            code.push(`    ${i !== 0 ? 'else ' : ''}if (this.mode === ${i}) { // mode: ${mode}`);
+            code.push(
+              `    ${i !== 0 ? 'else ' : ''}if (this.mode === ${i}) { // mode: ${mode}`,
+            );
           } else if (mode === 'default' && !setOnlyDefault) {
             code.push('    else { // default');
           }
           if (setModes.includes(mode) || mode === 'default') {
-            const { localMap }: { localMap: LocalMap } = parsedRegister?.set?.[mode] || { localMap: {} };
+            const { localMap }: { localMap: LocalMap } = parsedRegister?.set?.[
+              mode
+            ] || { localMap: {} };
             for (const [localName, localInfo] of Object.entries(localMap)) {
               if (localName === 'vector') {
                 continue;
@@ -387,10 +425,7 @@ class TypeScriptBackend extends Backend {
     };
 
     const locals: LocalsInfo = {};
-    for (const localInfo of [
-      ...(instruction.locals || []),
-      ...(form.locals || []),
-    ]) {
+    for (const localInfo of instruction.locals || []) {
       locals[localInfo.identifier] = localInfo;
     }
 
@@ -686,7 +721,10 @@ class TypeScriptBackend extends Backend {
     // Read next byte (if this is a prefix)
     if (prefix) {
       // If there is some finalize code, remember this prefix
-      if (form.finalize) {
+      if (
+        (form as InstructionFormFlat).finalize ||
+        (form as InstructionFormModes).modes?.[context.mode]?.finalize
+      ) {
         context.code.push(
           `${indent}_finalize.push(0x${context.prefixCount.toString(16)});`,
         );
@@ -1120,6 +1158,10 @@ class TypeScriptBackend extends Backend {
     return [`${reference.mapping.identifier}`];
   }
 
+  readSystem(_generated: GeneratedStatement, identifier: string): string[] {
+    return [`this.${identifier.substring(1)}`];
+  }
+
   writeRegister(
     _generated: GeneratedStatement,
     reference: RegisterReference,
@@ -1194,6 +1236,14 @@ class TypeScriptBackend extends Backend {
     value: string,
   ): string[] {
     return [`${reference.mapping.identifier} = ${value}`];
+  }
+
+  writeSystem(
+    _generated: GeneratedStatement,
+    identifier: string,
+    value: string,
+  ): string[] {
+    return [`this.${identifier.substring(1)} = ${value}`];
   }
 
   readMemory_(

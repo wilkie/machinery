@@ -17,6 +17,11 @@ export const pushf: InstructionInfo = {
       size: 32,
     },
     {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
+    {
       identifier: 'tmp',
       name: 'Temporary stack pointer',
       size: 16,
@@ -27,14 +32,33 @@ export const pushf: InstructionInfo = {
     {
       opcode: [Opcodes.PUSHF],
       operands: [],
-      operation: [
-        '${RESOLVE_FLAGS}',
-        'tmp = SP - 2',
-        'stack_address = SS_BASE + tmp',
-        // FLAGS bit 1 is always set
-        'RAM:u16[stack_address] = FLAGS | 0b10',
-        'SP = tmp',
-      ],
+      modes: {
+        real: {
+          operation: [
+            '${RESOLVE_FLAGS}',
+            'tmp = SP - 2',
+            'offset = tmp',
+            'stack_address = SS_BASE + offset',
+            '#GP if offset == 0xffff',
+            // FLAGS bit 1 is always set
+            'RAM:u16[stack_address] = FLAGS | 0b10',
+            'SP = tmp',
+          ],
+        },
+        protected: {
+          operation: [
+            '${RESOLVE_FLAGS}',
+            'tmp = SP - 2',
+            'offset = tmp',
+            'stack_address = SS_BASE + offset',
+            '#GP if (offset + 1) < SS_LIMIT_MIN',
+            '#GP if (offset + 1) > SS_LIMIT_MAX',
+            // FLAGS bit 1 is always set
+            'RAM:u16[stack_address] = FLAGS | 0b10',
+            'SP = tmp',
+          ],
+        },
+      },
       cycles: 3,
     },
   ],

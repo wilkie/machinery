@@ -17,6 +17,11 @@ export const popf: InstructionInfo = {
       size: 32,
     },
     {
+      identifier: 'offset',
+      name: 'Effective Offset',
+      size: 32,
+    },
+    {
       identifier: 'value',
       name: 'Resulting Value',
       size: 16,
@@ -27,14 +32,33 @@ export const popf: InstructionInfo = {
     {
       opcode: [Opcodes.POPF],
       operands: [],
-      operation: [
-        'stack_address = SS_BASE + SP',
-        'value = RAM:u16[stack_address]',
-        'SP = SP + 2',
-        'FLAGS = ((FLAGS & ~0b11111111010101) | (value & 0b111111010101) | 0b10) & 0xffff',
-        'flag_op = ${FLAG_OP_RESOLVED}',
-        'CARRY = CF',
-      ],
+      modes: {
+        real: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if offset == 0xffff',
+            'value = RAM:u16[stack_address]',
+            'SP = SP + 2',
+            'FLAGS = ((FLAGS & ~0b11111111010101) | (value & 0b111111010101) | 0b10) & 0xffff',
+            'flag_op = ${FLAG_OP_RESOLVED}',
+            'CARRY = CF',
+          ],
+        },
+        protected: {
+          operation: [
+            'offset = SP',
+            'stack_address = SS_BASE + offset',
+            '#GP if (offset + 1) < SS_LIMIT_MIN',
+            '#GP if (offset + 1) > SS_LIMIT_MAX',
+            'value = RAM:u16[stack_address]',
+            'SP = SP + 2',
+            'FLAGS = ((FLAGS & ~0b11111111010101) | (value & 0b111111010101) | 0b10) & 0xffff',
+            'flag_op = ${FLAG_OP_RESOLVED}',
+            'CARRY = CF',
+          ],
+        },
+      },
       cycles: 5,
     },
   ],

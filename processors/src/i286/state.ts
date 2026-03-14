@@ -399,4 +399,10 @@ export const state: RegisterInfo[] = [
     size: 16,
     type: RegisterTypes.Integer,
   },
+  {
+    identifier: 'ERROR_CODE',
+    name: 'Exception Error Code',
+    size: 16,
+    type: RegisterTypes.Integer,
+  },
 ];

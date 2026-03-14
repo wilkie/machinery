@@ -160,6 +160,7 @@ export const iret: InstructionInfo = {
             'ret_rpl = ret_cs & 0x0003',
             'old_cpl = CS & 0x0003',
             ';; return CS RPL must be >= CPL',
+            'ERROR_CODE = ret_cs',
             '#GP if ret_rpl < old_cpl',
             ';; validate return CS selector',
             'index = ret_cs >> 3',

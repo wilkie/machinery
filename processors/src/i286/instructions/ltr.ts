@@ -14,6 +14,7 @@ export const ltr: InstructionInfo = {
       '${RESOLVE_FLAGS}',
       ';; CPL must be 0',
       '#GP if CS.RPL != 0',
+      'ERROR_CODE = tmp',
       ';; extract GDT index from selector',
       'index = tmp >> 3',
       ';; selector must not be null',

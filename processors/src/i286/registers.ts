@@ -271,6 +271,7 @@ export const registers: RegisterInfo[] = [
             'end if',
             'if index != 0',
             [
+              'ERROR_CODE = ES',
               ';; GDT bounds check',
               '#GP if (index * 8) > GDTR.limit',
               ';; must be a segment descriptor (S=1)',
@@ -349,6 +350,7 @@ export const registers: RegisterInfo[] = [
             'index = CS >> 3',
             ';; null selector not allowed for CS',
             '#GP if index == 0',
+            'ERROR_CODE = CS',
             ';; GDT bounds check',
             '#GP if (index * 8) > GDTR.limit',
             ';; must be a segment descriptor (S=1)',
@@ -429,6 +431,7 @@ export const registers: RegisterInfo[] = [
             'index = SS >> 3',
             ';; null selector not allowed for SS',
             '#GP if index == 0',
+            'ERROR_CODE = SS',
             ';; GDT bounds check',
             '#GP if (index * 8) > GDTR.limit',
             ';; must be a segment descriptor (S=1)',
@@ -549,6 +552,7 @@ export const registers: RegisterInfo[] = [
             'end if',
             'if index != 0',
             [
+              'ERROR_CODE = DS',
               ';; GDT bounds check',
               '#GP if (index * 8) > GDTR.limit',
               ';; must be a segment descriptor (S=1)',

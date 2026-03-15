@@ -96,6 +96,8 @@ const simple = [
   'block',
   'ix',
   'iy',
+  'ix_flags',
+  'iy_flags',
   'bit',
   'cond',
 ];

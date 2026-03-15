@@ -30,7 +30,7 @@ export const push: InstructionInfo = {
     {
       opcode: [Opcodes.PUSH_AF],
       operands: ['AF'],
-      operation: ['SP = SP - 2', 'RAM:u16[SP] = AF'],
+      operation: ['${RESOLVE_FLAGS}', 'SP = SP - 2', 'RAM:u16[SP] = AF'],
       cycles: 11,
     },
     // PUSH IX / PUSH IY

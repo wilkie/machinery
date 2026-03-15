@@ -16,7 +16,7 @@ export const ex_af: InstructionInfo = {
     {
       opcode: [Opcodes.EX_AF_AF],
       operands: ['AF', "AF'"],
-      operation: ['tmp = AF', "AF = AF'", "AF' = tmp"],
+      operation: ['${RESOLVE_FLAGS}', 'tmp = AF', "AF = AF'", "AF' = tmp"],
       cycles: 4,
     },
     // EX DE, HL

@@ -172,7 +172,7 @@ class WasmMachineBackend extends TypeScriptBackend {
               if (localName === 'vector') {
                 continue;
               }
-              code.push(`      let ${localInfo.identifier};`);
+              code.push(`      let ${localInfo.identifier} = 0;`);
             }
             const generated = {
               accesses: [name],
@@ -230,7 +230,7 @@ class WasmMachineBackend extends TypeScriptBackend {
               if (localName === 'vector') {
                 continue;
               }
-              code.push(`      let ${localInfo.identifier};`);
+              code.push(`      let ${localInfo.identifier} = 0;`);
             }
             const generated2 = {
               accesses: [] as string[],

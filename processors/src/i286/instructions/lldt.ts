@@ -17,6 +17,7 @@ export const lldt: InstructionInfo = {
       ';; extract GDT index from selector',
       'index = tmp >> 3',
       ';; null selector: mark LDTR as invalid',
+      'LDTR.selector = tmp',
       'if index == 0',
       ['LDTR.base = 0', 'LDTR.limit = 0'],
       'end if',

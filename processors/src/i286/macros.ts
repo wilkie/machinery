@@ -128,6 +128,97 @@ export const macros = {
     '#GP if (offset + 3) > ${MOD_RM_SEGMENT_LIMIT_MAX}',
   ],
 
+  // Resolves a descriptor from a selector in 'tmp' (no exceptions).
+  // Expects locals: index, desc_type, desc_s, desc_a, desc_dpl, desc_p, desc_limit, desc_base, desc_valid.
+  // Sets desc_valid=1 if the descriptor was found, 0 otherwise.
+  RESOLVE_DESCRIPTOR: [
+    'desc_valid = 0',
+    'index = tmp >> 3',
+    ';; GDT lookup (TI=0)',
+    'if (tmp & 0x0004) == 0 && index != 0',
+    [
+      'if (index * 8) <= GDTR.limit',
+      [
+        'desc_type = RAM.GDT.gates[index].SD.type',
+        'desc_s = RAM.GDT.gates[index].SD.S',
+        'desc_a = RAM.GDT.gates[index].SD.A',
+        'desc_dpl = RAM.GDT.gates[index].SD.DPL',
+        'desc_p = RAM.GDT.gates[index].SD.P',
+        'desc_limit = RAM.GDT.gates[index].SD.limit',
+        'desc_base = RAM.GDT.gates[index].SD.base',
+        'desc_valid = 1',
+      ],
+      'end if',
+    ],
+    'end if',
+    ';; LDT lookup (TI=1)',
+    'if (tmp & 0x0004) != 0 && index != 0',
+    [
+      'if (index * 8) <= LDTR.limit',
+      [
+        'desc_type = RAM.LDT.gates[index].SD.type',
+        'desc_s = RAM.LDT.gates[index].SD.S',
+        'desc_a = RAM.LDT.gates[index].SD.A',
+        'desc_dpl = RAM.LDT.gates[index].SD.DPL',
+        'desc_p = RAM.LDT.gates[index].SD.P',
+        'desc_limit = RAM.LDT.gates[index].SD.limit',
+        'desc_base = RAM.LDT.gates[index].SD.base',
+        'desc_valid = 1',
+      ],
+      'end if',
+    ],
+    'end if',
+  ],
+
+  // Loads descriptor fields from GDT or LDT based on TI bit in 'tmp'.
+  // Expects locals: tmp (selector), index (already set to tmp >> 3),
+  //   desc_type, desc_s, desc_dpl, desc_p, desc_limit, desc_base.
+  // Does NOT check bounds or null — caller must do that.
+  LOAD_DESCRIPTOR_FIELDS: [
+    'if (tmp & 0x0004) == 0',
+    [
+      'desc_type = RAM.GDT.gates[index].SD.type',
+      'desc_s = RAM.GDT.gates[index].SD.S',
+      'desc_dpl = RAM.GDT.gates[index].SD.DPL',
+      'desc_p = RAM.GDT.gates[index].SD.P',
+      'desc_limit = RAM.GDT.gates[index].SD.limit',
+      'desc_base = RAM.GDT.gates[index].SD.base',
+    ],
+    'end if',
+    'if (tmp & 0x0004) != 0',
+    [
+      'desc_type = RAM.LDT.gates[index].SD.type',
+      'desc_s = RAM.LDT.gates[index].SD.S',
+      'desc_dpl = RAM.LDT.gates[index].SD.DPL',
+      'desc_p = RAM.LDT.gates[index].SD.P',
+      'desc_limit = RAM.LDT.gates[index].SD.limit',
+      'desc_base = RAM.LDT.gates[index].SD.base',
+    ],
+    'end if',
+  ],
+
+  // Sets the accessed bit on the descriptor resolved by RESOLVE_DESCRIPTOR.
+  // Expects locals: tmp (selector), index.
+  SET_DESCRIPTOR_ACCESSED: [
+    'if (tmp & 0x0004) == 0',
+    ['RAM.GDT.gates[index].SD.A = 1'],
+    'end if',
+    'if (tmp & 0x0004) != 0',
+    ['RAM.LDT.gates[index].SD.A = 1'],
+    'end if',
+  ],
+
+  // Checks that a selector in 'tmp' is within descriptor table bounds.
+  // Expects locals: index. Raises #GP with ERROR_CODE = tmp if out of bounds.
+  DESCRIPTOR_BOUNDS_CHECK: [
+    'if (tmp & 0x0004) == 0',
+    ['#GP if (index * 8) > GDTR.limit'],
+    'end if',
+    'if (tmp & 0x0004) != 0',
+    ['#GP if (index * 8) > LDTR.limit'],
+    'end if',
+  ],
+
   // Raises exceptions
   UD_EXCEPTION: ['#6'],
 };

@@ -174,7 +174,7 @@ class TypeScriptBackend extends Backend {
               if (localName === 'vector') {
                 continue;
               }
-              code.push(`    let ${localInfo.identifier};`);
+              code.push(`    let ${localInfo.identifier} = 0;`);
             }
             for (const line of handlerCode) {
               code.push('    ' + line);
@@ -240,7 +240,7 @@ class TypeScriptBackend extends Backend {
               if (localName === 'vector') {
                 continue;
               }
-              code.push(`      let ${localInfo.identifier};`);
+              code.push(`      let ${localInfo.identifier} = 0;`);
             }
             const generated: GeneratedStatement = {
               accesses: [name],
@@ -298,7 +298,7 @@ class TypeScriptBackend extends Backend {
               if (localName === 'vector') {
                 continue;
               }
-              code.push(`      let ${localInfo.identifier};`);
+              code.push(`      let ${localInfo.identifier} = 0;`);
             }
             const generated2: GeneratedStatement = {
               accesses: [],

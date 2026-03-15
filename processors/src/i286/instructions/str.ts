@@ -2,7 +2,6 @@ import type { InstructionInfo } from '@machinery/core';
 
 import { Opcodes, SystemOpcodes } from '../opcodes';
 
-// TODO: protected mode
 export const str: InstructionInfo = {
   identifier: 'str',
   name: 'Store Task Register',
@@ -10,20 +9,6 @@ export const str: InstructionInfo = {
     'The contents of the Task Register are copied to the 2-byte register or memory location indicated by the effective address operand.',
   modifies: [],
   undefined: [],
-  macros: {
-    OP: [
-      '${RESOLVE_FLAGS}',
-      // Raise #6 in real mode
-      '#6',
-      // "memw(2, effective_address, TR)", // (protected mode)
-    ],
-    OP_REG: [
-      '${RESOLVE_FLAGS}',
-      // Raise #6 in real mode
-      '#6',
-      // "${MOD_RM_RM16} = TR", // (protected mode)
-    ],
-  },
   locals: [
     {
       identifier: 'effective_address',
@@ -41,19 +26,14 @@ export const str: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: [
-            'offset = %{DISP}',
-            'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
-            '${OP}',
-          ],
+          operation: ['#6'],
         },
         protected: {
           operation: [
             'offset = %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
-            '${OP}',
+            'RAM:u16[effective_address] = TR.selector',
           ],
         },
       },
@@ -70,19 +50,14 @@ export const str: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: [
-            'offset = ${MOD_RM_OFFSET}',
-            'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
-            '${OP}',
-          ],
+          operation: ['#6'],
         },
         protected: {
           operation: [
             'offset = ${MOD_RM_OFFSET}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
-            '${OP}',
+            'RAM:u16[effective_address] = TR.selector',
           ],
         },
       },
@@ -98,19 +73,14 @@ export const str: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
-            'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
-            '${OP}',
-          ],
+          operation: ['#6'],
         },
         protected: {
           operation: [
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
-            '${OP}',
+            'RAM:u16[effective_address] = TR.selector',
           ],
         },
       },
@@ -127,19 +97,14 @@ export const str: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
-            'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
-            '${OP}',
-          ],
+          operation: ['#6'],
         },
         protected: {
           operation: [
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
-            '${OP}',
+            'RAM:u16[effective_address] = TR.selector',
           ],
         },
       },
@@ -154,7 +119,14 @@ export const str: InstructionInfo = {
       cycles: 3,
     },
     {
-      operation: ['${OP_REG}'],
+      modes: {
+        real: {
+          operation: ['#6'],
+        },
+        protected: {
+          operation: ['${MOD_RM_RM16} = TR.selector'],
+        },
+      },
       opcode: [
         Opcodes.SYSTEM,
         SystemOpcodes.LTR_STR_LLDT_SLDT_VERR_VERW,

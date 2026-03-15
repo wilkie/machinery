@@ -332,6 +332,72 @@ export const memory: MemoryInfo[] = [
           },
         ],
       },
+      // Protected-mode Local Descriptor Table (LDT)
+      {
+        identifier: 'LDT',
+        name: 'Local Descriptor Table',
+        offset: 'LDTR.base',
+        fields: [
+          {
+            identifier: 'gates',
+            name: 'Gates',
+            count: 256,
+            offset: 0,
+            size: 64,
+            cell: [
+              {
+                identifier: 'SD',
+                name: 'Segment Descriptor',
+                fields: [
+                  {
+                    identifier: 'limit',
+                    name: 'Segment Limit',
+                    offset: 0,
+                    size: 16,
+                  },
+                  {
+                    identifier: 'base',
+                    name: 'Segment Base',
+                    offset: 16,
+                    size: 24,
+                  },
+                  {
+                    identifier: 'A',
+                    name: 'Accessed',
+                    offset: 40,
+                    size: 1,
+                  },
+                  {
+                    identifier: 'type',
+                    name: 'Gate type',
+                    offset: 41,
+                    size: 3,
+                  },
+                  {
+                    identifier: 'S',
+                    name: 'Segment Descriptor',
+                    offset: 44,
+                    size: 1,
+                    equals: 1,
+                  },
+                  {
+                    identifier: 'DPL',
+                    name: 'Destination Protection Level',
+                    offset: 45,
+                    size: 2,
+                  },
+                  {
+                    identifier: 'P',
+                    name: 'Present Bit',
+                    offset: 47,
+                    size: 1,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
     ],
   },
 ];

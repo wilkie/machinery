@@ -155,7 +155,7 @@ comparison -> comparison %logical_operator comparison_atom
 comparison_atom -> %left_paren comparison %right_paren
             {% (data) => new ComparisonNode(data[1]) %}
             | %unary_logic_operator comparison_atom
-            {% (data) => new UnaryLogicNode(data[0].value.toString(), data[1]) %}
+            {% (data) => new UnaryLogicNode(data[1], data[0].value.toString()) %}
             | expression %comparison expression
             {% (data) => new ComparisonEvaluationNode(data[0], data[1].value.toString(), data[2]) %}
 

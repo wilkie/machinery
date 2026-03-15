@@ -1,6 +1,6 @@
 /** @type {import('jest').Config} */
 module.exports = {
-  displayName: 'file-systems',
+  displayName: 'virtual-machine',
   transform: {
     '^.+\\.ts$': ['ts-jest', { useESM: true }],
   },

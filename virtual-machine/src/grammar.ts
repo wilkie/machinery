@@ -186,7 +186,7 @@ const grammar: Grammar = {
     {"name": "comparison", "symbols": ["comparison", logical_operator, "comparison_atom"], "postprocess": (data) => new BinaryLogicNode(data[0], data[1].value.toString(), data[2])},
     {"name": "comparison", "symbols": ["comparison_atom"], "postprocess": (data) => data[0]},
     {"name": "comparison_atom", "symbols": [left_paren, "comparison", right_paren], "postprocess": (data) => new ComparisonNode(data[1])},
-    {"name": "comparison_atom", "symbols": [unary_logic_operator, "comparison_atom"], "postprocess": (data) => new UnaryLogicNode(data[0].value.toString(), data[1])},
+    {"name": "comparison_atom", "symbols": [unary_logic_operator, "comparison_atom"], "postprocess": (data) => new UnaryLogicNode(data[1], data[0].value.toString())},
     {"name": "comparison_atom", "symbols": ["expression", comparison, "expression"], "postprocess": (data) => new ComparisonEvaluationNode(data[0], data[1].value.toString(), data[2])},
     {"name": "named$ebnf$1$subexpression$1", "symbols": [dot, "named"]},
     {"name": "named$ebnf$1", "symbols": ["named$ebnf$1$subexpression$1"], "postprocess": id},

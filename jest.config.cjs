@@ -10,5 +10,6 @@ module.exports = {
     '<rootDir>/assemblers',
     '<rootDir>/disassemblers',
     '<rootDir>/formats',
+    '<rootDir>/virtual-machine',
   ],
 };

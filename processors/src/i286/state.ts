@@ -405,4 +405,10 @@ export const state: RegisterInfo[] = [
     size: 16,
     type: RegisterTypes.Integer,
   },
+  {
+    identifier: 'SOFTWARE_INT',
+    name: 'Software Interrupt Flag',
+    size: 1,
+    type: RegisterTypes.Integer,
+  },
 ];

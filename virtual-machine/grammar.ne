@@ -145,18 +145,19 @@ expr_atom -> %left_paren expression %right_paren
             {% (data) => new ExpressionNode(data[0]) %}
 
 # Some expression that evaluates to a boolean value
-comparison -> %left_paren comparison %right_paren
-            {% (data) => new ComparisonNode(data[1]) %}
-            | %unary_logic_operator comparison
-            {% (data) => new UnaryLogicNode(data[0].value.toString(), data[1]) %}
-            | comparison_operand %comparison comparison_operand
-            {% (data) => new ComparisonEvaluationNode(data[0][0], data[1].value.toString(), data[2][0]) %}
-            | comparison %logical_operator comparison
+# comparison is left-recursive for logical operators (&&, ||)
+# comparison_atom handles single comparisons, parenthesized, and negated comparisons
+comparison -> comparison %logical_operator comparison_atom
             {% (data) => new BinaryLogicNode(data[0], data[1].value.toString(), data[2]) %}
+            | comparison_atom
+            {% (data) => data[0] %}
 
-# An operand that can only be used with comparision expressions
-comparison_operand -> comparison
-                    | expression
+comparison_atom -> %left_paren comparison %right_paren
+            {% (data) => new ComparisonNode(data[1]) %}
+            | %unary_logic_operator comparison_atom
+            {% (data) => new UnaryLogicNode(data[0].value.toString(), data[1]) %}
+            | expression %comparison expression
+            {% (data) => new ComparisonEvaluationNode(data[0], data[1].value.toString(), data[2]) %}
 
 # A named identifier and possibly dotted
 named -> %identifier (%dot named):?

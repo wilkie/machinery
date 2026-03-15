@@ -141,10 +141,10 @@ class Generator {
           const code =
             mode !== 'default'
               ? (info.get as OperationViaMode).modes?.[mode]?.operation
-                  ?.flat(3)
+                  ?.flat(Infinity)
                   .join(' ; ')
               : (info.get as OperationNotViaMode).operation
-                  ?.flat(3)
+                  ?.flat(Infinity)
                   .join(' ; ');
           if (code) {
             map.registers[name].get ||= {};
@@ -182,10 +182,10 @@ class Generator {
           const code =
             mode !== 'default'
               ? (info.set as OperationViaMode).modes?.[mode]?.operation
-                  ?.flat(3)
+                  ?.flat(Infinity)
                   .join(' ; ')
               : (info.set as OperationNotViaMode).operation
-                  ?.flat(3)
+                  ?.flat(Infinity)
                   .join(' ; ') || '';
           if (code) {
             map.registers[name].set ||= {};
@@ -243,12 +243,12 @@ class Generator {
             ? (machine.target.interrupts.handler as OperationViaMode).modes?.[
                 mode
               ]?.operation
-                ?.flat(3)
+                ?.flat(Infinity)
                 .join(' ; ')
             : (
                 machine.target.interrupts.handler as OperationNotViaMode
               ).operation
-                ?.flat(3)
+                ?.flat(Infinity)
                 .join(' ; ');
         const parsed = this.parser.parse((code || '') + ' ;', {}, locals);
         const statement = this.resolver.resolve(parsed, locals, localMap);
@@ -397,7 +397,6 @@ class Generator {
     }
 
     try {
-      //console.log("PARSING", info.identifier, variant);
       const result = this.parser.parse(
         (finalize
           ? (form as InstructionFormModes).modes?.[mode]?.finalize ||
@@ -407,7 +406,7 @@ class Generator {
             (form as InstructionFormFlat).operation ||
             []
         )
-          .flat(3)
+          .flat(Infinity)
           .join(' ; ') + ' ;',
         macros,
         locals,

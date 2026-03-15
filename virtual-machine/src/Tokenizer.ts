@@ -14,10 +14,13 @@ class Tokenizer {
   protected macros: MacrosInfo;
   /** A set of locals to use by default */
   protected locals: LocalsInfo;
+  /** Cache for expanded macro tokens (keyed by macro definition reference) */
+  macroCache: Map<unknown, Token[]>;
 
   constructor(macros?: MacrosInfo, locals?: LocalsInfo) {
     this.macros = macros || {};
     this.locals = locals || {};
+    this.macroCache = new Map();
 
     this.lexer = moo.compile({
       // if
@@ -132,6 +135,11 @@ class Tokenizer {
             }
           }
 
+          // Cache macro expansions by definition reference
+          if (this.macroCache.has(macro)) {
+            return this.macroCache.get(macro)!;
+          }
+
           let ret: Token[] = [];
           const operations = Array.isArray(macro)
             ? (macro as unknown[]).flat(Infinity)
@@ -145,6 +153,8 @@ class Tokenizer {
               ),
             );
           }
+
+          this.macroCache.set(macro, ret);
           return ret;
         } else if (token.type === 'local' || token.type === 'identifier') {
           const local =

@@ -86,42 +86,98 @@ export const memory: MemoryInfo[] = [
             count: 256,
             offset: 0,
             size: 64,
-            cell: {
-              identifier: 'IGD',
-              name: 'Interrupt Gate Descriptor',
-              fields: [
-                {
-                  identifier: 'offset',
-                  name: 'Interrupt Code Offset',
-                  offset: 0,
-                  size: 16,
-                },
-                {
-                  identifier: 'segment',
-                  name: 'Interrupt Code Segment Selector',
-                  offset: 16,
-                  size: 16,
-                },
-                {
-                  identifier: 'T',
-                  name: 'Trap Bit',
-                  offset: 40,
-                  size: 1,
-                },
-                {
-                  identifier: 'DPL',
-                  name: 'Destination Protection Level',
-                  offset: 45,
-                  size: 2,
-                },
-                {
-                  identifier: 'P',
-                  name: 'Present Bit',
-                  offset: 47,
-                  size: 1,
-                },
-              ],
-            },
+            cell: [
+              {
+                identifier: 'IGD',
+                name: 'Interrupt Gate Descriptor',
+                fields: [
+                  {
+                    identifier: 'offset',
+                    name: 'Interrupt Code Offset',
+                    offset: 0,
+                    size: 16,
+                  },
+                  {
+                    identifier: 'segment',
+                    name: 'Interrupt Code Segment Selector',
+                    offset: 16,
+                    size: 16,
+                  },
+                  {
+                    identifier: 'T',
+                    name: 'Trap Bit',
+                    offset: 40,
+                    size: 1,
+                  },
+                  {
+                    // Gate type field (bits 41-43): 011 for interrupt/trap gates
+                    identifier: 'gate_type',
+                    name: 'Gate Type',
+                    offset: 41,
+                    size: 3,
+                    equals: 0b011,
+                  },
+                  {
+                    identifier: 'DPL',
+                    name: 'Destination Protection Level',
+                    offset: 45,
+                    size: 2,
+                  },
+                  {
+                    identifier: 'P',
+                    name: 'Present Bit',
+                    offset: 47,
+                    size: 1,
+                  },
+                ],
+              },
+              {
+                // Task gate in IDT: A=1, type=010 (same encoding as GDT/LDT task gates)
+                identifier: 'TGD',
+                name: 'Task Gate Descriptor',
+                fields: [
+                  {
+                    identifier: 'selector',
+                    name: 'Target TSS Selector',
+                    offset: 16,
+                    size: 16,
+                  },
+                  {
+                    identifier: 'A',
+                    name: 'Gate Subtype',
+                    offset: 40,
+                    size: 1,
+                    equals: 1,
+                  },
+                  {
+                    identifier: 'type',
+                    name: 'Gate Type',
+                    offset: 41,
+                    size: 3,
+                    equals: 0b010,
+                  },
+                  {
+                    identifier: 'S',
+                    name: 'System Descriptor',
+                    offset: 44,
+                    size: 1,
+                    equals: 0,
+                  },
+                  {
+                    identifier: 'DPL',
+                    name: 'Destination Protection Level',
+                    offset: 45,
+                    size: 2,
+                  },
+                  {
+                    identifier: 'P',
+                    name: 'Present Bit',
+                    offset: 47,
+                    size: 1,
+                  },
+                ],
+              },
+            ],
           },
         ],
       },

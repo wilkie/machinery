@@ -1179,7 +1179,7 @@ class TypeScriptBackend extends Backend {
     else size = 32;
 
     return [
-      `this.mem${size}[${index}] = ${offset !== undefined ? `(this.mem${size}[${index}] & ~0x${((Math.pow(2, length) - 1) << offset).toString(16)}) | (` : ''}${(offset || 0) === 0 ? '' : '('}${value}${size !== length ? ` & 0x${(Math.pow(2, length) - 1).toString(16)}` : ''}${(offset || 0) === 0 ? '' : `) << ${offset}`}${offset !== undefined ? ')' : ''}`,
+      `this.mem${size}[${index}] = ${offset !== undefined ? `(this.mem${size}[${index}] & ~0x${(((Math.pow(2, length) - 1) << offset) >>> 0).toString(16)}) | (` : ''}${(offset || 0) === 0 ? '' : '('}${value}${size !== length ? ` & 0x${(Math.pow(2, length) - 1).toString(16)}` : ''}${(offset || 0) === 0 ? '' : `) << ${offset}`}${offset !== undefined ? ')' : ''}`,
     ];
   }
 
@@ -1365,7 +1365,7 @@ class TypeScriptBackend extends Backend {
       else size = 32;
 
       return [
-        `this.mem${size}[${index}] = ${offset !== undefined ? `(this.mem${size}[${index}] & ~0x${((Math.pow(2, length) - 1) << offset).toString(16)}) | (` : ''}${(offset || 0) === 0 ? '' : '('}${value}${size !== length ? ` & 0x${(Math.pow(2, length) - 1).toString(16)}` : ''}${(offset || 0) === 0 ? '' : `) << ${offset}`}${offset !== undefined ? ')' : ''}`,
+        `this.mem${size}[${index}] = ${offset !== undefined ? `(this.mem${size}[${index}] & ~0x${(((Math.pow(2, length) - 1) << offset) >>> 0).toString(16)}) | (` : ''}${(offset || 0) === 0 ? '' : '('}${value}${size !== length ? ` & 0x${(Math.pow(2, length) - 1).toString(16)}` : ''}${(offset || 0) === 0 ? '' : `) << ${offset}`}${offset !== undefined ? ')' : ''}`,
       ];
     }
 

@@ -748,13 +748,19 @@ export const registers: RegisterInfo[] = [
     fields: [
       {
         identifier: 'limit',
-        name: 'IDT Limit Register',
+        name: 'TSS Limit',
         offset: 0,
         size: 16,
       },
       {
+        identifier: 'selector',
+        name: 'TSS Selector',
+        offset: 16,
+        size: 16,
+      },
+      {
         identifier: 'base',
-        name: 'IDT Base Offset Register',
+        name: 'TSS Base Offset',
         offset: 32,
         size: 24,
       },

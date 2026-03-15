@@ -29,7 +29,7 @@ export const ltr: InstructionInfo = {
       ';; must be present',
       '#NP if RAM.GDT.gates[index].SD.P != 1',
       ';; load task register and cache base/limit',
-      'TR = tmp',
+      'TR.selector = tmp',
       'TR.base = RAM.GDT.gates[index].SD.base',
       'TR.limit = RAM.GDT.gates[index].SD.limit',
       ';; mark TSS as busy (type = 0b001)',

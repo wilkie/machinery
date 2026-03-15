@@ -33,15 +33,7 @@ export const arpl: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: [
-            'offset = %{DISP}',
-            'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
-            'a = RAM:u16[effective_address]',
-            'b = ${MOD_RM_REG16}',
-            '${OP}',
-            'RAM:u16[effective_address] = alu_result',
-          ],
+          operation: ['#6'],
         },
         protected: {
           operation: [
@@ -63,15 +55,7 @@ export const arpl: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: [
-            'offset = ${MOD_RM_OFFSET}',
-            'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
-            'a = RAM:u16[effective_address]',
-            'b = ${MOD_RM_REG16}',
-            '${OP}',
-            'RAM:u16[effective_address] = alu_result',
-          ],
+          operation: ['#6'],
         },
         protected: {
           operation: [
@@ -93,15 +77,7 @@ export const arpl: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
-            'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
-            'a = RAM:u16[effective_address]',
-            'b = ${MOD_RM_REG16}',
-            '${OP}',
-            'RAM:u16[effective_address] = alu_result',
-          ],
+          operation: ['#6'],
         },
         protected: {
           operation: [
@@ -123,15 +99,7 @@ export const arpl: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
-            'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
-            'a = RAM:u16[effective_address]',
-            'b = ${MOD_RM_REG16}',
-            '${OP}',
-            'RAM:u16[effective_address] = alu_result',
-          ],
+          operation: ['#6'],
         },
         protected: {
           operation: [
@@ -151,12 +119,19 @@ export const arpl: InstructionInfo = {
       cycles: 11,
     },
     {
-      operation: [
-        'a = ${MOD_RM_RM8}',
-        'b = ${MOD_RM_REG8}',
-        '${OP}',
-        '${MOD_RM_RM16} = alu_result',
-      ],
+      modes: {
+        real: {
+          operation: ['#6'],
+        },
+        protected: {
+          operation: [
+            'a = ${MOD_RM_RM16}',
+            'b = ${MOD_RM_REG16}',
+            '${OP}',
+            '${MOD_RM_RM16} = alu_result',
+          ],
+        },
+      },
       opcode: [Opcodes.ARPL_EW_RW, 'ModRM_rm16_reg16_11'],
       operands: ['rm', 'reg'],
       operandSize: 16,

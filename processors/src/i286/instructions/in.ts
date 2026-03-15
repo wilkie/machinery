@@ -12,7 +12,14 @@ export const in_: InstructionInfo = {
   forms: [
     // 0xE4 db - IN AL, db
     {
-      operation: ['AL = IO.read(1, %{imm})'],
+      modes: {
+        real: {
+          operation: ['AL = IO.read(1, %{imm})'],
+        },
+        protected: {
+          operation: ['#GP if CS.RPL > IOPL', 'AL = IO.read(1, %{imm})'],
+        },
+      },
       opcode: [Opcodes.IN_AL_DB, 'IMM_u8'],
       operands: ['AL', 'imm'],
       operandSize: 8,
@@ -20,7 +27,14 @@ export const in_: InstructionInfo = {
     },
     // 0xE5 db - IN AX, db
     {
-      operation: ['AX = IO.read(2, %{imm})'],
+      modes: {
+        real: {
+          operation: ['AX = IO.read(2, %{imm})'],
+        },
+        protected: {
+          operation: ['#GP if CS.RPL > IOPL', 'AX = IO.read(2, %{imm})'],
+        },
+      },
       opcode: [Opcodes.IN_AX_DB, 'IMM_u8'],
       operands: ['AX', 'imm'],
       operandSize: 16,
@@ -28,7 +42,14 @@ export const in_: InstructionInfo = {
     },
     // 0xEC - IN AL, DX
     {
-      operation: ['AL = IO.read(1, DX)'],
+      modes: {
+        real: {
+          operation: ['AL = IO.read(1, DX)'],
+        },
+        protected: {
+          operation: ['#GP if CS.RPL > IOPL', 'AL = IO.read(1, DX)'],
+        },
+      },
       opcode: [Opcodes.IN_AL_DX],
       operands: ['AL', 'DX'],
       operandSize: 8,
@@ -36,7 +57,14 @@ export const in_: InstructionInfo = {
     },
     // 0xED - IN AX, DX
     {
-      operation: ['AX = IO.read(2, DX)'],
+      modes: {
+        real: {
+          operation: ['AX = IO.read(2, DX)'],
+        },
+        protected: {
+          operation: ['#GP if CS.RPL > IOPL', 'AX = IO.read(2, DX)'],
+        },
+      },
       opcode: [Opcodes.IN_AX_DX],
       operands: ['AX', 'DX'],
       operandSize: 16,

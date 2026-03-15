@@ -12,7 +12,14 @@ export const out: InstructionInfo = {
   forms: [
     // 0xE6 db - OUT db, AL
     {
-      operation: ['IO:u8[%{imm}] = AL'],
+      modes: {
+        real: {
+          operation: ['IO:u8[%{imm}] = AL'],
+        },
+        protected: {
+          operation: ['#GP if CS.RPL > IOPL', 'IO:u8[%{imm}] = AL'],
+        },
+      },
       opcode: [Opcodes.OUT_DB_AL, 'IMM_u8'],
       operands: ['imm', 'AL'],
       operandSize: 8,
@@ -20,7 +27,14 @@ export const out: InstructionInfo = {
     },
     // 0xE7 db - OUT db, AX
     {
-      operation: ['IO:u16[%{imm}] = AX'],
+      modes: {
+        real: {
+          operation: ['IO:u16[%{imm}] = AX'],
+        },
+        protected: {
+          operation: ['#GP if CS.RPL > IOPL', 'IO:u16[%{imm}] = AX'],
+        },
+      },
       opcode: [Opcodes.OUT_DB_AX, 'IMM_u8'],
       operands: ['imm', 'AX'],
       operandSize: 16,
@@ -28,7 +42,14 @@ export const out: InstructionInfo = {
     },
     // 0xEE - OUT DX, AL
     {
-      operation: ['IO:u8[DX] = AL'],
+      modes: {
+        real: {
+          operation: ['IO:u8[DX] = AL'],
+        },
+        protected: {
+          operation: ['#GP if CS.RPL > IOPL', 'IO:u8[DX] = AL'],
+        },
+      },
       opcode: [Opcodes.OUT_DX_AL],
       operands: ['DX', 'AL'],
       operandSize: 8,
@@ -36,7 +57,14 @@ export const out: InstructionInfo = {
     },
     // 0xEF - OUT DX, AX
     {
-      operation: ['IO:u16[DX] = AX'],
+      modes: {
+        real: {
+          operation: ['IO:u16[DX] = AX'],
+        },
+        protected: {
+          operation: ['#GP if CS.RPL > IOPL', 'IO:u16[DX] = AX'],
+        },
+      },
       opcode: [Opcodes.OUT_DX_AX],
       operands: ['DX', 'AX'],
       operandSize: 16,

@@ -14,7 +14,18 @@ export const sti: InstructionInfo = {
     {
       opcode: [Opcodes.STI],
       operands: [],
-      operation: ['${RESOLVE_FLAGS}', 'IF = 1'],
+      modes: {
+        real: {
+          operation: ['${RESOLVE_FLAGS}', 'IF = 1'],
+        },
+        protected: {
+          operation: [
+            '${RESOLVE_FLAGS}',
+            '#GP if CS.RPL > IOPL',
+            'IF = 1',
+          ],
+        },
+      },
       cycles: 2,
     },
   ],

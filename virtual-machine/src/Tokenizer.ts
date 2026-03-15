@@ -133,10 +133,13 @@ class Tokenizer {
           }
 
           let ret: Token[] = [];
-          for (const operation of Array.isArray(macro) ? macro : [macro]) {
+          const operations = Array.isArray(macro)
+            ? (macro as unknown[]).flat(Infinity)
+            : [macro];
+          for (const operation of operations) {
             ret = ret.concat(
               this.tokenize(
-                operation.toString() + (Array.isArray(macro) ? ' ; ' : ''),
+                (operation as string) + (Array.isArray(macro) ? ' ; ' : ''),
                 macros,
                 locals,
               ),
@@ -161,9 +164,10 @@ class Tokenizer {
           }
         }
 
-        const coercion = (token.type !== 'comment' && token.value.includes(':'))
-          ? token.value.split(':')[1]
-          : undefined;
+        const coercion =
+          token.type !== 'comment' && token.value.includes(':')
+            ? token.value.split(':')[1]
+            : undefined;
         token.value = coercion ? token.value.split(':')[0] : token.value;
 
         return {

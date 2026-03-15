@@ -197,7 +197,7 @@ export interface OpcodeMatcher {
 }
 
 export interface MacrosInfo {
-  [key: string]: string | number | string[];
+  [key: string]: string | number | Operation;
 }
 
 export interface LocalInfo {

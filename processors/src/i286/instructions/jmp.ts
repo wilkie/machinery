@@ -71,7 +71,90 @@ export const jmp: InstructionInfo = {
     '```',
   modifies: [],
   undefined: [],
-  macros: {},
+  macros: {
+    // Protected-mode far JMP logic — handles direct code segment jumps
+    // and jump through call gates (no stack operations, no privilege transitions).
+    // Expects locals: gate_sel, gate_off, tmp, index,
+    //   desc_type, desc_s, desc_a, desc_dpl, desc_p, desc_limit, desc_base,
+    //   gate_target_sel, gate_target_off, gate_word_count.
+    JMP_FAR_PROTECTED: [
+      ';; Look up the descriptor for the selector',
+      'tmp = gate_sel',
+      'index = tmp >> 3',
+      'ERROR_CODE = gate_sel',
+      '#GP if index == 0',
+      '${DESCRIPTOR_BOUNDS_CHECK}',
+      '${LOAD_DESCRIPTOR_FIELDS}',
+      '${LOAD_DESCRIPTOR_A}',
+
+      ';; === DIRECT CODE SEGMENT JUMP (S=1) ===',
+      'if desc_s == 1',
+      [
+        ';; Must be executable code segment',
+        '#GP if (desc_type & 0b100) != 0b100',
+        ';; Non-conforming: RPL must be <= CPL, DPL must equal CPL',
+        'if (desc_type & 0b010) != 0b010',
+        [
+          '#GP if (gate_sel & 0x0003) > CS.RPL',
+          '#GP if desc_dpl != CS.RPL',
+        ],
+        'end if',
+        ';; Conforming: DPL must be <= CPL',
+        'if (desc_type & 0b010) == 0b010',
+        ['#GP if desc_dpl > CS.RPL'],
+        'end if',
+        ';; Must be present',
+        '#NP if desc_p != 1',
+        ';; Load CS:IP via setter (set RPL to CPL)',
+        'CS = (gate_sel & 0xFFFC) | CS.RPL',
+        'IP = gate_off',
+      ],
+      'end if',
+
+      ';; === SYSTEM DESCRIPTOR — CALL GATE (S=0) ===',
+      'if desc_s == 0',
+      [
+        ';; Must be a call gate (A=0, type=010)',
+        '#GP if desc_a != 0',
+        '#GP if desc_type != 0b010',
+        ';; Gate DPL must be >= CPL',
+        '#GP if desc_dpl < CS.RPL',
+        ';; Gate DPL must be >= selector RPL',
+        '#GP if desc_dpl < (gate_sel & 0x0003)',
+        ';; Gate must be present',
+        '#NP if desc_p != 1',
+
+        ';; Read call gate descriptor fields',
+        '${LOAD_CALL_GATE_FIELDS}',
+
+        ';; Look up target code segment',
+        'tmp = gate_target_sel',
+        'index = tmp >> 3',
+        'ERROR_CODE = gate_target_sel',
+        '#GP if index == 0',
+        '${DESCRIPTOR_BOUNDS_CHECK}',
+        '${LOAD_DESCRIPTOR_FIELDS}',
+        ';; Must be code segment (S=1, executable)',
+        '#GP if desc_s != 1',
+        '#GP if (desc_type & 0b100) != 0b100',
+        ';; Non-conforming: DPL must equal CPL (JMP cannot change privilege)',
+        'if (desc_type & 0b010) != 0b010',
+        ['#GP if desc_dpl != CS.RPL'],
+        'end if',
+        ';; Conforming: DPL must be <= CPL',
+        'if (desc_type & 0b010) == 0b010',
+        ['#GP if desc_dpl > CS.RPL'],
+        'end if',
+        ';; Must be present',
+        '#NP if desc_p != 1',
+
+        ';; Load CS:IP from gate (set RPL to CPL)',
+        'CS = (gate_target_sel & 0xFFFC) | CS.RPL',
+        'IP = gate_target_off',
+      ],
+      'end if',
+    ],
+  },
   locals: [
     {
       identifier: 'effective_address',
@@ -82,6 +165,77 @@ export const jmp: InstructionInfo = {
       identifier: 'offset',
       name: 'Effective Offset',
       size: 32,
+    },
+    // Protected-mode call gate support
+    {
+      identifier: 'gate_sel',
+      name: 'Far jump selector',
+      size: 16,
+    },
+    {
+      identifier: 'gate_off',
+      name: 'Far jump offset',
+      size: 16,
+    },
+    {
+      identifier: 'tmp',
+      name: 'Temporary register',
+      size: 16,
+    },
+    {
+      identifier: 'index',
+      name: 'Descriptor table entry index',
+      size: 16,
+    },
+    {
+      identifier: 'desc_type',
+      name: 'Descriptor type field',
+      size: 8,
+    },
+    {
+      identifier: 'desc_s',
+      name: 'Descriptor S bit',
+      size: 8,
+    },
+    {
+      identifier: 'desc_a',
+      name: 'Descriptor A bit',
+      size: 8,
+    },
+    {
+      identifier: 'desc_dpl',
+      name: 'Descriptor privilege level',
+      size: 8,
+    },
+    {
+      identifier: 'desc_p',
+      name: 'Descriptor present bit',
+      size: 8,
+    },
+    {
+      identifier: 'desc_limit',
+      name: 'Descriptor limit',
+      size: 16,
+    },
+    {
+      identifier: 'desc_base',
+      name: 'Descriptor base',
+      size: 32,
+    },
+    {
+      identifier: 'gate_target_sel',
+      name: 'Call gate target CS selector',
+      size: 16,
+    },
+    {
+      identifier: 'gate_target_off',
+      name: 'Call gate target IP offset',
+      size: 16,
+    },
+    {
+      identifier: 'gate_word_count',
+      name: 'Call gate parameter word count',
+      size: 8,
     },
   ],
   forms: [
@@ -107,7 +261,18 @@ export const jmp: InstructionInfo = {
     },
     // 0xEA cd - JMP FAR cd
     {
-      operation: ['CS = %{NEW_CS}', 'IP = %{NEW_IP}'],
+      modes: {
+        real: {
+          operation: ['CS = %{NEW_CS}', 'IP = %{NEW_IP}'],
+        },
+        protected: {
+          operation: [
+            'gate_sel = %{NEW_CS}',
+            'gate_off = %{NEW_IP}',
+            '${JMP_FAR_PROTECTED}',
+          ],
+        },
+      },
       opcode: [
         Opcodes.JMPF_CD,
         {
@@ -127,7 +292,7 @@ export const jmp: InstructionInfo = {
       operandSize: 8,
       distance: 'far',
       addressing: 'absolute',
-      cycles: 11, // 23 in protected mode, 38 via same-privilege call-gate, 175 via tss, 180 via task gate
+      cycles: 11,
     },
     // 0xFF /4 - JMP NEAR ew (absolute offset)
     {
@@ -243,7 +408,7 @@ export const jmp: InstructionInfo = {
       addressing: 'absolute',
       cycles: 7,
     },
-    // 0xFF /5 - JMP FAR ed
+    // 0xFF /5 - JMP FAR ed (far indirect through memory)
     {
       modes: {
         real: {
@@ -260,8 +425,9 @@ export const jmp: InstructionInfo = {
             'offset = %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
-            'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'gate_off = RAM:u16[effective_address]',
+            'gate_sel = RAM:u16[effective_address + 2]',
+            '${JMP_FAR_PROTECTED}',
           ],
         },
       },
@@ -270,7 +436,7 @@ export const jmp: InstructionInfo = {
       operandSize: 16,
       distance: 'far',
       addressing: 'absolute',
-      cycles: 15, // 26 in protected-mode, 41 via same-privilege call gate, 178 via tss, 183 via task gate
+      cycles: 15,
     },
     {
       modes: {
@@ -288,8 +454,9 @@ export const jmp: InstructionInfo = {
             'offset = ${MOD_RM_OFFSET}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
-            'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'gate_off = RAM:u16[effective_address]',
+            'gate_sel = RAM:u16[effective_address + 2]',
+            '${JMP_FAR_PROTECTED}',
           ],
         },
       },
@@ -316,8 +483,9 @@ export const jmp: InstructionInfo = {
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
-            'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'gate_off = RAM:u16[effective_address]',
+            'gate_sel = RAM:u16[effective_address + 2]',
+            '${JMP_FAR_PROTECTED}',
           ],
         },
       },
@@ -344,8 +512,9 @@ export const jmp: InstructionInfo = {
             'offset = ${MOD_RM_OFFSET} + %{DISP}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
-            'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'gate_off = RAM:u16[effective_address]',
+            'gate_sel = RAM:u16[effective_address + 2]',
+            '${JMP_FAR_PROTECTED}',
           ],
         },
       },

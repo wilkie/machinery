@@ -219,6 +219,61 @@ export const macros = {
     'end if',
   ],
 
+  // Loads the A bit from a descriptor (GDT or LDT based on TI bit in 'tmp').
+  // Expects locals: tmp (selector), index, desc_a.
+  LOAD_DESCRIPTOR_A: [
+    'if (tmp & 0x0004) == 0',
+    ['desc_a = RAM.GDT.gates[index].SD.A'],
+    'end if',
+    'if (tmp & 0x0004) != 0',
+    ['desc_a = RAM.LDT.gates[index].SD.A'],
+    'end if',
+  ],
+
+  // Loads call gate descriptor fields (CGD overlay) from GDT or LDT.
+  // Expects locals: tmp (selector), index, gate_target_sel, gate_target_off, gate_word_count.
+  LOAD_CALL_GATE_FIELDS: [
+    'if (tmp & 0x0004) == 0',
+    [
+      'gate_target_sel = RAM.GDT.gates[index].CGD.selector',
+      'gate_target_off = RAM.GDT.gates[index].CGD.offset',
+      'gate_word_count = RAM.GDT.gates[index].CGD.word_count',
+    ],
+    'end if',
+    'if (tmp & 0x0004) != 0',
+    [
+      'gate_target_sel = RAM.LDT.gates[index].CGD.selector',
+      'gate_target_off = RAM.LDT.gates[index].CGD.offset',
+      'gate_word_count = RAM.LDT.gates[index].CGD.word_count',
+    ],
+    'end if',
+  ],
+
+  // Reads new SS:SP from the TSS based on new_cpl (target privilege level).
+  // Expects locals: new_cpl, new_ss, new_sp.
+  CALL_GATE_READ_TSS_STACK: [
+    'if new_cpl == 0',
+    ['new_sp = RAM.TSS.SP0', 'new_ss = RAM.TSS.SS0'],
+    'end if',
+    'if new_cpl == 1',
+    ['new_sp = RAM.TSS.SP1', 'new_ss = RAM.TSS.SS1'],
+    'end if',
+    'if new_cpl == 2',
+    ['new_sp = RAM.TSS.SP2', 'new_ss = RAM.TSS.SS2'],
+    'end if',
+  ],
+
+  // Copies up to 31 parameter words from old stack to new stack frame.
+  // Expects locals: gate_word_count, stack_address, old_stack_addr.
+  // Parameters are written at stack_address + 4 + 2*i from old_stack_addr + 2*i.
+  CALL_GATE_COPY_PARAMS: Array.from({ length: 31 }, (_, i) => [
+    `if gate_word_count > ${i}`,
+    [
+      `RAM:u16[stack_address + ${4 + i * 2}] = RAM:u16[old_stack_addr + ${i * 2}]`,
+    ],
+    'end if',
+  ]).flat(),
+
   // Raises exceptions
   UD_EXCEPTION: ['#6'],
 };

@@ -307,12 +307,116 @@ export const memory: MemoryInfo[] = [
                     size: 3,
                   },
                   {
-                    // Marks this field as a segment descriptor and not a call gate */
+                    // Marks this field as a segment descriptor and not a call gate
                     identifier: 'S',
                     name: 'Segment Descriptor',
                     offset: 44,
                     size: 1,
                     equals: 1,
+                  },
+                  {
+                    identifier: 'DPL',
+                    name: 'Destination Protection Level',
+                    offset: 45,
+                    size: 2,
+                  },
+                  {
+                    identifier: 'P',
+                    name: 'Present Bit',
+                    offset: 47,
+                    size: 1,
+                  },
+                ],
+              },
+              {
+                // Call gate: S=0, A=0, type=010
+                identifier: 'CGD',
+                name: 'Call Gate Descriptor',
+                fields: [
+                  {
+                    identifier: 'offset',
+                    name: 'Target Code Offset',
+                    offset: 0,
+                    size: 16,
+                  },
+                  {
+                    identifier: 'selector',
+                    name: 'Target Code Segment Selector',
+                    offset: 16,
+                    size: 16,
+                  },
+                  {
+                    identifier: 'word_count',
+                    name: 'Parameter Word Count',
+                    offset: 32,
+                    size: 5,
+                  },
+                  {
+                    identifier: 'A',
+                    name: 'Gate Subtype',
+                    offset: 40,
+                    size: 1,
+                    equals: 0,
+                  },
+                  {
+                    identifier: 'type',
+                    name: 'Gate Type',
+                    offset: 41,
+                    size: 3,
+                    equals: 0b010,
+                  },
+                  {
+                    identifier: 'S',
+                    name: 'System Descriptor',
+                    offset: 44,
+                    size: 1,
+                    equals: 0,
+                  },
+                  {
+                    identifier: 'DPL',
+                    name: 'Destination Protection Level',
+                    offset: 45,
+                    size: 2,
+                  },
+                  {
+                    identifier: 'P',
+                    name: 'Present Bit',
+                    offset: 47,
+                    size: 1,
+                  },
+                ],
+              },
+              {
+                // Task gate: S=0, A=1, type=010
+                identifier: 'TGD',
+                name: 'Task Gate Descriptor',
+                fields: [
+                  {
+                    identifier: 'selector',
+                    name: 'Target TSS Selector',
+                    offset: 16,
+                    size: 16,
+                  },
+                  {
+                    identifier: 'A',
+                    name: 'Gate Subtype',
+                    offset: 40,
+                    size: 1,
+                    equals: 1,
+                  },
+                  {
+                    identifier: 'type',
+                    name: 'Gate Type',
+                    offset: 41,
+                    size: 3,
+                    equals: 0b010,
+                  },
+                  {
+                    identifier: 'S',
+                    name: 'System Descriptor',
+                    offset: 44,
+                    size: 1,
+                    equals: 0,
                   },
                   {
                     identifier: 'DPL',
@@ -379,6 +483,110 @@ export const memory: MemoryInfo[] = [
                     offset: 44,
                     size: 1,
                     equals: 1,
+                  },
+                  {
+                    identifier: 'DPL',
+                    name: 'Destination Protection Level',
+                    offset: 45,
+                    size: 2,
+                  },
+                  {
+                    identifier: 'P',
+                    name: 'Present Bit',
+                    offset: 47,
+                    size: 1,
+                  },
+                ],
+              },
+              {
+                // Call gate: S=0, A=0, type=010
+                identifier: 'CGD',
+                name: 'Call Gate Descriptor',
+                fields: [
+                  {
+                    identifier: 'offset',
+                    name: 'Target Code Offset',
+                    offset: 0,
+                    size: 16,
+                  },
+                  {
+                    identifier: 'selector',
+                    name: 'Target Code Segment Selector',
+                    offset: 16,
+                    size: 16,
+                  },
+                  {
+                    identifier: 'word_count',
+                    name: 'Parameter Word Count',
+                    offset: 32,
+                    size: 5,
+                  },
+                  {
+                    identifier: 'A',
+                    name: 'Gate Subtype',
+                    offset: 40,
+                    size: 1,
+                    equals: 0,
+                  },
+                  {
+                    identifier: 'type',
+                    name: 'Gate Type',
+                    offset: 41,
+                    size: 3,
+                    equals: 0b010,
+                  },
+                  {
+                    identifier: 'S',
+                    name: 'System Descriptor',
+                    offset: 44,
+                    size: 1,
+                    equals: 0,
+                  },
+                  {
+                    identifier: 'DPL',
+                    name: 'Destination Protection Level',
+                    offset: 45,
+                    size: 2,
+                  },
+                  {
+                    identifier: 'P',
+                    name: 'Present Bit',
+                    offset: 47,
+                    size: 1,
+                  },
+                ],
+              },
+              {
+                // Task gate: S=0, A=1, type=010
+                identifier: 'TGD',
+                name: 'Task Gate Descriptor',
+                fields: [
+                  {
+                    identifier: 'selector',
+                    name: 'Target TSS Selector',
+                    offset: 16,
+                    size: 16,
+                  },
+                  {
+                    identifier: 'A',
+                    name: 'Gate Subtype',
+                    offset: 40,
+                    size: 1,
+                    equals: 1,
+                  },
+                  {
+                    identifier: 'type',
+                    name: 'Gate Type',
+                    offset: 41,
+                    size: 3,
+                    equals: 0b010,
+                  },
+                  {
+                    identifier: 'S',
+                    name: 'System Descriptor',
+                    offset: 44,
+                    size: 1,
+                    equals: 0,
                   },
                   {
                     identifier: 'DPL',

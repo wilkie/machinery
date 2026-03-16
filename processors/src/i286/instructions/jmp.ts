@@ -94,10 +94,7 @@ export const jmp: InstructionInfo = {
         '#GP if (desc_type & 0b100) != 0b100',
         ';; Non-conforming: RPL must be <= CPL, DPL must equal CPL',
         'if (desc_type & 0b010) != 0b010',
-        [
-          '#GP if (gate_sel & 0x0003) > CS.RPL',
-          '#GP if desc_dpl != CS.RPL',
-        ],
+        ['#GP if (gate_sel & 0x0003) > CS.RPL', '#GP if desc_dpl != CS.RPL'],
         'end if',
         ';; Conforming: DPL must be <= CPL',
         'if (desc_type & 0b010) == 0b010',

@@ -456,10 +456,7 @@ class Resolver {
     // If so, substitute it as a numeric constant rather than a variable reference.
     const mergedLocals = { ...this.locals, ...locals };
     const localInfo = mergedLocals[node.value as string];
-    if (
-      localInfo?.value !== undefined &&
-      typeof localInfo.value === 'number'
-    ) {
+    if (localInfo?.value !== undefined && typeof localInfo.value === 'number') {
       return new OperandNode(localInfo.value);
     }
 

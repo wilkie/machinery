@@ -78,8 +78,7 @@ class Parser {
     // Nearley format: "Syntax error at index N\nUnexpected {"type":"...","value":"..."}"
     const indexMatch = err.message.match(/at index (\d+)/);
     const tokenIndex = indexMatch ? parseInt(indexMatch[1]) : undefined;
-    const failToken =
-      tokenIndex !== undefined ? tokens[tokenIndex] : undefined;
+    const failToken = tokenIndex !== undefined ? tokens[tokenIndex] : undefined;
 
     // Build a context window around the failure point
     const contextTokens = this.tokenContext(tokens, tokenIndex);
@@ -138,7 +137,10 @@ class Parser {
 
   /** Token types to hide from expected lists (internal grammar plumbing) */
   private static readonly HIDDEN_TYPES = new Set([
-    'macro_end', 'list_start', 'list_end', 'list_delimiter',
+    'macro_end',
+    'list_start',
+    'list_end',
+    'list_delimiter',
     'ternary_else',
   ]);
 
@@ -165,10 +167,7 @@ class Parser {
     return message;
   }
 
-  private tokenContext(
-    tokens: Token[],
-    index?: number,
-  ): string | undefined {
+  private tokenContext(tokens: Token[], index?: number): string | undefined {
     if (index === undefined || tokens.length === 0) return undefined;
     const start = Math.max(0, index - 3);
     const end = Math.min(tokens.length, index + 4);

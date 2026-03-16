@@ -1221,8 +1221,8 @@ class TypeScriptBackend extends Backend {
 
     // Sub-width field: read-modify-write to preserve surrounding bits
     if (originalSize < size && originalSize > 0) {
-      const fieldMask = (Math.pow(2, originalSize) - 1);
-      const shiftedMask = ((fieldMask << offset) >>> 0);
+      const fieldMask = Math.pow(2, originalSize) - 1;
+      const shiftedMask = (fieldMask << offset) >>> 0;
       return [
         `this.mem8[${effective}] = (this.mem8[${effective}] & ~0x${shiftedMask.toString(16)}) | (${offset === 0 ? '' : '('}${value}${originalSize < 8 ? ` & 0x${fieldMask.toString(16)}` : ''}${offset === 0 ? '' : `) << ${offset}`})`,
       ];

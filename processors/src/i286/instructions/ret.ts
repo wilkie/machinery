@@ -56,11 +56,7 @@ export const ret: InstructionInfo = {
 
       ';; === RETURN TO SAME PRIVILEGE LEVEL ===',
       'if ret_rpl == old_cpl',
-      [
-        'IP = RAM:u16[stack_address]',
-        'CS = ret_cs',
-        'SP = SP + 4 + ret_imm',
-      ],
+      ['IP = RAM:u16[stack_address]', 'CS = ret_cs', 'SP = SP + 4 + ret_imm'],
       'end if',
 
       ';; === RETURN TO OUTER PRIVILEGE LEVEL ===',

@@ -1,3 +1,5 @@
+import type { MacrosInfo } from '@machinery/core';
+
 import Tokenizer from './Tokenizer';
 import Parser, { ParseError } from './Parser';
 import {
@@ -137,7 +139,10 @@ describe('Tokenizer', () => {
       const t = new Tokenizer();
       const tokens = t.tokenize(';; hello world ; ');
       // The comment regex captures between ;; and \s;\s, stripping the delimiter
-      expect(tokens[0]).toMatchObject({ type: 'comment', value: ' hello world' });
+      expect(tokens[0]).toMatchObject({
+        type: 'comment',
+        value: ' hello world',
+      });
     });
   });
 
@@ -267,8 +272,8 @@ describe('Tokenizer', () => {
 // ─── Parser / Grammar ───────────────────────────────────────────────────────
 
 describe('Parser', () => {
-  const parse = (code: string, macros?: Record<string, unknown>) =>
-    new Parser(macros).parse(code + ' ;', macros);
+  const parse = (code: string, macros?: MacrosInfo) =>
+    new Parser(macros || {}).parse(code + ' ;', macros);
 
   describe('simple operands', () => {
     it('parses an identifier expression', () => {
@@ -552,9 +557,7 @@ describe('Parser', () => {
     });
 
     it('parses nested if blocks', () => {
-      const ast = parse(
-        'if AX == 1 ; if BX == 2 ; CX = 3 ; end if ; end if',
-      );
+      const ast = parse('if AX == 1 ; if BX == 2 ; CX = 3 ; end if ; end if');
       const outer = ast.node as IfBlockNode;
       const inner = outer.body!.node as IfBlockNode;
       expect(inner).toBeInstanceOf(IfBlockNode);
@@ -698,9 +701,7 @@ describe('Parser', () => {
     });
 
     it('expands multi-line macro into multiple statements', () => {
-      const ast = new Parser({ BODY: ['AX = 1', 'BX = 2'] }).parse(
-        '${BODY} ;',
-      );
+      const ast = new Parser({ BODY: ['AX = 1', 'BX = 2'] }).parse('${BODY} ;');
       const nodes = statements(ast);
       // Array macros append '; ' per element, plus the trailing ; from input,
       // producing an extra EmptyNode at the end

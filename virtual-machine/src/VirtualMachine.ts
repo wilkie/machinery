@@ -190,7 +190,7 @@ class VirtualMachine {
         // And the leftover offset in bits
         let offset = subinfo.offset % 8;
         // And the amount we need in bits, ultimately
-        let length = subinfo.size;
+        const length = subinfo.size;
         const bitsNeeded = (length + offset + 7) & -8;
         // Start with byte-sized access; upsize if the field needs more bits
         let size = 8;

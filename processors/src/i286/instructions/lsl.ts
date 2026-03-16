@@ -38,18 +38,12 @@ export const lsl: InstructionInfo = {
         [
           ';; conforming code: S=1, type bit 2 set, type bit 0 set — no DPL check',
           'if desc_s == 1 && (desc_type & 0b100) == 0b100 && (desc_type & 0b001) == 0b001',
-          [
-            '${MOD_RM_REG16} = desc_limit',
-            'ZF = 1',
-          ],
+          ['${MOD_RM_REG16} = desc_limit', 'ZF = 1'],
           'end if',
           'if desc_s != 1 || (desc_type & 0b100) != 0b100 || (desc_type & 0b001) != 0b001',
           [
             'if desc_dpl >= CS.RPL && desc_dpl >= rpl',
-            [
-              '${MOD_RM_REG16} = desc_limit',
-              'ZF = 1',
-            ],
+            ['${MOD_RM_REG16} = desc_limit', 'ZF = 1'],
             'end if',
           ],
           'end if',

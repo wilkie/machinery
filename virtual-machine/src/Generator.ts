@@ -141,10 +141,10 @@ class Generator {
           const code =
             mode !== 'default'
               ? (info.get as OperationViaMode).modes?.[mode]?.operation
-                  ?.flat(Infinity)
+                  ?.flat(19)
                   .join(' ; ')
               : (info.get as OperationNotViaMode).operation
-                  ?.flat(Infinity)
+                  ?.flat(19)
                   .join(' ; ');
           if (code) {
             map.registers[name].get ||= {};
@@ -182,10 +182,10 @@ class Generator {
           const code =
             mode !== 'default'
               ? (info.set as OperationViaMode).modes?.[mode]?.operation
-                  ?.flat(Infinity)
+                  ?.flat(19)
                   .join(' ; ')
               : (info.set as OperationNotViaMode).operation
-                  ?.flat(Infinity)
+                  ?.flat(19)
                   .join(' ; ') || '';
           if (code) {
             map.registers[name].set ||= {};
@@ -243,12 +243,12 @@ class Generator {
             ? (machine.target.interrupts.handler as OperationViaMode).modes?.[
                 mode
               ]?.operation
-                ?.flat(Infinity)
+                ?.flat(19)
                 .join(' ; ')
             : (
                 machine.target.interrupts.handler as OperationNotViaMode
               ).operation
-                ?.flat(Infinity)
+                ?.flat(19)
                 .join(' ; ');
         const parsed = this.parser.parse((code || '') + ' ;', {}, locals);
         const statement = this.resolver.resolve(parsed, locals, localMap);
@@ -406,7 +406,7 @@ class Generator {
             (form as InstructionFormFlat).operation ||
             []
         )
-          .flat(Infinity)
+          .flat(19)
           .join(' ; ') + ' ;',
         macros,
         locals,

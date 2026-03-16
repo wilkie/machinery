@@ -19,11 +19,7 @@ export const sti: InstructionInfo = {
           operation: ['${RESOLVE_FLAGS}', 'IF = 1'],
         },
         protected: {
-          operation: [
-            '${RESOLVE_FLAGS}',
-            '#GP if CS.RPL > IOPL',
-            'IF = 1',
-          ],
+          operation: ['${RESOLVE_FLAGS}', '#GP if CS.RPL > IOPL', 'IF = 1'],
         },
       },
       cycles: 2,

@@ -96,6 +96,11 @@ export const interrupts = {
         name: 'IDT gate type field',
         size: 8,
       },
+      {
+        identifier: 'saved_error_code',
+        name: 'Saved error code from faulting instruction',
+        size: 16,
+      },
       // Task switch support (for IDT task gates)
       {
         identifier: 'tss_sel',
@@ -208,6 +213,8 @@ export const interrupts = {
             'end if',
             ';; detect gate type (bits 41-43 of the descriptor)',
             'gate_type = RAM.IDT.gates[vector].IGD.gate_type',
+            ';; save error code before gate validation clobbers ERROR_CODE',
+            'saved_error_code = ERROR_CODE',
 
             ';; === IDT TASK GATE (gate_type=010) ===',
             'if gate_type == 0b010',
@@ -241,7 +248,7 @@ export const interrupts = {
                 'stack_address = SS_BASE + offset',
                 '#SS if offset < SS_LIMIT_MIN',
                 '#SS if (offset + 1) > SS_LIMIT_MAX',
-                'RAM:u16[stack_address] = ERROR_CODE',
+                'RAM:u16[stack_address] = saved_error_code',
                 'SP = tmp',
                 'ERROR_CODE = 0',
               ],
@@ -336,7 +343,7 @@ export const interrupts = {
                 'stack_address = SS_BASE + offset',
                 '#SS if offset < SS_LIMIT_MIN',
                 '#SS if (offset + 1) > SS_LIMIT_MAX',
-                'RAM:u16[stack_address] = ERROR_CODE',
+                'RAM:u16[stack_address] = saved_error_code',
                 'SP = tmp',
                 'ERROR_CODE = 0',
               ],

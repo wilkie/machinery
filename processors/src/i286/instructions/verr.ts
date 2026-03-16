@@ -23,11 +23,7 @@ export const verr: InstructionInfo = {
         'end if',
         ';; data segment or non-conforming readable code: DPL >= CPL and DPL >= RPL',
         'if (desc_type & 0b100) == 0 || ((desc_type & 0b100) == 0b100 && (desc_type & 0b010) == 0 && (desc_type & 0b001) == 0b001)',
-        [
-          'if desc_dpl >= CS.RPL && desc_dpl >= rpl',
-          ['ZF = 1'],
-          'end if',
-        ],
+        ['if desc_dpl >= CS.RPL && desc_dpl >= rpl', ['ZF = 1'], 'end if'],
         'end if',
       ],
       'end if',

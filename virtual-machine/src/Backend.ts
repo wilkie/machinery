@@ -7,7 +7,6 @@ import {
   AssignmentNode,
   BinaryExpressionNode,
   BinaryLogicNode,
-  CallExpressionNode,
   ChoiceExpressionNode,
   CommentNode,
   ComparisonNode,
@@ -87,12 +86,17 @@ class Backend {
   ): boolean {
     if (!exprType) return false;
     if (targetSigned) {
-      // Signed target: expr must be signed and fit within target width
-      return exprType.signed && exprType.size <= targetSize;
+      // Signed target: signed expr fits if size <= target width
+      if (exprType.signed) return exprType.size <= targetSize;
+      // Unsigned expr into signed target: safe when expr occupies strictly
+      // fewer bits, so the sign-extension bit is guaranteed zero.
+      return exprType.size < targetSize;
     }
-    // Unsigned target: expr must fit within target width and not be signed
-    // (a signed value could have set high bits beyond the mask)
-    return !exprType.signed && exprType.size <= targetSize;
+    // Unsigned target: unsigned expr fits if size <= target width
+    if (!exprType.signed) return exprType.size <= targetSize;
+    // Signed expr into unsigned target: the JS value may have high bits set
+    // from sign extension, so the mask is always needed.
+    return false;
   }
 
   prologue(): string[] {
@@ -588,8 +592,6 @@ class Backend {
 
     if (node instanceof RaiseExpressionNode) {
       result = this.fromRaiseExpression(generated, node);
-    } else if (node instanceof CallExpressionNode) {
-      result = this.fromCallExpression(generated, node);
     } else if (node instanceof RegisterChoiceExpressionNode) {
       result = this.fromRegisterChoiceExpression(generated, node);
     } else if (node instanceof ChoiceExpressionNode) {
@@ -729,13 +731,6 @@ class Backend {
     _generated: GeneratedStatement,
     _operand: OperandNode,
     _node: ArrayAccessNode,
-  ): string[] {
-    return [];
-  }
-
-  fromCallExpression(
-    _generated: GeneratedStatement,
-    _node: CallExpressionNode,
   ): string[] {
     return [];
   }

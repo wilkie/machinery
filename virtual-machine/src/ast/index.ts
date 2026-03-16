@@ -2,7 +2,6 @@ export { default as ArrayAccessNode } from './ArrayAccessNode';
 export { default as AssignmentNode } from './AssignmentNode';
 export { default as BinaryExpressionNode } from './BinaryExpressionNode';
 export { default as BinaryLogicNode } from './BinaryLogicNode';
-export { default as CallExpressionNode } from './CallExpressionNode';
 export { default as ChoiceExpressionNode } from './ChoiceExpressionNode';
 export { default as CommentNode } from './CommentNode';
 export { default as ComparisonEvaluationNode } from './ComparisonEvaluationNode';

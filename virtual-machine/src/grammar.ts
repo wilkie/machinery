@@ -8,7 +8,6 @@ import ArrayAccessNode from './ast/ArrayAccessNode';
 import AssignmentNode from './ast/AssignmentNode';
 import BinaryExpressionNode from './ast/BinaryExpressionNode';
 import BinaryLogicNode from './ast/BinaryLogicNode';
-import CallExpressionNode from './ast/CallExpressionNode';
 import ChoiceExpressionNode from './ast/ChoiceExpressionNode';
 import CommentNode from './ast/CommentNode';
 import ComparisonNode from './ast/ComparisonNode';
@@ -171,16 +170,12 @@ const grammar: Grammar = {
     {"name": "expr_unary", "symbols": [unary_operator, "expr_unary"], "postprocess": (data) => new UnaryExpressionNode(data[1], data[0].value.toString())},
     {"name": "expr_unary", "symbols": ["expr_atom"], "postprocess": (data) => data[0]},
     {"name": "expr_atom", "symbols": [left_paren, "expression", right_paren], "postprocess": (data) => new ExpressionNode(data[1], data[2].coercion)},
-    {"name": "expr_atom$ebnf$1", "symbols": []},
-    {"name": "expr_atom$ebnf$1$subexpression$1", "symbols": [list_delimiter, "expression"]},
-    {"name": "expr_atom$ebnf$1", "symbols": ["expr_atom$ebnf$1", "expr_atom$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "expr_atom", "symbols": ["named", left_paren, "expression", "expr_atom$ebnf$1", right_paren], "postprocess": (data) => new CallExpressionNode(data[0].value.toString(), [data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))])},
     {"name": "expr_atom", "symbols": [raise, "operand"], "postprocess": (data) => new RaiseExpressionNode(data[1])},
     {"name": "expr_atom", "symbols": [macro_start, identifier, macro_end], "postprocess": (data) => new OperandNode(data[1].value, data[1].coercion)},
-    {"name": "expr_atom$ebnf$2", "symbols": []},
-    {"name": "expr_atom$ebnf$2$subexpression$1", "symbols": [list_delimiter, "operand"]},
-    {"name": "expr_atom$ebnf$2", "symbols": ["expr_atom$ebnf$2", "expr_atom$ebnf$2$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "expr_atom", "symbols": [macro_start, list_start, "operand", "expr_atom$ebnf$2", list_end, list_start, "expression", list_end, macro_end], "postprocess": (data) => new ChoiceExpressionNode([data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))], data[6], data[7].coercion)},
+    {"name": "expr_atom$ebnf$1", "symbols": []},
+    {"name": "expr_atom$ebnf$1$subexpression$1", "symbols": [list_delimiter, "operand"]},
+    {"name": "expr_atom$ebnf$1", "symbols": ["expr_atom$ebnf$1", "expr_atom$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},
+    {"name": "expr_atom", "symbols": [macro_start, list_start, "operand", "expr_atom$ebnf$1", list_end, list_start, "expression", list_end, macro_end], "postprocess": (data) => new ChoiceExpressionNode([data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))], data[6], data[7].coercion)},
     {"name": "expr_atom", "symbols": ["operand"], "postprocess": (data) => new ExpressionNode(data[0])},
     {"name": "comparison", "symbols": ["comparison", logical_operator, "comparison_atom"], "postprocess": (data) => new BinaryLogicNode(data[0], data[1].value.toString(), data[2])},
     {"name": "comparison", "symbols": ["comparison_atom"], "postprocess": (data) => data[0]},

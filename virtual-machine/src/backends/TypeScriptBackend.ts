@@ -13,7 +13,6 @@ import {
   AssignmentNode,
   BinaryExpressionNode,
   BinaryLogicNode,
-  CallExpressionNode,
   ComparisonEvaluationNode,
   ComparisonNode,
   ExpressionNode,
@@ -1183,6 +1182,7 @@ class TypeScriptBackend extends Backend {
     _generated: GeneratedStatement,
     reference: RegisterReference,
     value: string,
+    exprType?: ExpressionType,
   ): string[] {
     let { size, length } = reference.mapping;
     const { index, offset } = reference.mapping;
@@ -1193,8 +1193,12 @@ class TypeScriptBackend extends Backend {
     else if (size <= 16) size = 16;
     else size = 32;
 
+    // Determine if we need to mask the value to `length` bits
+    const needsMask =
+      size !== length && !this.canSkipCoercion(exprType, length, false);
+
     return [
-      `this.mem${size}[${index}] = ${offset !== undefined ? `(this.mem${size}[${index}] & ~0x${(((Math.pow(2, length) - 1) << offset) >>> 0).toString(16)}) | (` : ''}${(offset || 0) === 0 ? '' : '('}${value}${size !== length ? ` & 0x${(Math.pow(2, length) - 1).toString(16)}` : ''}${(offset || 0) === 0 ? '' : `) << ${offset}`}${offset !== undefined ? ')' : ''}`,
+      `this.mem${size}[${index}] = ${offset !== undefined ? `(this.mem${size}[${index}] & ~0x${(((Math.pow(2, length) - 1) << offset) >>> 0).toString(16)}) | (` : ''}${(offset || 0) === 0 ? '' : '('}${value}${needsMask ? ` & 0x${(Math.pow(2, length) - 1).toString(16)}` : ''}${(offset || 0) === 0 ? '' : `) << ${offset}`}${offset !== undefined ? ')' : ''}`,
     ];
   }
 
@@ -1265,7 +1269,13 @@ class TypeScriptBackend extends Backend {
     exprType?: ExpressionType,
   ): string[] {
     if (reference.mapping.size) {
-      if (this.canSkipCoercion(exprType, reference.mapping.size, !!reference.mapping.signed)) {
+      if (
+        this.canSkipCoercion(
+          exprType,
+          reference.mapping.size,
+          !!reference.mapping.signed,
+        )
+      ) {
         return [`${reference.mapping.identifier} = ${value}`];
       }
       const coercion =
@@ -1593,66 +1603,6 @@ class TypeScriptBackend extends Backend {
       1,
       this.fromNode(generated, node.index)[0],
     );
-  }
-
-  fromCallExpression(
-    generated: GeneratedStatement,
-    node: CallExpressionNode,
-  ): string[] {
-    const name = node.name;
-
-    if (name === 'signextend') {
-      // Sign-extend the value
-      const size = parseInt(this.fromNode(generated, node.args[0])[0]);
-
-      const shiftAmount = 32 - size * 8;
-      if (shiftAmount > 0) {
-        return [
-          `((${this.fromNode(generated, node.args[1])}) << ${shiftAmount} >> ${shiftAmount})`,
-        ];
-      } else if (size === 4) {
-        return [`((${this.fromNode(generated, node.args[1])}) >> 0)`];
-      }
-    } else {
-      // Discover any memory read/write operations
-      for (const memoryInfo of this.target.memory || []) {
-        const memoryName = memoryInfo.identifier;
-        if (name === `${memoryName}.read` || name === `${memoryName}.write`) {
-          // Read/Write this memory
-          const size = parseInt(this.fromNode(generated, node.args[0])[0]);
-          if (name === `${memoryName}.read`) {
-            const addressCode = this.fromNode(generated, node.args[1]);
-            return [
-              ...addressCode.slice(0, addressCode.length - 1),
-              ...this.readMemory_(
-                generated,
-                memoryName,
-                size,
-                addressCode[addressCode.length - 1],
-              ),
-            ];
-          } else {
-            const addressCode = this.fromNode(generated, node.args[1]);
-            const valueCode = this.fromNode(generated, node.args[2]);
-            return [
-              ...addressCode.slice(0, addressCode.length - 1),
-              ...valueCode.slice(0, valueCode.length - 1),
-              ...this.writeMemory_(
-                generated,
-                memoryName,
-                size,
-                addressCode[addressCode.length - 1],
-                valueCode[valueCode.length - 1],
-              ),
-            ];
-          }
-        }
-      }
-    }
-
-    return [
-      `${name}(${node.args.map((arg: ExpressionNode) => this.fromNode(generated, arg).join('\n')).join(', ')})`,
-    ];
   }
 }
 

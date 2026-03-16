@@ -12,7 +12,6 @@ import {
   ArrayAccessNode,
   BinaryExpressionNode,
   BinaryLogicNode,
-  CallExpressionNode,
   ComparisonEvaluationNode,
   ComparisonNode,
   ExpressionNode,
@@ -480,6 +479,7 @@ class WebAssemblyBackend extends Backend {
     _generated: GeneratedStatement,
     reference: RegisterReference,
     value: string,
+    exprType?: ExpressionType,
   ): string[] {
     let { size, length } = reference.mapping;
     const { index, offset } = reference.mapping;
@@ -499,10 +499,12 @@ class WebAssemblyBackend extends Backend {
       const shiftedMask = mask << offset;
       const clearMask =
         ~shiftedMask & (size === 8 ? 0xff : size === 16 ? 0xffff : 0xffffffff);
+      const needsMask = !this.canSkipCoercion(exprType, length, false);
+      const masked = needsMask
+        ? `(i32.and ${value} (i32.const ${mask}))`
+        : value;
       const maskedValue =
-        offset === 0
-          ? `(i32.and ${value} (i32.const ${mask}))`
-          : `(i32.shl (i32.and ${value} (i32.const ${mask})) (i32.const ${offset}))`;
+        offset === 0 ? masked : `(i32.shl ${masked} (i32.const ${offset}))`;
       return [
         `(${store} (i32.const ${byteOffset}) (i32.or (i32.and (${load} (i32.const ${byteOffset})) (i32.const ${clearMask})) ${maskedValue}))`,
       ];
@@ -558,7 +560,13 @@ class WebAssemblyBackend extends Backend {
     exprType?: ExpressionType,
   ): string[] {
     if (reference.mapping.size) {
-      if (this.canSkipCoercion(exprType, reference.mapping.size, !!reference.mapping.signed)) {
+      if (
+        this.canSkipCoercion(
+          exprType,
+          reference.mapping.size,
+          !!reference.mapping.signed,
+        )
+      ) {
         return [`(local.set $${reference.mapping.identifier} ${value})`];
       }
       const coercion =
@@ -837,58 +845,6 @@ class WebAssemblyBackend extends Backend {
       1,
       this.fromNode(generated, node.index)[0],
     );
-  }
-
-  fromCallExpression(
-    generated: GeneratedStatement,
-    node: CallExpressionNode,
-  ): string[] {
-    const name = node.name;
-
-    if (name === 'signextend') {
-      const size = parseInt(this.fromNode(generated, node.args[0])[0]);
-      const value = this.fromNode(generated, node.args[1])[0];
-      const bits = size * 8;
-      return [this.signExtend(value, bits)];
-    } else {
-      // Discover memory read/write operations
-      for (const memoryInfo of this.target.memory || []) {
-        const memoryName = memoryInfo.identifier;
-        if (name === `${memoryName}.read` || name === `${memoryName}.write`) {
-          const size = parseInt(this.fromNode(generated, node.args[0])[0]);
-          if (name === `${memoryName}.read`) {
-            const addressCode = this.fromNode(generated, node.args[1]);
-            return [
-              ...addressCode.slice(0, addressCode.length - 1),
-              ...this.readMemory_(
-                generated,
-                memoryName,
-                size,
-                addressCode[addressCode.length - 1],
-              ),
-            ];
-          } else {
-            const addressCode = this.fromNode(generated, node.args[1]);
-            const valueCode = this.fromNode(generated, node.args[2]);
-            return [
-              ...addressCode.slice(0, addressCode.length - 1),
-              ...valueCode.slice(0, valueCode.length - 1),
-              ...this.writeMemory_(
-                generated,
-                memoryName,
-                size,
-                addressCode[addressCode.length - 1],
-                valueCode[valueCode.length - 1],
-              ),
-            ];
-          }
-        }
-      }
-    }
-
-    return [
-      `(call $${name} ${node.args.map((arg: ExpressionNode) => this.fromNode(generated, arg).join(' ')).join(' ')})`,
-    ];
   }
 
   private readMemory_(

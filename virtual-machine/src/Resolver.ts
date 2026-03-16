@@ -404,8 +404,7 @@ class Resolver {
         signed: !!ret.reference.signed,
       };
     } else if (ret instanceof UnaryExpressionNode) {
-      const operandType =
-        (ret.operand as Node).resolvedType;
+      const operandType = (ret.operand as Node).resolvedType;
       ret.resolvedType = inferUnaryType(ret.operator, operandType);
     } else if (ret instanceof BinaryExpressionNode) {
       const leftType = (ret.operand as Node).resolvedType;

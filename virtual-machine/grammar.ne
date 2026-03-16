@@ -5,7 +5,6 @@ import ArrayAccessNode from './ast/ArrayAccessNode';
 import AssignmentNode from './ast/AssignmentNode';
 import BinaryExpressionNode from './ast/BinaryExpressionNode';
 import BinaryLogicNode from './ast/BinaryLogicNode';
-import CallExpressionNode from './ast/CallExpressionNode';
 import ChoiceExpressionNode from './ast/ChoiceExpressionNode';
 import CommentNode from './ast/CommentNode';
 import ComparisonNode from './ast/ComparisonNode';
@@ -132,8 +131,6 @@ expr_unary -> %unary_operator expr_unary
 
 expr_atom -> %left_paren expression %right_paren
             {% (data) => new ExpressionNode(data[1], data[2].coercion) %}
-            | named %left_paren expression (%list_delimiter expression):* %right_paren
-            {% (data) => new CallExpressionNode(data[0].value.toString(), [data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))]) %}
             | %raise operand
             {% (data) => new RaiseExpressionNode(data[1]) %}
             | %macro_start %identifier %macro_end

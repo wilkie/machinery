@@ -14,10 +14,10 @@ export const in_: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: ['AL = IO.read(1, %{imm})'],
+          operation: ['AL = IO:u8[%{imm}]'],
         },
         protected: {
-          operation: ['#GP if CS.RPL > IOPL', 'AL = IO.read(1, %{imm})'],
+          operation: ['#GP if CS.RPL > IOPL', 'AL = IO:u8[%{imm}]'],
         },
       },
       opcode: [Opcodes.IN_AL_DB, 'IMM_u8'],
@@ -29,10 +29,10 @@ export const in_: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: ['AX = IO.read(2, %{imm})'],
+          operation: ['AX = IO:u16[%{imm}]'],
         },
         protected: {
-          operation: ['#GP if CS.RPL > IOPL', 'AX = IO.read(2, %{imm})'],
+          operation: ['#GP if CS.RPL > IOPL', 'AX = IO:u16[%{imm}]'],
         },
       },
       opcode: [Opcodes.IN_AX_DB, 'IMM_u8'],
@@ -44,10 +44,10 @@ export const in_: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: ['AL = IO.read(1, DX)'],
+          operation: ['AL = IO:u8[DX]'],
         },
         protected: {
-          operation: ['#GP if CS.RPL > IOPL', 'AL = IO.read(1, DX)'],
+          operation: ['#GP if CS.RPL > IOPL', 'AL = IO:u8[DX]'],
         },
       },
       opcode: [Opcodes.IN_AL_DX],
@@ -59,10 +59,10 @@ export const in_: InstructionInfo = {
     {
       modes: {
         real: {
-          operation: ['AX = IO.read(2, DX)'],
+          operation: ['AX = IO:u16[DX]'],
         },
         protected: {
-          operation: ['#GP if CS.RPL > IOPL', 'AX = IO.read(2, DX)'],
+          operation: ['#GP if CS.RPL > IOPL', 'AX = IO:u16[DX]'],
         },
       },
       opcode: [Opcodes.IN_AX_DX],

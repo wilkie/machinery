@@ -9,7 +9,6 @@ import {
   BinaryExpressionNode,
   UnaryExpressionNode,
   TernaryExpressionNode,
-  CallExpressionNode,
   ChoiceExpressionNode,
   OperandNode,
   ArrayAccessNode,
@@ -655,24 +654,6 @@ describe('Parser', () => {
       expect(nodes.length).toBe(2);
       expect(nodes[0]).toBeInstanceOf(IfBlockNode);
       expect(nodes[1]).toBeInstanceOf(AssignmentNode);
-    });
-  });
-
-  describe('call expressions', () => {
-    it('parses single-arg call', () => {
-      const ast = parse('foo(AX)');
-      // CallExpressionNode extends ExpressionNode, so ast.node IS the call node
-      expect(ast.node).toBeInstanceOf(CallExpressionNode);
-      const call = ast.node as CallExpressionNode;
-      expect(call.name).toBe('foo');
-      expect(call.args.length).toBe(1);
-    });
-
-    it('parses multi-arg call', () => {
-      const ast = parse('foo(AX, BX, CX)');
-      expect(ast.node).toBeInstanceOf(CallExpressionNode);
-      const call = ast.node as CallExpressionNode;
-      expect(call.args.length).toBe(3);
     });
   });
 

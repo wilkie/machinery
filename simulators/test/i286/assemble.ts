@@ -12,7 +12,7 @@ import { assemble } from '@machinery/assemblers/i286/intel';
 
 const testRoot = resolve(import.meta.dirname);
 
-const dirs = [resolve(testRoot, 'simple'), resolve(testRoot, 'complex')];
+const dirs = [resolve(testRoot, 'simple'), resolve(testRoot, 'complex'), resolve(testRoot, 'protected')];
 
 let assembled = 0;
 let failed = 0;

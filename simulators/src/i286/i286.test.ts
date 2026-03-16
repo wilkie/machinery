@@ -14,31 +14,42 @@ class TestMachine extends Machine {
     this.IP = 0x100;
   }
 
-  interrupt_real(vector: number) {
+  private handleAssertions(vector: number): boolean {
     if (vector === 0x23) {
-      // Assert AX === BX
       if (this.AX !== this.BX) {
         this.halted = -1;
       }
+      return true;
     } else if (vector === 0x22) {
-      // Assert AL === AH
       if (this.AL !== this.AH) {
         this.halted = -1;
       }
+      return true;
     } else if (vector === 0x21) {
       const AH = this.AH;
       const AL = this.AL;
       const DX = this.DX;
       if (AH === 0x25) {
-        // Set interrupt vector
         const base = AL * 4 + Machine.RAM_OFFSET;
         this.mem16[base >> 1] = this.DS;
         this.mem16[(base >> 1) + 1] = DX;
       } else if (AH === 0x4c || AH === 0) {
         this.halted = 1;
       }
-    } else {
+      return true;
+    }
+    return false;
+  }
+
+  interrupt_real(vector: number) {
+    if (!this.handleAssertions(vector)) {
       super.interrupt_real(vector);
+    }
+  }
+
+  interrupt_protected(vector: number) {
+    if (!this.handleAssertions(vector)) {
+      super.interrupt_protected(vector);
     }
   }
 }
@@ -46,7 +57,11 @@ class TestMachine extends Machine {
 function runProgram(program: Uint8Array): { halted: number; ip: number } {
   const m = new TestMachine(program);
   for (let i = 0; i < 10000; i++) {
-    m.decode_real();
+    if (m.mode === 0) {
+      m.decode_real();
+    } else {
+      m.decode_protected();
+    }
     if (m.halted) {
       return { halted: m.halted, ip: m.IP };
     }
@@ -163,6 +178,19 @@ describe('i286 simple instructions', () => {
 describe('i286 complex instructions', () => {
   test.each(complex)('%s', async (name) => {
     const data = await readFile(resolve(testDir, `complex/bin/${name}.com`));
+    const { halted } = runProgram(data);
+    expect(halted).toBe(1);
+  });
+});
+
+const protected_mode = [
+  'gdt_idt',
+  'mode_switch',
+];
+
+describe('i286 protected mode', () => {
+  test.each(protected_mode)('%s', async (name) => {
+    const data = await readFile(resolve(testDir, `protected/bin/${name}.com`));
     const { halted } = runProgram(data);
     expect(halted).toBe(1);
   });

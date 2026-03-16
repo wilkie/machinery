@@ -174,32 +174,38 @@ class VirtualMachine {
       // Align byte index to the appropriate word
       const bytes = Math.ceil(info.size / 8);
       i = (i + bytes - 1) & -bytes;
+      // The backend normalizes access to mem8/mem16/mem32 (max 32-bit).
+      // Compute index for the actual typed-array that will be used.
+      const accessBytes = bytes <= 1 ? 1 : bytes <= 2 ? 2 : 4;
       ret.registers[name] = {
         identifier: name,
         size: info.size,
-        index: Math.floor(i / bytes),
+        index: Math.floor(i / accessBytes),
         initialValue: info.initialValue || 0,
       };
 
       for (const subinfo of info.fields || []) {
-        // We can only read at a word alignment (unless we slice memory in weird ways, perhaps)
-        // We will come up with the most efficient way to read this data via word alignment
-        // 'i' is already aligned appropriately, so worst case we read the whole value
-
-        // Determine if this is within a byte and which one
+        // Determine the byte offset of this field within the buffer
         let index = i + Math.floor((subinfo.offset - (subinfo.offset % 8)) / 8);
         // And the leftover offset in bits
         let offset = subinfo.offset % 8;
         // And the amount we need in bits, ultimately
         let length = subinfo.size;
         const bitsNeeded = (length + offset + 7) & -8;
+        // Start with byte-sized access; upsize if the field needs more bits
         let size = 8;
-        if (index !== i && bitsNeeded > 8) {
-          // We need to just read the whole value
-          index = i;
-          size = info.size;
-          offset = subinfo.offset;
-          length = subinfo.size;
+        if (bitsNeeded > 8) {
+          // Upsize to the minimum typed-array width that fits
+          if (bitsNeeded <= 16) {
+            size = 16;
+          } else {
+            size = 32;
+          }
+          // Align the byte offset down to the access width boundary
+          const fieldAccessBytes = size / 8;
+          const alignedByte = index - (index % fieldAccessBytes);
+          offset += (index - alignedByte) * 8;
+          index = Math.floor(alignedByte / fieldAccessBytes);
         }
 
         const tag = `${name}.${subinfo.identifier}`;

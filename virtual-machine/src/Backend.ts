@@ -32,6 +32,7 @@ import {
 import type {
   DecoderMap,
   IntermediateRepresentation,
+  LocalMap,
   MemoryMap,
   RegisterMap,
   MemoryReference,
@@ -144,17 +145,73 @@ class Backend {
     return [`; ${message}`];
   }
 
+  /**
+   * Inline a getter/setter statement, remapping its local variables to avoid
+   * collisions with the instruction's existing locals.  The inlined operation's
+   * localMap entries share mapping objects with its AST — temporarily rewriting
+   * their identifiers lets writeLocal/readLocal pick up unique names.
+   */
+  inlineOperation(
+    node: StatementNode,
+    inlinedLocalMap: LocalMap,
+    generated: GeneratedStatement,
+  ): GeneratedStatement {
+    // Check if any inlined variable names collide with existing locals
+    const existingIds = new Set(
+      Object.values(generated.context.localMap).map((m) => m.identifier),
+    );
+    let hasCollision = false;
+    for (const mapping of Object.values(inlinedLocalMap)) {
+      if (existingIds.has(mapping.identifier)) {
+        hasCollision = true;
+        break;
+      }
+    }
+
+    // No collision — emit directly without remapping
+    if (!hasCollision) {
+      return this.fromStatement(node, generated.context);
+    }
+
+    // Save original identifiers so we can restore after generation
+    const saved: { [key: string]: string } = {};
+    for (const [localName, mapping] of Object.entries(inlinedLocalMap)) {
+      saved[localName] = mapping.identifier;
+      // Allocate a new unique name from the instruction's localMap counter
+      const counter = Object.keys(generated.context.localMap).length;
+      const newId = `v_${counter}`;
+      mapping.identifier = newId;
+      // Register in the instruction's localMap so the counter advances
+      generated.context.localMap[`__inline_${localName}_${counter}`] = {
+        identifier: newId,
+      };
+    }
+
+    const result = this.fromStatement(node, generated.context);
+
+    // Restore original identifiers so the shared AST is unmodified for reuse
+    for (const [localName, mapping] of Object.entries(inlinedLocalMap)) {
+      mapping.identifier = saved[localName];
+    }
+
+    return result;
+  }
+
   fromAccessors(generated: GeneratedStatement): string[] {
     const ret: string[] = [];
     for (const name of generated.accesses) {
       const parsedRegister = this.parsed.registers[name];
       if (parsedRegister?.get) {
         this.suppressRegisterOperation = true;
-        const node =
-          parsedRegister.get[generated.context.mode]?.statement ||
-          parsedRegister.get.default?.statement;
-        if (node) {
-          const getStatement = this.fromStatement(node, generated.context);
+        const parsed =
+          parsedRegister.get[generated.context.mode] ||
+          parsedRegister.get.default;
+        if (parsed?.statement) {
+          const getStatement = this.inlineOperation(
+            parsed.statement,
+            parsed.localMap,
+            generated,
+          );
           const choiceInfo = generated.choiceIndexes?.[name];
           if (choiceInfo) {
             // Guard with conditional: only emit when the choice index selects this register
@@ -184,11 +241,15 @@ class Backend {
       const parsedRegister = this.parsed.registers[name];
       if (parsedRegister?.set) {
         this.suppressRegisterOperation = true;
-        const node =
-          parsedRegister.set[generated.context.mode]?.statement ||
-          parsedRegister.set.default?.statement;
-        if (node) {
-          const setStatement = this.fromStatement(node, generated.context);
+        const parsed =
+          parsedRegister.set[generated.context.mode] ||
+          parsedRegister.set.default;
+        if (parsed?.statement) {
+          const setStatement = this.inlineOperation(
+            parsed.statement,
+            parsed.localMap,
+            generated,
+          );
           const choiceInfo = generated.choiceIndexes?.[name];
           if (choiceInfo) {
             // Guard with conditional: only emit when the choice index selects this register

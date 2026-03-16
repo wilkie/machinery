@@ -1208,7 +1208,8 @@ class TypeScriptBackend extends Backend {
     address: ExpressionNode,
     value: string,
   ): string[] {
-    let { size } = reference;
+    const originalSize = reference.size;
+    let size = originalSize;
 
     // Normalize to valid TypedArray width (8, 16, or 32)
     if (size <= 8) size = 8;
@@ -1216,6 +1217,16 @@ class TypeScriptBackend extends Backend {
     else size = 32;
 
     const effective = this.fromExpression(generated, address)[0];
+    const offset = reference.offset || 0;
+
+    // Sub-width field: read-modify-write to preserve surrounding bits
+    if (originalSize < size && originalSize > 0) {
+      const fieldMask = (Math.pow(2, originalSize) - 1);
+      const shiftedMask = ((fieldMask << offset) >>> 0);
+      return [
+        `this.mem8[${effective}] = (this.mem8[${effective}] & ~0x${shiftedMask.toString(16)}) | (${offset === 0 ? '' : '('}${value}${originalSize < 8 ? ` & 0x${fieldMask.toString(16)}` : ''}${offset === 0 ? '' : `) << ${offset}`})`,
+      ];
+    }
 
     if (size === 8) {
       return [`this.mem8[${effective}] = ${value}`];

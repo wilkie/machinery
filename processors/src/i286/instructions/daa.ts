@@ -35,10 +35,12 @@ export const daa: InstructionInfo = {
         'tmp_b = (AL > 0x99 || CF > 0) ? 0x1 : 0x0',
         // This is the new CF flag
         'CARRY = tmp_b',
+        // Retain for OF flag (undefined, but still computed on real hardware)
+        'a = AL',
+        'b = (tmp_a != 0 ? 0x6 : 0x0) + (tmp_b != 0 ? 0x60 : 0x0)',
         // Perform alterations
-        'AL = tmp_a != 0 ? (AL + 6) : AL',
-        'AL = tmp_b != 0 ? AL + 0x60 : AL',
-        'alu_result = AL',
+        'alu_result = a + b',
+        'AL = alu_result',
         // Reset flag operation
         'flag_op = ${FLAG_OP_NOCF} | ${FLAG_OP_NOAF}',
       ],

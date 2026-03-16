@@ -29,8 +29,11 @@ export const aaa: InstructionInfo = {
         // Set flags
         'CARRY = tmp_a',
         'AF = tmp_a',
+        // Retain for OF flag (undefined, but still computed on real hardware)
+        'a = AL',
         // Add 6 to AL if AF is set or AL > 9
-        'AL = (tmp_a != 0 ? (AL + 6) : AL) & 0xf',
+        'b = tmp_a != 0 ? 0x6 : 0x0',
+        'AL = (a + b) & 0xf',
         'alu_result = AX',
         // Reset flag operation
         'flag_op = ${FLAG_OP_NOCF} | ${FLAG_OP_NOAF}',

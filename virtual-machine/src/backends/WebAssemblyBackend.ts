@@ -28,6 +28,7 @@ import {
 import Backend from '../Backend';
 import type {
   DecoderMap,
+  ExpressionType,
   InputMap,
   GeneratedStatement,
   MemoryReference,
@@ -554,8 +555,12 @@ class WebAssemblyBackend extends Backend {
     _generated: GeneratedStatement,
     reference: LocalReference,
     value: string,
+    exprType?: ExpressionType,
   ): string[] {
     if (reference.mapping.size) {
+      if (this.canSkipCoercion(exprType, reference.mapping.size, !!reference.mapping.signed)) {
+        return [`(local.set $${reference.mapping.identifier} ${value})`];
+      }
       const coercion =
         (reference.mapping.signed ? 'i' : 'u') + reference.mapping.size;
       return [

@@ -10,6 +10,11 @@ import type {
 
 import type { StatementNode, ExpressionNode } from './ast';
 
+export interface ExpressionType {
+  size: number;
+  signed: boolean;
+}
+
 export interface LocalsInfo {
   [key: string]: LocalInfo;
 }

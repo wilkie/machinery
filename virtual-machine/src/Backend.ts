@@ -31,6 +31,7 @@ import {
 } from './ast';
 import type {
   DecoderMap,
+  ExpressionType,
   IntermediateRepresentation,
   LocalMap,
   MemoryMap,
@@ -73,6 +74,25 @@ class Backend {
 
   get linearStart(): number {
     return this.machine.linearStart;
+  }
+
+  /**
+   * Returns true when the expression's resolved type already fits in the
+   * target slot, making explicit masking/sign-extension unnecessary.
+   */
+  canSkipCoercion(
+    exprType: ExpressionType | undefined,
+    targetSize: number,
+    targetSigned: boolean,
+  ): boolean {
+    if (!exprType) return false;
+    if (targetSigned) {
+      // Signed target: expr must be signed and fit within target width
+      return exprType.signed && exprType.size <= targetSize;
+    }
+    // Unsigned target: expr must fit within target width and not be signed
+    // (a signed value could have set high bits beyond the mask)
+    return !exprType.signed && exprType.size <= targetSize;
   }
 
   prologue(): string[] {
@@ -429,6 +449,7 @@ class Backend {
     _generated: GeneratedStatement,
     reference: RegisterReference,
     value: string,
+    _exprType?: ExpressionType,
   ): string[] {
     return [`mem[${reference.mapping}] = ${value}`];
   }
@@ -447,6 +468,7 @@ class Backend {
     reference: MemoryReference,
     _address: ExpressionNode,
     value: string,
+    _exprType?: ExpressionType,
   ): string[] {
     return [`mem[${reference.mapping}] = ${value}`];
   }
@@ -455,6 +477,7 @@ class Backend {
     _generated: GeneratedStatement,
     reference: LocalReference,
     value: string,
+    _exprType?: ExpressionType,
   ): string[] {
     return [`${reference.mapping.identifier} = ${value}`];
   }
@@ -471,19 +494,21 @@ class Backend {
     generated: GeneratedStatement,
     node: OperandNode,
     value: string,
+    exprType?: ExpressionType,
   ): string[] {
     if (typeof node.value === 'number') {
       throw new Error(`Cannot assign to a constant value.`);
     }
 
     if (node instanceof LocalOperandNode) {
-      return this.writeLocal(generated, node.reference, value);
+      return this.writeLocal(generated, node.reference, value, exprType);
     } else if (node instanceof MemoryOperandNode) {
       return this.writeMemory(
         generated,
         node.reference,
         node.reference.address,
         value,
+        exprType,
       );
     } else if (node instanceof RegisterOperandNode) {
       const { identifier } = node.reference.mapping;
@@ -494,7 +519,7 @@ class Backend {
         generated.modifies.push(identifier);
       }
 
-      return this.writeRegister(generated, node.reference, value);
+      return this.writeRegister(generated, node.reference, value, exprType);
     } else if (node instanceof SystemOperandNode) {
       const { identifier } = node.reference;
       return this.writeSystem(generated, identifier, value);
@@ -600,12 +625,14 @@ class Backend {
   ): string[] {
     if (node.destination instanceof OperandNode) {
       const expressionCode = this.fromExpression(generated, node.expression);
+      const exprType = (node.expression as Node).resolvedType;
       return [
         ...expressionCode.slice(0, expressionCode.length - 1),
         ...this.write(
           generated,
           node.destination,
           expressionCode[expressionCode.length - 1],
+          exprType,
         ),
       ];
     }

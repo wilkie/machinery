@@ -107,7 +107,7 @@ export const sidt: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '#GP if offset == 0xffff',
             '#GP if (offset + 2) == 0xffff',
@@ -120,7 +120,7 @@ export const sidt: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '#GP if (offset + 5) < ${MOD_RM_SEGMENT_LIMIT_MIN}',
             '#GP if (offset + 5) > ${MOD_RM_SEGMENT_LIMIT_MAX}',
@@ -144,7 +144,7 @@ export const sidt: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '#GP if offset == 0xffff',
             '#GP if (offset + 2) == 0xffff',
@@ -157,7 +157,7 @@ export const sidt: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '#GP if (offset + 5) < ${MOD_RM_SEGMENT_LIMIT_MIN}',
             '#GP if (offset + 5) > ${MOD_RM_SEGMENT_LIMIT_MAX}',

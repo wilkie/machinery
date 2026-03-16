@@ -111,12 +111,13 @@ adc_rb_eb_b db 0x90, 0x90
 adc_rw_ew_b db 0x90, 0x90
 adc_rw_ew_w db 0x90, 0x90, 0x90, 0x90
 
-    ; ADC ew, rw (mod 0x1 with constant signed DISP, reg is AX..., result is an overflow)
+    ; ADC ew, rw (mod 0x1 with constant signed DISP, reg is AX,...DI, result is an overflow)
     mov bp, adc_rw_ew_b
     mov si, 9
     ; [add] -2 + -2 = -4 (C = 1)
     ; [adc] -4 + -2 + 1 = -5
-    rep_macro_5w adc_ew_rw, ax, word [bp + si - 9], 0xfffe, 0xfffe, 0xfffb
+    ; Use no_bp_si variant because [bp + si - 9] addressing clobbers bp/si
+    rep_macro_5w_no_bp_si adc_ew_rw, ax, word [bp + si - 9], 0xfffe, 0xfffe, 0xfffb
 
     ; ADC rw, ew
  ; adc_rw_ew %1, %2 (adc %3 + %4 and test that it equals %5)
@@ -160,8 +161,9 @@ adc_rw_ew_w db 0x90, 0x90, 0x90, 0x90
     ; ADC rw, ew (mod 0x0 with constant DISP, reg is AX..., result is an overflow)
     rep_macro_5w adc_rw_ew, ax, word [bb], 0xffff, 0xffff, 0xffff
 
-    ; ADC rw, ew (mod 0x1 with constant signed DISP, reg is AX..., result is an overflow)
-    rep_macro_5w adc_rw_ew, ax, word [bp + si - 9], 0xffff, 0xffff, 0xffff
+    ; ADC rw, ew (mod 0x1 with constant signed DISP, reg is AX,...DI, result is an overflow)
+    ; Use no_bp_si variant because [bp + si - 9] addressing clobbers bp/si
+    rep_macro_5w_no_bp_si adc_rw_ew, ax, word [bp + si - 9], 0xffff, 0xffff, 0xffff
 
     ; ADC AL, db
     mov al, 0x0

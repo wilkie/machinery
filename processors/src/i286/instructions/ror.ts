@@ -130,7 +130,7 @@ export const ror: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'tmp_a = RAM:u8[effective_address]',
@@ -164,7 +164,7 @@ export const ror: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'tmp_a = RAM:u8[effective_address]',
@@ -279,7 +279,7 @@ export const ror: InstructionInfo = {
         protected: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'tmp_a = RAM:u8[effective_address]',
@@ -313,7 +313,7 @@ export const ror: InstructionInfo = {
         protected: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'tmp_a = RAM:u8[effective_address]',
@@ -430,7 +430,7 @@ export const ror: InstructionInfo = {
         protected: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'tmp_a = RAM:u8[effective_address]',
@@ -465,7 +465,7 @@ export const ror: InstructionInfo = {
         protected: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'tmp_a = RAM:u8[effective_address]',
@@ -573,7 +573,7 @@ export const ror: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'tmp_a = RAM:u16[effective_address]',
@@ -584,7 +584,7 @@ export const ror: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'tmp_a = RAM:u16[effective_address]',
@@ -608,7 +608,7 @@ export const ror: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'tmp_a = RAM:u16[effective_address]',
@@ -619,7 +619,7 @@ export const ror: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'tmp_a = RAM:u16[effective_address]',
@@ -726,7 +726,7 @@ export const ror: InstructionInfo = {
         real: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'tmp_a = RAM:u16[effective_address]',
@@ -738,7 +738,7 @@ export const ror: InstructionInfo = {
         protected: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'tmp_a = RAM:u16[effective_address]',
@@ -762,7 +762,7 @@ export const ror: InstructionInfo = {
         real: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'tmp_a = RAM:u16[effective_address]',
@@ -774,7 +774,7 @@ export const ror: InstructionInfo = {
         protected: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'tmp_a = RAM:u16[effective_address]',
@@ -885,7 +885,7 @@ export const ror: InstructionInfo = {
         real: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'tmp_a = RAM:u16[effective_address]',
@@ -897,7 +897,7 @@ export const ror: InstructionInfo = {
         protected: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'tmp_a = RAM:u16[effective_address]',
@@ -922,7 +922,7 @@ export const ror: InstructionInfo = {
         real: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'tmp_a = RAM:u16[effective_address]',
@@ -934,7 +934,7 @@ export const ror: InstructionInfo = {
         protected: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET} + %{DISP}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'tmp_a = RAM:u16[effective_address]',

@@ -105,10 +105,11 @@ or_rb_eb_b db 0x90, 0x90
 or_rw_ew_b db 0x90, 0x90
 or_rw_ew_w db 0x90, 0x90, 0x90, 0x90
 
-    ; OR ew, rw (mod 0x1 with constant signed DISP, reg is AL,...BH)
+    ; OR ew, rw (mod 0x1 with constant signed DISP, reg is AX,...DI)
+    ; Use no_bp_si variant because [bp + si - 9] addressing clobbers bp/si
     mov bp, or_rw_ew_b
     mov si, 1
-    rep_macro_5w or_ew_rw, ax, word [bp + si - 9], 0x85f0, 0x580f, 0xddff
+    rep_macro_5w_no_bp_si or_ew_rw, ax, word [bp + si - 9], 0x85f0, 0x580f, 0xddff
 
     ; OR rw, ew
  ; or_rw_ew %1, %2 (or %3 + %4 and test that it equals %5)
@@ -136,10 +137,11 @@ or_rw_ew_w db 0x90, 0x90, 0x90, 0x90
     ; OR rw, ew (mod 0x0 with constant DISP, reg is AX...)
     rep_macro_5w or_rw_ew, ax, word [bb], 0x85f0, 0x580f, 0xddff
 
-    ; OR rw, ew (mod 0x1 with constant signed DISP, reg is AX...)
+    ; OR rw, ew (mod 0x1 with constant signed DISP, reg is AX,...DI)
+    ; Use no_bp_si variant because [bp + si - 9] addressing clobbers bp/si
     mov bp, or_rw_ew_w
     mov si, 1
-    rep_macro_5w or_rw_ew, ax, word [bp + si - 9], 0x85f0, 0x580f, 0xddff
+    rep_macro_5w_no_bp_si or_rw_ew, ax, word [bp + si - 9], 0x85f0, 0x580f, 0xddff
 
     ; OR AL, db
     mov al, 0x85

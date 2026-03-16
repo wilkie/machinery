@@ -131,7 +131,7 @@ expr_unary -> %unary_operator expr_unary
             {% (data) => data[0] %}
 
 expr_atom -> %left_paren expression %right_paren
-            {% (data) => new ExpressionNode(data[1]) %}
+            {% (data) => new ExpressionNode(data[1], data[2].coercion) %}
             | named %left_paren expression (%list_delimiter expression):* %right_paren
             {% (data) => new CallExpressionNode(data[0].value.toString(), [data[2], ...((data[3] || []).map((set: NearleyToken) => set[1]))]) %}
             | %raise operand

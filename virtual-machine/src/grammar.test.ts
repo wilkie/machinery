@@ -703,12 +703,11 @@ describe('Parser', () => {
     it('expands multi-line macro into multiple statements', () => {
       const ast = new Parser({ BODY: ['AX = 1', 'BX = 2'] }).parse('${BODY} ;');
       const nodes = statements(ast);
-      // Array macros append '; ' per element, plus the trailing ; from input,
-      // producing an extra EmptyNode at the end
-      expect(nodes.length).toBe(3);
+      // Array macros append '; ' per element; the trailing ; from input
+      // is consumed by the grammar's %terminator:* rule
+      expect(nodes.length).toBe(2);
       expect(nodes[0]).toBeInstanceOf(AssignmentNode);
       expect(nodes[1]).toBeInstanceOf(AssignmentNode);
-      expect(nodes[2]).toBeInstanceOf(EmptyNode);
     });
   });
 

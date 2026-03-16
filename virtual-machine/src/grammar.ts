@@ -170,7 +170,7 @@ const grammar: Grammar = {
     {"name": "expr_rotate", "symbols": ["expr_unary"], "postprocess": (data) => data[0]},
     {"name": "expr_unary", "symbols": [unary_operator, "expr_unary"], "postprocess": (data) => new UnaryExpressionNode(data[1], data[0].value.toString())},
     {"name": "expr_unary", "symbols": ["expr_atom"], "postprocess": (data) => data[0]},
-    {"name": "expr_atom", "symbols": [left_paren, "expression", right_paren], "postprocess": (data) => new ExpressionNode(data[1])},
+    {"name": "expr_atom", "symbols": [left_paren, "expression", right_paren], "postprocess": (data) => new ExpressionNode(data[1], data[2].coercion)},
     {"name": "expr_atom$ebnf$1", "symbols": []},
     {"name": "expr_atom$ebnf$1$subexpression$1", "symbols": [list_delimiter, "expression"]},
     {"name": "expr_atom$ebnf$1", "symbols": ["expr_atom$ebnf$1", "expr_atom$ebnf$1$subexpression$1"], "postprocess": (d) => d[0].concat([d[1]])},

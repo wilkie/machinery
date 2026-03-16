@@ -105,10 +105,11 @@ and_rb_eb_b db 0x90, 0x90
 and_rw_ew_b db 0x90, 0x90
 and_rw_ew_w db 0x90, 0x90, 0x90, 0x90
 
-    ; AND ew, rw (mod 0x1 with constant signed DISP, reg is AL,...BH)
+    ; AND ew, rw (mod 0x1 with constant signed DISP, reg is AX,...DI)
     mov bp, and_rw_ew_b
     mov si, 1
-    rep_macro_5w and_ew_rw, ax, word [bp + si - 9], 0x85f0, 0x580f, 0x0
+    ; Use no_bp_si variant because [bp + si - 9] addressing clobbers bp/si
+    rep_macro_5w_no_bp_si and_ew_rw, ax, word [bp + si - 9], 0x85f0, 0x580f, 0x0
 
     ; AND rw, ew
  ; and_rw_ew %1, %2 (and %3 & %4 and test that it equals %5)
@@ -136,10 +137,11 @@ and_rw_ew_w db 0x90, 0x90, 0x90, 0x90
     ; AND rw, ew (mod 0x0 with constant DISP, reg is AX...)
     rep_macro_5w and_rw_ew, ax, word [bb], 0x85f0, 0x580f, 0x0
 
-    ; AND rw, ew (mod 0x1 with constant signed DISP, reg is AX...)
+    ; AND rw, ew (mod 0x1 with constant signed DISP, reg is AX,...DI)
     mov bp, and_rw_ew_w
     mov si, 1
-    rep_macro_5w and_rw_ew, ax, word [bp + si - 9], 0x85f0, 0x580f, 0x0
+    ; Use no_bp_si variant because [bp + si - 9] addressing clobbers bp/si
+    rep_macro_5w_no_bp_si and_rw_ew, ax, word [bp + si - 9], 0x85f0, 0x580f, 0x0
 
     ; AND AL, db
     mov al, 0x85

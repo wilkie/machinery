@@ -65,6 +65,18 @@ function jsName(name: string): string {
 }
 
 class TypeScriptBackend extends Backend {
+  applyCoercion(result: string[], coercion: string): string[] {
+    const size = parseInt(coercion.slice(1));
+    const last = result[result.length - 1];
+    if (coercion.startsWith('i')) {
+      result[result.length - 1] = `(${last} << ${32 - size} >> ${32 - size})`;
+    } else {
+      const mask = (Math.pow(2, size) - 1) >>> 0;
+      result[result.length - 1] = `((${last}) & 0x${mask.toString(16)})`;
+    }
+    return result;
+  }
+
   prologue(): string[] {
     const target = this.target;
     const code: string[] = [];
@@ -1158,17 +1170,8 @@ class TypeScriptBackend extends Backend {
     reference: LocalReference,
     coercion?: string,
   ): string[] {
-    const name = reference.mapping.identifier;
-    if (coercion) {
-      const size = parseInt(coercion.slice(1));
-      if (coercion.startsWith('i')) {
-        return [`(${name} << ${32 - size} >> ${32 - size})`];
-      } else {
-        const mask = (Math.pow(2, size) - 1) >>> 0;
-        return [`((${name}) & 0x${mask.toString(16)})`];
-      }
-    }
-    return [`${name}`];
+    const result = [`${reference.mapping.identifier}`];
+    return coercion ? this.applyCoercion(result, coercion) : result;
   }
 
   readSystem(_generated: GeneratedStatement, identifier: string): string[] {

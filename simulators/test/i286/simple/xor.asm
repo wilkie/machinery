@@ -96,10 +96,11 @@ xor_rb_eb_b db 0x90, 0x90
 xor_rw_ew_b db 0x90, 0x90
 xor_rw_ew_w db 0x90, 0x90, 0x90, 0x90
 
-    ; XOR ew, rw (mod 0x1 with constant signed DISP, reg is AL,...BH)
+    ; XOR ew, rw (mod 0x1 with constant signed DISP, reg is AX,...DI)
     mov bp, xor_rw_ew_b
     mov si, 9
-    rep_macro_5w xor_ew_rw, ax, word [bp + si - 9], 0x8f8f, 0x7777, 0xf8f8
+    ; Use no_bp_si variant because [bp + si - 9] addressing clobbers bp/si
+    rep_macro_5w_no_bp_si xor_ew_rw, ax, word [bp + si - 9], 0x8f8f, 0x7777, 0xf8f8
 
     ; XOR rw, ew
  ; xor_rw_ew %1, %2 (xor %3 ^ %4 and test that it equals %5)
@@ -124,10 +125,11 @@ xor_rw_ew_w db 0x90, 0x90, 0x90, 0x90
     ; XOR rw, ew (mod 0x0 with constant DISP, reg is AX...)
     rep_macro_5w xor_rw_ew, ax, word [bb], 0x8f8f, 0x7777, 0xf8f8
 
-    ; XOR rw, ew (mod 0x1 with constant signed DISP, reg is AX...)
+    ; XOR rw, ew (mod 0x1 with constant signed DISP, reg is AX,...DI)
     mov bp, xor_rw_ew_w
     mov si, 1
-    rep_macro_5w xor_rw_ew, ax, word [bp + si - 9], 0x8f8f, 0x7777, 0xf8f8
+    ; Use no_bp_si variant because [bp + si - 9] addressing clobbers bp/si
+    rep_macro_5w_no_bp_si xor_rw_ew, ax, word [bp + si - 9], 0x8f8f, 0x7777, 0xf8f8
 
     ; XOR AL, db
     mov al, 0x8f

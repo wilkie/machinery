@@ -551,47 +551,43 @@ class Backend {
     throw new Error(`Non dereferenced operand cannot be processed.`);
   }
 
+  applyCoercion(result: string[], _coercion: string): string[] {
+    return result;
+  }
+
   fromExpression(
     generated: GeneratedStatement,
     node: ExpressionNode,
   ): string[] {
+    let result: string[];
+
     if (node instanceof RaiseExpressionNode) {
-      return this.fromRaiseExpression(generated, node);
+      result = this.fromRaiseExpression(generated, node);
+    } else if (node instanceof CallExpressionNode) {
+      result = this.fromCallExpression(generated, node);
+    } else if (node instanceof RegisterChoiceExpressionNode) {
+      result = this.fromRegisterChoiceExpression(generated, node);
+    } else if (node instanceof ChoiceExpressionNode) {
+      result = this.fromChoiceExpression(generated, node);
+    } else if (node instanceof UnaryExpressionNode) {
+      result = this.fromUnaryExpression(generated, node);
+    } else if (node instanceof BinaryExpressionNode) {
+      result = this.fromBinaryExpression(generated, node);
+    } else if (node instanceof TernaryExpressionNode) {
+      result = this.fromTernaryExpression(generated, node);
+    } else if (node instanceof OperandNode) {
+      result = this.fromOperand(generated, node);
+    } else if (node.operand instanceof OperandNode) {
+      result = this.fromOperand(generated, node.operand);
+    } else {
+      result = this.fromExpression(generated, node.operand);
     }
 
-    if (node instanceof CallExpressionNode) {
-      return this.fromCallExpression(generated, node);
+    if (node.coercion) {
+      return this.applyCoercion(result, node.coercion);
     }
 
-    if (node instanceof RegisterChoiceExpressionNode) {
-      return this.fromRegisterChoiceExpression(generated, node);
-    }
-
-    if (node instanceof ChoiceExpressionNode) {
-      return this.fromChoiceExpression(generated, node);
-    }
-
-    if (node instanceof UnaryExpressionNode) {
-      return this.fromUnaryExpression(generated, node);
-    }
-
-    if (node instanceof BinaryExpressionNode) {
-      return this.fromBinaryExpression(generated, node);
-    }
-
-    if (node instanceof TernaryExpressionNode) {
-      return this.fromTernaryExpression(generated, node);
-    }
-
-    if (node instanceof OperandNode) {
-      return this.fromOperand(generated, node);
-    }
-
-    if (node.operand instanceof OperandNode) {
-      return this.fromOperand(generated, node.operand);
-    }
-
-    return this.fromExpression(generated, node.operand);
+    return result;
   }
 
   fromNextIf(_generated: GeneratedStatement, _node: NextIfNode): string[] {

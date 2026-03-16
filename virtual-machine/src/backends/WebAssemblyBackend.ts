@@ -64,6 +64,18 @@ function watName(name: string): string {
 }
 
 class WebAssemblyBackend extends Backend {
+  applyCoercion(result: string[], coercion: string): string[] {
+    const size = parseInt(coercion.slice(1));
+    const last = result[result.length - 1];
+    if (coercion.startsWith('i')) {
+      result[result.length - 1] = this.signExtend(last, size);
+    } else {
+      const mask = (Math.pow(2, size) - 1) >>> 0;
+      result[result.length - 1] = `(i32.and ${last} (i32.const ${mask}))`;
+    }
+    return result;
+  }
+
   /** Emit wasm sign-extension from `bits` to i32 */
   private signExtend(expr: string, bits: number): string {
     if (bits === 8) return `(i32.extend8_s ${expr})`;
@@ -440,17 +452,8 @@ class WebAssemblyBackend extends Backend {
     reference: LocalReference,
     coercion?: string,
   ): string[] {
-    const get = `(local.get $${reference.mapping.identifier})`;
-    if (coercion) {
-      const size = parseInt(coercion.slice(1));
-      if (coercion.startsWith('i')) {
-        return [this.signExtend(get, size)];
-      } else {
-        const mask = (Math.pow(2, size) - 1) >>> 0;
-        return [`(i32.and ${get} (i32.const ${mask}))`];
-      }
-    }
-    return [get];
+    const result = [`(local.get $${reference.mapping.identifier})`];
+    return coercion ? this.applyCoercion(result, coercion) : result;
   }
 
   readGlobals(

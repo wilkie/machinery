@@ -105,10 +105,11 @@ sub_rb_eb_b db 0x90, 0x90
 sub_rw_ew_b db 0x90, 0x90
 sub_rw_ew_w db 0x90, 0x90, 0x90, 0x90
 
-    ; SUB ew, rw (mod 0x1 with constant signed DISP, reg is AL,...BH, result is an overflow)
+    ; SUB ew, rw (mod 0x1 with constant signed DISP, reg is AX,...DI, result is an overflow)
     mov bp, sub_rw_ew_b
     mov si, 9
-    rep_macro_5w sub_ew_rw, ax, word [bp + si - 9], 0xfffe, 0x0, 0x2
+    ; Use no_bp_si variant because [bp + si - 9] addressing clobbers bp/si
+    rep_macro_5w_no_bp_si sub_ew_rw, ax, word [bp + si - 9], 0xfffe, 0x0, 0x2
 
     ; SUB rw, ew
  ; sub_rw_ew %1, %2 (sub %3 - %4 and test that it equals %5)
@@ -150,8 +151,9 @@ sub_rw_ew_w db 0x90, 0x90, 0x90, 0x90
     ; SUB rw, ew (mod 0x0 with constant DISP, reg is AX..., result is an overflow)
     rep_macro_5w sub_rw_ew, ax, word [bb], 0x0, 0xffff, 0x1
 
-    ; SUB rw, ew (mod 0x1 with constant signed DISP, reg is AX..., result is an overflow)
-    rep_macro_5w sub_rw_ew, ax, word [bp + si - 9], 0x0, 0xffff, 0x1
+    ; SUB rw, ew (mod 0x1 with constant signed DISP, reg is AX,...DI, result is an overflow)
+    ; Use no_bp_si variant because [bp + si - 9] addressing clobbers bp/si
+    rep_macro_5w_no_bp_si sub_rw_ew, ax, word [bp + si - 9], 0x0, 0xffff, 0x1
 
     ; SUB AL, db
     mov al, 0x0

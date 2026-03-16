@@ -291,12 +291,13 @@ class Resolver {
         this.resolveNode(node.operand, locals, localMap),
       );
     } else if (node instanceof ExpressionNode) {
-      // Collapse single item expressions
-      if (node.operand instanceof OperandNode) {
+      // Collapse single item expressions (but preserve coercion)
+      if (node.operand instanceof OperandNode && !node.coercion) {
         return this.resolveNode(node.operand, locals, localMap) as unknown as T;
       }
       ret = new ExpressionNode(
         this.resolveNode(node.operand, locals, localMap),
+        node.coercion,
       );
     } else if (node instanceof OperandNode) {
       ret = this.resolveOperand(node, locals, localMap);

@@ -92,7 +92,7 @@ class Tokenizer {
       raise: /#/,
       // Parentheses
       left_paren: /\(/,
-      right_paren: /\)/,
+      right_paren: /\)(?::(?:u|i)\d+)?/,
       // And then whitespace, which we will more or less ignore
       space: {
         match: /\s+/,
@@ -157,10 +157,11 @@ class Tokenizer {
           this.macroCache.set(macro, ret);
           return ret;
         } else if (token.type === 'local' || token.type === 'identifier') {
-          const baseName = token.value.includes(':') ? token.value.split(':')[0] : token.value;
+          const baseName = token.value.includes(':')
+            ? token.value.split(':')[0]
+            : token.value;
           const local =
-            locals?.[baseName]?.identifier ||
-            this.locals[baseName]?.identifier;
+            locals?.[baseName]?.identifier || this.locals[baseName]?.identifier;
 
           if (local === undefined) {
             // Error! Local not found

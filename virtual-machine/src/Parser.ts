@@ -1,7 +1,7 @@
 import type { MacrosInfo } from '@machinery/core';
 import nearley from 'nearley';
 
-import { StatementNode } from './ast';
+import { EmptyNode, StatementNode } from './ast';
 import grammar from './grammar';
 import type { Token } from './Token';
 import Tokenizer from './Tokenizer';
@@ -43,6 +43,11 @@ class Parser {
   parse(code: string, macros?: MacrosInfo, locals?: LocalsInfo): StatementNode {
     const parser = new nearley.Parser(nearley.Grammar.fromCompiled(grammar));
     const tokens = this.tokenizer.tokenize(code, macros, locals);
+
+    // Empty input (only terminators) — return an empty statement
+    if (tokens.every((t) => t.type === 'terminator')) {
+      return new StatementNode(new EmptyNode());
+    }
 
     try {
       // @ts-expect-error TS2345 - The type definitions expect a string, but we're totally

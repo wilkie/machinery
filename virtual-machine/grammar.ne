@@ -70,7 +70,6 @@ statement -> assignment %terminator %terminator:* statement:? {% (data) => new S
            | %if_ comparison %terminator:* statement:? %end %if_ %terminator:* statement:? {% (data) => new StatementNode(new IfBlockNode(data[1], data[3]), data[7] || undefined) %}
            | %raise operand %if_ comparison %terminator:* statement:? {% (data) => new StatementNode(new RaiseExpressionNode(data[1], data[3]), data[5] || undefined) %}
            | %comment %terminator:* statement:? {% (data) => new StatementNode(new CommentNode(data[0].value), data[2] || undefined) %}
-           | %terminator {% () => new StatementNode(new EmptyNode()) %}
 
 # An assignment has a left-hand identifier (or system identifier) and then some expression that
 # we will write to it.
@@ -156,7 +155,7 @@ comparison_atom -> %left_paren comparison %right_paren
             {% (data) => new ComparisonNode(data[1]) %}
             | %unary_logic_operator comparison_atom
             {% (data) => new UnaryLogicNode(data[1], data[0].value.toString()) %}
-            | expression %comparison expression
+            | expr_or %comparison expr_or
             {% (data) => new ComparisonEvaluationNode(data[0], data[1].value.toString(), data[2]) %}
 
 # A named identifier and possibly dotted

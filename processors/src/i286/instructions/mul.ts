@@ -50,7 +50,7 @@ export const mul: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'a = AL',
@@ -166,7 +166,7 @@ export const mul: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'a = AX',
@@ -178,7 +178,7 @@ export const mul: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'a = AX',

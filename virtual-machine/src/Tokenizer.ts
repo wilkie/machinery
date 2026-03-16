@@ -58,7 +58,7 @@ class Tokenizer {
       // A local is a variable that needs to exist just in the context of the operation
       // ex: %{imm}
       local: {
-        match: /%\{[a-zA-Z_][a-zA-Z0-9_]*\}/,
+        match: /%\{[a-zA-Z_][a-zA-Z0-9_]*(?::(?:u|i)\d+)?\}/,
         value: (data) => data.substring(2, data.length - 1),
       },
       // Any constant value that represents an integer number
@@ -157,9 +157,10 @@ class Tokenizer {
           this.macroCache.set(macro, ret);
           return ret;
         } else if (token.type === 'local' || token.type === 'identifier') {
+          const baseName = token.value.includes(':') ? token.value.split(':')[0] : token.value;
           const local =
-            locals?.[token.value]?.identifier ||
-            this.locals[token.value]?.identifier;
+            locals?.[baseName]?.identifier ||
+            this.locals[baseName]?.identifier;
 
           if (local === undefined) {
             // Error! Local not found

@@ -408,6 +408,7 @@ class Backend {
   readLocal(
     _generated: GeneratedStatement,
     reference: LocalReference,
+    _coercion?: string,
   ): string[] {
     return [`${reference.mapping.identifier}`];
   }
@@ -529,7 +530,7 @@ class Backend {
     }
 
     if (node instanceof LocalOperandNode) {
-      return this.readLocal(generated, node.reference);
+      return this.readLocal(generated, node.reference, node.coercion);
     } else if (node instanceof MemoryOperandNode) {
       return this.readMemory(generated, node.reference, node.reference.address);
     } else if (node instanceof RegisterOperandNode) {

@@ -40,7 +40,7 @@ export const not: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'value = ~RAM:u8[effective_address]',
@@ -137,7 +137,7 @@ export const not: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'value = ~RAM:u16[effective_address]',
@@ -146,7 +146,7 @@ export const not: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'value = ~RAM:u16[effective_address]',

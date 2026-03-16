@@ -52,7 +52,7 @@ export const idiv: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'a = AX',
@@ -168,7 +168,7 @@ export const idiv: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'div_a = (DX << 16) | AX',
@@ -179,7 +179,7 @@ export const idiv: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'div_a = (DX << 16) | AX',

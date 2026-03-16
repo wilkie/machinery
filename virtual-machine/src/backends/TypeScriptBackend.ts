@@ -1156,8 +1156,19 @@ class TypeScriptBackend extends Backend {
   readLocal(
     _generated: GeneratedStatement,
     reference: LocalReference,
+    coercion?: string,
   ): string[] {
-    return [`${reference.mapping.identifier}`];
+    const name = reference.mapping.identifier;
+    if (coercion) {
+      const size = parseInt(coercion.slice(1));
+      if (coercion.startsWith('i')) {
+        return [`(${name} << ${32 - size} >> ${32 - size})`];
+      } else {
+        const mask = (Math.pow(2, size) - 1) >>> 0;
+        return [`((${name}) & 0x${mask.toString(16)})`];
+      }
+    }
+    return [`${name}`];
   }
 
   readSystem(_generated: GeneratedStatement, identifier: string): string[] {

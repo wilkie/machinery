@@ -318,7 +318,7 @@ export const interrupts = {
               'end if',
               ';; INTERRUPT TO SAME PRIVILEGE',
               ';; conforming code, or DPL == CPL',
-              'if (desc_type & 0b010) == 0b010 || new_cpl == (CS.RPL)',
+              'if (desc_type & 0b010) == 0b010 || new_cpl == (old_cs & 0x0003)',
               [
                 ';; push FLAGS, CS:IP on current stack (6 bytes)',
                 'tmp = SP - 6',

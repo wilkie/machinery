@@ -198,6 +198,14 @@ const protected_mode = [
   'privilege',
   'exceptions',
   'ldt',
+  'strings',
+  'expand_down',
+  'conforming',
+  'gates',
+  'task_gate',
+  'iopl',
+  'stack_fault',
+  'arpl',
 ];
 
 describe('i286 protected mode', () => {

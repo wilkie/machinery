@@ -66,7 +66,7 @@ export const rol: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'tmp_a = RAM:u8[effective_address]',
@@ -215,7 +215,7 @@ export const rol: InstructionInfo = {
         protected: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'tmp_a = RAM:u8[effective_address]',
@@ -361,7 +361,7 @@ export const rol: InstructionInfo = {
         protected: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'tmp_a = RAM:u8[effective_address]',
@@ -507,7 +507,7 @@ export const rol: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'tmp_a = RAM:u16[effective_address]',
@@ -518,7 +518,7 @@ export const rol: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'tmp_a = RAM:u16[effective_address]',
@@ -658,7 +658,7 @@ export const rol: InstructionInfo = {
         real: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'tmp_a = RAM:u16[effective_address]',
@@ -670,7 +670,7 @@ export const rol: InstructionInfo = {
         protected: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'tmp_a = RAM:u16[effective_address]',
@@ -812,7 +812,7 @@ export const rol: InstructionInfo = {
         real: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'tmp_a = RAM:u16[effective_address]',
@@ -824,7 +824,7 @@ export const rol: InstructionInfo = {
         protected: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = %{DISP}',
+            'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'tmp_a = RAM:u16[effective_address]',

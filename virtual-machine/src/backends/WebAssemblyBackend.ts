@@ -435,8 +435,21 @@ class WebAssemblyBackend extends Backend {
   readLocal(
     _generated: GeneratedStatement,
     reference: LocalReference,
+    coercion?: string,
   ): string[] {
-    return [`(local.get $${reference.mapping.identifier})`];
+    const get = `(local.get $${reference.mapping.identifier})`;
+    if (coercion) {
+      const size = parseInt(coercion.slice(1));
+      if (coercion.startsWith('i')) {
+        if (size === 8) return [`(i32.extend8_s ${get})`];
+        if (size === 16) return [`(i32.extend16_s ${get})`];
+        return [`(i32.shr_s (i32.shl ${get} (i32.const ${32 - size})) (i32.const ${32 - size}))`];
+      } else {
+        const mask = (Math.pow(2, size) - 1) >>> 0;
+        return [`(i32.and ${get} (i32.const ${mask}))`];
+      }
+    }
+    return [get];
   }
 
   readGlobals(

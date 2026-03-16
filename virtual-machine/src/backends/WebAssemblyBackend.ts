@@ -64,6 +64,14 @@ function watName(name: string): string {
 }
 
 class WebAssemblyBackend extends Backend {
+  /** Emit wasm sign-extension from `bits` to i32 */
+  private signExtend(expr: string, bits: number): string {
+    if (bits === 8) return `(i32.extend8_s ${expr})`;
+    if (bits === 16) return `(i32.extend16_s ${expr})`;
+    if (bits >= 32) return expr;
+    return `(i32.shr_s (i32.shl ${expr} (i32.const ${32 - bits})) (i32.const ${32 - bits}))`;
+  }
+
   /** Track which register names map to which wasm locals */
   private registerLocals: Map<string, { local: string; size: number }> =
     new Map();
@@ -291,10 +299,7 @@ class WebAssemblyBackend extends Backend {
     if (node instanceof LocalOperandNode && node.coercion?.startsWith('i')) {
       const bits = parseInt(node.coercion.slice(1));
       if (bits < 32) {
-        const shiftAmount = 32 - bits;
-        return [
-          `(i32.shr_s (i32.shl ${result[0]} (i32.const ${shiftAmount})) (i32.const ${shiftAmount}))`,
-        ];
+        return [this.signExtend(result[0], bits)];
       }
     }
     return result;
@@ -375,13 +380,11 @@ class WebAssemblyBackend extends Backend {
     if (needsPostSignExtend) {
       // Sign-extend from destSize bits to 32 bits
       if (destSize < 32) {
-        expr = `(i32.shr_s (i32.shl ${expr} (i32.const ${32 - destSize})) (i32.const ${32 - destSize}))`;
+        expr = this.signExtend(expr, destSize);
       }
     } else if (signed && !load.endsWith('_s')) {
-      if (destSize === 32) {
-        // already i32
-      } else {
-        expr = `(i32.shr_s (i32.shl ${expr} (i32.const ${32 - destSize})) (i32.const ${32 - destSize}))`;
+      if (destSize < 32) {
+        expr = this.signExtend(expr, destSize);
       }
     }
 
@@ -441,9 +444,7 @@ class WebAssemblyBackend extends Backend {
     if (coercion) {
       const size = parseInt(coercion.slice(1));
       if (coercion.startsWith('i')) {
-        if (size === 8) return [`(i32.extend8_s ${get})`];
-        if (size === 16) return [`(i32.extend16_s ${get})`];
-        return [`(i32.shr_s (i32.shl ${get} (i32.const ${32 - size})) (i32.const ${32 - size}))`];
+        return [this.signExtend(get, size)];
       } else {
         const mask = (Math.pow(2, size) - 1) >>> 0;
         return [`(i32.and ${get} (i32.const ${mask}))`];
@@ -832,14 +833,8 @@ class WebAssemblyBackend extends Backend {
     if (name === 'signextend') {
       const size = parseInt(this.fromNode(generated, node.args[0])[0]);
       const value = this.fromNode(generated, node.args[1])[0];
-      const shiftAmount = 32 - size * 8;
-      if (shiftAmount > 0) {
-        return [
-          `(i32.shr_s (i32.shl ${value} (i32.const ${shiftAmount})) (i32.const ${shiftAmount}))`,
-        ];
-      } else if (size === 4) {
-        return [value];
-      }
+      const bits = size * 8;
+      return [this.signExtend(value, bits)];
     } else {
       // Discover memory read/write operations
       for (const memoryInfo of this.target.memory || []) {
@@ -1077,8 +1072,7 @@ class WebAssemblyBackend extends Backend {
         }
 
         if (matcher.signed) {
-          const signBits = 32 - (matcher.size || 8);
-          readExpr = `(i32.shr_s (i32.shl ${readExpr} (i32.const ${signBits})) (i32.const ${signBits}))`;
+          readExpr = this.signExtend(readExpr, matcher.size || 8);
         }
 
         context.code.push(

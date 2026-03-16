@@ -960,6 +960,8 @@ class Resolver {
 
       context.localMap[name] ||= {
         identifier: `v_${variableCount}`,
+        size: context.locals[name].size,
+        signed: context.locals[name].signed,
       };
 
       ret = {

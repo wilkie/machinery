@@ -555,6 +555,13 @@ class WebAssemblyBackend extends Backend {
     reference: LocalReference,
     value: string,
   ): string[] {
+    if (reference.mapping.size) {
+      const coercion =
+        (reference.mapping.signed ? 'i' : 'u') + reference.mapping.size;
+      return [
+        `(local.set $${reference.mapping.identifier} ${this.applyCoercion([value], coercion)[0]})`,
+      ];
+    }
     return [`(local.set $${reference.mapping.identifier} ${value})`];
   }
 

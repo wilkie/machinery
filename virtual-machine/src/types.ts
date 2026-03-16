@@ -16,6 +16,8 @@ export interface LocalsInfo {
 
 export interface LocalMapping {
   identifier: string;
+  size?: number;
+  signed?: boolean;
 }
 
 export interface LocalMap {

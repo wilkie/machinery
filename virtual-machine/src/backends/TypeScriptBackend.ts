@@ -1262,6 +1262,12 @@ class TypeScriptBackend extends Backend {
     reference: LocalReference,
     value: string,
   ): string[] {
+    if (reference.mapping.size) {
+      const coercion =
+        (reference.mapping.signed ? 'i' : 'u') + reference.mapping.size;
+      const coerced = this.applyCoercion([value], coercion)[0];
+      return [`${reference.mapping.identifier} = ${coerced}`];
+    }
     return [`${reference.mapping.identifier} = ${value}`];
   }
 

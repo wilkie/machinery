@@ -371,7 +371,7 @@ class Generator {
           const fieldName = fieldInfo.identifier;
           locals[fieldName] = {
             identifier: fieldName,
-            value: fieldInfo.match,
+            value: fieldInfo.value ?? fieldInfo.match,
             size: fieldInfo.size,
             signed: fieldInfo.signed,
           };
@@ -388,7 +388,7 @@ class Generator {
           const fieldName = fieldInfo.identifier;
           locals[fieldName] = {
             identifier: fieldName,
-            value: fieldInfo.match,
+            value: fieldInfo.value ?? fieldInfo.match,
             size: fieldInfo.size,
             signed: fieldInfo.signed,
           };

@@ -14,6 +14,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         match: 0b110,
+        value: 0,
       },
       {
         identifier: 'reg',
@@ -42,6 +43,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         match: 0b110,
+        value: 0,
       },
       {
         identifier: 'reg',
@@ -356,6 +358,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         match: 0b110,
+        value: 0,
       },
       {
         identifier: 'seg',
@@ -516,6 +519,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         match: 0b110,
+        value: 0,
       },
       {
         identifier: 'reg',
@@ -710,6 +714,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         match: 0b110,
+        value: 0,
       },
       {
         identifier: 'reg',
@@ -904,6 +909,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         match: 0b110,
+        value: 0,
       },
       {
         identifier: 'reg',
@@ -1098,6 +1104,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         match: 0b110,
+        value: 0,
       },
       {
         identifier: 'reg',
@@ -1292,6 +1299,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         match: 0b110,
+        value: 0,
       },
       {
         identifier: 'reg',
@@ -1486,6 +1494,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         match: 0b110,
+        value: 0,
       },
       {
         identifier: 'reg',
@@ -1680,6 +1689,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         match: 0b110,
+        value: 0,
       },
       {
         identifier: 'reg',
@@ -1874,6 +1884,7 @@ export const operands: OpcodeMatcher[] = [
         offset: 0,
         size: 3,
         match: 0b110,
+        value: 0,
       },
       {
         identifier: 'reg',

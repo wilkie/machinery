@@ -658,7 +658,9 @@ export const mov: InstructionInfo = {
     },
     // 0xA0 dw - MOV AL, xb
     {
-      operation: ['AL = RAM:u8[DS_BASE + %{mem}]'],
+      operation: [
+        'AL = RAM:u8[(DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + %{mem}]',
+      ],
       opcode: [Opcodes.MOV_AL_XB, 'IMM_MEM_u16'],
       operands: ['AL', 'mem'],
       operandSize: 8,
@@ -666,7 +668,9 @@ export const mov: InstructionInfo = {
     },
     // 0xA1 dw - MOV AX, xw
     {
-      operation: ['AX = RAM:u16[DS_BASE + %{mem}]'],
+      operation: [
+        'AX = RAM:u16[(DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + %{mem}]',
+      ],
       opcode: [Opcodes.MOV_AX_XW, 'IMM_MEM_u16'],
       operands: ['AX', 'mem'],
       operandSize: 16,
@@ -674,7 +678,9 @@ export const mov: InstructionInfo = {
     },
     // 0xA2 dw - MOV xb, AL
     {
-      operation: ['RAM:u8[DS_BASE + %{mem}] = AL'],
+      operation: [
+        'RAM:u8[(DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + %{mem}] = AL',
+      ],
       opcode: [Opcodes.MOV_XB_AL, 'IMM_MEM_u16'],
       operands: ['mem', 'AL'],
       operandSize: 8,
@@ -682,7 +688,9 @@ export const mov: InstructionInfo = {
     },
     // 0xA3 dw - MOV xw, AX
     {
-      operation: ['RAM:u16[DS_BASE + %{mem}] = AX'],
+      operation: [
+        'RAM:u16[(DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + %{mem}] = AX',
+      ],
       opcode: [Opcodes.MOV_XW_AX, 'IMM_MEM_u16'],
       operands: ['mem', 'AX'],
       operandSize: 16,

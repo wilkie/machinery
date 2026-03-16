@@ -186,6 +186,9 @@ describe('i286 complex instructions', () => {
 const protected_mode = [
   'gdt_idt',
   'mode_switch',
+  'descriptor_ops',
+  'interrupts',
+  'segment_load',
 ];
 
 describe('i286 protected mode', () => {

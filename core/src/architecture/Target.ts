@@ -143,6 +143,12 @@ export interface OpcodeMatcherFieldBase {
   signed?: boolean;
   /** Requires this field to match exactly the given number. */
   match?: number;
+  /** The value to use when this field is referenced as a local variable.
+   * If not set, defaults to the match value. Useful when the match value
+   * is consumed for form identification but a different value is needed
+   * for code generation (e.g., direct displacement uses rm=6 for matching
+   * but needs rm=0 to select the DS segment base). */
+  value?: number;
   /**
    * The encoding expected to map to the subfield value when assembled.
    *

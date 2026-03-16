@@ -163,7 +163,7 @@ class TypeScriptBackend extends Backend {
           // Transpile the statement node for this instruction form
           if (statement && localMap) {
             const { code: handlerCode } = this.fromStatement(statement, {
-              mode: this.target.modes?.[0]?.identifier || 'default',
+              mode,
               locals,
               localMap,
             });
@@ -1146,7 +1146,7 @@ class TypeScriptBackend extends Backend {
       ];
     } else if (width === 32) {
       return [
-        `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x3 ? ((this.mem32[(${effective}) >> 2] >> (8 * (${effective} % 4))) | (this.mem32[((${effective}) >> 1) + 1] << (8 * (4 - ${effective} % 4))) & 0xffffffff) : this.mem32[(${effective}) >> 2])${signed ? ' | 0)' : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
+        `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x3 ? ((this.mem32[(${effective}) >> 2] >> (8 * (${effective} % 4))) | (this.mem32[((${effective}) >> 2) + 1] << (8 * (4 - ${effective} % 4))) & 0xffffffff) : this.mem32[(${effective}) >> 2])${signed ? ' | 0)' : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
       ];
     }
 
@@ -1281,7 +1281,7 @@ class TypeScriptBackend extends Backend {
       ];
     } else if (size === 32) {
       return [
-        `(${address} & 0x3 ? ((this.mem32[(${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2] >> (8 * (${address} % 4))) | (this.mem32[((${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 1) + 1] << (8 * (4 - ${address} % 4))) & 0xffffffff) : this.mem32[(${address}${start ? ` - 0x${start.toString(16)}` : ''}) >> 2])`,
+        `(${address} & 0x3 ? ((this.mem32[(${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2] >> (8 * (${address} % 4))) | (this.mem32[((${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2) + 1] << (8 * (4 - ${address} % 4))) & 0xffffffff) : this.mem32[(${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2])`,
       ];
     }
 

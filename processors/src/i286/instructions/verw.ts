@@ -17,8 +17,8 @@ export const verw: InstructionInfo = {
       '${RESOLVE_DESCRIPTOR}',
       'if desc_valid == 1 && desc_s == 1',
       [
-        ';; must be a writable data segment: type bit 2 = 0 (data), type bit 1 = 1 (writable)',
-        'if (desc_type & 0b100) == 0 && (desc_type & 0b010) == 0b010',
+        ';; must be a writable data segment: type bit 2 = 0 (data), type bit 0 = 1 (writable)',
+        'if (desc_type & 0b100) == 0 && (desc_type & 0b001) == 0b001',
         [
           ';; DPL >= CPL and DPL >= RPL',
           'if desc_dpl >= CS.RPL && desc_dpl >= rpl',

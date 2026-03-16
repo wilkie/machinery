@@ -1,0 +1,12 @@
+limit: ed=1: 0x7fff (0x8000 -> 0xffff)
+
+offset = 0x8000... what is the check
+
+ED ? offset > limit && <= 0xffff offset <= limit
+
+or we commpare min and limit
+
+when ED is marked, and the segment is loaded, MIN <- limit + 1 LIMIT <- 0xffff
+when ED is clear, when the segment is loaded, MIN <- 0x0000    LIMIT <- limit
+
+#GP if offset < min || offset + size > limit

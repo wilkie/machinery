@@ -17,22 +17,12 @@ export const verr: InstructionInfo = {
       '${RESOLVE_DESCRIPTOR}',
       'if desc_valid == 1 && desc_s == 1',
       [
-        ';; data segments are always readable',
-        ';; code segments must have readable bit (type bit 1) set',
         ';; conforming readable code: no DPL check needed',
         'if (desc_type & 0b100) == 0b100 && (desc_type & 0b010) == 0b010 && (desc_type & 0b001) == 0b001',
         ['ZF = 1'],
         'end if',
         ';; data segment or non-conforming readable code: DPL >= CPL and DPL >= RPL',
-        'if (desc_type & 0b100) == 0 || ((desc_type & 0b001) == 0 && (desc_type & 0b010) == 0b010)',
-        [
-          'if desc_dpl >= CS.RPL && desc_dpl >= rpl',
-          ['ZF = 1'],
-          'end if',
-        ],
-        'end if',
-        ';; non-conforming readable code with DPL check',
-        'if (desc_type & 0b100) == 0b100 && (desc_type & 0b010) == 0b010 && (desc_type & 0b001) == 0',
+        'if (desc_type & 0b100) == 0 || ((desc_type & 0b100) == 0b100 && (desc_type & 0b010) == 0 && (desc_type & 0b001) == 0b001)',
         [
           'if desc_dpl >= CS.RPL && desc_dpl >= rpl',
           ['ZF = 1'],

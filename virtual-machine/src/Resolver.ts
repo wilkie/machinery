@@ -315,12 +315,21 @@ class Resolver {
     locals: LocalsInfo,
     localMap: LocalMap,
   ): ExpressionNode | RegisterChoiceExpressionNode {
-    if (node.index.operand instanceof OperandNode) {
-      const operand = node.index.operand as OperandNode;
-      if (typeof operand.value === 'number') {
-        // We know the index... just emit that choice
-        return new ExpressionNode(node.choices[operand.value]);
-      }
+    // Resolve the index first so constant locals (e.g., matched fields) are
+    // substituted before we check whether it's a known constant.
+    const resolvedIndex = this.resolveNode(node.index, locals, localMap);
+    const indexOperand =
+      resolvedIndex instanceof OperandNode
+        ? resolvedIndex
+        : resolvedIndex.operand instanceof OperandNode
+          ? resolvedIndex.operand
+          : undefined;
+    if (indexOperand && typeof indexOperand.value === 'number') {
+      // We know the index... just emit that choice, resolved
+      const choice = node.choices[indexOperand.value];
+      return new ExpressionNode(
+        this.resolveOperand(choice, locals, localMap, node.coercion),
+      );
     }
 
     const resolved: OperandNode[] = node.choices.map((subNode) =>
@@ -443,13 +452,21 @@ class Resolver {
       }
     }
 
+    // Check if this local has a constant value (e.g., from a matched field).
+    // If so, substitute it as a numeric constant rather than a variable reference.
+    const mergedLocals = { ...this.locals, ...locals };
+    const localInfo = mergedLocals[node.value as string];
+    if (
+      localInfo?.value !== undefined &&
+      typeof localInfo.value === 'number'
+    ) {
+      return new OperandNode(localInfo.value);
+    }
+
     // Get the reference described by this operand
     const reference = this.locateOperand(node, {
       mode: this.target.modes?.[0]?.identifier || 'default',
-      locals: {
-        ...this.locals,
-        ...locals,
-      },
+      locals: mergedLocals,
       localMap,
     });
 

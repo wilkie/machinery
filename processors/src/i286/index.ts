@@ -20,6 +20,7 @@ const Target286: Target = {
   description: '16-bit x86',
   endianness: 'little',
   alignmentFill: 0x90,
+  opcodeAliases: { 0x82: 0x80 },
   memory,
   registers,
   fetch: {

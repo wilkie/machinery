@@ -59,7 +59,7 @@ export const arpl: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'a = RAM:u16[effective_address]',

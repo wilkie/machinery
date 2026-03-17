@@ -275,6 +275,11 @@ gp_handler:
     mov byte [exception_vector], 0x0D
     pop bx
     pop ax
+    ; Fault IP points to faulting instruction; skip past it (2 bytes)
+    push bp
+    mov bp, sp
+    add word [ss:bp+4], 2     ; adjust IP past faulting instruction
+    pop bp
     add sp, 2                  ; pop error code
     iret
 
@@ -292,6 +297,11 @@ np_handler:
     mov byte [exception_vector], 0x0B
     pop bx
     pop ax
+    ; Fault IP points to faulting instruction; skip past it (2 bytes)
+    push bp
+    mov bp, sp
+    add word [ss:bp+4], 2     ; adjust IP past faulting instruction
+    pop bp
     add sp, 2
     iret
 

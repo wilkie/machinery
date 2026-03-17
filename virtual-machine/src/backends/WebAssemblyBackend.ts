@@ -99,6 +99,14 @@ class WebAssemblyBackend extends Backend {
     // Import shared memory from host
     code.push('  ;; Import shared memory from host');
     code.push('  (import "env" "memory" (memory 30 1024))');
+    for (const memoryInfo of this.target.memory || []) {
+      if (memoryInfo.type === 'programmable') {
+        code.push(
+          `  (import "env" "${memoryInfo.identifier}_read" (func $${memoryInfo.identifier}_read (param i32) (param i32) (result i32)))`,
+          `  (import "env" "${memoryInfo.identifier}_write" (func $${memoryInfo.identifier}_write (param i32) (param i32) (param i32) (result i32)))`,
+        );
+      }
+    }
     code.push('');
 
     // Import interrupt callback (returns i32: 1=handled by host, 0=vector through IVT)
@@ -338,24 +346,54 @@ class WebAssemblyBackend extends Backend {
     value: string,
     condition?: ComparisonNode,
   ): string[] {
+    // In register getter/setter helpers, suppress raises — returning from the
+    // helper is not the same as returning from the decode function.
+    if (generated.context.suppressRaise) {
+      return [];
+    }
+
+    // Build IP rollback so fault frame points to the faulting instruction
+    // (before any prefix bytes were consumed).
+    let rollback = '';
+    if (generated.context.ipAdvance) {
+      const ip =
+        this.target.fetch?.effectiveRegister ||
+        (Array.isArray(this.target.fetch?.register)
+          ? this.target.fetch?.register?.[0]
+          : this.target.fetch?.register);
+      if (ip && this.registerMap.registers[ip]) {
+        const ipRef: RegisterReference = {
+          type: 'register',
+          identifier: ip,
+          mapping: this.registerMap.registers[ip],
+          size: this.registerMap.registers[ip].size,
+        };
+        rollback = this.writeRegister(
+          generated,
+          ipRef,
+          `(local.get $_ip_save)`,
+        )[0] + ' ';
+      }
+    }
+
     const hasHandler = !!this.parsed.interrupts?.handler;
     if (hasHandler) {
       // Call JS callback first; if it returns 0 (not handled), do IVT vectoring
       const call = `(if (i32.eqz (call $interrupt_${generated.context.mode} ${value})) (then (call $interrupt_${generated.context.mode}_handler ${value})))`;
       if (condition) {
         return [
-          `(if ${this.fromComparison(generated, condition)[0]} (then ${call}))`,
+          `(if ${this.fromComparison(generated, condition)[0]} (then ${rollback}${call} (return (i32.const 0))))`,
         ];
       }
-      return [call];
+      return [call, `(return (i32.const 0))`];
     }
     // No interrupt handler defined — just call JS callback (ignore return value)
     if (condition) {
       return [
-        `(if ${this.fromComparison(generated, condition)[0]} (then (drop (call $interrupt_${generated.context.mode} ${value}))))`,
+        `(if ${this.fromComparison(generated, condition)[0]} (then ${rollback}(drop (call $interrupt_${generated.context.mode} ${value})) (return (i32.const 0))))`,
       ];
     }
-    return [`(drop (call $interrupt ${value}))`];
+    return [`(drop (call $interrupt ${value}))`, `(return (i32.const 0))`];
   }
 
   readRegister(
@@ -441,6 +479,11 @@ class WebAssemblyBackend extends Backend {
     else size = 32;
 
     const effective = this.fromExpression(generated, address)[0];
+
+    if (reference.mapping.type === 'programmable') {
+      return [`(call $${reference.identifier}_read (i32.const ${size}) ${effective})`];
+    }
+
     const load = this.loadOp(size, signed);
 
     // Wasm handles unaligned access natively with align=1
@@ -1062,6 +1105,7 @@ class WebAssemblyBackend extends Backend {
       context.code.push(
         `${indent}${this.writeRegister(generated, ipReference, `(i32.add ${ipRead} (i32.const 0x${bytesRead.toString(16)}))`)[0]}`,
       );
+      generated.context.ipAdvance = bytesRead;
     }
 
     // Handle prefix finalize
@@ -1084,6 +1128,7 @@ class WebAssemblyBackend extends Backend {
         mode: context.mode || this.target.modes?.[0]?.identifier || 'default',
         locals,
         localMap,
+        ipAdvance: generated.context.ipAdvance,
       });
       for (const line of code) {
         context.code.push(indent + line);
@@ -1146,6 +1191,26 @@ class WebAssemblyBackend extends Backend {
       );
       context.code.push(`${indent}(local.set $_has_finalize (i32.const 0))`);
 
+      // Save IP at start of instruction (before prefixes) for fault rollback
+      if (!context.variables.includes('_ip_save')) {
+        context.variables.push('_ip_save');
+      }
+      const ipForSave =
+        this.target.fetch?.effectiveRegister ||
+        (Array.isArray(this.target.fetch?.register)
+          ? this.target.fetch?.register?.[0]
+          : this.target.fetch?.register);
+      if (ipForSave && this.registerMap.registers[ipForSave]) {
+        const ipRefSave: RegisterReference = {
+          type: 'register',
+          identifier: ipForSave,
+          mapping: this.registerMap.registers[ipForSave],
+          size: this.registerMap.registers[ipForSave].size,
+        };
+        context.code.push(
+          `${indent}(local.set $_ip_save ${this.readRegister(generated, ipRefSave)[0]})`,
+        );
+      }
       // Prefix loop
       context.code.push(`${indent}(block $done`);
       context.code.push(`${indent}  (loop $outer`);

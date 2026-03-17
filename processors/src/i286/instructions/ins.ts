@@ -20,6 +20,11 @@ export const ins: InstructionInfo = {
       name: 'Effective Offset',
       size: 32,
     },
+    {
+      identifier: 'value',
+      name: 'Port Value',
+      size: 16,
+    },
   ],
   forms: [
     // 0x6C - INS eb, DX
@@ -72,11 +77,14 @@ export const ins: InstructionInfo = {
             [
               'next if REP != 0 && CX == 0',
               'offset = DI',
-              'effective_address = ES_BASE + offset',
-              '${SEGMENT_LIMIT_CHECK_REAL}',
-              'RAM:u16[effective_address] = IO:u16[DX]',
               'DI = DI + (DF == 1 ? -2 : 2)',
               'CX = REP != 0 ? CX - 1 : CX',
+              'effective_address = ES_BASE + offset',
+              'value = IO:u16[DX]',
+              'CX = REP != 0 ? CX - 1 : CX',
+              '${SEGMENT_LIMIT_CHECK_REAL}',
+              'RAM:u16[effective_address] = value',
+              'CX = REP != 0 ? CX + 1 : CX',
             ],
             'repeat if REP != 0',
           ],

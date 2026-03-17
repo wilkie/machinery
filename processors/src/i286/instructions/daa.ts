@@ -41,8 +41,8 @@ export const daa: InstructionInfo = {
         // Perform alterations
         'alu_result = a + b',
         'AL = alu_result',
-        // Reset flag operation
-        'flag_op = ${FLAG_OP_NOCF} | ${FLAG_OP_NOAF}',
+        // Set flag_op as ADD for OF, but skip CF/AF (already computed)
+        'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_NOCF} | ${FLAG_OP_NOAF} | ${FLAG_OP_8BIT}',
       ],
       cycles: 3,
     },

@@ -24,19 +24,22 @@ export const aaa: InstructionInfo = {
         // Compute the AF flag from the last ALU op
         '${RESOLVE_AF}',
         'tmp_a = (AF > 0 || (AL & 0xf) > 9) ? 0x1 : 0x0',
-        // Add 1 to AH if AF is set or AL > 9
-        'AH = tmp_a == 1 ? AH + 1 : AH',
         // Set flags
         'CARRY = tmp_a',
         'AF = tmp_a',
-        // Retain for OF flag (undefined, but still computed on real hardware)
+        // Save AL for flag computation before the AX-level add
         'a = AL',
-        // Add 6 to AL if AF is set or AL > 9
         'b = tmp_a != 0 ? 0x6 : 0x0',
-        'AL = (a + b) & 0xf',
-        'alu_result = AX',
-        // Reset flag operation
-        'flag_op = ${FLAG_OP_NOCF} | ${FLAG_OP_NOAF}',
+        // On real 286, AL += 6 is done as AX += 6 (carry propagates into AH)
+        'AX = tmp_a != 0 ? AX + 6 : AX',
+        // Then AH is incremented by 1 for the BCD adjustment
+        'AH = tmp_a != 0 ? AH + 1 : AH',
+        // SF/ZF/PF are computed from AL+6 before masking (8-bit)
+        'alu_result = a + b',
+        // Clear upper nibble of AL
+        'AL = AL & 0xf',
+        // SF/ZF/PF computed from alu_result (pre-masked), skip CF/AF (already set)
+        'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_NOCF} | ${FLAG_OP_NOAF} | ${FLAG_OP_8BIT}',
       ],
       cycles: 3,
     },

@@ -332,14 +332,15 @@ start:
 
 ; ---------------- Mixed AF/CF inputs ----------------
 
-; 19) AF_in=1, AL=00 -> FA ; CF=0 AF=1 ; ZF=0 SF=1 PF=1
+; 19) AF_in=1, AL=00 -> FA ; CF=1 AF=1 ; ZF=0 SF=1 PF=1
+;     (CF=1 because AL < 6 when AF adjustment triggers — borrow into CF)
     mov al, 0x00
     mov ah, [patA]
     sahf
     das
     SAVE_FLAGS
     ASSERT_BYTE 0xFA
-    CHECK_CF 0
+    CHECK_CF 1
     CHECK_AF 1
     CHECK_ZF 0
     CHECK_SF 1

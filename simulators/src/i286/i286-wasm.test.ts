@@ -28,8 +28,8 @@ class TestWasmMachine extends WasmMachine {
       if (AH === 0x25) {
         // Set interrupt vector
         const base = AL * 4 + WasmMachine.RAM_OFFSET;
-        this.mem16[base >> 1] = this.DS;
-        this.mem16[(base >> 1) + 1] = DX;
+        this.mem16[base >> 1] = DX;
+        this.mem16[(base >> 1) + 1] = this.DS;
       } else if (AH === 0x4c || AH === 0) {
         this.halted = 1;
       }

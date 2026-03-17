@@ -33,7 +33,7 @@ export const not: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP:u16}',
             'value = ~RAM:u8[effective_address]',
             'RAM:u8[effective_address] = value',
           ],
@@ -57,14 +57,14 @@ export const not: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET}):u16',
             'value = ~RAM:u8[effective_address]',
             'RAM:u8[effective_address] = value',
           ],
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'value = ~RAM:u8[effective_address]',
@@ -81,7 +81,7 @@ export const not: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'value = ~RAM:u8[effective_address]',
             'RAM:u8[effective_address] = value',
           ],
@@ -105,7 +105,7 @@ export const not: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'value = ~RAM:u8[effective_address]',
             'RAM:u8[effective_address] = value',
           ],
@@ -163,7 +163,7 @@ export const not: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'value = ~RAM:u16[effective_address]',
@@ -172,7 +172,7 @@ export const not: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'value = ~RAM:u16[effective_address]',

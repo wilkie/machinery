@@ -18,6 +18,10 @@ export const das: InstructionInfo = {
       identifier: 'tmp_b',
       size: 8,
     },
+    {
+      identifier: 'adj',
+      size: 8,
+    },
   ],
   forms: [
     // 0x2F - DAS
@@ -27,20 +31,26 @@ export const das: InstructionInfo = {
       operation: [
         // Compute the AF flag from the last ALU op
         '${RESOLVE_FLAGS}',
-        // Subtract 6 from AL if AF is set or AL > 9
+        // Save original AL for OF computation
+        'a = AL',
+        // Subtract 6 from AL if AF is set or (AL & 0xF) > 9
         'tmp_a = (AF > 0 || (AL & 0xf) > 9) ? 0x1 : 0x0',
         // This is the new AF flag
         'AF = tmp_a',
-        // Subtract 0x60 from AL if CF is set or old AL > 0x99 (accounts for the aux-carry of AL > 9)
+        // Step 1 borrow: if AF adjustment triggers and AL < 6, there's a borrow into CF
+        'adj = (tmp_a != 0 && AL < 6) ? 0x1 : 0x0',
+        // Subtract 0x60 from AL if CF is set or old AL > 0x99
         'tmp_b = (AL > 0x99 || CF > 0) ? 0x1 : 0x0',
-        // This is the new CF flag
-        'CARRY = tmp_b',
+        // CF = step2 triggered OR step1 borrow (when step2 doesn't clear it)
+        'CARRY = tmp_b != 0 ? 0x1 : adj',
+        // Compute total adjustment for OF
+        'b = (tmp_a != 0 ? 6 : 0) + (tmp_b != 0 ? 0x60 : 0)',
         // Perform alterations
         'AL = tmp_a != 0 ? AL - 6 : AL',
         'AL = tmp_b != 0 ? AL - 0x60 : AL',
         'alu_result = AL',
-        // Reset flag operation
-        'flag_op = ${FLAG_OP_NOCF} | ${FLAG_OP_NOAF}',
+        // Set flag_op as SUB for OF, but skip CF/AF (already computed)
+        'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_SUB} | ${FLAG_OP_NOCF} | ${FLAG_OP_NOAF} | ${FLAG_OP_8BIT}',
       ],
       cycles: 3,
     },

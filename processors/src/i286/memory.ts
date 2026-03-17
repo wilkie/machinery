@@ -31,6 +31,7 @@ export const memory: MemoryInfo[] = [
     type: 'programmable',
     length: 0x10000,
     endian: 'little',
+    default: 0xff,
   },
   // Rest is RAM
   {
@@ -58,14 +59,14 @@ export const memory: MemoryInfo[] = [
               name: 'Interrupt Vector Descriptor',
               fields: [
                 {
-                  identifier: 'segment',
-                  name: 'Interrupt Handler Target CS',
+                  identifier: 'offset',
+                  name: 'Interrupt Handler Target IP',
                   offset: 0,
                   size: 16,
                 },
                 {
-                  identifier: 'offset',
-                  name: 'Interrupt Handler Target IP',
+                  identifier: 'segment',
+                  name: 'Interrupt Handler Target CS',
                   offset: 16,
                   size: 16,
                 },

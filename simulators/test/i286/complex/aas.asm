@@ -167,13 +167,13 @@ start:
     CHECK_CF 1
     CHECK_AF 1
 
-; 12) AF_in=1, AL=00, AH=34 -> AL=FA→&0F=0A?  (00-06=FA, &0F=0x0A); AH=33 ⇒ AX=330A ; CF=1 AF=1
+; 12) AF_in=1, AL=00, AH=34 -> AX-=6 → 0x33FA (borrow); AH-=1 → 0x32; AL&=0xF → 0x0A ⇒ AX=320A ; CF=1 AF=1
     mov ah, [patA]
     sahf
     mov ax, 0x3400
     aas
     SAVE_FLAGS
-    ASSERT_AX 0x330A
+    ASSERT_AX 0x320A
     CHECK_CF 1
     CHECK_AF 1
 
@@ -187,13 +187,13 @@ start:
     CHECK_CF 1
     CHECK_AF 1
 
-; 14) AF_in=1, AL=05, AH=22 -> AL=FF? (05-06=FF → &0F=0F); AH=21 ⇒ AX=210F ; CF=1 AF=1
+; 14) AF_in=1, AL=05, AH=22 -> AX-=6 → 0x21FF (borrow); AH-=1 → 0x20; AL&=0xF → 0x0F ⇒ AX=200F ; CF=1 AF=1
     mov ah, [patA]
     sahf
     mov ax, 0x2205
     aas
     SAVE_FLAGS
-    ASSERT_AX 0x210F
+    ASSERT_AX 0x200F
     CHECK_CF 1
     CHECK_AF 1
 
@@ -299,13 +299,13 @@ start:
     CHECK_CF 1
     CHECK_AF 1
 
-; 24) 9 - 9 = 0 with borrow flag set as AF_in=1 → AL=00, AH=01, AF_in=1 ⇒ AAS ⇒ AL=FA&0F=0A, AH=00 ⇒ AX=000A ; CF=1 AF=1
+; 24) 9 - 9 = 0 with borrow flag set as AF_in=1 → AX=0x0100-6=0x00FA (borrow); AH-=1=0xFF; AL&=0xF=0x0A ⇒ AX=FF0A ; CF=1 AF=1
     mov ah, [patA]           ; preset AF=1
     sahf
     mov ax, 0x0100
     aas
     SAVE_FLAGS
-    ASSERT_AX 0x000A
+    ASSERT_AX 0xFF0A
     CHECK_CF 1
     CHECK_AF 1
 
@@ -335,13 +335,13 @@ start:
 
 ; ---------------- Wrap on AH decrement (8-bit) ----------------
 
-; 27) AL=00, AF_in=1, AH=00 → adjust: AL=FA→&0F=0A; AH=FF ⇒ AX=FF0A ; CF=1 AF=1
+; 27) AL=00, AF_in=1, AH=00 → AX-=6 → 0xFFFA (borrow+wrap); AH-=1 → 0xFE; AL&=0xF → 0x0A ⇒ AX=FE0A ; CF=1 AF=1
     mov ah, [patA]
     sahf
     mov ax, 0x0000
     aas
     SAVE_FLAGS
-    ASSERT_AX 0xFF0A
+    ASSERT_AX 0xFE0A
     CHECK_CF 1
     CHECK_AF 1
 
@@ -358,13 +358,13 @@ start:
 
 ; ---------------- Mixed AF/CF preset (CF_in irrelevant) ----------------
 
-; 29) CF_in=1, AF_in=1, AL=00, AH=00 → adjust ⇒ AX=FF0A ; CF=1 AF=1
+; 29) CF_in=1, AF_in=1, AL=00, AH=00 → AX-=6 → 0xFFFA (borrow+wrap); AH-=1 → 0xFE; AL&=0xF → 0x0A ⇒ AX=FE0A ; CF=1 AF=1
     mov ah, [patAC]
     sahf
     mov ax, 0x0000
     aas
     SAVE_FLAGS
-    ASSERT_AX 0xFF0A
+    ASSERT_AX 0xFE0A
     CHECK_CF 1
     CHECK_AF 1
 

@@ -36,7 +36,7 @@ export const xchg: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP:u16}',
             'tmp = RAM:u8[effective_address]',
             'RAM:u8[effective_address] = ${MOD_RM_REG8}',
             '${MOD_RM_REG8} = tmp',
@@ -62,7 +62,7 @@ export const xchg: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET}):u16',
             'tmp = RAM:u8[effective_address]',
             'RAM:u8[effective_address] = ${MOD_RM_REG8}',
             '${MOD_RM_REG8} = tmp',
@@ -70,7 +70,7 @@ export const xchg: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'tmp = RAM:u8[effective_address]',
@@ -88,7 +88,7 @@ export const xchg: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'tmp = RAM:u8[effective_address]',
             'RAM:u8[effective_address] = ${MOD_RM_REG8}',
             '${MOD_RM_REG8} = tmp',
@@ -114,7 +114,7 @@ export const xchg: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'tmp = RAM:u8[effective_address]',
             'RAM:u8[effective_address] = ${MOD_RM_REG8}',
             '${MOD_RM_REG8} = tmp',
@@ -181,7 +181,7 @@ export const xchg: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'tmp = RAM:u16[effective_address]',
@@ -191,7 +191,7 @@ export const xchg: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'tmp = RAM:u16[effective_address]',

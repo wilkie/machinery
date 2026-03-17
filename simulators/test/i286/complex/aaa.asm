@@ -348,13 +348,13 @@ start:
     CHECK_CF 1
     CHECK_AF 1
 
-; 28) AL=FF, AF_in=0, AH=EE → adjust: (FF+06)=105→&0F=05; AH=EF ⇒ AX=EF05 ; CF=1 AF=1
+; 28) AL=FF, AF_in=0, AH=EE → adjust: AX+=6 → 0xEF05 (carry into AH); AH+=1 → F0; AL&=0xF → 05 ⇒ AX=F005 ; CF=1 AF=1
     mov ah, [pat0]
     sahf
     mov ax, 0xEEFF
     aaa
     SAVE_FLAGS
-    ASSERT_AX 0xEF05
+    ASSERT_AX 0xF005
     CHECK_CF 1
     CHECK_AF 1
 

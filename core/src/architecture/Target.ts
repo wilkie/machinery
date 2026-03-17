@@ -283,6 +283,11 @@ export interface InstructionFormBase {
    */
   operands?: string[];
   /**
+   * A list of allowed prefixes by name, which is especially important for
+   * prefixes that have been disallowed.
+   */
+  allow?: string[];
+  /**
    * An optional specific name for this form.
    */
   name?: string;
@@ -345,6 +350,11 @@ export interface InstructionInfo {
   modifies: string[];
   /** Whether or not this instruction is actually a prefix to another one. */
   prefix?: boolean;
+  /**
+   * When this is a prefix, whether or not instructions need to explicitly
+   * mark that they are allowed with this prefix.
+   */
+  disallowed?: OperationMaybeModes;
   /** Whether the instruction's operands are commutative (order doesn't affect result). */
   commutative?: boolean;
   /** Flags left undefined, if any */
@@ -586,6 +596,10 @@ export type ReadWriteMemoryInfo = BaseMemoryInfo & {
 
 export type ProgrammableMemoryInfo = BaseMemoryInfo & {
   type: 'programmable';
+  /**
+   * The default value read when there's no region mapped into a byte.
+   */
+  default?: number;
   regions?: ReadWriteMemoryRegion[];
 };
 
@@ -683,4 +697,10 @@ export interface Target {
    * x86 uses 0x90 (NOP) so alignment padding is executable as no-ops.
    */
   alignmentFill?: number;
+  /**
+   * Opcode byte aliases — maps alias byte to source byte.
+   * The decoder will treat the alias byte identically to the source byte.
+   * Example: { 0x82: 0x80 } makes opcode 0x82 behave like 0x80.
+   */
+  opcodeAliases?: Record<number, number>;
 }

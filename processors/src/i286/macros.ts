@@ -90,7 +90,7 @@ export const macros = {
 
   RESOLVE_OF: [
     //"OF = flag_op < ${FLAG_OP_RESOLVED} ? ((flag_op & ${FLAG_OP_LOGIC}) > 0 ? 0 : ((flag_op & ${FLAG_OP_BITS}) == 0x0 ? ((a ^ alu_result) & (a ^ b) & 0x80) >> 7 : ((a ^ alu_result) & (a ^ b) & 0x8000) >> 15)) : OF",
-    'OF = ((flag_op < ${FLAG_OP_RESOLVED}) && (flag_op & ${FLAG_OP_NOOF} == 0)) ? ((flag_op & ${FLAG_OP_LOGIC}) > 0 ? 0 : ((flag_op & ${FLAG_OP_SHIFT}) > 0 ? (((((((flag_op & ${FLAG_OP_RIGHT}) > 0 ? alu_result : a) >> (((((flag_op & ${FLAG_OP_BITS}) >> 1) + 1) * 8) - 2)) - 1) & 0x3) < 2) ? 1 : 0) : (((flag_op & ${FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (a ^ alu_result) & (((flag_op & ${FLAG_OP_SUB}) > 0 ? a : alu_result) ^ (b + (flag_op & ${FLAG_OP_CARRY})))) > 0 ? 1 : 0)) : OF',
+    'OF = ((flag_op < ${FLAG_OP_RESOLVED}) && (flag_op & ${FLAG_OP_NOOF} == 0)) ? ((flag_op & ${FLAG_OP_LOGIC}) > 0 ? 0 : ((flag_op & ${FLAG_OP_SHIFT}) > 0 ? (((((((flag_op & ${FLAG_OP_RIGHT}) > 0 ? alu_result : a) >> (((((flag_op & ${FLAG_OP_BITS}) >> 1) + 1) * 8) - 2)) - 1) & 0x3) < 2) ? 1 : 0) : (((flag_op & ${FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (a ^ alu_result) & (((flag_op & ${FLAG_OP_SUB}) > 0 ? a : alu_result) ^ b)) > 0 ? 1 : 0)) : OF',
   ],
 
   // Depending on the operation, understand the carry flag
@@ -107,8 +107,9 @@ export const macros = {
   ],
 
   // Depending on the operation, understand the auxiliary carry flag
+  // Logic ops (OR/AND/XOR/TEST) clear AF; ALU ops compute from operands.
   RESOLVE_AF: [
-    'AF = ((flag_op < ${FLAG_OP_RESOLVED}) && (flag_op & ${FLAG_OP_NOAF} == 0)) ? ((a ^ b ^ alu_result) & 0x10) >> 4 : AF',
+    'AF = ((flag_op < ${FLAG_OP_RESOLVED}) && (flag_op & ${FLAG_OP_NOAF} == 0)) ? ((flag_op & ${FLAG_OP_LOGIC}) > 0 ? 0 : ((a ^ b ^ alu_result) & 0x10) >> 4) : AF',
   ],
 
   SEGMENT_LIMIT_CHECK_REAL: ['#GP if offset == 0xffff'],
@@ -377,8 +378,8 @@ export const macros = {
     '#GP if IP > CS_LIMIT_MAX',
   ],
 
-  // Raises exceptions
-  UD_EXCEPTION: ['#6'],
+  // Raises exceptions (uses conditional form so _ip_save rollback occurs)
+  UD_EXCEPTION: ['#6 if 1 == 1'],
 };
 
 export default macros;

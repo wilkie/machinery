@@ -38,7 +38,7 @@ export const sal: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP:u16}',
             'a = RAM:u8[effective_address]',
             'b = 1',
             '${ALU8_OP}',
@@ -71,7 +71,7 @@ export const sal: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET}):u16',
             'a = RAM:u8[effective_address]',
             'b = 1',
             '${ALU8_OP}',
@@ -80,7 +80,7 @@ export const sal: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'a = RAM:u8[effective_address]',
@@ -100,7 +100,7 @@ export const sal: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = RAM:u8[effective_address]',
             'b = 1',
             '${ALU8_OP}',
@@ -133,7 +133,7 @@ export const sal: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = RAM:u8[effective_address]',
             'b = 1',
             '${ALU8_OP}',
@@ -181,7 +181,7 @@ export const sal: InstructionInfo = {
         real: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP:u16}',
             'a = RAM:u8[effective_address]',
             'b = CL & 0x1f',
             '${ALU8_OP}',
@@ -216,7 +216,7 @@ export const sal: InstructionInfo = {
         real: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET}):u16',
             'a = RAM:u8[effective_address]',
             'b = CL & 0x1f',
             '${ALU8_OP}',
@@ -226,7 +226,7 @@ export const sal: InstructionInfo = {
         protected: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'a = RAM:u8[effective_address]',
@@ -247,7 +247,7 @@ export const sal: InstructionInfo = {
         real: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = RAM:u8[effective_address]',
             'b = CL & 0x1f',
             '${ALU8_OP}',
@@ -282,7 +282,7 @@ export const sal: InstructionInfo = {
         real: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = RAM:u8[effective_address]',
             'b = CL & 0x1f',
             '${ALU8_OP}',
@@ -332,7 +332,7 @@ export const sal: InstructionInfo = {
         real: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP:u16}',
             'a = RAM:u8[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU8_OP}',
@@ -368,7 +368,7 @@ export const sal: InstructionInfo = {
         real: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET}):u16',
             'a = RAM:u8[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU8_OP}',
@@ -378,7 +378,7 @@ export const sal: InstructionInfo = {
         protected: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'a = RAM:u8[effective_address]',
@@ -403,7 +403,7 @@ export const sal: InstructionInfo = {
         real: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = RAM:u8[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU8_OP}',
@@ -439,7 +439,7 @@ export const sal: InstructionInfo = {
         real: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = RAM:u8[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU8_OP}',
@@ -528,7 +528,7 @@ export const sal: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'a = RAM:u16[effective_address]',
@@ -539,7 +539,7 @@ export const sal: InstructionInfo = {
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'a = RAM:u16[effective_address]',
@@ -681,7 +681,7 @@ export const sal: InstructionInfo = {
         real: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'a = RAM:u16[effective_address]',
@@ -693,7 +693,7 @@ export const sal: InstructionInfo = {
         protected: {
           operation: [
             'next if (CL & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'a = RAM:u16[effective_address]',
@@ -841,7 +841,7 @@ export const sal: InstructionInfo = {
         real: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'a = RAM:u16[effective_address]',
@@ -853,7 +853,7 @@ export const sal: InstructionInfo = {
         protected: {
           operation: [
             'next if (%{imm} & 0x1f) == 0',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'a = RAM:u16[effective_address]',

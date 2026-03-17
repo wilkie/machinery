@@ -11,13 +11,11 @@ export const adc: InstructionInfo = {
   undefined: [],
   macros: {
     ALU8_OP: [
-      'b = b + CARRY',
-      'alu_result = a + b',
+      'alu_result = a + b + CARRY',
       'flag_op = ${FLAG_OP_ALU} | CARRY | ${FLAG_OP_8BIT}',
     ],
     ALU16_OP: [
-      'b = b + CARRY',
-      'alu_result = a + b',
+      'alu_result = a + b + CARRY',
       'flag_op = ${FLAG_OP_ALU} | CARRY | ${FLAG_OP_16BIT}',
     ],
   },
@@ -40,7 +38,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP:u16}',
             'a = RAM:u8[effective_address]',
             'b = ${MOD_RM_REG8}',
             '${ALU8_OP}',
@@ -70,7 +68,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET}):u16',
             'a = RAM:u8[effective_address]',
             'b = ${MOD_RM_REG8}',
             '${ALU8_OP}',
@@ -80,7 +78,7 @@ export const adc: InstructionInfo = {
         protected: {
           operation: [
             '${RESOLVE_CF}',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'a = RAM:u8[effective_address]',
@@ -100,7 +98,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = RAM:u8[effective_address]',
             'b = ${MOD_RM_REG8}',
             '${ALU8_OP}',
@@ -130,7 +128,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = RAM:u8[effective_address]',
             'b = ${MOD_RM_REG8}',
             '${ALU8_OP}',
@@ -206,7 +204,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'a = RAM:u16[effective_address]',
@@ -218,7 +216,7 @@ export const adc: InstructionInfo = {
         protected: {
           operation: [
             '${RESOLVE_CF}',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'a = RAM:u16[effective_address]',
@@ -316,7 +314,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP:u16}',
             'a = ${MOD_RM_REG8}',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -346,7 +344,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET}):u16',
             'a = ${MOD_RM_REG8}',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -356,7 +354,7 @@ export const adc: InstructionInfo = {
         protected: {
           operation: [
             '${RESOLVE_CF}',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'a = ${MOD_RM_REG8}',
@@ -376,7 +374,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = ${MOD_RM_REG8}',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -406,7 +404,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = ${MOD_RM_REG8}',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -482,7 +480,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'a = ${MOD_RM_REG16}',
@@ -494,7 +492,7 @@ export const adc: InstructionInfo = {
         protected: {
           operation: [
             '${RESOLVE_CF}',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'a = ${MOD_RM_REG16}',
@@ -622,7 +620,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP:u16}',
             'a = RAM:u8[effective_address]',
             'b = %{imm}',
             '${ALU8_OP}',
@@ -652,7 +650,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET}):u16',
             'a = RAM:u8[effective_address]',
             'b = %{imm}',
             '${ALU8_OP}',
@@ -662,7 +660,7 @@ export const adc: InstructionInfo = {
         protected: {
           operation: [
             '${RESOLVE_CF}',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'a = RAM:u8[effective_address]',
@@ -682,7 +680,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = RAM:u8[effective_address]',
             'b = %{imm}',
             '${ALU8_OP}',
@@ -712,7 +710,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = RAM:u8[effective_address]',
             'b = %{imm}',
             '${ALU8_OP}',
@@ -788,7 +786,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'a = RAM:u16[effective_address]',
@@ -800,7 +798,7 @@ export const adc: InstructionInfo = {
         protected: {
           operation: [
             '${RESOLVE_CF}',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'a = RAM:u16[effective_address]',
@@ -920,7 +918,7 @@ export const adc: InstructionInfo = {
           ],
         },
       },
-      opcode: [Opcodes.ALU_EW_DB, 'ModRM_110_010_00', 'DISP_i16', 'IMM_u8'],
+      opcode: [Opcodes.ALU_EW_DB, 'ModRM_110_010_00', 'DISP_i16', 'IMM_i8'],
       operands: ['rm', 'imm'],
       operandSize: 16,
       cycles: 7,
@@ -930,7 +928,7 @@ export const adc: InstructionInfo = {
         real: {
           operation: [
             '${RESOLVE_CF}',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'a = RAM:u16[effective_address]',
@@ -942,7 +940,7 @@ export const adc: InstructionInfo = {
         protected: {
           operation: [
             '${RESOLVE_CF}',
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'a = RAM:u16[effective_address]',
@@ -952,39 +950,7 @@ export const adc: InstructionInfo = {
           ],
         },
       },
-      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm_010_00', 'IMM_u8'],
-      operands: ['rm', 'imm'],
-      operandSize: 16,
-      cycles: 7,
-    },
-    {
-      modes: {
-        real: {
-          operation: [
-            '${RESOLVE_CF}',
-            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
-            'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
-            'a = RAM:u16[effective_address]',
-            'b = %{imm}',
-            '${ALU16_OP}',
-            'RAM:u16[effective_address] = alu_result',
-          ],
-        },
-        protected: {
-          operation: [
-            '${RESOLVE_CF}',
-            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
-            'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
-            'a = RAM:u16[effective_address]',
-            'b = %{imm}',
-            '${ALU16_OP}',
-            'RAM:u16[effective_address] = alu_result',
-          ],
-        },
-      },
-      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm_010_01', 'DISP_i8', 'IMM_u8'],
+      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm_010_00', 'IMM_i8'],
       operands: ['rm', 'imm'],
       operandSize: 16,
       cycles: 7,
@@ -1016,7 +982,39 @@ export const adc: InstructionInfo = {
           ],
         },
       },
-      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm_010_10', 'DISP_i16', 'IMM_u8'],
+      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm_010_01', 'DISP_i8', 'IMM_i8'],
+      operands: ['rm', 'imm'],
+      operandSize: 16,
+      cycles: 7,
+    },
+    {
+      modes: {
+        real: {
+          operation: [
+            '${RESOLVE_CF}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_REAL}',
+            'a = RAM:u16[effective_address]',
+            'b = %{imm}',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+        protected: {
+          operation: [
+            '${RESOLVE_CF}',
+            'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
+            'effective_address = ${MOD_RM_SEGMENT} + offset',
+            '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'a = RAM:u16[effective_address]',
+            'b = %{imm}',
+            '${ALU16_OP}',
+            'RAM:u16[effective_address] = alu_result',
+          ],
+        },
+      },
+      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm_010_10', 'DISP_i16', 'IMM_i8'],
       operands: ['rm', 'imm'],
       operandSize: 16,
       cycles: 7,
@@ -1029,7 +1027,7 @@ export const adc: InstructionInfo = {
         '${ALU16_OP}',
         '${MOD_RM_RM16} = alu_result',
       ],
-      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm16_010_11', 'IMM_u8'],
+      opcode: [Opcodes.ALU_EW_DB, 'ModRM_rm16_010_11', 'IMM_i8'],
       operands: ['rm', 'imm'],
       operandSize: 16,
       cycles: 3,

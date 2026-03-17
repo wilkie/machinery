@@ -203,6 +203,18 @@ export interface GeneratorContext {
    * Contains the mapping between local and an allocated variable.
    */
   localMap: LocalMap;
+  /**
+   * Number of bytes by which the instruction pointer was advanced before the
+   * operation body runs.  Used by `raise` to undo the advance so that the
+   * fault frame captures the faulting instruction's IP, not the next one.
+   */
+  ipAdvance?: number;
+  /**
+   * When true, suppress raise/interrupt generation. Used in register setter
+   * helpers where raising would return from the helper rather than the decode
+   * function.
+   */
+  suppressRaise?: boolean;
 }
 
 /**

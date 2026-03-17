@@ -200,6 +200,31 @@ class TypeScriptBackend extends Backend {
         });
     }
 
+    // Create functions for accessing programmable memory
+    for (const memoryInfo of this.target.memory || []) {
+      if (memoryInfo.type === 'programmable') {
+        code.push(`  ${memoryInfo.identifier}_read(size: number, _address: number): number {`);
+        code.push('    if (size === 32) {');
+        code.push(
+          `    return 0x${((((memoryInfo.default || 0x0) << 24) | ((memoryInfo.default || 0x0) << 16) | ((memoryInfo.default || 0x0) << 8) | (memoryInfo.default || 0x0)) >>> 0).toString(16)};`,
+        );
+        code.push('    }');
+        code.push('    else if (size === 16) {');
+        code.push(
+          `    return 0x${(((memoryInfo.default || 0x0) << 8) | (memoryInfo.default || 0x0)).toString(16)};`,
+        );
+        code.push('    }');
+        code.push(
+          `    return 0x${(memoryInfo.default || 0x0).toString(16)};`,
+        );
+        code.push(`  }`);
+        code.push('');
+        code.push(`  ${memoryInfo.identifier}_write(_size: number, _address: number, _value: number) {`);
+        code.push(`  }`);
+        code.push('');
+      }
+    }
+
     // Create functions for accessing system state
     const generatedDummy: GeneratedStatement = {
       accesses: [],
@@ -262,6 +287,7 @@ class TypeScriptBackend extends Backend {
                 mode,
                 locals: {},
                 localMap: { _ip: { identifier: '_ip' } },
+                suppressRaise: true,
               },
             };
             const readCode = this.readRegister(generated, {
@@ -320,6 +346,7 @@ class TypeScriptBackend extends Backend {
                 mode,
                 locals: {},
                 localMap: { _ip: { identifier: '_ip' } },
+                suppressRaise: true,
               },
             };
             const writeCode = this.writeRegister(
@@ -359,6 +386,7 @@ class TypeScriptBackend extends Backend {
             mode: this.target.modes?.[0]?.identifier || 'default',
             locals: {},
             localMap: { _ip: { identifier: '_ip' } },
+            suppressRaise: true,
           },
         };
         code.push('  get ' + jsName(subname) + '() {');
@@ -730,6 +758,7 @@ class TypeScriptBackend extends Backend {
           ';',
       );
       //context.code.push(indent + this.readGlobal(generated, ip) + " += 0x" + bytesRead.toString(16) + ";");
+      generated.context.ipAdvance = bytesRead;
     }
 
     // Read next byte (if this is a prefix)
@@ -756,6 +785,7 @@ class TypeScriptBackend extends Backend {
         mode: context.mode || this.target.modes?.[0]?.identifier || 'default',
         locals,
         localMap,
+        ipAdvance: generated.context.ipAdvance,
       });
       for (const line of code) {
         context.code.push(indent + line);
@@ -819,6 +849,10 @@ class TypeScriptBackend extends Backend {
       );
       context.code.push(`${indent}let _finalize: number[] = [];`);
 
+      // Save IP at start of instruction (before prefixes) for fault rollback
+      context.code.push(
+        `${indent}let _ip_save = ${this.readRegister(generated, ipReference)};`,
+      );
       // Define the prefix loop
       context.code.push(indent + 'outer: while (true) {');
       indent += '  ';
@@ -1086,13 +1120,39 @@ class TypeScriptBackend extends Backend {
     value: string,
     condition?: ComparisonNode,
   ): string[] {
+    // In register setter helpers, suppress raises — returning from the helper
+    // is not the same as returning from the decode function.
+    if (generated.context.suppressRaise) {
+      return [];
+    }
+
+    // Build IP rollback code so the fault frame points to the faulting
+    // instruction (before any prefix bytes were consumed) rather than past it.
+    let rollback = '';
+    if (generated.context.ipAdvance) {
+      const ip =
+        this.target.fetch?.effectiveRegister ||
+        (Array.isArray(this.target.fetch?.register)
+          ? this.target.fetch?.register?.[0]
+          : this.target.fetch?.register);
+      if (ip && this.registerMap.registers[ip]) {
+        const ipRef: RegisterReference = {
+          type: 'register',
+          identifier: ip,
+          mapping: this.registerMap.registers[ip],
+          size: this.registerMap.registers[ip].size,
+        };
+        rollback = this.writeRegister(generated, ipRef, '_ip_save') + '; ';
+      }
+    }
+
     if (condition) {
       return [
-        `if (${this.fromComparison(generated, condition)[0]}) { this.interrupt_${generated.context.mode}(${value}); }`,
+        `if (${this.fromComparison(generated, condition)[0]}) { ${rollback}this.interrupt_${generated.context.mode}(${value}); return; }`,
       ];
     }
 
-    return [`this.interrupt_${generated.context.mode}(${value})`];
+    return [`this.interrupt_${generated.context.mode}(${value}); return;`];
   }
 
   readRegister(
@@ -1147,6 +1207,10 @@ class TypeScriptBackend extends Backend {
     else width = 32;
 
     const effective = this.fromExpression(generated, address)[0];
+
+    if (reference.mapping.type === 'programmable') {
+      return [`this.${reference.identifier}_read(${size}, ${effective})`];
+    }
 
     if (width === 8) {
       return [

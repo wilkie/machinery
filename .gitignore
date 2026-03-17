@@ -12,3 +12,6 @@ simulators/src/*/Machine.ts
 simulators/src/*/WasmMachine.ts
 simulators/src/*/machine.wat
 simulators/src/*/machine.wasm
+
+# External test data (SingleStepTests repo clones)
+simulators/test/*/SingleStepTests/

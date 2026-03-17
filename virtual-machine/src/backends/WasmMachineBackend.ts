@@ -56,6 +56,12 @@ class WasmMachineBackend extends TypeScriptBackend {
     code.push('    const { instance } = await WebAssembly.instantiate(wasm, {');
     code.push('      env: {');
     code.push('        memory: this.memory,');
+    for (const memoryInfo of this.target.memory || []) {
+      if (memoryInfo.type === 'programmable') {
+        code.push(`  ${memoryInfo.identifier}_read: (size: number, address: number) => this.${memoryInfo.identifier}_read(size, address),`);
+        code.push(`  ${memoryInfo.identifier}_write: (size: number, address: number, value: number) => this.${memoryInfo.identifier}_write(size, address, value),`);
+      }
+    }
     ((this.target.modes as Pick<ModeInfo, 'identifier'>[]) || [])
       .concat(
         this.target.modes?.find(
@@ -100,6 +106,31 @@ class WasmMachineBackend extends TypeScriptBackend {
         code.push('  }');
         code.push('');
       });
+
+    // Create functions for accessing programmable memory
+    for (const memoryInfo of this.target.memory || []) {
+      if (memoryInfo.type === 'programmable') {
+        code.push(`  ${memoryInfo.identifier}_read(size: number, _address: number): number {`);
+        code.push('    if (size === 32) {');
+        code.push(
+          `    return 0x${((((memoryInfo.default || 0x0) << 24) | ((memoryInfo.default || 0x0) << 16) | ((memoryInfo.default || 0x0) << 8) | (memoryInfo.default || 0x0)) >>> 0).toString(16)};`,
+        );
+        code.push('    }');
+        code.push('    else if (size === 16) {');
+        code.push(
+          `    return 0x${(((memoryInfo.default || 0x0) << 8) | (memoryInfo.default || 0x0)).toString(16)};`,
+        );
+        code.push('    }');
+        code.push(
+          `    return 0x${(memoryInfo.default || 0x0).toString(16)};`,
+        );
+        code.push(`  }`);
+        code.push('');
+        code.push(`  ${memoryInfo.identifier}_write(_size: number, _address: number, _value: number) {`);
+        code.push(`  }`);
+        code.push('');
+      }
+    }
 
     // Create functions for accessing system state
     const generatedDummy = {
@@ -182,6 +213,7 @@ class WasmMachineBackend extends TypeScriptBackend {
                 mode,
                 locals: {},
                 localMap: { _ip: { identifier: '_ip' } },
+                suppressRaise: true,
               },
             };
             const readCode = this.readRegister(generated, {
@@ -240,6 +272,7 @@ class WasmMachineBackend extends TypeScriptBackend {
                 mode,
                 locals: {},
                 localMap: { _ip: { identifier: '_ip' } },
+                suppressRaise: true,
               },
             };
             const writeCode = this.writeRegister(
@@ -281,6 +314,7 @@ class WasmMachineBackend extends TypeScriptBackend {
             mode: this.target.modes?.[0]?.identifier || 'default',
             locals: {},
             localMap: { _ip: { identifier: '_ip' } },
+            suppressRaise: true,
           },
         };
         code.push('  get ' + subJs + '() {');

@@ -72,11 +72,11 @@ export const outs: InstructionInfo = {
             [
               'next if REP != 0 && CX == 0',
               'offset = SI',
+              'SI = SI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
               'effective_address = DATA_SEG_BASE + offset',
               '${SEGMENT_LIMIT_CHECK_REAL}',
               'IO:u16[DX] = RAM:u16[effective_address]',
-              'SI = SI + (DF == 1 ? -2 : 2)',
-              'CX = REP != 0 ? CX - 1 : CX',
             ],
             'repeat if REP != 0',
           ],

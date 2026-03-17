@@ -427,6 +427,16 @@ class VirtualMachine {
       }
     }
 
+    // Apply opcode aliases (e.g., 0x82 → 0x80 on i286)
+    if (machine.opcodeAliases) {
+      for (const [alias, source] of Object.entries(machine.opcodeAliases)) {
+        const aliasNum = Number(alias);
+        if (decoder.exact?.[Number(source)] !== undefined) {
+          decoder.exact[aliasNum] = decoder.exact[Number(source)];
+        }
+      }
+    }
+
     return decoder;
   }
 }

@@ -14,13 +14,21 @@ export const mul: InstructionInfo = {
       'alu_result = a * b',
       'CARRY = alu_result > 0xff ? 1 : 0',
       'OF = CARRY',
-      'flag_op = ${FLAG_OP_RESOLVED}',
+      'AF = 1',
+      'tmp_result = alu_result',
+      // SF/ZF/PF computed from high byte of 16-bit result (undocumented 286 behavior)
+      'alu_result = (alu_result >> 8) & 0xff',
+      'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_NOCF} | ${FLAG_OP_NOAF} | ${FLAG_OP_NOOF} | ${FLAG_OP_8BIT}',
     ],
     ALU16_OP: [
       'alu_result = a * b',
       'CARRY = alu_result > 0xffff ? 1 : 0',
       'OF = CARRY',
-      'flag_op = ${FLAG_OP_RESOLVED}',
+      'AF = 1',
+      'tmp_result = alu_result',
+      // SF/ZF/PF computed from high 16 bits of 32-bit result (undocumented 286 behavior)
+      'alu_result = alu_result >> 16',
+      'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_NOCF} | ${FLAG_OP_NOAF} | ${FLAG_OP_NOOF} | ${FLAG_OP_16BIT}',
     ],
   },
   locals: [
@@ -34,6 +42,10 @@ export const mul: InstructionInfo = {
       name: 'Effective Offset',
       size: 32,
     },
+    {
+      identifier: 'tmp_result',
+      size: 32,
+    },
   ],
   forms: [
     // 0xF6 /4 - MUL eb
@@ -41,11 +53,11 @@ export const mul: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + %{DISP:u16}',
             'a = AL',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
-            'AX = alu_result',
+            'AX = tmp_result',
           ],
         },
         protected: {
@@ -56,7 +68,7 @@ export const mul: InstructionInfo = {
             'a = AL',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
-            'AX = alu_result',
+            'AX = tmp_result',
           ],
         },
       },
@@ -69,22 +81,22 @@ export const mul: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET}):u16',
             'a = AL',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
-            'AX = alu_result',
+            'AX = tmp_result',
           ],
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
             'a = AL',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
-            'AX = alu_result',
+            'AX = tmp_result',
           ],
         },
       },
@@ -97,11 +109,11 @@ export const mul: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = AL',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
-            'AX = alu_result',
+            'AX = tmp_result',
           ],
         },
         protected: {
@@ -112,7 +124,7 @@ export const mul: InstructionInfo = {
             'a = AL',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
-            'AX = alu_result',
+            'AX = tmp_result',
           ],
         },
       },
@@ -125,11 +137,11 @@ export const mul: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'effective_address = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+            'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'a = AL',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
-            'AX = alu_result',
+            'AX = tmp_result',
           ],
         },
         protected: {
@@ -140,7 +152,7 @@ export const mul: InstructionInfo = {
             'a = AL',
             'b = RAM:u8[effective_address]',
             '${ALU8_OP}',
-            'AX = alu_result',
+            'AX = tmp_result',
           ],
         },
       },
@@ -154,7 +166,7 @@ export const mul: InstructionInfo = {
         'a = AL',
         'b = ${MOD_RM_RM8}',
         '${ALU8_OP}',
-        'AX = alu_result',
+        'AX = tmp_result',
       ],
       opcode: [Opcodes.ALU_LOGIC_EB, 'ModRM_rm8_100_11'],
       operands: ['rm'],
@@ -172,8 +184,8 @@ export const mul: InstructionInfo = {
             'a = AX',
             'b = RAM:u16[effective_address]',
             '${ALU16_OP}',
-            'DX = alu_result >> 16',
-            'AX = alu_result & 0xffff',
+            'DX = tmp_result >> 16',
+            'AX = tmp_result & 0xffff',
           ],
         },
         protected: {
@@ -184,8 +196,8 @@ export const mul: InstructionInfo = {
             'a = AX',
             'b = RAM:u16[effective_address]',
             '${ALU16_OP}',
-            'DX = alu_result >> 16',
-            'AX = alu_result & 0xffff',
+            'DX = tmp_result >> 16',
+            'AX = tmp_result & 0xffff',
           ],
         },
       },
@@ -198,26 +210,26 @@ export const mul: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'a = AX',
             'b = RAM:u16[effective_address]',
             '${ALU16_OP}',
-            'DX = alu_result >> 16',
-            'AX = alu_result & 0xffff',
+            'DX = tmp_result >> 16',
+            'AX = tmp_result & 0xffff',
           ],
         },
         protected: {
           operation: [
-            'offset = ${MOD_RM_OFFSET}',
+            'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'a = AX',
             'b = RAM:u16[effective_address]',
             '${ALU16_OP}',
-            'DX = alu_result >> 16',
-            'AX = alu_result & 0xffff',
+            'DX = tmp_result >> 16',
+            'AX = tmp_result & 0xffff',
           ],
         },
       },
@@ -236,8 +248,8 @@ export const mul: InstructionInfo = {
             'a = AX',
             'b = RAM:u16[effective_address]',
             '${ALU16_OP}',
-            'DX = alu_result >> 16',
-            'AX = alu_result & 0xffff',
+            'DX = tmp_result >> 16',
+            'AX = tmp_result & 0xffff',
           ],
         },
         protected: {
@@ -248,8 +260,8 @@ export const mul: InstructionInfo = {
             'a = AX',
             'b = RAM:u16[effective_address]',
             '${ALU16_OP}',
-            'DX = alu_result >> 16',
-            'AX = alu_result & 0xffff',
+            'DX = tmp_result >> 16',
+            'AX = tmp_result & 0xffff',
           ],
         },
       },
@@ -268,8 +280,8 @@ export const mul: InstructionInfo = {
             'a = AX',
             'b = RAM:u16[effective_address]',
             '${ALU16_OP}',
-            'DX = alu_result >> 16',
-            'AX = alu_result & 0xffff',
+            'DX = tmp_result >> 16',
+            'AX = tmp_result & 0xffff',
           ],
         },
         protected: {
@@ -280,8 +292,8 @@ export const mul: InstructionInfo = {
             'a = AX',
             'b = RAM:u16[effective_address]',
             '${ALU16_OP}',
-            'DX = alu_result >> 16',
-            'AX = alu_result & 0xffff',
+            'DX = tmp_result >> 16',
+            'AX = tmp_result & 0xffff',
           ],
         },
       },
@@ -295,8 +307,8 @@ export const mul: InstructionInfo = {
         'a = AX',
         'b = ${MOD_RM_RM16}',
         '${ALU16_OP}',
-        'DX = alu_result >> 16',
-        'AX = alu_result & 0xffff',
+        'DX = tmp_result >> 16',
+        'AX = tmp_result & 0xffff',
       ],
       opcode: [Opcodes.ALU_LOGIC_EW, 'ModRM_rm16_100_11'],
       operands: ['rm'],

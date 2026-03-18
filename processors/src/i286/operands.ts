@@ -2,6 +2,22 @@ import { InstructionDataTypes, InstructionOperandTypes } from '@machinery/core';
 import type { OpcodeMatcher } from '@machinery/core';
 
 export const operands: OpcodeMatcher[] = [
+  // ALU group 1 byte-immediate opcode (0x80), with 0x82 as an undocumented alias
+  {
+    identifier: 'ALU_EB_DB',
+    name: 'ALU r/m8, imm8 Opcode',
+    type: InstructionDataTypes.Opcode,
+    size: 8,
+    aliases: [0x82],
+    fields: [
+      {
+        identifier: 'opcode',
+        offset: 0,
+        size: 8,
+        match: 0x80,
+      },
+    ],
+  },
   // ModRM block special case where mod == 0b00 and rm == 0b110
   {
     identifier: 'ModRM_110_reg8_00',

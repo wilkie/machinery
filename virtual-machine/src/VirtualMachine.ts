@@ -388,18 +388,42 @@ class VirtualMachine {
               pass.exact ||= new Array(BYTE_MAX);
 
               if (i === lastOpcodeIndex) {
-                pass.exact[and] = {
+                const entry = {
                   instruction: instruction,
                   form: form,
                   variant: variant_index,
                   inputs: { ...inputs },
                   index: i,
                 };
+                pass.exact[and] = entry;
+                // Insert aliases as shared references
+                if (typeof matcher === 'object' && matcher?.aliases) {
+                  for (const alias of matcher.aliases) {
+                    if (pass.exact[alias] !== undefined && pass.exact[alias] !== entry) {
+                      throw new Error(
+                        `Opcode alias 0x${alias.toString(16)} conflicts with existing entry at byte position ${i}`,
+                      );
+                    }
+                    pass.exact[alias] = entry;
+                  }
+                }
               } else {
                 pass.exact[and] ||= {
                   partial: [],
                 };
-                pass = pass.exact[and];
+                const entry = pass.exact[and];
+                // Insert aliases as shared references
+                if (typeof matcher === 'object' && matcher?.aliases) {
+                  for (const alias of matcher.aliases) {
+                    if (pass.exact[alias] !== undefined && pass.exact[alias] !== entry) {
+                      throw new Error(
+                        `Opcode alias 0x${alias.toString(16)} conflicts with existing entry at byte position ${i}`,
+                      );
+                    }
+                    pass.exact[alias] = entry;
+                  }
+                }
+                pass = entry;
               }
             } else {
               const sequence: DecoderPartial = {
@@ -427,7 +451,7 @@ class VirtualMachine {
       }
     }
 
-    // Apply opcode aliases (e.g., 0x82 → 0x80 on i286)
+    // Legacy opcodeAliases support (prefer aliases on OpcodeMatcher instead)
     if (machine.opcodeAliases) {
       for (const [alias, source] of Object.entries(machine.opcodeAliases)) {
         const aliasNum = Number(alias);

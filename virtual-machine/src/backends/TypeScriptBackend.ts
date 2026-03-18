@@ -59,6 +59,137 @@ interface DecoderContext {
   prefixMap: PrefixMapEntry[];
 }
 
+/**
+ * Allowed-prefix condition collected from the decoder trie.
+ * Each entry describes a byte-level condition at a given depth
+ * that leads to a form with the prefix in its `allow` list.
+ */
+interface AllowedPrefixCondition {
+  /** Sequence of (depth, byte-test) entries leading to this form. */
+  path: { depth: number; type: 'exact'; byte: number }[];
+  /** The mask/and partial match at the deepest level, if any. */
+  partial?: { depth: number; mask: number; and: number };
+}
+
+/**
+ * Recursively walks a DecoderMap trie and collects all byte-level paths
+ * that lead to instruction forms whose `allow` array includes `prefixId`.
+ * Also collects prefix byte values so the lookahead allows other prefixes
+ * to follow (they'll be decoded normally in subsequent loop iterations).
+ */
+function collectAllowedConditions(
+  decoder: DecoderMap,
+  prefixId: string,
+  depth: number = 0,
+  path: { depth: number; type: 'exact'; byte: number }[] = [],
+): { conditions: AllowedPrefixCondition[]; prefixBytes: number[] } {
+  const conditions: AllowedPrefixCondition[] = [];
+  const prefixBytes: number[] = [];
+
+  // Check leaf node
+  if (decoder.instruction && decoder.form) {
+    const form = decoder.form as InstructionFormFlat & InstructionFormModes;
+    if (form.allow?.includes(prefixId)) {
+      conditions.push({ path: [...path] });
+    }
+    return { conditions, prefixBytes };
+  }
+
+  // Walk exact matches
+  if (decoder.exact) {
+    for (let i = 0; i < decoder.exact.length; i++) {
+      const child = decoder.exact[i];
+      if (!child) continue;
+      // Collect prefix byte values — other prefixes are always allowed
+      // to follow a disallowed prefix (they'll be processed normally)
+      if (child.instruction?.prefix) {
+        if (depth === 0) prefixBytes.push(i);
+        continue;
+      }
+      const childPath = [...path, { depth, type: 'exact' as const, byte: i }];
+      const sub = collectAllowedConditions(
+        child,
+        prefixId,
+        depth + 1,
+        childPath,
+      );
+      conditions.push(...sub.conditions);
+    }
+  }
+
+  // Walk partial matches
+  if (decoder.partial) {
+    for (const { mask, and, map } of decoder.partial) {
+      // Check leaf
+      if (map.instruction && map.form) {
+        const form = map.form as InstructionFormFlat & InstructionFormModes;
+        if (form.allow?.includes(prefixId)) {
+          conditions.push({
+            path: [...path],
+            partial: { depth, mask, and },
+          });
+        }
+      } else {
+        // Recurse into partial subtree
+        const sub = collectAllowedConditions(
+          map as DecoderMap,
+          prefixId,
+          depth + 1,
+          path,
+        );
+        conditions.push(...sub.conditions);
+      }
+    }
+  }
+
+  return { conditions, prefixBytes };
+}
+
+/**
+ * Build a JS condition expression that checks peeked bytes against
+ * the collected allowed conditions for a prefix with `disallowed`.
+ *
+ * The generated expression references `_peek0`, `_peek1`, etc. for bytes
+ * at _ip+0, _ip+1, ... which the caller must declare.
+ */
+function buildAllowedCondition(
+  conditions: AllowedPrefixCondition[],
+  prefixBytes: number[],
+): { expr: string; maxDepth: number } {
+  let maxDepth = 0;
+  const parts: string[] = [];
+
+  // Other prefix bytes are always allowed (they'll be decoded normally)
+  if (prefixBytes.length > 0) {
+    maxDepth = Math.max(maxDepth, 1);
+    for (const b of prefixBytes) {
+      parts.push(`_peek0 === 0x${b.toString(16)}`);
+    }
+  }
+
+  for (const cond of conditions) {
+    const checks: string[] = [];
+    for (const step of cond.path) {
+      maxDepth = Math.max(maxDepth, step.depth + 1);
+      checks.push(`_peek${step.depth} === 0x${step.byte.toString(16)}`);
+    }
+    if (cond.partial) {
+      maxDepth = Math.max(maxDepth, cond.partial.depth + 1);
+      checks.push(
+        `(_peek${cond.partial.depth} & 0x${cond.partial.mask.toString(16)}) === 0x${cond.partial.and.toString(16)}`,
+      );
+    }
+    if (checks.length > 0) {
+      parts.push(checks.length === 1 ? checks[0] : `(${checks.join(' && ')})`);
+    }
+  }
+
+  return {
+    expr: parts.length === 0 ? 'false' : parts.join(' || '),
+    maxDepth,
+  };
+}
+
 /** Sanitize an identifier for use as a JavaScript property name (e.g. AF' → AF_) */
 function jsName(name: string): string {
   return name.replace(/'/g, '_');
@@ -759,6 +890,19 @@ class TypeScriptBackend extends Backend {
       );
       //context.code.push(indent + this.readGlobal(generated, ip) + " += 0x" + bytesRead.toString(16) + ";");
       generated.context.ipAdvance = bytesRead;
+
+      // Check instruction length limit (only for non-prefix instructions,
+      // since _ip has consumed all bytes by this point)
+      const maxLen = target.fetch?.maxInstructionLength;
+      if (maxLen && !prefix) {
+        const gpVec = target.interrupts?.vectors?.find(
+          (v) => v.identifier === 'GP',
+        );
+        const gpNum = gpVec?.index ?? 13;
+        context.code.push(
+          `${indent}if (_ip - _ip_start > ${maxLen}) { ${this.writeRegister(generated, ipReference, '_ip_save')}; this.interrupt_${context.mode}(${gpNum}); return; }`,
+        );
+      }
     }
 
     // Read next byte (if this is a prefix)
@@ -853,6 +997,9 @@ class TypeScriptBackend extends Backend {
       context.code.push(
         `${indent}let _ip_save = ${this.readRegister(generated, ipReference)};`,
       );
+      const { start: ramStart } = this.memoryMap[instructionMemory];
+      const ipStartExpr = `_ip_save${ramStart ? ` + 0x${ramStart.toString(16)}` : ''}`;
+      context.code.push(`${indent}let _ip_start = ${ipStartExpr};`);
       // Define the prefix loop
       context.code.push(indent + 'outer: while (true) {');
       indent += '  ';
@@ -889,10 +1036,23 @@ class TypeScriptBackend extends Backend {
     // labeled breaks and continues to make it work.
     if (decoder.exact) {
       context.code.push(indent + 'switch(' + byteName + ') {');
+      // Track shared references to emit fallthrough case labels for aliases
+      const emitted = new Set<DecoderMap>();
       for (let i = 0; i < (decoder.exact || []).length; i++) {
         const matcher = decoder.exact[i];
         if (matcher) {
+          // Skip if this is an alias whose primary (lower) case was already emitted
+          if (emitted.has(matcher)) continue;
+          emitted.add(matcher);
+          // Emit the primary case label
           context.code.push(indent + '  case ' + '0x' + i.toString(16) + ':');
+          // Emit fallthrough case labels for any aliases (higher byte values
+          // that share the same decoder map reference)
+          for (let j = i + 1; j < decoder.exact.length; j++) {
+            if (decoder.exact[j] === matcher) {
+              context.code.push(indent + '  case ' + '0x' + j.toString(16) + ':');
+            }
+          }
           // Go through these cases, too
           if (
             matcher.instruction &&
@@ -914,7 +1074,88 @@ class TypeScriptBackend extends Backend {
               context,
             );
             if (matcher.instruction.prefix) {
-              context.code.push(indent + '    continue outer;');
+              if (matcher.instruction.disallowed) {
+                // Prefix with disallowed: generate lookahead to check if
+                // the next instruction allows this prefix, otherwise fault.
+                const prefixId = matcher.instruction.identifier;
+                const { conditions, prefixBytes } =
+                  collectAllowedConditions(this.decoderMap, prefixId);
+                const { expr, maxDepth } = buildAllowedCondition(
+                  conditions,
+                  prefixBytes,
+                );
+                const ind = indent + '    ';
+                if (conditions.length > 0) {
+                  // Declare peek variables for the bytes we need to inspect
+                  for (let p = 0; p < maxDepth; p++) {
+                    context.code.push(
+                      `${ind}const _peek${p} = this.mem8[_ip${p > 0 ? ' + ' + p : ''}];`,
+                    );
+                  }
+                  context.code.push(`${ind}if (${expr}) {`);
+                  context.code.push(`${ind}  continue outer;`);
+                  context.code.push(`${ind}}`);
+                }
+                // Disallowed path: resolve the interrupt vector from the
+                // disallowed operation (e.g. '#UD' → '#6' → interrupt 6).
+                const disallowedOp =
+                  (matcher.instruction.disallowed as InstructionFormModes)
+                    .modes?.[context.mode]?.operation ||
+                  (matcher.instruction.disallowed as InstructionFormFlat)
+                    .operation;
+                // Extract interrupt vector from the operation (supports
+                // '#UD', '#6', '#GP' etc. via the target's interrupt table)
+                let vector: number | undefined;
+                if (disallowedOp) {
+                  for (const op of disallowedOp) {
+                    const intMatch = op.match(/^#(\w+)/);
+                    if (intMatch) {
+                      const name = intMatch[1];
+                      // Check if it's a numeric vector
+                      const num = parseInt(name, 10);
+                      if (!isNaN(num)) {
+                        vector = num;
+                      } else {
+                        // Look up named exception in interrupt vectors
+                        const vec =
+                          this.target.interrupts?.vectors?.find(
+                            (v) => v.identifier === name,
+                          );
+                        if (vec?.index !== undefined) {
+                          vector = vec.index;
+                        }
+                      }
+                    }
+                  }
+                }
+                if (vector !== undefined) {
+                  // Emit IP rollback + interrupt for the disallowed case
+                  const ipReg =
+                    this.target.fetch?.effectiveRegister ||
+                    (Array.isArray(this.target.fetch?.register)
+                      ? this.target.fetch?.register?.[0]
+                      : this.target.fetch?.register);
+                  if (ipReg && this.registerMap.registers[ipReg]) {
+                    const ipRef: RegisterReference = {
+                      type: 'register',
+                      identifier: ipReg,
+                      mapping: this.registerMap.registers[ipReg],
+                      size: this.registerMap.registers[ipReg].size,
+                    };
+                    context.code.push(
+                      `${ind}${this.writeRegister(generated, ipRef, '_ip_save')};`,
+                    );
+                  }
+                  context.code.push(
+                    `${ind}this.interrupt_${context.mode}(${vector}); return;`,
+                  );
+                } else {
+                  // Fallback: no vector found, just break
+                  context.code.push(`${ind}break outer;`);
+                }
+              } else {
+                context.code.push(indent + '    continue outer;');
+              }
             } else {
               context.code.push(indent + '    break outer;');
             }

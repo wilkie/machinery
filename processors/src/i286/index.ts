@@ -20,7 +20,6 @@ const Target286: Target = {
   description: '16-bit x86',
   endianness: 'little',
   alignmentFill: 0x90,
-  opcodeAliases: { 0x82: 0x80 },
   memory,
   registers,
   fetch: {
@@ -35,6 +34,9 @@ const Target286: Target = {
 
     // And the instructions are fetched from the normal RAM
     memory: 'RAM',
+
+    // 286 enforces a 10-byte maximum instruction length (including prefixes)
+    maxInstructionLength: 10,
   },
   modes: [
     {

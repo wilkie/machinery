@@ -200,6 +200,12 @@ export interface OpcodeMatcher {
   signed?: boolean;
   /** An optional set of subfield matches to further differentiate this overall pattern. */
   fields?: OpcodeMatcherField[];
+  /**
+   * Opcode byte aliases. When this matcher is inserted into the decoder trie,
+   * the same reference is also inserted at each alias byte position.
+   * All forms sharing this opcode byte must declare the same aliases.
+   */
+  aliases?: number[];
 }
 
 export interface MacrosInfo {
@@ -402,6 +408,8 @@ export interface FetchInfo {
   memory: string;
   /** Whether or not the instruction pointer advances during the fetch phase. */
   advancePointer?: boolean;
+  /** Maximum instruction length in bytes (including prefixes). Exceeding this raises #GP. */
+  maxInstructionLength?: number;
 }
 
 /**

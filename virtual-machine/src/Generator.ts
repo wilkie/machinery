@@ -397,8 +397,7 @@ class Generator {
     }
 
     try {
-      const result = this.parser.parse(
-        (finalize
+      const code = (finalize
           ? (form as InstructionFormModes).modes?.[mode]?.finalize ||
             (form as InstructionFormFlat).finalize ||
             []
@@ -407,7 +406,9 @@ class Generator {
             []
         )
           .flat(19)
-          .join(' ; ') + ' ;',
+          .join(' ; ') + ' ;';
+      const result = this.parser.parse(
+        code,
         macros,
         locals,
       );

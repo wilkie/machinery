@@ -12,14 +12,14 @@ export const lea: InstructionInfo = {
   forms: [
     // 0x8D /r - LEA rw, m
     {
-      operation: ['${MOD_RM_REG16} = ${MOD_RM_SEGMENT} + %{DISP}'],
+      operation: ['${MOD_RM_REG16} = (%{DISP}):u16'],
       opcode: [Opcodes.LEA, 'ModRM_110_reg16_00', 'DISP_IMM_i16'],
       operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 3,
     },
     {
-      operation: ['${MOD_RM_REG16} = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET}'],
+      operation: ['${MOD_RM_REG16} = (${MOD_RM_OFFSET}):u16'],
       opcode: [Opcodes.LEA, 'ModRM_rm_reg16_00'],
       operands: ['reg', 'rm'],
       operandSize: 16,
@@ -27,7 +27,7 @@ export const lea: InstructionInfo = {
     },
     {
       operation: [
-        '${MOD_RM_REG16} = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        '${MOD_RM_REG16} = (${MOD_RM_OFFSET} + %{DISP}):u16',
       ],
       opcode: [Opcodes.LEA, 'ModRM_rm_reg16_01', 'DISP_IMM_i8'],
       operands: ['reg', 'rm'],
@@ -36,7 +36,7 @@ export const lea: InstructionInfo = {
     },
     {
       operation: [
-        '${MOD_RM_REG16} = ${MOD_RM_SEGMENT} + ${MOD_RM_OFFSET} + %{DISP}',
+        '${MOD_RM_REG16} = (${MOD_RM_OFFSET} + %{DISP}):u16',
       ],
       opcode: [Opcodes.LEA, 'ModRM_rm_reg16_10', 'DISP_IMM_i16'],
       operands: ['reg', 'rm'],

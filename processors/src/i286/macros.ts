@@ -379,7 +379,7 @@ export const macros = {
   ],
 
   // Raises exceptions (uses conditional form so _ip_save rollback occurs)
-  UD_EXCEPTION: ['#6 if 1 == 1'],
+  UD_EXCEPTION: ['#UD if 1 == 1'],
 };
 
 export default macros;

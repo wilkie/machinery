@@ -277,5 +277,41 @@ export const pop: InstructionInfo = {
       operandSize: 16,
       cycles: 3,
     },
+    // /1 through /7 are undefined on 286 — catch-alls for each mod level
+    {
+      operation: ['${UD_EXCEPTION}'],
+      opcode: [Opcodes.POP_MW, 'ModRM_110_reg16_00', 'DISP_i16'],
+      operands: ['rm'],
+      operandSize: 16,
+      cycles: 1,
+    },
+    {
+      operation: ['${UD_EXCEPTION}'],
+      opcode: [Opcodes.POP_MW, 'ModRM_rm_reg16_00'],
+      operands: ['rm'],
+      operandSize: 16,
+      cycles: 1,
+    },
+    {
+      operation: ['${UD_EXCEPTION}'],
+      opcode: [Opcodes.POP_MW, 'ModRM_rm_reg16_01', 'DISP_i8'],
+      operands: ['rm'],
+      operandSize: 16,
+      cycles: 1,
+    },
+    {
+      operation: ['${UD_EXCEPTION}'],
+      opcode: [Opcodes.POP_MW, 'ModRM_rm_reg16_10', 'DISP_i16'],
+      operands: ['rm'],
+      operandSize: 16,
+      cycles: 1,
+    },
+    {
+      operation: ['${UD_EXCEPTION}'],
+      opcode: [Opcodes.POP_MW, 'ModRM_rm16_reg16_11'],
+      operands: ['rm'],
+      operandSize: 16,
+      cycles: 1,
+    },
   ],
 };

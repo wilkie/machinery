@@ -334,7 +334,9 @@ class TypeScriptBackend extends Backend {
     // Create functions for accessing programmable memory
     for (const memoryInfo of this.target.memory || []) {
       if (memoryInfo.type === 'programmable') {
-        code.push(`  ${memoryInfo.identifier}_read(size: number, _address: number): number {`);
+        code.push(
+          `  ${memoryInfo.identifier}_read(size: number, _address: number): number {`,
+        );
         code.push('    if (size === 32) {');
         code.push(
           `    return 0x${((((memoryInfo.default || 0x0) << 24) | ((memoryInfo.default || 0x0) << 16) | ((memoryInfo.default || 0x0) << 8) | (memoryInfo.default || 0x0)) >>> 0).toString(16)};`,
@@ -345,12 +347,12 @@ class TypeScriptBackend extends Backend {
           `    return 0x${(((memoryInfo.default || 0x0) << 8) | (memoryInfo.default || 0x0)).toString(16)};`,
         );
         code.push('    }');
-        code.push(
-          `    return 0x${(memoryInfo.default || 0x0).toString(16)};`,
-        );
+        code.push(`    return 0x${(memoryInfo.default || 0x0).toString(16)};`);
         code.push(`  }`);
         code.push('');
-        code.push(`  ${memoryInfo.identifier}_write(_size: number, _address: number, _value: number) {`);
+        code.push(
+          `  ${memoryInfo.identifier}_write(_size: number, _address: number, _value: number) {`,
+        );
         code.push(`  }`);
         code.push('');
       }
@@ -1052,7 +1054,9 @@ class TypeScriptBackend extends Backend {
           // that share the same decoder map reference)
           for (let j = i + 1; j < decoder.exact.length; j++) {
             if (decoder.exact[j] === matcher) {
-              context.code.push(indent + '  case ' + '0x' + j.toString(16) + ':');
+              context.code.push(
+                indent + '  case ' + '0x' + j.toString(16) + ':',
+              );
             }
           }
           // Go through these cases, too
@@ -1080,8 +1084,10 @@ class TypeScriptBackend extends Backend {
                 // Prefix with disallowed: generate lookahead to check if
                 // the next instruction allows this prefix, otherwise fault.
                 const prefixId = matcher.instruction.identifier;
-                const { conditions, prefixBytes } =
-                  collectAllowedConditions(this.decoderMap, prefixId);
+                const { conditions, prefixBytes } = collectAllowedConditions(
+                  this.decoderMap,
+                  prefixId,
+                );
                 const { expr, maxDepth } = buildAllowedCondition(
                   conditions,
                   prefixBytes,
@@ -1100,11 +1106,12 @@ class TypeScriptBackend extends Backend {
                 }
                 // Disallowed path: resolve the interrupt vector from the
                 // disallowed operation (e.g. '#UD' → '#6' → interrupt 6).
-                const disallowedOp =
-                  ((matcher.instruction.disallowed as InstructionFormModes)
+                const disallowedOp = (
+                  (matcher.instruction.disallowed as InstructionFormModes)
                     .modes?.[context.mode]?.operation ||
                   (matcher.instruction.disallowed as InstructionFormFlat)
-                    .operation).flat(19) as string[];
+                    .operation
+                ).flat(19) as string[];
                 // Extract interrupt vector from the operation (supports
                 // '#UD', '#6', '#GP' etc. via the target's interrupt table)
                 let vector: number | undefined;
@@ -1119,10 +1126,9 @@ class TypeScriptBackend extends Backend {
                         vector = num;
                       } else {
                         // Look up named exception in interrupt vectors
-                        const vec =
-                          this.target.interrupts?.vectors?.find(
-                            (v) => v.identifier === name,
-                          );
+                        const vec = this.target.interrupts?.vectors?.find(
+                          (v) => v.identifier === name,
+                        );
                         if (vec?.index !== undefined) {
                           vector = vec.index;
                         }
@@ -1464,8 +1470,7 @@ class TypeScriptBackend extends Backend {
         return [
           `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}this.mem16[${effective}]${signed ? ` << ${32 - width} >> ${32 - width})` : ''}${offset ? ` >> ${offset})` : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
         ];
-      }
-      else {
+      } else {
         return [
           `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x1 ? (this.mem16[(${effective}) >> 1] >> 8) | ((this.mem16[((${effective}) >> 1) + 1] & 0xff) << 8) : this.mem16[(${effective}) >> 1])${signed ? ` << ${32 - width} >> ${32 - width})` : ''}${offset ? ` >> ${offset})` : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
         ];
@@ -1475,8 +1480,7 @@ class TypeScriptBackend extends Backend {
         return [
           `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}this.mem32[${effective}]${signed ? ' | 0)' : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
         ];
-      }
-      else {
+      } else {
         return [
           `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x3 ? ((this.mem32[(${effective}) >> 2] >> (8 * (${effective} % 4))) | (this.mem32[((${effective}) >> 2) + 1] << (8 * (4 - ${effective} % 4))) & 0xffffffff) : this.mem32[(${effective}) >> 2])${signed ? ' | 0)' : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
         ];

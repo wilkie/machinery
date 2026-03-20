@@ -865,17 +865,18 @@ class Resolver {
     mapping: MemoryMapping,
   ): Pick<
     MemoryReference,
-    'address' | 'offset' | 'references' | 'size' | 'signed'
+    'address' | 'offset' | 'references' | 'size' | 'signed' | 'aligned'
   > {
     const name = memoryInfo.identifier;
 
     let ret: Pick<
       MemoryReference,
-      'address' | 'references' | 'size' | 'signed'
+      'address' | 'references' | 'size' | 'signed' | 'aligned'
     > = {
       address: new ExpressionNode(new OperandNode(0)),
       size: 0,
       signed: false,
+      aligned: false,
     };
 
     // We are referencing a region/field/etc
@@ -906,9 +907,12 @@ class Resolver {
     // Regions are mapped in the memory map, so we can find an offset there
     // if it is otherwise unknown.
     const regionMapping = this.memoryMap[tag];
-    const offset =
+    const offsetTag: string | number =
       (regionInfo as BaseOffsettableMemoryRegion).offset ||
       (regionMapping.start || mapping.start) - mapping.start;
+
+    // Dereference the register for this offset
+    const offset: number = typeof offsetTag === 'string' ? 0 : offsetTag;
 
     if (!operand.next) {
       return ret;
@@ -918,8 +922,12 @@ class Resolver {
 
     // Array access (direct byte access within the region)
     if (next instanceof ArrayAccessNode) {
-      const coercion = operand.coercion ? `:${operand.coercion}` : `:${regionMapping.signed ?? mapping.signed ?? false ? 'u' : 'i'}${regionMapping.size || mapping.size || 8}`;
-      const size = operand.coercion ? parseInt(operand.coercion.slice(1)) : (regionMapping.size || mapping.size || 8);
+      const coercion = operand.coercion
+        ? `:${operand.coercion}`
+        : `:${(regionMapping.signed ?? mapping.signed ?? false) ? 'u' : 'i'}${regionMapping.size || mapping.size || 8}`;
+      const size = operand.coercion
+        ? parseInt(operand.coercion.slice(1))
+        : regionMapping.size || mapping.size || 8;
       ret.references = {
         type: 'memory',
         identifier: coercion,
@@ -966,18 +974,22 @@ class Resolver {
     operand: OperandNode,
     memoryInfo: MemoryInfo,
     mapping: MemoryMapping,
-  ): Pick<MemoryReference, 'address' | 'references' | 'size' | 'signed'> {
+  ): Pick<
+    MemoryReference,
+    'address' | 'references' | 'size' | 'signed' | 'aligned'
+  > {
     if (typeof operand.value !== 'string') {
       throw new Error('Memory cannot access a numerical value');
     }
 
     let ret: Pick<
       MemoryReference,
-      'address' | 'references' | 'size' | 'signed'
+      'address' | 'references' | 'size' | 'signed' | 'aligned'
     > = {
       address: new ExpressionNode(new OperandNode(0)),
       size: 0,
       signed: false,
+      aligned: false,
     };
 
     const name: string = memoryInfo.identifier;
@@ -991,9 +1003,13 @@ class Resolver {
     if (next instanceof ArrayAccessNode) {
       ret.references = {
         type: 'memory',
-        identifier: operand.coercion ? `:${operand.coercion}` : `:u${memoryInfo.size || 8}`,
+        identifier: operand.coercion
+          ? `:${operand.coercion}`
+          : `:u${memoryInfo.size || 8}`,
         index: next.index,
-        size: operand.coercion ? parseInt(operand.coercion.slice(1)) : (memoryInfo.size || 8),
+        size: operand.coercion
+          ? parseInt(operand.coercion.slice(1))
+          : memoryInfo.size || 8,
         signed: operand.coercion?.startsWith('i') || memoryInfo.signed || false,
       };
 
@@ -1021,7 +1037,13 @@ class Resolver {
     };
 
     ret.address = new BinaryExpressionNode(
-      new ExpressionNode(new OperandNode(ret.aligned ? mapping.start >> Math.floor(ret.size / 16) : mapping.start)),
+      new ExpressionNode(
+        new OperandNode(
+          ret.aligned
+            ? mapping.start >> Math.floor(ret.size / 16)
+            : mapping.start,
+        ),
+      ),
       '+',
       ret.address,
     );

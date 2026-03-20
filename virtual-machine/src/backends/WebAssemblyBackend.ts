@@ -172,7 +172,7 @@ class WebAssemblyBackend extends Backend {
       for (let i = 0; i < data.length; i++) {
         if (data[i] !== 0) {
           code.push(
-            `    (i32.store${info.size} (i32.const ${(info.start >> shift) + (i * bytes)}) (i32.const 0x${data[i].toString(16)}))`,
+            `    (i32.store${info.size} (i32.const ${(info.start >> shift) + i * bytes}) (i32.const 0x${data[i].toString(16)}))`,
           );
         }
       }
@@ -370,11 +370,9 @@ class WebAssemblyBackend extends Backend {
           mapping: this.registerMap.registers[ip],
           size: this.registerMap.registers[ip].size,
         };
-        rollback = this.writeRegister(
-          generated,
-          ipRef,
-          `(local.get $_ip_save)`,
-        )[0] + ' ';
+        rollback =
+          this.writeRegister(generated, ipRef, `(local.get $_ip_save)`)[0] +
+          ' ';
       }
     }
 
@@ -483,7 +481,9 @@ class WebAssemblyBackend extends Backend {
     const effective = this.fromExpression(generated, address)[0];
 
     if (reference.mapping.type === 'programmable') {
-      return [`(call $${reference.identifier}_read (i32.const ${size}) ${effective})`];
+      return [
+        `(call $${reference.identifier}_read (i32.const ${size}) ${effective})`,
+      ];
     }
 
     const load = this.loadOp(size, signed);

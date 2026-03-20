@@ -65,16 +65,25 @@ function setupMachine(test: MooTest): Machine {
 
   // Set registers — segments first, then GP regs, then IP last
   const segRegs: (keyof Registers)[] = ['cs', 'ss', 'ds', 'es'];
-  const gpRegs: (keyof Registers)[] = ['ax', 'bx', 'cx', 'dx', 'sp', 'bp', 'si', 'di'];
+  const gpRegs: (keyof Registers)[] = [
+    'ax',
+    'bx',
+    'cx',
+    'dx',
+    'sp',
+    'bp',
+    'si',
+    'di',
+  ];
 
   for (const reg of segRegs) {
     if (test.initial.regs[reg] !== undefined) {
-      (m as any)[REG_SETTERS[reg]] = test.initial.regs[reg];
+      m[REG_SETTERS[reg]] = test.initial.regs[reg];
     }
   }
   for (const reg of gpRegs) {
     if (test.initial.regs[reg] !== undefined) {
-      (m as any)[REG_SETTERS[reg]] = test.initial.regs[reg];
+      m[REG_SETTERS[reg]] = test.initial.regs[reg];
     }
   }
   if (test.initial.regs.flags !== undefined) {
@@ -87,16 +96,15 @@ function setupMachine(test: MooTest): Machine {
   return m;
 }
 
-function compareFinalState(
-  m: Machine,
-  test: MooTest,
-  regMask?: number,
-): string[] {
+function compareFinalState(m: Machine, test: MooTest): string[] {
   const errors: string[] = [];
 
-  for (const [reg, expected] of Object.entries(test.final.regs) as [keyof Registers, number][]) {
+  for (const [reg, expected] of Object.entries(test.final.regs) as [
+    keyof Registers,
+    number,
+  ][]) {
     const prop = REG_SETTERS[reg];
-    const actual = (m as any)[prop] as number;
+    const actual = m[prop] as number;
 
     if (reg === 'flags') {
       const mask = FLAGS_MASK_286;
@@ -116,8 +124,8 @@ function compareFinalState(
         if (diff & 0x800) flagNames.push('OF');
         errors.push(
           `FLAGS: expected 0x${maskedExpected.toString(16).padStart(4, '0')}, ` +
-          `got 0x${maskedActual.toString(16).padStart(4, '0')} ` +
-          `(diff: ${flagNames.join(', ')})`
+            `got 0x${maskedActual.toString(16).padStart(4, '0')} ` +
+            `(diff: ${flagNames.join(', ')})`,
         );
       }
     } else {
@@ -125,7 +133,7 @@ function compareFinalState(
       if ((actual & mask) !== (expected & mask)) {
         errors.push(
           `${prop}: expected 0x${(expected & mask).toString(16).padStart(4, '0')}, ` +
-          `got 0x${(actual & mask).toString(16).padStart(4, '0')}`
+            `got 0x${(actual & mask).toString(16).padStart(4, '0')}`,
         );
       }
     }
@@ -136,7 +144,7 @@ function compareFinalState(
     if (actual !== expected) {
       errors.push(
         `RAM[0x${addr.toString(16)}]: expected 0x${expected.toString(16).padStart(2, '0')}, ` +
-        `got 0x${actual.toString(16).padStart(2, '0')}`
+          `got 0x${actual.toString(16).padStart(2, '0')}`,
       );
     }
   }
@@ -144,7 +152,7 @@ function compareFinalState(
   return errors;
 }
 
-function runTest(test: MooTest, regMask?: number): string[] {
+function runTest(test: MooTest): string[] {
   const m = setupMachine(test);
 
   const maxIter = 1000;
@@ -158,10 +166,12 @@ function runTest(test: MooTest, regMask?: number): string[] {
   }
 
   if (m.mode !== 2) {
-    return [`Machine did not halt after ${maxIter} iterations (mode=${m.mode})`];
+    return [
+      `Machine did not halt after ${maxIter} iterations (mode=${m.mode})`,
+    ];
   }
 
-  return compareFinalState(m, test, regMask);
+  return compareFinalState(m, test);
 }
 
 // Discover test files filtered by hex prefix (e.g. "0" matches 00-0F)
@@ -169,8 +179,11 @@ function getTestFiles(prefix: string): string[] {
   if (!HAS_TESTS) return [];
   try {
     return readdirSync(realModeDir)
-      .filter(f => (f.endsWith('.MOO.gz') || f.endsWith('.MOO')) &&
-                    f.toUpperCase().startsWith(prefix.toUpperCase()))
+      .filter(
+        (f) =>
+          (f.endsWith('.MOO.gz') || f.endsWith('.MOO')) &&
+          f.toUpperCase().startsWith(prefix.toUpperCase()),
+      )
       .sort();
   } catch {
     return [];
@@ -210,13 +223,13 @@ export function runSingleStepTests(prefix: string): void {
           let failed = 0;
 
           for (const test of tests.tests) {
-            const errors = runTest(test, tests.regMask);
+            const errors = runTest(test);
             if (errors.length > 0) {
               failed++;
               if (sampleFailures.length < 5) {
                 sampleFailures.push(
-                  `Test #${test.idx} "${test.name}" [${test.bytes.map(b => b.toString(16).padStart(2, '0')).join(' ')}]:\n` +
-                  errors.map(e => `  ${e}`).join('\n')
+                  `Test #${test.idx} "${test.name}" [${test.bytes.map((b) => b.toString(16).padStart(2, '0')).join(' ')}]:\n` +
+                    errors.map((e) => `  ${e}`).join('\n'),
                 );
                 sampleFailures.push(JSON.stringify(test, null, 2));
               }
@@ -229,8 +242,8 @@ export function runSingleStepTests(prefix: string): void {
             const total = tests!.tests.length;
             throw new Error(
               `${failed}/${total} failed (${passed} passed):\n\n` +
-              sampleFailures.join('\n\n') +
-              (failed > 5 ? `\n\n... and ${failed - 5} more` : '')
+                sampleFailures.join('\n\n') +
+                (failed > 5 ? `\n\n... and ${failed - 5} more` : ''),
             );
           }
         });

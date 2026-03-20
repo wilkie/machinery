@@ -139,15 +139,14 @@ class VirtualMachine {
 
         if (ret[tag].size === 8) {
           this.mem8.set(ret[tag].data, ret[tag].start);
-        }
-        else if (ret[tag].size === 16) {
+        } else if (ret[tag].size === 16) {
           this.mem16.set(ret[tag].data, ret[tag].start >> 1);
-        }
-        else if (ret[tag].size === 32) {
+        } else if (ret[tag].size === 32) {
           this.mem32.set(ret[tag].data, ret[tag].start >> 2);
-        }
-        else {
-          throw new Error('Cannot use a read-only region that has a non-byte-aligned size');
+        } else {
+          throw new Error(
+            'Cannot use a read-only region that has a non-byte-aligned size',
+          );
         }
         position += ret[tag].length;
       }
@@ -410,7 +409,10 @@ class VirtualMachine {
                 // Insert aliases as shared references
                 if (typeof matcher === 'object' && matcher?.aliases) {
                   for (const alias of matcher.aliases) {
-                    if (pass.exact[alias] !== undefined && pass.exact[alias] !== entry) {
+                    if (
+                      pass.exact[alias] !== undefined &&
+                      pass.exact[alias] !== entry
+                    ) {
                       throw new Error(
                         `Opcode alias 0x${alias.toString(16)} conflicts with existing entry at byte position ${i}`,
                       );
@@ -426,7 +428,10 @@ class VirtualMachine {
                 // Insert aliases as shared references
                 if (typeof matcher === 'object' && matcher?.aliases) {
                   for (const alias of matcher.aliases) {
-                    if (pass.exact[alias] !== undefined && pass.exact[alias] !== entry) {
+                    if (
+                      pass.exact[alias] !== undefined &&
+                      pass.exact[alias] !== entry
+                    ) {
                       throw new Error(
                         `Opcode alias 0x${alias.toString(16)} conflicts with existing entry at byte position ${i}`,
                       );

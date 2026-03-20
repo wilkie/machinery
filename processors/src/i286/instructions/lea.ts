@@ -26,18 +26,14 @@ export const lea: InstructionInfo = {
       cycles: 3,
     },
     {
-      operation: [
-        '${MOD_RM_REG16} = (${MOD_RM_OFFSET} + %{DISP}):u16',
-      ],
+      operation: ['${MOD_RM_REG16} = (${MOD_RM_OFFSET} + %{DISP}):u16'],
       opcode: [Opcodes.LEA, 'ModRM_rm_reg16_01', 'DISP_IMM_i8'],
       operands: ['reg', 'rm'],
       operandSize: 16,
       cycles: 3,
     },
     {
-      operation: [
-        '${MOD_RM_REG16} = (${MOD_RM_OFFSET} + %{DISP}):u16',
-      ],
+      operation: ['${MOD_RM_REG16} = (${MOD_RM_OFFSET} + %{DISP}):u16'],
       opcode: [Opcodes.LEA, 'ModRM_rm_reg16_10', 'DISP_IMM_i16'],
       operands: ['reg', 'rm'],
       operandSize: 16,

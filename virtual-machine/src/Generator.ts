@@ -397,7 +397,8 @@ class Generator {
     }
 
     try {
-      const code = (finalize
+      const code =
+        (finalize
           ? (form as InstructionFormModes).modes?.[mode]?.finalize ||
             (form as InstructionFormFlat).finalize ||
             []
@@ -407,11 +408,7 @@ class Generator {
         )
           .flat(19)
           .join(' ; ') + ' ;';
-      const result = this.parser.parse(
-        code,
-        macros,
-        locals,
-      );
+      const result = this.parser.parse(code, macros, locals);
       if (result === undefined) {
         throw new Error(`Yikes`);
       }

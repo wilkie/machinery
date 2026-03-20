@@ -9,7 +9,7 @@ const parityArray: number[] = Array.from({ length: 256 }, (_, i) => {
 });
 
 const aamArray: number[] = Array.from({ length: 256 }, (_, i) => {
-  return ((Math.floor(i / 10)) << 8) | (i % 10);
+  return (Math.floor(i / 10) << 8) | (i % 10);
 });
 
 export const memory: MemoryInfo[] = [

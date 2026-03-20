@@ -40,8 +40,20 @@ export interface Registers {
 }
 
 const REG_NAMES: (keyof Registers)[] = [
-  'ax', 'bx', 'cx', 'dx', 'cs', 'ss', 'ds', 'es',
-  'sp', 'bp', 'si', 'di', 'ip', 'flags',
+  'ax',
+  'bx',
+  'cx',
+  'dx',
+  'cs',
+  'ss',
+  'ds',
+  'es',
+  'sp',
+  'bp',
+  'si',
+  'di',
+  'ip',
+  'flags',
 ];
 
 class Reader {
@@ -223,7 +235,9 @@ export function parseMoo(data: Buffer): MooFile {
   // Read file header
   const { tag: headerTag, length: headerLen } = reader.readChunkHeader();
   if (headerTag !== 'MOO ') {
-    throw new Error(`Invalid MOO file: expected 'MOO ' header, got '${headerTag}'`);
+    throw new Error(
+      `Invalid MOO file: expected 'MOO ' header, got '${headerTag}'`,
+    );
   }
 
   const headerReader = reader.subReader(headerLen);
@@ -248,11 +262,14 @@ export function parseMoo(data: Buffer): MooFile {
         const metaReader = reader.subReader(length);
         // Parse META subchunks
         while (metaReader.remaining > 0) {
-          const { tag: metaTag, length: metaLen } = metaReader.readChunkHeader();
+          const { tag: metaTag, length: metaLen } =
+            metaReader.readChunkHeader();
           switch (metaTag) {
             case 'OPCD': {
               const opcLen = metaReader.readU8();
-              file.opcode = [...metaReader.readBytes(opcLen)].map(b => b.toString(16).padStart(2, '0')).join(' ');
+              file.opcode = [...metaReader.readBytes(opcLen)]
+                .map((b) => b.toString(16).padStart(2, '0'))
+                .join(' ');
               break;
             }
             case 'MNEM': {

@@ -88,7 +88,7 @@ class Tokenizer {
       unary_operator: /[~]/,
       unary_logic_operator: /[!]/,
       ternary_if: /\?/,
-      ternary_else: /\s:/,
+      ternary_else: /:/,
       raise: /#/,
       // Parentheses
       left_paren: /\(/,

@@ -36,6 +36,7 @@ export interface MemoryMapping {
   data: Uint8Array | number[];
   type?: MemoryType;
   info: MemoryInfo | MemoryRegion;
+  signed?: boolean;
 }
 
 export interface MemoryMap {
@@ -126,6 +127,7 @@ export interface MemoryReference extends BaseReference {
   size: number;
   signed?: boolean;
   references?: MemoryAccessReference | MemoryFieldReference;
+  aligned: boolean;
 }
 
 export interface LocalReference extends BaseReference {

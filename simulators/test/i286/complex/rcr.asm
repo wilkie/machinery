@@ -123,7 +123,7 @@ start:
     CHECK_PF 1
     CHECK_AF 1
 
-; 3) AL=01, CF_in=0 -> 00 ; CF=1, OF=1 ; flags preserved (0s)
+; 3) AL=01, CF_in=0 -> 00 ; CF=1, OF=0 ; flags preserved (0s)
     mov al, 0x01
     mov ah, [pat0]
     sahf
@@ -131,13 +131,13 @@ start:
     SAVE_FLAGS
     ASSERT_BYTE 0x00
     CHECK_CF 1
-    CHECK_OF 1
+    CHECK_OF 0
     CHECK_SF 0
     CHECK_ZF 0
     CHECK_PF 0
     CHECK_AF 0
 
-; 4) AL=80, CF_in=0 -> 40 ; CF=0, OF=0 ; flags preserved (0s)
+; 4) AL=80, CF_in=0 -> 40 ; CF=0, OF=1 ; flags preserved (0s)
     mov al, 0x80
     mov ah, [pat0]
     sahf
@@ -145,7 +145,7 @@ start:
     SAVE_FLAGS
     ASSERT_BYTE 0x40
     CHECK_CF 0
-    CHECK_OF 0
+    CHECK_OF 1
     CHECK_SF 0
     CHECK_ZF 0
     CHECK_PF 0
@@ -168,7 +168,7 @@ start:
     CHECK_PF 1
     CHECK_AF 1
 
-; 6) BL=7F, CF_in=1 -> BF ; CF=1, OF=0 ; flags preserved (1s)
+; 6) BL=7F, CF_in=1 -> BF ; CF=1, OF=1 ; flags preserved (1s)
     mov bl, 0x7F
     mov ah, [pat1]
     sahf
@@ -177,7 +177,7 @@ start:
     mov al, bl
     ASSERT_BYTE 0xBF
     CHECK_CF 1
-    CHECK_OF 0
+    CHECK_OF 1
     CHECK_SF 1
     CHECK_ZF 1
     CHECK_PF 1
@@ -212,7 +212,7 @@ start:
     CHECK_PF 0
     CHECK_AF 0
 
-; 9) [di]=80, CF_in=1 -> C0 ; CF=0, OF=1 ; flags preserved (1s)
+; 9) [di]=80, CF_in=1 -> C0 ; CF=0, OF=0 ; flags preserved (1s)
     lea di, [rcr8_di_80]
     mov ah, [pat1]
     sahf
@@ -221,13 +221,13 @@ start:
     mov al, [di]
     ASSERT_BYTE 0xC0
     CHECK_CF 0
-    CHECK_OF 1
+    CHECK_OF 0
     CHECK_SF 1
     CHECK_ZF 1
     CHECK_PF 1
     CHECK_AF 1
 
-; 10) [bx]=01, CF_in=0 -> 00 ; CF=1, OF=1 ; flags preserved (0s)
+; 10) [bx]=01, CF_in=0 -> 00 ; CF=1, OF=0 ; flags preserved (0s)
     lea bx, [rcr8_bx_01]
     mov ah, [pat0]
     sahf
@@ -236,7 +236,7 @@ start:
     mov al, [bx]
     ASSERT_BYTE 0x00
     CHECK_CF 1
-    CHECK_OF 1
+    CHECK_OF 0
     CHECK_SF 0
     CHECK_ZF 0
     CHECK_PF 0
@@ -287,7 +287,7 @@ start:
     CHECK_PF 1
     CHECK_AF 1
 
-; 14) [bx+si+disp]=7F, CF_in=0 -> 3F ; CF=1, OF=1 ; flags preserved (0s)
+; 14) [bx+si+disp]=7F, CF_in=0 -> 3F ; CF=1, OF=0 ; flags preserved (0s)
     lea bx, [base8]
     lea si, [index8]
     mov ah, [pat0]
@@ -297,13 +297,13 @@ start:
     mov al, [bx+si + (rcr8_bxsi_7f - base8 - index8)]
     ASSERT_BYTE 0x3F
     CHECK_CF 1
-    CHECK_OF 1
+    CHECK_OF 0
     CHECK_SF 0
     CHECK_ZF 0
     CHECK_PF 0
     CHECK_AF 0
 
-; 15) [bp] (ds:)=03, CF_in=1 -> 81 ; CF=1, OF=0 ; flags preserved (1s)
+; 15) [bp] (ds:)=03, CF_in=1 -> 81 ; CF=1, OF=1 ; flags preserved (1s)
     mov bp, rcr8_bp_03
     mov ah, [pat1]
     sahf
@@ -312,13 +312,13 @@ start:
     mov al, [ds:bp]
     ASSERT_BYTE 0x81
     CHECK_CF 1
-    CHECK_OF 0
+    CHECK_OF 1
     CHECK_SF 1
     CHECK_ZF 1
     CHECK_PF 1
     CHECK_AF 1
 
-; 16) [bp+disp] (ds:)=C0, CF_in=0 -> 60 ; CF=0, OF=0 ; flags preserved (0s)
+; 16) [bp+disp] (ds:)=C0, CF_in=0 -> 60 ; CF=0, OF=1 ; flags preserved (0s)
     lea bp, [base_bp_d]
     mov ah, [pat0]
     sahf
@@ -327,7 +327,7 @@ start:
     mov al, [ds:bp + (rcr8_bpd_c0 - base_bp_d)]
     ASSERT_BYTE 0x60
     CHECK_CF 0
-    CHECK_OF 0
+    CHECK_OF 1
     CHECK_SF 0
     CHECK_ZF 0
     CHECK_PF 0
@@ -349,7 +349,7 @@ start:
     CHECK_PF 1
     CHECK_AF 1
 
-; 18) [bp+di+disp] (ds:)=FE, CF_in=0 -> 7F ; CF=0, OF=0 ; flags preserved (0s)
+; 18) [bp+di+disp] (ds:)=FE, CF_in=0 -> 7F ; CF=0, OF=1 ; flags preserved (0s)
     lea bp, [base_bp_di_A]
     lea di, [base_bp_di_B]
     mov ah, [pat0]
@@ -359,7 +359,7 @@ start:
     mov al, [ds:bp+di + (rcr8_bpdi_fe - base_bp_di_A - base_bp_di_B)]
     ASSERT_BYTE 0x7F
     CHECK_CF 0
-    CHECK_OF 0
+    CHECK_OF 1
     CHECK_SF 0
     CHECK_ZF 0
     CHECK_PF 0
@@ -516,7 +516,7 @@ start:
     CHECK_PF 0
     CHECK_AF 0
 
-; 29) AX=8000, CF_in=1 -> C000 ; CF=0, OF=1 ; flags preserved (1s)
+; 29) AX=8000, CF_in=1 -> C000 ; CF=0, OF=0 ; flags preserved (1s)
     mov ah, [pat1]
     sahf
     mov ax, 0x8000
@@ -524,7 +524,7 @@ start:
     SAVE_FLAGS
     ASSERT_AX 0xC000
     CHECK_CF 0
-    CHECK_OF 1
+    CHECK_OF 0
     CHECK_SF 1
     CHECK_ZF 1
     CHECK_PF 1
@@ -559,7 +559,7 @@ start:
     CHECK_PF 1
     CHECK_AF 1
 
-; 32) DX=7FFF, CF_in=0 -> 3FFF ; CF=1, OF=1 ; flags preserved (0s)
+; 32) DX=7FFF, CF_in=0 -> 3FFF ; CF=1, OF=0 ; flags preserved (0s)
     mov dx, 0x7FFF
     mov ah, [pat0]
     sahf
@@ -568,7 +568,7 @@ start:
     mov ax, dx
     ASSERT_AX 0x3FFF
     CHECK_CF 1
-    CHECK_OF 1
+    CHECK_OF 0
     CHECK_SF 0
     CHECK_ZF 0
     CHECK_PF 0
@@ -577,7 +577,7 @@ start:
 
 ; ===================== 16-bit RCR (memory, count=1) =====================
 
-; 33) [si]=7FFF, CF_in=1 -> BFFF ; CF=1, OF=0 ; flags preserved (1s)
+; 33) [si]=7FFF, CF_in=1 -> BFFF ; CF=1, OF=1 ; flags preserved (1s)
     lea si, [rcr16_si_7fff]
     mov ah, [pat1]
     sahf
@@ -586,13 +586,13 @@ start:
     mov ax, [si]
     ASSERT_AX 0xBFFF
     CHECK_CF 1
-    CHECK_OF 0
+    CHECK_OF 1
     CHECK_SF 1
     CHECK_ZF 1
     CHECK_PF 1
     CHECK_AF 1
 
-; 34) [di]=8000, CF_in=0 -> 4000 ; CF=0, OF=0 ; flags preserved (0s)
+; 34) [di]=8000, CF_in=0 -> 4000 ; CF=0, OF=1 ; flags preserved (0s)
     lea di, [rcr16_di_8000]
     mov ah, [pat0]
     sahf
@@ -601,13 +601,13 @@ start:
     mov ax, [di]
     ASSERT_AX 0x4000
     CHECK_CF 0
-    CHECK_OF 0
+    CHECK_OF 1
     CHECK_SF 0
     CHECK_ZF 0
     CHECK_PF 0
     CHECK_AF 0
 
-; 35) [bx]=0001, CF_in=1 -> 8000 ; CF=1, OF=0 ; flags preserved (1s)
+; 35) [bx]=0001, CF_in=1 -> 8000 ; CF=1, OF=1 ; flags preserved (1s)
     lea bx, [rcr16_bx_0001]
     mov ah, [pat1]
     sahf
@@ -616,7 +616,7 @@ start:
     mov ax, [bx]
     ASSERT_AX 0x8000
     CHECK_CF 1
-    CHECK_OF 0
+    CHECK_OF 1
     CHECK_SF 1
     CHECK_ZF 1
     CHECK_PF 1
@@ -652,7 +652,7 @@ start:
     CHECK_PF 1
     CHECK_AF 1
 
-; 38) [bx+disp]=3FFF, CF_in=0 -> 1FFF ; CF=1, OF=1 ; flags preserved (0s)
+; 38) [bx+disp]=3FFF, CF_in=0 -> 1FFF ; CF=1, OF=0 ; flags preserved (0s)
     lea bx, [base16bd]
     mov ah, [pat0]
     sahf
@@ -661,7 +661,7 @@ start:
     mov ax, [bx + (rcr16_bxd_3fff - base16bd)]
     ASSERT_AX 0x1FFF
     CHECK_CF 1
-    CHECK_OF 1
+    CHECK_OF 0
     CHECK_SF 0
     CHECK_ZF 0
     CHECK_PF 0
@@ -729,7 +729,7 @@ start:
     CHECK_PF 0
     CHECK_AF 0
 
-; 43) [bp+di+disp] (ds:)=C000, CF_in=1 -> E000 ; CF=0, OF=1 ; flags preserved (1s)
+; 43) [bp+di+disp] (ds:)=C000, CF_in=1 -> E000 ; CF=0, OF=0 ; flags preserved (1s)
     lea bp, [base_bp16_di_A]
     lea di, [base_bp16_di_B]
     mov ah, [pat1]
@@ -739,7 +739,7 @@ start:
     mov ax, [ds:bp+di + (rcr16_bpdi_c000 - base_bp16_di_A - base_bp16_di_B)]
     ASSERT_AX 0xE000
     CHECK_CF 0
-    CHECK_OF 1
+    CHECK_OF 0
     CHECK_SF 1
     CHECK_ZF 1
     CHECK_PF 1

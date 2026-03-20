@@ -24,6 +24,7 @@ import { das } from './instructions/das';
 import { dec } from './instructions/dec';
 import { div } from './instructions/div';
 import { enter } from './instructions/enter';
+import { esc } from './instructions/esc';
 import { hlt } from './instructions/hlt';
 import { idiv } from './instructions/idiv';
 import { imul } from './instructions/imul';
@@ -91,6 +92,7 @@ import { rol } from './instructions/rol';
 import { ror } from './instructions/ror';
 import { sahf } from './instructions/sahf';
 import { sal } from './instructions/sal';
+import { salc } from './instructions/salc';
 import { sar } from './instructions/sar';
 import { sbb } from './instructions/sbb';
 import { scas } from './instructions/scas';
@@ -139,6 +141,7 @@ export const instructions: InstructionInfo[] = [
   dec,
   div,
   enter,
+  esc,
   hlt,
   idiv,
   imul,
@@ -206,6 +209,7 @@ export const instructions: InstructionInfo[] = [
   ret,
   sahf,
   sal,
+  salc,
   sar,
   shr,
   sbb,

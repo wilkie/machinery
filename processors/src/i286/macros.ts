@@ -76,21 +76,38 @@ export const macros = {
   ],
 
   RESOLVE_ZF: [
-    'ZF = flag_op < ${FLAG_OP_RESOLVED} ? ((flag_op & ${FLAG_OP_BITS}) == 0x0 ? ((alu_result & 0xff) == 0x0 ? 1 : 0) : ((alu_result & 0xffff) == 0x0 ? 1 : 0)) : ZF',
+    `ZF = flag_op < $\{FLAG_OP_RESOLVED}
+      ? ((flag_op & $\{FLAG_OP_BITS}) == 0x0
+        ? ((alu_result & 0xff) == 0x0 ? 1 : 0)
+        : ((alu_result & 0xffff) == 0x0 ? 1 : 0))
+      : ZF`,
   ],
 
   // Look at the parity data and match it against the alu_result
   RESOLVE_PF: [
-    'PF = flag_op < ${FLAG_OP_RESOLVED} ? ROM.PARITY[alu_result & 0xff] : PF',
+    `PF = flag_op < $\{FLAG_OP_RESOLVED}
+      ? ROM.PARITY[alu_result & 0xff]
+      : PF`,
   ],
 
   RESOLVE_SF: [
-    'SF = flag_op < ${FLAG_OP_RESOLVED} ? ((flag_op & ${FLAG_OP_BITS}) == 0x0 ? ((alu_result & 0x80) > 0 ? 1 : 0) : ((alu_result & 0x8000) > 0 ? 1 : 0)) : SF',
+    `SF = flag_op < $\{FLAG_OP_RESOLVED}
+      ? ((flag_op & $\{FLAG_OP_BITS}) == 0x0
+        ? ((alu_result & 0x80) > 0 ? 1 : 0)
+        : ((alu_result & 0x8000) > 0 ? 1 : 0))
+      : SF`,
   ],
 
   RESOLVE_OF: [
-    //"OF = flag_op < ${FLAG_OP_RESOLVED} ? ((flag_op & ${FLAG_OP_LOGIC}) > 0 ? 0 : ((flag_op & ${FLAG_OP_BITS}) == 0x0 ? ((a ^ alu_result) & (a ^ b) & 0x80) >> 7 : ((a ^ alu_result) & (a ^ b) & 0x8000) >> 15)) : OF",
-    'OF = ((flag_op < ${FLAG_OP_RESOLVED}) && (flag_op & ${FLAG_OP_NOOF} == 0)) ? ((flag_op & ${FLAG_OP_LOGIC}) > 0 ? 0 : ((flag_op & ${FLAG_OP_SHIFT}) > 0 ? (((((((flag_op & ${FLAG_OP_RIGHT}) > 0 ? alu_result : a) >> (((((flag_op & ${FLAG_OP_BITS}) >> 1) + 1) * 8) - 2)) - 1) & 0x3) < 2) ? 1 : 0) : (((flag_op & ${FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (a ^ alu_result) & (((flag_op & ${FLAG_OP_SUB}) > 0 ? a : alu_result) ^ b)) > 0 ? 1 : 0)) : OF',
+    `OF = ((flag_op < $\{FLAG_OP_RESOLVED}) && (flag_op & $\{FLAG_OP_NOOF} == 0))
+      ? ((flag_op & $\{FLAG_OP_LOGIC}) > 0
+        ? 0
+        : ((flag_op & $\{FLAG_OP_SHIFT}) > 0
+          ? ((flag_op & $\{FLAG_OP_RIGHT}) > 0
+            ? (((((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (((flag_op & $\{FLAG_OP_SIGNED}) == 0 ? a >>> (b - 1) : ((flag_op & $\{FLAG_OP_BITS}) == 0 ? a:i8 : a:i16) >> (b - 1)) ^ alu_result)) > 0) ? 1 : 0)
+            : ((((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & ((a << (b - 1)) ^ alu_result)) > 0 ? 1 : 0))
+          : (((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (a ^ alu_result) & (((flag_op & $\{FLAG_OP_SUB}) > 0 ? a : alu_result) ^ b)) > 0 ? 1 : 0))
+      : OF`,
   ],
 
   // Depending on the operation, understand the carry flag
@@ -103,13 +120,29 @@ export const macros = {
     // CARRY = (a >> (16 - b)) & 0x1 if 16-bit shift left
     // CARRY = (a >> (b - 1)) & 0x1 if any shift right
     // CARRY = a < (b + C_in) if sub
-    'CARRY = ((flag_op < ${FLAG_OP_RESOLVED}) && (flag_op & ${FLAG_OP_NOCF} == 0)) ? ((flag_op & ${FLAG_OP_LOGIC}) > 0 ? 0 : ((flag_op & ${FLAG_OP_SHIFT}) > 0 ? (((flag_op & ${FLAG_OP_SIGNED}) == 0 ? a : a:i16) >> ((flag_op & ${FLAG_OP_RIGHT}) == 0 ? ((((flag_op & ${FLAG_OP_BITS}) == 0 ? 8 : 16) - b)) : (b - 1))) & 0x1 : ((flag_op & ${FLAG_OP_SUB}) > 0 ? (a < (b + (flag_op & ${FLAG_OP_CARRY})) ? 1 : 0) : (((a & b) | ((a | b) & ~alu_result)) >> ((flag_op & ${FLAG_OP_BITS}) == 0x0 ? 7 : 15)) & 0x1))) : CARRY',
+    `CARRY = ((flag_op < $\{FLAG_OP_RESOLVED}) && (flag_op & $\{FLAG_OP_NOCF} == 0))
+      ? ((flag_op & $\{FLAG_OP_LOGIC}) > 0
+        ? 0
+        : ((flag_op & $\{FLAG_OP_SHIFT}) > 0
+          ? (((flag_op & $\{FLAG_OP_SIGNED}) == 0 ? a : ((flag_op & $\{FLAG_OP_BITS}) == 0 ? a:i8 : a:i16)) >> ((flag_op & $\{FLAG_OP_RIGHT}) == 0 ? ((((flag_op & $\{FLAG_OP_BITS}) == 0 ? 8 : 16) - b)) : (b - 1))) & 0x1
+          : ((flag_op & $\{FLAG_OP_SUB}) > 0
+            ? (a < (b + (flag_op & $\{FLAG_OP_CARRY})) ? 1 : 0)
+            : (((a & b) | ((a | b) & ~alu_result)) >> ((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 7 : 15)) & 0x1)))
+      : CARRY`,
   ],
 
   // Depending on the operation, understand the auxiliary carry flag
   // Logic ops (OR/AND/XOR/TEST) clear AF; ALU ops compute from operands.
   RESOLVE_AF: [
-    'AF = ((flag_op < ${FLAG_OP_RESOLVED}) && (flag_op & ${FLAG_OP_NOAF} == 0)) ? ((flag_op & ${FLAG_OP_LOGIC}) > 0 ? 0 : ((a ^ b ^ alu_result) & 0x10) >> 4) : AF',
+    `AF = ((flag_op < $\{FLAG_OP_RESOLVED}) && (flag_op & $\{FLAG_OP_NOAF} == 0))
+      ? ((flag_op & $\{FLAG_OP_LOGIC}) > 0
+        ? 0
+        : ((flag_op & $\{FLAG_OP_SHIFT}) > 0
+          ? ((flag_op & $\{FLAG_OP_RIGHT}) > 0
+            ? 1
+            : (((a << (b - 1)) & 0x8) != 0 ? 1 : 0))
+          : ((a ^ b ^ alu_result) & 0x10) >> 4))
+      : AF`,
   ],
 
   SEGMENT_LIMIT_CHECK_REAL: ['#GP if offset == 0xffff'],

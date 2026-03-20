@@ -18,6 +18,7 @@ export const sahf: InstructionInfo = {
         '${RESOLVE_FLAGS}',
         'FLAGS = (FLAGS & ~0b11010101) | (AH & 0b11010101)',
         'CARRY = CF',
+        'flag_op = ${FLAG_OP_RESOLVED}',
       ],
       cycles: 2,
     },

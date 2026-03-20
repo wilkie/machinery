@@ -72,11 +72,11 @@ export const lods: InstructionInfo = {
             [
               'next if REP != 0 && CX == 0',
               'offset = SI',
+              'SI = SI + (DF == 1 ? -2 : 2)',
+              'CX = REP != 0 ? CX - 1 : CX',
               'effective_address = (DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + offset',
               '${SEGMENT_LIMIT_CHECK_REAL}',
               'AX = RAM:u16[effective_address]',
-              'SI = SI + (DF == 1 ? -2 : 2)',
-              'CX = REP != 0 ? CX - 1 : CX',
             ],
             'repeat if REP != 0',
           ],

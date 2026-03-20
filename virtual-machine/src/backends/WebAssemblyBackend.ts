@@ -167,10 +167,12 @@ class WebAssemblyBackend extends Backend {
       code.push(`    ;; ${name}`);
       const data = Array.from(info.data);
       // Store ROM data byte by byte
+      const bytes = info.size / 8;
+      const shift = Math.floor(info.size / 16);
       for (let i = 0; i < data.length; i++) {
         if (data[i] !== 0) {
           code.push(
-            `    (i32.store8 (i32.const ${info.start + i}) (i32.const ${data[i]}))`,
+            `    (i32.store${info.size} (i32.const ${(info.start >> shift) + (i * bytes)}) (i32.const 0x${data[i].toString(16)}))`,
           );
         }
       }

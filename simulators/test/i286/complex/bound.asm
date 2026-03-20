@@ -71,7 +71,7 @@ start:
     push ds
     pop  es
 
-    ; Use a scratch stack with SS=DS (as in your other suites)
+    ; Use a scratch stack with SS=DS
     cli
     mov ax, ds
     mov ss, ax

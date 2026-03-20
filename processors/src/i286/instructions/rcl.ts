@@ -10,22 +10,24 @@ export const rcl: InstructionInfo = {
   undefined: ['OF'],
   macros: {
     ALU8_OP: [
-      '${RESOLVE_CF}',
+      '${RESOLVE_FLAGS}',
       'tmp_a = CARRY == 1 ? (tmp_a | 0x100) : tmp_a',
       'tmp = tmp_a <~[9] tmp_b',
-      'CARRY = (tmp_a >> (8 - tmp_b)) & 0x1',
+      // CF = carry bit (bit 8) of 9-bit result; OF = MSB XOR CF from last rotation
+      'CARRY = (tmp >> 8) & 0x1',
       'CF = CARRY',
-      'OF = (((tmp_a >> 6) - 1) & 0x3) < 2 ? 1 : 0',
-      'flag_op = flag_op | ${FLAG_OP_NOCF} | ${FLAG_OP_NOOF}',
+      // OF = MSB(result) XOR new CF = bit 7 XOR bit 8 of 9-bit result
+      'OF = ((tmp >> 7) ^ (tmp >> 8)) & 0x1',
+      'flag_op = ${FLAG_OP_RESOLVED}',
     ],
     ALU16_OP: [
-      '${RESOLVE_CF}',
+      '${RESOLVE_FLAGS}',
       'tmp_a = CARRY == 1 ? (tmp_a | 0x10000) : tmp_a',
       'tmp = tmp_a <~[17] tmp_b',
-      'CARRY = (tmp_a >> (16 - tmp_b)) & 0x1',
+      'CARRY = (tmp >> 16) & 0x1',
       'CF = CARRY',
-      'OF = (((tmp_a >> 14) - 1) & 0x3) < 2 ? 1 : 0',
-      'flag_op = flag_op | ${FLAG_OP_NOCF} | ${FLAG_OP_NOOF}',
+      'OF = ((tmp >> 15) ^ (tmp >> 16)) & 0x1',
+      'flag_op = ${FLAG_OP_RESOLVED}',
     ],
   },
   locals: [
@@ -208,8 +210,8 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
+            'next if (CL & 0x1f) == 0',
             'tmp_b = (CL & 0x1f) % 9',
-            'next if tmp_b == 0',
             'effective_address = ${MOD_RM_SEGMENT} + %{DISP:u16}',
             'tmp_a = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -218,8 +220,8 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
+            'next if (CL & 0x1f) == 0',
             'tmp_b = (CL & 0x1f) % 9',
-            'next if tmp_b == 0',
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
@@ -242,8 +244,8 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
+            'next if (CL & 0x1f) == 0',
             'tmp_b = (CL & 0x1f) % 9',
-            'next if tmp_b == 0',
             'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET}):u16',
             'tmp_a = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -252,8 +254,8 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
+            'next if (CL & 0x1f) == 0',
             'tmp_b = (CL & 0x1f) % 9',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
@@ -272,8 +274,8 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
+            'next if (CL & 0x1f) == 0',
             'tmp_b = (CL & 0x1f) % 9',
-            'next if tmp_b == 0',
             'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'tmp_a = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -282,8 +284,8 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
+            'next if (CL & 0x1f) == 0',
             'tmp_b = (CL & 0x1f) % 9',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
@@ -306,8 +308,8 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
+            'next if (CL & 0x1f) == 0',
             'tmp_b = (CL & 0x1f) % 9',
-            'next if tmp_b == 0',
             'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'tmp_a = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -316,8 +318,8 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
+            'next if (CL & 0x1f) == 0',
             'tmp_b = (CL & 0x1f) % 9',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
@@ -338,8 +340,8 @@ export const rcl: InstructionInfo = {
     },
     {
       operation: [
+        'next if (CL & 0x1f) == 0',
         'tmp_b = (CL & 0x1f) % 9',
-        'next if tmp_b == 0',
         'tmp_a = ${MOD_RM_RM8}',
         '${ALU8_OP}',
         '${MOD_RM_RM8} = tmp',
@@ -354,8 +356,8 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
+            'next if (%{imm} & 0x1f) == 0',
             'tmp_b = (%{imm} & 0x1f) % 9',
-            'next if tmp_b == 0',
             'effective_address = ${MOD_RM_SEGMENT} + %{DISP:u16}',
             'tmp_a = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -364,8 +366,8 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
+            'next if (%{imm} & 0x1f) == 0',
             'tmp_b = (%{imm} & 0x1f) % 9',
-            'next if tmp_b == 0',
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
@@ -389,8 +391,8 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
+            'next if (%{imm} & 0x1f) == 0',
             'tmp_b = (%{imm} & 0x1f) % 9',
-            'next if tmp_b == 0',
             'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET}):u16',
             'tmp_a = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -399,8 +401,8 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
+            'next if (%{imm} & 0x1f) == 0',
             'tmp_b = (%{imm} & 0x1f) % 9',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
@@ -423,8 +425,8 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
+            'next if (%{imm} & 0x1f) == 0',
             'tmp_b = (%{imm} & 0x1f) % 9',
-            'next if tmp_b == 0',
             'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'tmp_a = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -433,8 +435,8 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
+            'next if (%{imm} & 0x1f) == 0',
             'tmp_b = (%{imm} & 0x1f) % 9',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
@@ -458,8 +460,8 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
+            'next if (%{imm} & 0x1f) == 0',
             'tmp_b = (%{imm} & 0x1f) % 9',
-            'next if tmp_b == 0',
             'effective_address = ${MOD_RM_SEGMENT} + (${MOD_RM_OFFSET} + %{DISP}):u16',
             'tmp_a = RAM:u8[effective_address]',
             '${ALU8_OP}',
@@ -468,8 +470,8 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
+            'next if (%{imm} & 0x1f) == 0',
             'tmp_b = (%{imm} & 0x1f) % 9',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED8}',
@@ -491,8 +493,8 @@ export const rcl: InstructionInfo = {
     },
     {
       operation: [
+        'next if (%{imm} & 0x1f) == 0',
         'tmp_b = (%{imm} & 0x1f) % 9',
-        'next if tmp_b == 0',
         'tmp_a = ${MOD_RM_RM8}',
         '${ALU8_OP}',
         '${MOD_RM_RM8} = tmp',
@@ -661,11 +663,11 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp_b = (CL & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (CL & 0x1f) == 0',
+            'tmp_b = (CL & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -673,11 +675,11 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
-            'tmp_b = (CL & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (CL & 0x1f) == 0',
+            'tmp_b = (CL & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -697,11 +699,11 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp_b = (CL & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (CL & 0x1f) == 0',
+            'tmp_b = (CL & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -709,11 +711,11 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
-            'tmp_b = (CL & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (CL & 0x1f) == 0',
+            'tmp_b = (CL & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -729,11 +731,11 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp_b = (CL & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (CL & 0x1f) == 0',
+            'tmp_b = (CL & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -741,11 +743,11 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
-            'tmp_b = (CL & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (CL & 0x1f) == 0',
+            'tmp_b = (CL & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -765,11 +767,11 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp_b = (CL & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (CL & 0x1f) == 0',
+            'tmp_b = (CL & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -777,11 +779,11 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
-            'tmp_b = (CL & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (CL & 0x1f) == 0',
+            'tmp_b = (CL & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -799,8 +801,8 @@ export const rcl: InstructionInfo = {
     },
     {
       operation: [
+        'next if (CL & 0x1f) == 0',
         'tmp_b = (CL & 0x1f) % 17',
-        'next if tmp_b == 0',
         'tmp_a = ${MOD_RM_RM16}',
         '${ALU16_OP}',
         '${MOD_RM_RM16} = tmp',
@@ -815,11 +817,11 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp_b = (%{imm} & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (%{imm} & 0x1f) == 0',
+            'tmp_b = (%{imm} & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -827,11 +829,11 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
-            'tmp_b = (%{imm} & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (%{imm} & 0x1f) == 0',
+            'tmp_b = (%{imm} & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -852,11 +854,11 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp_b = (%{imm} & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (%{imm} & 0x1f) == 0',
+            'tmp_b = (%{imm} & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -864,11 +866,11 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
-            'tmp_b = (%{imm} & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (%{imm} & 0x1f) == 0',
+            'tmp_b = (%{imm} & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -888,11 +890,11 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp_b = (%{imm} & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (%{imm} & 0x1f) == 0',
+            'tmp_b = (%{imm} & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -900,11 +902,11 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
-            'tmp_b = (%{imm} & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (%{imm} & 0x1f) == 0',
+            'tmp_b = (%{imm} & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -925,11 +927,11 @@ export const rcl: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp_b = (%{imm} & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (%{imm} & 0x1f) == 0',
+            'tmp_b = (%{imm} & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -937,11 +939,11 @@ export const rcl: InstructionInfo = {
         },
         protected: {
           operation: [
-            'tmp_b = (%{imm} & 0x1f) % 17',
-            'next if tmp_b == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (%{imm} & 0x1f) == 0',
+            'tmp_b = (%{imm} & 0x1f) % 17',
             'tmp_a = RAM:u16[effective_address]',
             '${ALU16_OP}',
             'RAM:u16[effective_address] = tmp',
@@ -960,8 +962,8 @@ export const rcl: InstructionInfo = {
     },
     {
       operation: [
+        'next if (%{imm} & 0x1f) == 0',
         'tmp_b = (%{imm} & 0x1f) % 17',
-        'next if tmp_b == 0',
         'tmp_a = ${MOD_RM_RM16}',
         '${ALU16_OP}',
         '${MOD_RM_RM16} = tmp',

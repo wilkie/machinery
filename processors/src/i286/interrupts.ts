@@ -167,6 +167,7 @@ export const interrupts = {
             '#GP if offset == 0xffff',
             '#GP if (offset + 2) == 0xffff',
             '#GP if (offset + 4) == 0xffff',
+            '${RESOLVE_FLAGS}',
             'RAM:u16[stack_address] = IP',
             'RAM:u16[stack_address + 2] = CS',
             'RAM:u16[stack_address + 4] = FLAGS',
@@ -303,6 +304,7 @@ export const interrupts = {
                 'SS = new_ss',
                 'SP = new_sp',
                 ';; push old SS:SP, FLAGS, CS:IP on new stack (10 bytes)',
+                '${RESOLVE_FLAGS}',
                 'tmp = SP - 10',
                 'offset = tmp',
                 'stack_address = SS_BASE + offset',
@@ -321,6 +323,7 @@ export const interrupts = {
               'if (desc_type & 0b010) == 0b010 || new_cpl == (old_cs & 0x0003)',
               [
                 ';; push FLAGS, CS:IP on current stack (6 bytes)',
+                '${RESOLVE_FLAGS}',
                 'tmp = SP - 6',
                 'offset = tmp',
                 'stack_address = SS_BASE + offset',

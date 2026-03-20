@@ -218,6 +218,7 @@ export function runSingleStepTests(prefix: string): void {
                   `Test #${test.idx} "${test.name}" [${test.bytes.map(b => b.toString(16).padStart(2, '0')).join(' ')}]:\n` +
                   errors.map(e => `  ${e}`).join('\n')
                 );
+                sampleFailures.push(JSON.stringify(test, null, 2));
               }
             } else {
               passed++;

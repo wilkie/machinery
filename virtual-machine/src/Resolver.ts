@@ -377,6 +377,7 @@ class Resolver {
     } else if (node instanceof EmptyNode) {
       ret = node;
     } else {
+      console.log(node);
       throw new Error(`Unknown syntax node discovered.`);
     }
 
@@ -917,19 +918,22 @@ class Resolver {
 
     // Array access (direct byte access within the region)
     if (next instanceof ArrayAccessNode) {
+      const coercion = operand.coercion ? `:${operand.coercion}` : `:${regionMapping.signed ?? mapping.signed ?? false ? 'u' : 'i'}${regionMapping.size || mapping.size || 8}`;
+      const size = operand.coercion ? parseInt(operand.coercion.slice(1)) : (regionMapping.size || mapping.size || 8);
       ret.references = {
         type: 'memory',
-        identifier: operand.coercion ? `:${operand.coercion}` : ':u8',
+        identifier: coercion,
         index: next.index,
-        size: operand.coercion ? parseInt(operand.coercion.slice(1)) : 8,
-        signed: operand.coercion?.startsWith('i'),
+        size,
+        signed: coercion.startsWith('i'),
       };
 
-      ret.size = ret.references.size;
+      ret.aligned = (offset & (Math.floor(size / 8) - 1)) === 0x0;
+      ret.size = size;
       ret.signed = ret.references.signed;
 
       ret.address = new BinaryExpressionNode(
-        new ExpressionNode(new OperandNode(offset)),
+        new ExpressionNode(new OperandNode(offset >> Math.floor(size / 16))),
         '+',
         next.index,
       );
@@ -983,14 +987,14 @@ class Resolver {
 
     const next: OperandNode | ArrayAccessNode = operand.next;
 
-    // Array access (direct byte access within the memory)
+    // Array access (direct byte/word access within the memory)
     if (next instanceof ArrayAccessNode) {
       ret.references = {
         type: 'memory',
-        identifier: operand.coercion ? `:${operand.coercion}` : ':u8',
+        identifier: operand.coercion ? `:${operand.coercion}` : `:u${memoryInfo.size || 8}`,
         index: next.index,
-        size: operand.coercion ? parseInt(operand.coercion.slice(1)) : 8,
-        signed: operand.coercion?.startsWith('i'),
+        size: operand.coercion ? parseInt(operand.coercion.slice(1)) : (memoryInfo.size || 8),
+        signed: operand.coercion?.startsWith('i') || memoryInfo.signed || false,
       };
 
       ret.size = ret.references.size;
@@ -1017,7 +1021,7 @@ class Resolver {
     };
 
     ret.address = new BinaryExpressionNode(
-      new ExpressionNode(new OperandNode(mapping.start)),
+      new ExpressionNode(new OperandNode(ret.aligned ? mapping.start >> Math.floor(ret.size / 16) : mapping.start)),
       '+',
       ret.address,
     );

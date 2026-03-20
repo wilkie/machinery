@@ -642,10 +642,10 @@ export const shr: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'next if (CL & 0x1f) == 0',
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (CL & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = CL & 0x1f',
             '${ALU16_OP}',
@@ -654,10 +654,10 @@ export const shr: InstructionInfo = {
         },
         protected: {
           operation: [
-            'next if (CL & 0x1f) == 0',
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (CL & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = CL & 0x1f',
             '${ALU16_OP}',
@@ -679,10 +679,10 @@ export const shr: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'next if (CL & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (CL & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = CL & 0x1f',
             '${ALU16_OP}',
@@ -691,10 +691,10 @@ export const shr: InstructionInfo = {
         },
         protected: {
           operation: [
-            'next if (CL & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (CL & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = CL & 0x1f',
             '${ALU16_OP}',
@@ -712,10 +712,10 @@ export const shr: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'next if (CL & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (CL & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = CL & 0x1f',
             '${ALU16_OP}',
@@ -724,10 +724,10 @@ export const shr: InstructionInfo = {
         },
         protected: {
           operation: [
-            'next if (CL & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (CL & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = CL & 0x1f',
             '${ALU16_OP}',
@@ -749,10 +749,10 @@ export const shr: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'next if (CL & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (CL & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = CL & 0x1f',
             '${ALU16_OP}',
@@ -761,10 +761,10 @@ export const shr: InstructionInfo = {
         },
         protected: {
           operation: [
-            'next if (CL & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (CL & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = CL & 0x1f',
             '${ALU16_OP}',
@@ -801,10 +801,10 @@ export const shr: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'next if (%{imm} & 0x1f) == 0',
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (%{imm} & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU16_OP}',
@@ -813,10 +813,10 @@ export const shr: InstructionInfo = {
         },
         protected: {
           operation: [
-            'next if (%{imm} & 0x1f) == 0',
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (%{imm} & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU16_OP}',
@@ -839,10 +839,10 @@ export const shr: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'next if (%{imm} & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (%{imm} & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU16_OP}',
@@ -851,10 +851,10 @@ export const shr: InstructionInfo = {
         },
         protected: {
           operation: [
-            'next if (%{imm} & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (%{imm} & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU16_OP}',
@@ -876,10 +876,10 @@ export const shr: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'next if (%{imm} & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (%{imm} & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU16_OP}',
@@ -888,10 +888,10 @@ export const shr: InstructionInfo = {
         },
         protected: {
           operation: [
-            'next if (%{imm} & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (%{imm} & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU16_OP}',
@@ -914,10 +914,10 @@ export const shr: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'next if (%{imm} & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            'next if (%{imm} & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU16_OP}',
@@ -926,10 +926,10 @@ export const shr: InstructionInfo = {
         },
         protected: {
           operation: [
-            'next if (%{imm} & 0x1f) == 0',
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
+            'next if (%{imm} & 0x1f) == 0',
             'a = RAM:u16[effective_address]',
             'b = %{imm} & 0x1f',
             '${ALU16_OP}',

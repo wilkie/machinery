@@ -248,7 +248,9 @@ export const Opcodes = {
   ROL_ROR_RCL_RCR_SAL_SAR_SHR_EW_CL: 0xd3,
   AAM: 0xd4,
   AAD: 0xd5,
+  SALC: 0xd6,
   XLAT: 0xd7,
+  ESC: 0xd8,
   // LOOPNZ
   LOOPNE: 0xe0,
   // LOOPZ

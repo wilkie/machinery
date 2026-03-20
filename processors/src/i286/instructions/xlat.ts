@@ -30,7 +30,9 @@ export const xlat: InstructionInfo = {
       operands: [],
       modes: {
         real: {
-          operation: ['AL = RAM:u8[DS_BASE + BX + AL]'],
+          operation: [
+            'AL = RAM:u8[(DATA_SEG_BASE == 0xffff ? DS_BASE : DATA_SEG_BASE) + (BX + AL):u16]',
+          ],
         },
         protected: {
           operation: [

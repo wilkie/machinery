@@ -8,6 +8,10 @@ const parityArray: number[] = Array.from({ length: 256 }, (_, i) => {
   return onesCount % BASE_2 === 0 ? 1 : 0; // Return 1 if the count is even, otherwise 0
 });
 
+const aamArray: number[] = Array.from({ length: 256 }, (_, i) => {
+  return ((Math.floor(i / 10)) << 8) | (i % 10);
+});
+
 export const memory: MemoryInfo[] = [
   {
     // System ROM
@@ -21,6 +25,13 @@ export const memory: MemoryInfo[] = [
         identifier: 'PARITY',
         name: 'Parity (PF) Map',
         data: parityArray,
+      },
+      {
+        // The cache of AAM 0xA values
+        identifier: 'AAM_0XA',
+        name: 'AAM Lookup Table',
+        size: 16,
+        data: aamArray,
       },
     ],
   },

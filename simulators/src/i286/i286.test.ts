@@ -17,11 +17,13 @@ class TestMachine extends Machine {
   private handleAssertions(vector: number): boolean {
     if (vector === 0x23) {
       if (this.AX !== this.BX) {
+        console.log(`FAIL: AX=0x${this.AX.toString(16)} AH=0x${this.BX.toString(16)} IP=0x${(this.IP & 0xffff).toString(16)}`);
         this.halted = -1;
       }
       return true;
     } else if (vector === 0x22) {
       if (this.AL !== this.AH) {
+        console.log(`FAIL: AL=0x${this.AL.toString(16)} AH=0x${this.AH.toString(16)} IP=0x${(this.IP & 0xffff).toString(16)}`);
         this.halted = -1;
       }
       return true;

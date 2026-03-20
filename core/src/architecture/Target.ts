@@ -590,6 +590,8 @@ export interface BaseMemoryInfo {
   min?: number;
   max?: number;
   length?: number;
+  size?: number;
+  signed?: boolean;
 }
 
 export type ReadOnlyMemoryInfo = BaseMemoryInfo & {

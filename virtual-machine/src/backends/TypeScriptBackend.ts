@@ -241,7 +241,7 @@ class TypeScriptBackend extends Backend {
       }
       code.push(`    // ${name}`);
       code.push(
-        `    this.mem8.set(${JSON.stringify(info.data)}, 0x${info.start.toString(16)});`,
+        `    this.mem${info.size}.set(${JSON.stringify(info.data)}, 0x${info.start.toString(16)}${info.size !== 8 ? ` >> ${info.size / 16}` : ''});`,
       );
     }
     code.push('');
@@ -719,6 +719,7 @@ class TypeScriptBackend extends Backend {
                   {
                     type: 'memory',
                     identifier: 'memory',
+                    aligned: false,
                     mapping: {
                       start: 0,
                       size: 16,
@@ -778,6 +779,7 @@ class TypeScriptBackend extends Backend {
                   {
                     type: 'memory',
                     identifier: 'memory',
+                    aligned: false,
                     mapping: {
                       start: 0,
                       size: 32,
@@ -1099,10 +1101,10 @@ class TypeScriptBackend extends Backend {
                 // Disallowed path: resolve the interrupt vector from the
                 // disallowed operation (e.g. '#UD' → '#6' → interrupt 6).
                 const disallowedOp =
-                  (matcher.instruction.disallowed as InstructionFormModes)
+                  ((matcher.instruction.disallowed as InstructionFormModes)
                     .modes?.[context.mode]?.operation ||
                   (matcher.instruction.disallowed as InstructionFormFlat)
-                    .operation;
+                    .operation).flat(19) as string[];
                 // Extract interrupt vector from the operation (supports
                 // '#UD', '#6', '#GP' etc. via the target's interrupt table)
                 let vector: number | undefined;
@@ -1439,7 +1441,7 @@ class TypeScriptBackend extends Backend {
     reference: MemoryReference,
     address: ExpressionNode,
   ): string[] {
-    const { size, signed, offset } = reference;
+    const { size, signed, offset, aligned } = reference;
 
     // Normalize to valid TypedArray width (8, 16, or 32)
     let width = size;
@@ -1458,13 +1460,27 @@ class TypeScriptBackend extends Backend {
         `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}this.mem8[${effective}]${signed ? ` << ${32 - width} >> ${32 - width})` : ''}${offset ? ` >> ${offset})` : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
       ];
     } else if (width === 16) {
-      return [
-        `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x1 ? (this.mem16[(${effective}) >> 1] >> 8) | ((this.mem16[((${effective}) >> 1) + 1] & 0xff) << 8) : this.mem16[(${effective}) >> 1])${signed ? ` << ${32 - width} >> ${32 - width})` : ''}${offset ? ` >> ${offset})` : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
-      ];
+      if (aligned) {
+        return [
+          `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}this.mem16[${effective}]${signed ? ` << ${32 - width} >> ${32 - width})` : ''}${offset ? ` >> ${offset})` : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
+        ];
+      }
+      else {
+        return [
+          `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x1 ? (this.mem16[(${effective}) >> 1] >> 8) | ((this.mem16[((${effective}) >> 1) + 1] & 0xff) << 8) : this.mem16[(${effective}) >> 1])${signed ? ` << ${32 - width} >> ${32 - width})` : ''}${offset ? ` >> ${offset})` : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
+        ];
+      }
     } else if (width === 32) {
-      return [
-        `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x3 ? ((this.mem32[(${effective}) >> 2] >> (8 * (${effective} % 4))) | (this.mem32[((${effective}) >> 2) + 1] << (8 * (4 - ${effective} % 4))) & 0xffffffff) : this.mem32[(${effective}) >> 2])${signed ? ' | 0)' : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
-      ];
+      if (aligned) {
+        return [
+          `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}this.mem32[${effective}]${signed ? ' | 0)' : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
+        ];
+      }
+      else {
+        return [
+          `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x3 ? ((this.mem32[(${effective}) >> 2] >> (8 * (${effective} % 4))) | (this.mem32[((${effective}) >> 2) + 1] << (8 * (4 - ${effective} % 4))) & 0xffffffff) : this.mem32[(${effective}) >> 2])${signed ? ' | 0)' : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
+        ];
+      }
     }
 
     return [`this.mem${width}[${effective}]`];

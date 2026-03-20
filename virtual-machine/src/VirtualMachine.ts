@@ -63,7 +63,7 @@ class VirtualMachine {
     this.memoryMap = memoryMap;
 
     // Unallocated memory (or flexible RAM) is located at the end of the defined memory
-    // romSize is already an absolute position (generateMemoryMap starts from registerMap.size)
+    // ramStart is already an absolute position (generateMemoryMap starts from registerMap.size)
     this.linearStart = ramStart;
 
     this.decoderMap = this.generateDecoderMap();
@@ -137,7 +137,18 @@ class VirtualMachine {
           info: info,
         };
 
-        this.mem8.set(ret[tag].data, ret[tag].start);
+        if (ret[tag].size === 8) {
+          this.mem8.set(ret[tag].data, ret[tag].start);
+        }
+        else if (ret[tag].size === 16) {
+          this.mem16.set(ret[tag].data, ret[tag].start >> 1);
+        }
+        else if (ret[tag].size === 32) {
+          this.mem32.set(ret[tag].data, ret[tag].start >> 2);
+        }
+        else {
+          throw new Error('Cannot use a read-only region that has a non-byte-aligned size');
+        }
         position += ret[tag].length;
       }
 

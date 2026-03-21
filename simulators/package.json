@@ -31,6 +31,8 @@
     "build:generate:wasm:z80": "machinery-vm --target z80 --backend webassembly > src/z80/machine.wat && wat2wasm src/z80/machine.wat -o src/z80/machine.wasm && machinery-vm --target z80 --backend wasm-machine > src/z80/WasmMachine.ts",
     "build:generate:wasm": "pnpm build:generate:wasm:i286 && pnpm build:generate:wasm:z80",
     "build:generate": "pnpm build:generate:i286 && pnpm build:generate:z80 && pnpm build:generate:wasm",
+    "build:i286": "pnpm build:generate:i286 && pnpm build:generate:wasm:i286 && tsup",
+    "build:z80": "pnpm build:generate:z80 && pnpm build:generate:wasm:z80 && tsup",
     "build": "pnpm build:generate && tsup",
     "test": "jest --passWithNoTests",
     "build:tests": "pnpm build:tests:i286 && pnpm build:tests:z80",

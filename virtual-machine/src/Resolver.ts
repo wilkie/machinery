@@ -907,12 +907,9 @@ class Resolver {
     // Regions are mapped in the memory map, so we can find an offset there
     // if it is otherwise unknown.
     const regionMapping = this.memoryMap[tag];
-    const offsetTag: string | number =
+    const offset: string | number =
       (regionInfo as BaseOffsettableMemoryRegion).offset ||
       (regionMapping.start || mapping.start) - mapping.start;
-
-    // Dereference the register for this offset
-    const offset: number = typeof offsetTag === 'string' ? 0 : offsetTag;
 
     if (!operand.next) {
       return ret;
@@ -936,12 +933,21 @@ class Resolver {
         signed: coercion.startsWith('i'),
       };
 
-      ret.aligned = (offset & (Math.floor(size / 8) - 1)) === 0x0;
+      ret.aligned =
+        typeof offset !== 'string'
+          ? (offset & (Math.floor(size / 8) - 1)) === 0x0
+          : false;
       ret.size = size;
       ret.signed = ret.references.signed;
 
       ret.address = new BinaryExpressionNode(
-        new ExpressionNode(new OperandNode(offset >> Math.floor(size / 16))),
+        new ExpressionNode(
+          new OperandNode(
+            typeof offset !== 'string'
+              ? offset >> Math.floor(size / 16)
+              : offset,
+          ),
+        ),
         '+',
         next.index,
       );

@@ -43,17 +43,13 @@ const REG_SETTERS: Record<keyof Registers, string> = {
 const FLAGS_MASK_286 = 0x0fd7; // CF, PF, AF, ZF, SF, TF, IF, DF, OF (no IOPL/NT in real mode)
 
 // Internal register offsets for lazy flag evaluation state.
-const FLAG_OP_OFFSET = 46; // mem16 index
-const FLAG_OP_RESOLVED = 0x8000;
-const CARRY_OFFSET = 252; // mem8 index — mirrors CF through RESOLVE_FLAGS
+const CARRY_OFFSET = 256; // mem8 index — mirrors CF through RESOLVE_FLAGS
 
 function setupMachine(test: MooTest): Machine {
   const m = new Machine();
   m.mode = 0; // real mode
 
-  // Mark flags as already resolved so HLT's RESOLVE_FLAGS doesn't clobber
-  // the initial flag state.
-  m.mem16[FLAG_OP_OFFSET] = FLAG_OP_RESOLVED;
+  // Mimic the CARRY placeholder
   if (test.initial.regs.flags !== undefined) {
     m.mem8[CARRY_OFFSET] = test.initial.regs.flags & 1;
   }

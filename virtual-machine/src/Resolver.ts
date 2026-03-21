@@ -66,29 +66,38 @@ function minBits(n: number): number {
   return Math.ceil(Math.log2(n + 1));
 }
 
-/** Infer the resolved type for a binary expression. */
+/** Infer the resolved type for a binary expression.
+ *
+ * Follows C "usual arithmetic conversion" rules:
+ *  - Operands are widened to the width of the largest operand.
+ *  - If either operand is unsigned the other is coerced to unsigned and
+ *    the result is unsigned.  Both must be signed for the result to be signed.
+ */
 function inferBinaryType(
   op: string,
   left?: ExpressionType,
   right?: ExpressionType,
 ): ExpressionType | undefined {
   if (!left || !right) return undefined;
+  // C rule: unsigned wins — result is signed only when both operands are signed
+  const signed = left.signed && right.signed;
+  const wider = Math.max(left.size, right.size);
   switch (op) {
     case '&':
-      return { size: Math.min(left.size, right.size), signed: false };
+      return { size: Math.min(left.size, right.size), signed };
     case '|':
     case '^':
-      return { size: Math.max(left.size, right.size), signed: false };
+      return { size: wider, signed };
     case '+':
     case '-':
       return {
-        size: Math.min(Math.max(left.size, right.size) + 1, 32),
-        signed: left.signed || right.signed,
+        size: Math.min(wider + 1, 32),
+        signed,
       };
     case '*':
       return {
         size: Math.min(left.size + right.size, 32),
-        signed: left.signed || right.signed,
+        signed,
       };
     case '<<': {
       // If right is a known constant, we can be more precise
@@ -425,7 +434,14 @@ class Resolver {
         ret.resolvedType = inferBinaryType(ret.operator, leftType, rightType);
       }
     } else if (ret instanceof ExpressionNode && ret.coercion) {
-      ret.resolvedType = parseCoercion(ret.coercion);
+      const coercionType = parseCoercion(ret.coercion);
+      // C rule: coercing to signed when the inner expression is unsigned
+      // still produces unsigned (unsigned wins in binary contexts).
+      const innerType = (ret.operand as Node).resolvedType;
+      if (coercionType.signed && innerType && !innerType.signed) {
+        coercionType.signed = false;
+      }
+      ret.resolvedType = coercionType;
     } else if (ret instanceof ExpressionNode && !ret.coercion) {
       // Passthrough: inherit operand's type
       ret.resolvedType = (ret.operand as Node).resolvedType;

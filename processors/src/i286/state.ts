@@ -1,6 +1,8 @@
 import { RegisterTypes } from '@machinery/core';
 import type { RegisterInfo } from '@machinery/core';
 
+import macros from './macros';
+
 export const state: RegisterInfo[] = [
   // ALU operand registers
   {
@@ -18,6 +20,12 @@ export const state: RegisterInfo[] = [
   // Divisor state
   {
     identifier: 'div_a',
+    name: 'ALU Dividend Operand',
+    size: 32,
+    type: RegisterTypes.Integer,
+  },
+  {
+    identifier: 'div_b',
     name: 'ALU Divisor Operand',
     size: 32,
     type: RegisterTypes.Integer,
@@ -35,6 +43,7 @@ export const state: RegisterInfo[] = [
     name: 'FLAGS modifier state',
     size: 16,
     type: RegisterTypes.Integer,
+    initialValue: macros.FLAG_OP_RESOLVED,
   },
   // Repeat prefix loop target IP
   {

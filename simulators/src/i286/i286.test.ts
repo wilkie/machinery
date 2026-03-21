@@ -57,10 +57,10 @@ class TestMachine extends Machine {
     if (!this.handleAssertions(vector)) {
       super.interrupt_protected(vector);
     } else {
-      // Clear SOFTWARE_INT flag (mem8[268]) that was set by the INT instruction.
+      // Clear SOFTWARE_INT flag (mem8[272]) that was set by the INT instruction.
       // Without this, the next hardware exception would see stale SOFTWARE_INT=1
       // and incorrectly treat it as a software INT (clobbering the error code).
-      this.mem8[268] = 0;
+      this.mem8[272] = 0;
     }
   }
 }

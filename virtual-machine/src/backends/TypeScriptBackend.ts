@@ -201,6 +201,9 @@ class TypeScriptBackend extends Backend {
     const last = result[result.length - 1];
     if (coercion.startsWith('i')) {
       result[result.length - 1] = `(${last} << ${32 - size} >> ${32 - size})`;
+    } else if (size >= 32) {
+      // For 32-bit unsigned, use >>> 0 to avoid JS signed int32 issues
+      result[result.length - 1] = `((${last}) >>> 0)`;
     } else {
       const mask = (Math.pow(2, size) - 1) >>> 0;
       result[result.length - 1] = `((${last}) & 0x${mask.toString(16)})`;
@@ -1482,7 +1485,7 @@ class TypeScriptBackend extends Backend {
         ];
       } else {
         return [
-          `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x3 ? ((this.mem32[(${effective}) >> 2] >> (8 * (${effective} % 4))) | (this.mem32[((${effective}) >> 2) + 1] << (8 * (4 - ${effective} % 4))) & 0xffffffff) : this.mem32[(${effective}) >> 2])${signed ? ' | 0)' : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
+          `${size !== width ? '(' : ''}${offset ? '(' : ''}${signed ? '(' : ''}(${effective} & 0x3 ? ((this.mem32[(${effective}) >> 2] >> (8 * (${effective} % 4))) | ((this.mem32[((${effective}) >> 2) + 1] << (8 * (4 - ${effective} % 4))) & 0xffffffff) >>> 0) : this.mem32[(${effective}) >> 2])${signed ? ' | 0)' : ''}${size !== width ? ` & 0x${(Math.pow(2, size || 0) - 1).toString(16)})` : ''}`,
         ];
       }
     }
@@ -1641,7 +1644,7 @@ class TypeScriptBackend extends Backend {
       ];
     } else if (size === 32) {
       return [
-        `(${address} & 0x3 ? ((this.mem32[(${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2] >> (8 * (${address} % 4))) | (this.mem32[((${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2) + 1] << (8 * (4 - ${address} % 4))) & 0xffffffff) : this.mem32[(${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2])`,
+        `(${address} & 0x3 ? ((this.mem32[(${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2] >> (8 * (${address} % 4))) | ((this.mem32[((${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2) + 1] << (8 * (4 - ${address} % 4))) & 0xffffffff) >>> 0) : this.mem32[(${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2])`,
       ];
     }
 

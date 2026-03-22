@@ -727,14 +727,6 @@ class Backend {
     );
   }
 
-  fromArray(
-    _generated: GeneratedStatement,
-    _operand: OperandNode,
-    _node: ArrayAccessNode,
-  ): string[] {
-    return [];
-  }
-
   fromRegisterChoiceExpression(
     generated: GeneratedStatement,
     node: RegisterChoiceExpressionNode,

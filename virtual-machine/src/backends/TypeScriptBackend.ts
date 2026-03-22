@@ -1622,55 +1622,6 @@ class TypeScriptBackend extends Backend {
     return [`this.${identifier.substring(1)} = ${value}`];
   }
 
-  readMemory_(
-    _generated: GeneratedStatement,
-    name: string,
-    size: number,
-    address: string,
-  ): string[] {
-    if (!(name in this.memoryMap)) {
-      throw new Error(`Error: unknown memory ${name}`);
-    }
-
-    const { start } = this.memoryMap[name];
-
-    if (size === 8) {
-      return [
-        `this.mem8[${address}${start ? ` + 0x${start.toString(16)}` : ''}]`,
-      ];
-    } else if (size === 16) {
-      return [
-        `(${address} & 0x1 ? (this.mem16[(${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 1] >> 8) | ((this.mem16[((${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 1) + 1] & 0xff) << 8) : this.mem16[(${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 1])`,
-      ];
-    } else if (size === 32) {
-      return [
-        `(${address} & 0x3 ? ((this.mem32[(${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2] >> (8 * (${address} % 4))) | ((this.mem32[((${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2) + 1] << (8 * (4 - ${address} % 4))) & 0xffffffff) >>> 0) : this.mem32[(${address}${start ? ` + 0x${start.toString(16)}` : ''}) >> 2])`,
-      ];
-    }
-
-    return [`this.mem${size}[0x${start.toString(16)} + ${address}]`];
-  }
-
-  writeMemory_(
-    _generated: GeneratedStatement,
-    name: string,
-    size: number,
-    address: string,
-    value: string,
-  ): string[] {
-    const { start } = this.memoryMap[name];
-
-    if (size === 1) {
-      return [`this.mem8[${address} + 0x${start.toString(16)}] = ${value}`];
-    } else if (size === 2) {
-      return [
-        `if (${address} & 0x1) { const _value = ${value}; this.mem8[(${address}) + 0x${start.toString(16)}] = _value; this.mem8[(${address}) + 0x${start.toString(16)} + 1] = _value >> 8; } else { this.mem16[(${address} + 0x${start.toString(16)}) >> 1] = ${value}; }`,
-      ];
-    }
-
-    return [`this.mem${size}[0x${start.toString(16)} + ${address}] = ${value}`];
-  }
-
   readGlobal(generated: GeneratedStatement, reference: Reference): string[] {
     // Check register map for registers and state
     if (reference.type === 'register') {
@@ -1915,22 +1866,6 @@ class TypeScriptBackend extends Backend {
     return [
       `${this.fromComparisonOperand(generated, node.operand)[0]} ${node.operator === '==' ? '===' : node.operator === '!=' ? '!==' : node.operator} ${this.fromComparisonOperand(generated, node.argument)[0]}`,
     ];
-  }
-
-  fromArray(
-    generated: GeneratedStatement,
-    operand: OperandNode,
-    node: ArrayAccessNode,
-  ): string[] {
-    const arrayName = operand.value.toString();
-
-    // Determine the memory item
-    return this.readMemory_(
-      generated,
-      arrayName,
-      1,
-      this.fromNode(generated, node.index)[0],
-    );
   }
 }
 

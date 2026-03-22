@@ -885,59 +885,6 @@ class WebAssemblyBackend extends Backend {
     return [`(;; unknown logic op ${node.operator} ;;)`];
   }
 
-  fromArray(
-    generated: GeneratedStatement,
-    operand: OperandNode,
-    node: ArrayAccessNode,
-  ): string[] {
-    const arrayName = operand.value.toString();
-
-    // Determine the memory item
-    return this.readMemory_(
-      generated,
-      arrayName,
-      1,
-      this.fromNode(generated, node.index)[0],
-    );
-  }
-
-  private readMemory_(
-    _generated: GeneratedStatement,
-    name: string,
-    size: number,
-    address: string,
-  ): string[] {
-    if (!(name in this.memoryMap)) {
-      throw new Error(`Error: unknown memory ${name}`);
-    }
-
-    const { start } = this.memoryMap[name];
-    const offset = start || 0;
-    const load = this.loadOp(size * 8);
-
-    return [`(${load} align=1 (i32.add ${address} (i32.const ${offset})))`];
-  }
-
-  private writeMemory_(
-    _generated: GeneratedStatement,
-    name: string,
-    size: number,
-    address: string,
-    value: string,
-  ): string[] {
-    if (!(name in this.memoryMap)) {
-      throw new Error(`Error: unknown memory ${name}`);
-    }
-
-    const { start } = this.memoryMap[name];
-    const offset = start || 0;
-    const store = this.storeOp(size * 8);
-
-    return [
-      `(${store} align=1 (i32.add ${address} (i32.const ${offset})) ${value})`,
-    ];
-  }
-
   // --- Decoder generation ---
 
   private craftInstruction(

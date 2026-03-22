@@ -33,6 +33,8 @@ class Tokenizer {
       repeat: /repeat/,
       // end (end if, etc)
       end: /end/,
+      // else
+      else: /else/,
       // . (as a delimiter between identifiers: foo.bar)
       dot: /\./,
       // A list is an array indexer generally found within a macro expansion. (${[FOO,BAR][RM]})

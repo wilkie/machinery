@@ -9,7 +9,6 @@ import type {
 } from '@machinery/core';
 
 import {
-  ArrayAccessNode,
   AssignmentNode,
   BinaryExpressionNode,
   BinaryLogicNode,
@@ -1761,40 +1760,6 @@ class TypeScriptBackend extends Backend {
     return [`${allocated_name} = ${value}`];
   }
 
-  /*readGlobals(generated: GeneratedStatement, entries: (number | string)[], index: string): string[] {
-    const { pattern, halved, addresses, memsize, diff } = this.determinePattern(entries);
-
-    // TODO: if there is a pattern, we should try to conditionally handle it
-    for (const entry of entries) {
-      if (typeof entry === 'string') {
-        if (!generated.accesses.includes(entry)) {
-          generated.accesses.push(entry);
-        }
-      }
-    }
-
-    const code = pattern ? `this.mem${memsize}[${addresses[0] > 0 ? `0x${addresses[0].toString(16)} + ` : ""}${diff !== 1 ? `0x${diff.toString(16)} * ` : ""}${halved ? `((${index}) & 0x${((addresses.length / 2) - 1).toString(16)}) + (${addresses[addresses.length / 2] - addresses[0] > 1 ? `0x${(addresses[addresses.length / 2] - addresses[0]).toString(16)} * ` : ""}(((${index}) & 0x${(addresses.length / 2).toString(16)}) >> 0x${Math.log2(addresses.length / 2).toString(16)}))` : `(${index})`}]` :
-      `this.mem${memsize}[[${addresses.map((address) => `0x${address.toString(16)}`).join(',')}][${index}]]`;
-    return [code];
-  }
-
-  writeGlobals(generated: GeneratedStatement, entries: (number | string)[], index: string, value: string): string[] {
-    const { pattern, halved, addresses, memsize, diff } = this.determinePattern(entries);
-
-    // TODO: if there is a pattern, we should try to conditionally handle it
-    for (const entry of entries) {
-      if (typeof entry === 'string') {
-        if (!generated.modifies.includes(entry)) {
-          generated.modifies.push(entry);
-        }
-      }
-    }
-
-    const code = pattern ? `this.mem${memsize}[${addresses[0] > 0 ? `0x${addresses[0].toString(16)} + ` : ""}${diff !== 1 ? `0x${diff.toString(16)} * ` : ""}${halved ? `((${index}) & 0x${((addresses.length / 2) - 1).toString(16)}) + (${addresses[addresses.length / 2] - addresses[0] > 1 ? `0x${(addresses[addresses.length / 2] - addresses[0]).toString(16)} * ` : ""}(((${index}) & 0x${(addresses.length / 2).toString(16)}) >> 0x${Math.log2(addresses.length / 2).toString(16)}))` : `(${index})`}]` :
-      `this.mem${memsize}[[${addresses.map((address) => `0x${address.toString(16)}`).join(',')}][${index}]]`;
-    return [code + ' = ' + value];
-  }*/
-
   fromNextIf(generated: GeneratedStatement, node: NextIfNode): string[] {
     return [
       `if (${this.fromComparison(generated, node.condition)[0]}) { break outer; }`,
@@ -1806,9 +1771,15 @@ class TypeScriptBackend extends Backend {
       ? this.fromStatement(node.body, generated.context)
       : undefined;
 
+    const elseBody = node.elseBody
+      ? this.fromStatement(node.elseBody, generated.context)
+      : undefined;
+
     return [
       `if (${this.fromComparison(generated, node.condition)[0]}) {`,
       ...(body?.code.map((line) => `  ${line}`) || []),
+      ...(elseBody ? ['} else {'] : []),
+      ...(elseBody?.code.map((line) => `  ${line}`) || []),
       `} // end if`,
     ];
   }

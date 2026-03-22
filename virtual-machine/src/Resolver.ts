@@ -349,6 +349,7 @@ class Resolver {
       ret = new IfBlockNode(
         this.resolveNode(node.condition, locals, localMap),
         node.body ? this.resolve(node.body, locals, localMap) : undefined,
+        node.elseBody ? this.resolve(node.elseBody, locals, localMap) : undefined,
       );
     } else if (node instanceof LoopBlockNode) {
       ret = new LoopBlockNode(

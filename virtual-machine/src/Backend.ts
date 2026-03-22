@@ -3,7 +3,6 @@ import type { Target } from '@machinery/core';
 import type VirtualMachine from './VirtualMachine';
 
 import {
-  ArrayAccessNode,
   AssignmentNode,
   BinaryExpressionNode,
   BinaryLogicNode,

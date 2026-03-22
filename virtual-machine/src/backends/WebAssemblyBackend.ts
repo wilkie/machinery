@@ -9,7 +9,6 @@ import type {
 } from '@machinery/core';
 
 import {
-  ArrayAccessNode,
   BinaryExpressionNode,
   BinaryLogicNode,
   ComparisonEvaluationNode,
@@ -661,11 +660,20 @@ class WebAssemblyBackend extends Backend {
       ? this.fromStatement(node.body, generated.context)
       : undefined;
 
+    const elseBody = node.elseBody
+      ? this.fromStatement(node.elseBody, generated.context)
+      : undefined;
+
     return [
       `(if ${this.fromComparison(generated, node.condition)[0]}`,
       `  (then`,
       ...(body?.code.map((line) => `    ${line}`) || []),
       `  )`,
+      ...(elseBody ? [
+        `  (else`,
+        ...(elseBody?.code.map((line) => `    ${line}`) || []),
+        `  )`,
+      ] : []),
       `)`,
     ];
   }

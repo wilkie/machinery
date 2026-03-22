@@ -28,6 +28,7 @@ import NextIfNode from './ast/NextIfNode';
 import type { Token } from './Token';
 
 const if_ = { test: (x: Token) => x.type === 'if' };
+const else_ = { test: (x: Token) => x.type === 'else' };
 const dot = { test: (x: Token) => x.type === 'dot' };
 const comment = { test: (x: Token) => x.type === 'comment' };
 const not_terminator = { test: (x: Token) => x.type !== 'terminator' };
@@ -139,12 +140,25 @@ const grammar: Grammar = {
     {"name": "statement$ebnf$19", "symbols": ["statement$ebnf$19", terminator], "postprocess": (d) => d[0].concat([d[1]])},
     {"name": "statement$ebnf$20", "symbols": ["statement"], "postprocess": id},
     {"name": "statement$ebnf$20", "symbols": [], "postprocess": () => null},
-    {"name": "statement", "symbols": [raise, "operand", if_, "comparison", "statement$ebnf$19", "statement$ebnf$20"], "postprocess": (data) => new StatementNode(new RaiseExpressionNode(data[1], data[3]), data[5] || undefined)},
     {"name": "statement$ebnf$21", "symbols": []},
     {"name": "statement$ebnf$21", "symbols": ["statement$ebnf$21", terminator], "postprocess": (d) => d[0].concat([d[1]])},
-    {"name": "statement$ebnf$22", "symbols": ["statement"], "postprocess": id},
-    {"name": "statement$ebnf$22", "symbols": [], "postprocess": () => null},
-    {"name": "statement", "symbols": [comment, "statement$ebnf$21", "statement$ebnf$22"], "postprocess": (data) => new StatementNode(new CommentNode(data[0].value), data[2] || undefined)},
+    {"name": "statement$ebnf$22", "symbols": []},
+    {"name": "statement$ebnf$22", "symbols": ["statement$ebnf$22", terminator], "postprocess": (d) => d[0].concat([d[1]])},
+    {"name": "statement$ebnf$23", "symbols": []},
+    {"name": "statement$ebnf$23", "symbols": ["statement$ebnf$23", terminator], "postprocess": (d) => d[0].concat([d[1]])},
+    {"name": "statement$ebnf$24", "symbols": ["statement"], "postprocess": id},
+    {"name": "statement$ebnf$24", "symbols": [], "postprocess": () => null},
+    {"name": "statement", "symbols": [if_, "comparison", "statement$ebnf$19", "statement$ebnf$20", "statement$ebnf$21", else_, "statement$ebnf$22", "statement", end, if_, "statement$ebnf$23", "statement$ebnf$24"], "postprocess": (data) => new StatementNode(new IfBlockNode(data[1], data[3], data[7]), data[11] || undefined)},
+    {"name": "statement$ebnf$25", "symbols": []},
+    {"name": "statement$ebnf$25", "symbols": ["statement$ebnf$25", terminator], "postprocess": (d) => d[0].concat([d[1]])},
+    {"name": "statement$ebnf$26", "symbols": ["statement"], "postprocess": id},
+    {"name": "statement$ebnf$26", "symbols": [], "postprocess": () => null},
+    {"name": "statement", "symbols": [raise, "operand", if_, "comparison", "statement$ebnf$25", "statement$ebnf$26"], "postprocess": (data) => new StatementNode(new RaiseExpressionNode(data[1], data[3]), data[5] || undefined)},
+    {"name": "statement$ebnf$27", "symbols": []},
+    {"name": "statement$ebnf$27", "symbols": ["statement$ebnf$27", terminator], "postprocess": (d) => d[0].concat([d[1]])},
+    {"name": "statement$ebnf$28", "symbols": ["statement"], "postprocess": id},
+    {"name": "statement$ebnf$28", "symbols": [], "postprocess": () => null},
+    {"name": "statement", "symbols": [comment, "statement$ebnf$27", "statement$ebnf$28"], "postprocess": (data) => new StatementNode(new CommentNode(data[0].value), data[2] || undefined)},
     {"name": "assignment", "symbols": ["named", assignment, "expression"], "postprocess": (data) => new AssignmentNode(data[0], data[2])},
     {"name": "assignment", "symbols": [macro_start, identifier, macro_end, assignment, "expression"], "postprocess": (data) => new AssignmentNode(new OperandNode(data[1].value, data[1].coercion), data[4])},
     {"name": "assignment$ebnf$1", "symbols": []},

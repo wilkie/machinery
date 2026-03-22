@@ -22,6 +22,21 @@ export const enter: InstructionInfo = {
       size: 32,
     },
     {
+      identifier: 'last_offset',
+      name: 'Last Write Offset',
+      size: 32,
+    },
+    {
+      identifier: 'last_value',
+      name: 'Last Value',
+      size: 16,
+    },
+    {
+      identifier: 'current_value',
+      name: 'Current Value',
+      size: 16,
+    },
+    {
       identifier: 'frame_ptr',
       name: 'Frame Pointer',
       size: 16,
@@ -41,41 +56,83 @@ export const enter: InstructionInfo = {
         real: {
           operation: [
             'level = %{level} % 32',
-            // Push BP
-            'SP = SP - 2',
-            'offset = SP',
-            'stack_address = SS_BASE + offset',
+            // Push BP at frame_ptr location
+            'offset = (SP - 2):u16',
             '#GP if offset == 0xffff',
-            'RAM:u16[stack_address] = BP',
-            // Initialize frame_ptr
-            'frame_ptr = SP',
-            // When the level is specified
-            'if level > 0',
+            // Emulate bus behavior when BP=SP
+            'if BP == SP',
             [
-              // We wind the stack for larger levels
-              'loop if level > 1',
+              // Save the pre-push low byte for bus-pending emulation
+              'last_value = RAM:u8[SS_BASE + offset]',
+              'RAM:u16[SS_BASE + offset] = BP',
+              // Initialize frame_ptr (SP after BP push)
+              'frame_ptr = offset',
+              // When the level is specified, copy display before writing BP
+              // (the 286 reads the old frame before committing the BP push)
+              'if level > 0',
               [
-                'BP = BP - 2',
-                'SP = SP - 2',
-                'offset = BP',
+                // The BP push is the first pending write on the bus
+                'last_offset = frame_ptr',
+                // Copy display entries from old frame using offset as write pointer
+                'loop if level > 1',
+                [
+                  'BP = BP - 2',
+                  'offset = (offset - 2):u16',
+                  '#GP if BP == 0xffff',
+                  '#GP if offset == 0xffff',
+                  'current_value = RAM:u8[SS_BASE + offset]',
+                  'RAM:u16[SS_BASE + offset] = RAM:u16[SS_BASE + BP]',
+                  'if BP == last_offset',
+                  [
+                    ';; emulate the memory bus not yet committing the prior write',
+                    'RAM:u16[SS_BASE + offset] = last_value | (RAM:u16[SS_BASE + BP] & 0xff00)',
+                  ],
+                  'end if',
+                  'last_value = current_value',
+                  'last_offset = offset',
+                  'level = level - 1',
+                ],
+                'repeat',
+                // Push the frame pointer
+                'offset = (offset - 2):u16',
                 '#GP if offset == 0xffff',
-                'offset = SP',
-                '#GP if offset == 0xffff',
-                'RAM:u16[SS_BASE + SP] = RAM:u16[SS_BASE + BP]',
-                'level = level - 1',
+                'RAM:u16[SS_BASE + offset] = frame_ptr',
               ],
-              'repeat',
-              // We always push the frame pointer
-              'SP = SP - 2',
-              'offset = SP',
-              '#GP if offset == 0xffff',
-              'RAM:u16[SS_BASE + SP] = frame_ptr',
+              'end if',
+            ],
+            'else',
+            [
+              'RAM:u16[SS_BASE + offset] = BP',
+              // Initialize frame_ptr (SP after BP push)
+              'frame_ptr = offset',
+              // When the level is specified, copy display before writing BP
+              // (the 286 reads the old frame before committing the BP push)
+              'if level > 0',
+              [
+                // The BP push is the first pending write on the bus
+                'last_offset = frame_ptr',
+                // Copy display entries from old frame using offset as write pointer
+                'loop if level > 1',
+                [
+                  'BP = BP - 2',
+                  'offset = (offset - 2):u16',
+                  '#GP if BP == 0xffff',
+                  '#GP if offset == 0xffff',
+                  'RAM:u16[SS_BASE + offset] = RAM:u16[SS_BASE + BP]',
+                  'level = level - 1',
+                ],
+                'repeat',
+                // Push the frame pointer
+                'offset = (offset - 2):u16',
+                '#GP if offset == 0xffff',
+                'RAM:u16[SS_BASE + offset] = frame_ptr',
+              ],
+              'end if',
             ],
             'end if',
-            // Maintain frame_ptr into BP
+            // Maintain frame_ptr into BP, set SP to end of frame
             'BP = frame_ptr',
-            // Allocate requested space on the stack
-            'SP = SP - %{imm}',
+            'SP = (offset - %{imm}):u16',
           ],
         },
         protected: {

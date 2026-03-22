@@ -53,6 +53,9 @@ const Target286: Target = {
         initialization: {
           operation: ['ip = FETCH_IP'],
         },
+        unknown: {
+          operation: ['#UD if 1 == 1'],
+        },
         read: {
           byte: {
             locals: [
@@ -100,6 +103,9 @@ const Target286: Target = {
         ],
         initialization: {
           operation: ['ip = FETCH_IP'],
+        },
+        unknown: {
+          operation: ['#UD if 1 == 1'],
         },
         read: {
           byte: {

@@ -2240,4 +2240,200 @@ export const operands: OpcodeMatcher[] = [
     type: InstructionDataTypes.Immediate,
     size: 32,
   },
+  // ModRM with reg field unconstrained (ignored) — for undocumented C6/C7 aliases
+  // mod == 0b00, rm == 0b110 (direct displacement), reg = any
+  {
+    identifier: 'ModRM_110_00',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        match: 0b110,
+        value: 0,
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        value: 0,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b00,
+      },
+    ],
+  },
+  // mod == 0b00, rm = variable memory, reg = any
+  {
+    identifier: 'ModRM_rm_00',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: [
+          'BX + SI',
+          'BX + DI',
+          'BP + SI',
+          'BP + DI',
+          'SI',
+          'DI',
+          null,
+          'BX',
+        ],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        value: 0,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b00,
+      },
+    ],
+  },
+  // mod == 0b01, rm = variable memory, reg = any
+  {
+    identifier: 'ModRM_rm_01',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: [
+          'BX + SI',
+          'BX + DI',
+          'BP + SI',
+          'BP + DI',
+          'SI',
+          'DI',
+          'BP',
+          'BX',
+        ],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        value: 0,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b01,
+      },
+    ],
+  },
+  // mod == 0b10, rm = variable memory, reg = any
+  {
+    identifier: 'ModRM_rm_10',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Memory,
+        encoding: [
+          'BX + SI',
+          'BX + DI',
+          'BP + SI',
+          'BP + DI',
+          'SI',
+          'DI',
+          'BP',
+          'BX',
+        ],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        value: 0,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b10,
+      },
+    ],
+  },
+  // mod == 0b11, rm = 8-bit register, reg = any
+  {
+    identifier: 'ModRM_rm8_11',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AL', 'CL', 'DL', 'BL', 'AH', 'CH', 'DH', 'BH'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        value: 0,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b11,
+      },
+    ],
+  },
+  // mod == 0b11, rm = 16-bit register, reg = any
+  {
+    identifier: 'ModRM_rm16_11',
+    name: 'ModRM',
+    type: InstructionDataTypes.Operand,
+    size: 8,
+    fields: [
+      {
+        identifier: 'rm',
+        offset: 0,
+        size: 3,
+        type: InstructionOperandTypes.Register,
+        encoding: ['AX', 'CX', 'DX', 'BX', 'SP', 'BP', 'SI', 'DI'],
+      },
+      {
+        identifier: 'reg',
+        offset: 3,
+        size: 3,
+        value: 0,
+      },
+      {
+        identifier: 'mod',
+        offset: 6,
+        size: 2,
+        match: 0b11,
+      },
+    ],
+  },
 ];

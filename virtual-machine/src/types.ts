@@ -294,6 +294,10 @@ export interface IntermediateRepresentation {
       };
     };
   };
+  /** Parsed and resolved "unknown opcode" handler per mode */
+  unknown?: {
+    [mode: string]: ParsedOperation;
+  };
   /** The system state that is embedded in the machine linear memory */
   system: {
     mode?: MemoryReference;

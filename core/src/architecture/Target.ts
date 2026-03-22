@@ -143,11 +143,18 @@ export interface OpcodeMatcherFieldBase {
   signed?: boolean;
   /** Requires this field to match exactly the given number. */
   match?: number;
-  /** The value to use when this field is referenced as a local variable.
+  /**
+   * The value to use when this field is referenced as a local variable.
    * If not set, defaults to the match value. Useful when the match value
    * is consumed for form identification but a different value is needed
    * for code generation (e.g., direct displacement uses rm=6 for matching
-   * but needs rm=0 to select the DS segment base). */
+   * but needs rm=0 to select the DS segment base).
+   *
+   * This is also used when encoding this operand and it does not have an
+   * exact match. This is useful for when fields don't actually care what
+   * value they are, but assemblers should note that there is a preferred
+   * pattern to actually use.
+   * */
   value?: number;
   /**
    * The encoding expected to map to the subfield value when assembled.
@@ -435,6 +442,7 @@ export interface DecodeInfo {
      */
     operation: Operation;
   };
+  unknown?: OperationNotViaMode;
   /**
    * Describes read operations for the decoding phase.
    *

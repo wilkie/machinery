@@ -1246,10 +1246,37 @@ class TypeScriptBackend extends Backend {
       context.code.push(indent + '}');
       ifword = 'else if';
     }
-    // Maybe we cannot find any
+    // Maybe we cannot find any — emit the target's "unknown" operation (e.g. #UD)
     if ((decoder.partial || []).length > 0) {
+      const unknownParsed = this.parsed.unknown?.[context.mode];
       context.code.push(indent + 'else {');
-      context.code.push(indent + '  // undefined');
+      if (unknownParsed) {
+        // Restore IP to instruction start (before prefixes) — faults save the
+        // faulting instruction address, not the current position.
+        const ipReg =
+          this.target.fetch?.effectiveRegister ||
+          (Array.isArray(this.target.fetch?.register)
+            ? this.target.fetch?.register?.[0]
+            : this.target.fetch?.register);
+        if (ipReg) {
+          const mapping = this.registerMap.registers?.[ipReg];
+          if (mapping) {
+            let { size } = mapping;
+            if (size <= 8) size = 8;
+            else if (size <= 16) size = 16;
+            else size = 32;
+            context.code.push(
+              indent + `  this.mem${size}[${mapping.index}] = _ip_save;`,
+            );
+          }
+        }
+        const { code } = this.fromStatement(unknownParsed.statement);
+        for (const line of code) {
+          context.code.push(indent + '  ' + line);
+        }
+      } else {
+        context.code.push(indent + '  // undefined');
+      }
       context.code.push(indent + '}');
     }
     if (decoder.exact) {

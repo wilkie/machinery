@@ -93,7 +93,12 @@ export const int: InstructionInfo = {
     {
       opcode: [Opcodes.INTO],
       operands: [],
-      operation: ['${RESOLVE_FLAGS}', 'SOFTWARE_INT = 1', '#4 if OF > 0x0'],
+      operation: [
+        '${RESOLVE_FLAGS}',
+        'if OF > 0x0',
+        ['SOFTWARE_INT = 1', '#4'],
+        'end if',
+      ],
       cycles: 24, // 3, if no jump occurs
     },
   ],

@@ -218,13 +218,12 @@ export const iret: InstructionInfo = {
         real: {
           operation: [
             'offset = SP',
-            'stack_address = SS_BASE + offset',
             '#GP if offset == 0xffff',
             '#GP if (offset + 2) == 0xffff',
             '#GP if (offset + 4) == 0xffff',
-            'IP = RAM:u16[stack_address]',
-            'CS = RAM:u16[stack_address + 2]',
-            'FLAGS = RAM:u16[stack_address + 4] | 0b10',
+            'IP = RAM:u16[SS_BASE + offset]',
+            'CS = RAM:u16[SS_BASE + ((offset + 2) & 0xffff):u16]',
+            'FLAGS = RAM:u16[SS_BASE + ((offset + 4) & 0xffff):u16] | 0b10',
             ';; sync lazy flag state with restored FLAGS',
             'flag_op = ${FLAG_OP_RESOLVED}',
             'CARRY = CF',

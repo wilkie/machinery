@@ -212,23 +212,15 @@ t3:
     mov dx, ax
 
     enter 0,1
-    ; For curiosity: SP after LEAVE should equal the value stored at [BP-2] (SP0)
-    mov bx, [bp-2]           ; capture SP0 as saved by ENTER
     leave
     SAVE_FLAGS
 
-    mov ax, dx
-    mov dx, ax               ; keep AX unchanged check form
-    push bx
     mov bx, dx
     ASSERT_EQ_AX_BX
-    pop bx
 
     ; BP/SP restored
     mov ax, [bp0_store]
     ASSERT_BP_EQ ax
-    ASSERT_SP_EQ bx          ; bx still holds the captured SP0
-    ; Also equals sp0_store
     mov bx, [sp0_store]
     ASSERT_SP_EQ bx
 

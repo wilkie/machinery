@@ -4,12 +4,11 @@
 ;   int 0x22: assert AL == AH  (single-flag checks via saved FLAGS)
 ;
 ; ENTER semantics (16-bit):
-;   tempSP := SP
 ;   PUSH BP
-;   frameTemp := SP
+;   frameTemp := SP          ; (SP after push BP = original SP - 2)
 ;   if nesting > 0:
-;       for i=1..(nesting-1): PUSH word ptr [BP - i*2]   ; (using original BP)
-;       PUSH tempSP
+;       for i=1..(nesting-1): BP -= 2; PUSH word ptr [BP]
+;       PUSH frameTemp        ; (NOT original SP; this is SP after initial BP push)
 ;   BP := frameTemp
 ;   SP := SP - size
 ; Effects:
@@ -246,9 +245,10 @@ t3:
     mov bx, [bp0_store]
     ASSERT_EQ_AX_BX
 
-    ; [BP-2] == tempSP (SP0)
+    ; [BP-2] == FRAME_PTR (SP after initial BP push = SP0 - 2)
     mov ax, [bp-2]
     mov bx, [sp0_store]
+    sub bx, 2
     ASSERT_EQ_AX_BX
 
     CHECK_ALL_PRESERVED
@@ -275,13 +275,14 @@ t4:
     sub bx, 10
     ASSERT_SP_EQ bx
 
-    ; [BP] old BP, [BP-2] tempSP
+    ; [BP] old BP, [BP-2] FRAME_PTR (SP0 - 2)
     mov ax, [bp]
     mov bx, [bp0_store]
     ASSERT_EQ_AX_BX
 
     mov ax, [bp-2]
     mov bx, [sp0_store]
+    sub bx, 2
     ASSERT_EQ_AX_BX
 
     CHECK_CF 1
@@ -321,9 +322,10 @@ t5:
     mov ax, [bp-2]
     mov bx, 0xA001
     ASSERT_EQ_AX_BX
-    ; [BP-4] tempSP (SP0)
+    ; [BP-4] FRAME_PTR (SP0 - 2)
     mov ax, [bp-4]
     mov bx, [sp0_store]
+    sub bx, 2
     ASSERT_EQ_AX_BX
 
     CHECK_ALL_PRESERVED
@@ -360,6 +362,7 @@ t6:
 
     mov ax, [bp-4]
     mov bx, [sp0_store]
+    sub bx, 2
     ASSERT_EQ_AX_BX
 
     CHECK_CF 1
@@ -403,6 +406,7 @@ t7:
     ASSERT_EQ_AX_BX
     mov ax, [bp-6]
     mov bx, [sp0_store]
+    sub bx, 2
     ASSERT_EQ_AX_BX
 
     CHECK_ALL_PRESERVED
@@ -437,6 +441,7 @@ t8:
     ASSERT_EQ_AX_BX
     mov ax, [bp-6]
     mov bx, [sp0_store]
+    sub bx, 2
     ASSERT_EQ_AX_BX
 
     CHECK_CF 1
@@ -482,6 +487,7 @@ t9:
     ASSERT_EQ_AX_BX
     mov ax, [bp-10]
     mov bx, [sp0_store]
+    sub bx, 2
     ASSERT_EQ_AX_BX
 
     CHECK_ALL_PRESERVED
@@ -553,6 +559,7 @@ t11:
 
     mov ax, [bp-2]
     mov bx, [sp0_store]
+    sub bx, 2
     ASSERT_EQ_AX_BX
 
     CHECK_ALL_PRESERVED

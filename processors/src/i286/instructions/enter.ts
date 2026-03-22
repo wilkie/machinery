@@ -57,21 +57,19 @@ export const enter: InstructionInfo = {
               [
                 'BP = BP - 2',
                 'SP = SP - 2',
-                'stack_address = stack_address - 2',
                 'offset = BP',
                 '#GP if offset == 0xffff',
                 'offset = SP',
                 '#GP if offset == 0xffff',
-                'RAM:u16[stack_address] = RAM:u16[SS_BASE + BP]',
+                'RAM:u16[SS_BASE + SP] = RAM:u16[SS_BASE + BP]',
                 'level = level - 1',
               ],
               'repeat',
-              // We always push the initial value of SP (frame_ptr + 2)
+              // We always push the frame pointer
               'SP = SP - 2',
-              'stack_address = stack_address - 2',
               'offset = SP',
               '#GP if offset == 0xffff',
-              'RAM:u16[stack_address] = frame_ptr + 2',
+              'RAM:u16[SS_BASE + SP] = frame_ptr',
             ],
             'end if',
             // Maintain frame_ptr into BP
@@ -100,24 +98,22 @@ export const enter: InstructionInfo = {
               [
                 'BP = BP - 2',
                 'SP = SP - 2',
-                'stack_address = stack_address - 2',
                 'offset = BP',
                 '#GP if (offset + 1) < SS_LIMIT_MIN',
                 '#GP if (offset + 1) > SS_LIMIT_MAX',
                 'offset = SP',
                 '#GP if (offset + 1) < SS_LIMIT_MIN',
                 '#GP if (offset + 1) > SS_LIMIT_MAX',
-                'RAM:u16[stack_address] = RAM:u16[SS_BASE + BP]',
+                'RAM:u16[SS_BASE + SP] = RAM:u16[SS_BASE + BP]',
                 'level = level - 1',
               ],
               'repeat',
-              // We always push the initial value of SP (frame_ptr + 2)
+              // We always push the frame pointer
               'SP = SP - 2',
-              'stack_address = stack_address - 2',
               'offset = SP',
               '#GP if (offset + 1) < SS_LIMIT_MIN',
               '#GP if (offset + 1) > SS_LIMIT_MAX',
-              'RAM:u16[stack_address] = frame_ptr + 2',
+              'RAM:u16[SS_BASE + SP] = frame_ptr',
             ],
             'end if',
             // Maintain frame_ptr into BP

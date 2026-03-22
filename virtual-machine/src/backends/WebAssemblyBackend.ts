@@ -166,13 +166,12 @@ class WebAssemblyBackend extends Backend {
       }
       code.push(`    ;; ${name}`);
       const data = Array.from(info.data);
-      // Store ROM data byte by byte
+      // Store ROM data element by element
       const bytes = info.size / 8;
-      const shift = Math.floor(info.size / 16);
       for (let i = 0; i < data.length; i++) {
         if (data[i] !== 0) {
           code.push(
-            `    (i32.store${info.size} (i32.const ${(info.start >> shift) + i * bytes}) (i32.const 0x${data[i].toString(16)}))`,
+            `    (i32.store${info.size} (i32.const ${info.start + i * bytes}) (i32.const 0x${data[i].toString(16)}))`,
           );
         }
       }
@@ -488,7 +487,13 @@ class WebAssemblyBackend extends Backend {
 
     const load = this.loadOp(size, signed);
 
-    // Wasm handles unaligned access natively with align=1
+    // When aligned, `effective` is an element index (matching TypedArray conventions).
+    // WASM uses byte addressing, so scale by element size for aligned accesses.
+    // Unaligned accesses already use byte addresses.
+    if (reference.aligned && size > 8) {
+      const shift = size === 16 ? 1 : 2;
+      return [`(${load} align=1 (i32.shl ${effective} (i32.const ${shift})))`];
+    }
     return [`(${load} align=1 ${effective})`];
   }
 
@@ -595,6 +600,10 @@ class WebAssemblyBackend extends Backend {
     const effective = this.fromExpression(generated, address)[0];
     const store = this.storeOp(size);
 
+    if (reference.aligned && size > 8) {
+      const shift = size === 16 ? 1 : 2;
+      return [`(${store} align=1 (i32.shl ${effective} (i32.const ${shift})) ${value})`];
+    }
     return [`(${store} align=1 ${effective} ${value})`];
   }
 

@@ -268,21 +268,34 @@ class Generator {
       }
     }
 
-    // Parse the "unknown opcode" handler for each mode
+    // Parse the "unknown opcode" and "limit" handlers for each mode
     for (const modeInfo of machine.target.modes || []) {
-      const unknownOp = modeInfo.decode?.unknown?.operation;
-      if (!unknownOp) continue;
       const mode = modeInfo.identifier;
-      const locals: LocalsInfo = {};
-      const localMap: LocalMap = {};
-      for (const local of modeInfo.decode?.unknown?.locals || []) {
-        locals[local.identifier] = local;
+
+      const unknownOp = modeInfo.decode?.unknown?.operation;
+      if (unknownOp) {
+        const locals: LocalsInfo = {};
+        const localMap: LocalMap = {};
+        for (const local of modeInfo.decode?.unknown?.locals || []) {
+          locals[local.identifier] = local;
+        }
+        const code = unknownOp.flat(19).join(' ; ');
+        const parsed = this.parser.parse(code + ' ;', {}, locals);
+        const statement = this.resolver.resolve(parsed, locals, localMap);
+        map.unknown ||= {};
+        map.unknown[mode] = { statement, localMap };
       }
-      const code = unknownOp.flat(19).join(' ; ');
-      const parsed = this.parser.parse(code + ' ;', {}, locals);
-      const statement = this.resolver.resolve(parsed, locals, localMap);
-      map.unknown ||= {};
-      map.unknown[mode] = { statement, localMap };
+
+      const limitInfo = modeInfo.decode?.limit;
+      if (limitInfo) {
+        const locals: LocalsInfo = {};
+        const localMap: LocalMap = {};
+        const code = limitInfo.operation.flat(19).join(' ; ');
+        const parsed = this.parser.parse(code + ' ;', {}, locals);
+        const statement = this.resolver.resolve(parsed, locals, localMap);
+        map.limit ||= {};
+        map.limit[mode] = { bytes: limitInfo.bytes, parsed: { statement, localMap } };
+      }
     }
 
     this.map = map;

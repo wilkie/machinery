@@ -298,6 +298,10 @@ export interface IntermediateRepresentation {
   unknown?: {
     [mode: string]: ParsedOperation;
   };
+  /** Parsed and resolved instruction length limit handler per mode */
+  limit?: {
+    [mode: string]: { bytes: number; parsed: ParsedOperation };
+  };
   /** The system state that is embedded in the machine linear memory */
   system: {
     mode?: MemoryReference;

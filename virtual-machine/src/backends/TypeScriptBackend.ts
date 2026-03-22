@@ -287,10 +287,10 @@ class TypeScriptBackend extends Backend {
         `0x${info.initialValue.toString(16)}`,
       );
       for (const line of writeCode) {
-        code.push(`    ${line}`);
+        code.push(`    ${line};`);
       }
       for (const line of this.fromModifies(generated)) {
-        code.push(`    ${line}`);
+        code.push(`    ${line};`);
       }
     }
     code.push('  }');
@@ -898,16 +898,14 @@ class TypeScriptBackend extends Backend {
       //context.code.push(indent + this.readGlobal(generated, ip) + " += 0x" + bytesRead.toString(16) + ";");
       generated.context.ipAdvance = bytesRead;
 
-      // Check instruction length limit (only for non-prefix instructions,
-      // since _ip has consumed all bytes by this point)
-      const maxLen = target.fetch?.maxInstructionLength;
-      if (maxLen && !prefix) {
-        const gpVec = target.interrupts?.vectors?.find(
-          (v) => v.identifier === 'GP',
+      // Check instruction length limit
+      const limitInfo2 = this.parsed.limit?.[context.mode];
+      if (limitInfo2 && !prefix) {
+        const { code: limitCode } = this.fromStatement(
+          limitInfo2.parsed.statement,
         );
-        const gpNum = gpVec?.index ?? 13;
         context.code.push(
-          `${indent}if (_ip - _ip_start > ${maxLen}) { ${this.writeRegister(generated, ipReference, '_ip_save')}; this.interrupt_${context.mode}(${gpNum}); return; }`,
+          `${indent}if (_ip - _ip_start > ${limitInfo2.bytes}) { ${this.writeRegister(generated, ipReference, '_ip_save')}; ${limitCode.join(' ')} }`,
         );
       }
     }
@@ -1269,6 +1267,20 @@ class TypeScriptBackend extends Backend {
               indent + `  this.mem${size}[${mapping.index}] = _ip_save;`,
             );
           }
+        }
+        // Instruction length limit check — takes priority over unknown handler
+        const limitInfo = this.parsed.limit?.[context.mode];
+        if (limitInfo) {
+          const { code: limitCode } = this.fromStatement(
+            limitInfo.parsed.statement,
+          );
+          context.code.push(
+            indent + `  if (_ip - _ip_start > ${limitInfo.bytes}) {`,
+          );
+          for (const line of limitCode) {
+            context.code.push(indent + '    ' + line);
+          }
+          context.code.push(indent + '  }');
         }
         const { code } = this.fromStatement(unknownParsed.statement);
         for (const line of code) {

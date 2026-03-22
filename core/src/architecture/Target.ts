@@ -444,6 +444,14 @@ export interface DecodeInfo {
   };
   unknown?: OperationNotViaMode;
   /**
+   * Instruction length limit in bytes. When the number of consumed bytes
+   * exceeds this value, the `operation` is executed (typically raising #GP).
+   */
+  limit?: {
+    bytes: number;
+    operation: Operation;
+  };
+  /**
    * Describes read operations for the decoding phase.
    *
    * The decoder will occasionally need to fetch data from the instruction

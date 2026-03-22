@@ -34,9 +34,6 @@ const Target286: Target = {
 
     // And the instructions are fetched from the normal RAM
     memory: 'RAM',
-
-    // 286 enforces a 10-byte maximum instruction length (including prefixes)
-    maxInstructionLength: 10,
   },
   modes: [
     {
@@ -55,6 +52,10 @@ const Target286: Target = {
         },
         unknown: {
           operation: ['#UD if 1 == 1'],
+        },
+        limit: {
+          bytes: 10,
+          operation: ['#GP if 1 == 1'],
         },
         read: {
           byte: {
@@ -106,6 +107,10 @@ const Target286: Target = {
         },
         unknown: {
           operation: ['#UD if 1 == 1'],
+        },
+        limit: {
+          bytes: 10,
+          operation: ['#GP if 1 == 1'],
         },
         read: {
           byte: {

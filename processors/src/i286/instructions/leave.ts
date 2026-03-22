@@ -13,7 +13,23 @@ export const leave: InstructionInfo = {
   forms: [
     // 0xC9 - LEAVE
     {
-      operation: ['SP = BP + 2', 'BP = RAM:u16[SS_BASE + BP]'],
+      modes: {
+        real: {
+          operation: [
+            '#GP if BP == 0xffff',
+            'SP = BP + 2',
+            'BP = RAM:u16[SS_BASE + BP]',
+          ],
+        },
+        protected: {
+          operation: [
+            '#GP if (BP + 1) < SS_LIMIT_MIN',
+            '#GP if (BP + 1) > SS_LIMIT_MAX',
+            'SP = BP + 2',
+            'BP = RAM:u16[SS_BASE + BP]',
+          ],
+        },
+      },
       opcode: [Opcodes.LEAVE],
       operands: [],
       operandSize: 16,

@@ -99,46 +99,6 @@ export const macros = {
       : SF`,
   ],
 
-  RESOLVE_DIV_CARRY: [
-    ';; We have to perform the division algorithm to determine the carry',
-    'if (flag_op & ${FLAG_OP_BITS}) == ${FLAG_OP_8BIT}',
-    [
-      'b = b << 8',
-      'a = ((a >= b) ? (a - b) | 1 : a):u16',
-      'a = (((a << 1) >= b || (a & 0x8000) > 0) ? ((a << 1) - b) | 1 : a << 1):u16',
-      'a = (((a << 1) >= b || (a & 0x8000) > 0) ? ((a << 1) - b) | 1 : a << 1):u16',
-      'a = (((a << 1) >= b || (a & 0x8000) > 0) ? ((a << 1) - b) | 1 : a << 1):u16',
-      'a = (((a << 1) >= b || (a & 0x8000) > 0) ? ((a << 1) - b) | 1 : a << 1):u16',
-      'a = (((a << 1) >= b || (a & 0x8000) > 0) ? ((a << 1) - b) | 1 : a << 1):u16',
-      'a = (((a << 1) >= b || (a & 0x8000) > 0) ? ((a << 1) - b) | 1 : a << 1):u16',
-      'a = (((a << 1) >= b || (a & 0x8000) > 0) ? ((a << 1) - b) | 1 : a << 1):u16',
-      'CARRY = ((a >> 7):u8 < (b >> 8):u8) ? 1 : 0',
-    ],
-    'end if',
-    'if (flag_op & ${FLAG_OP_BITS}) == ${FLAG_OP_16BIT}',
-    [
-      'div_b = b << 16',
-      'div_a = (div_a >= div_b) ? (div_a - div_b) | 1 : div_a',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'div_a = ((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1',
-      'CARRY = ((div_a >> 15):u16 < b) ? 1 : 0',
-    ],
-    'end if',
-  ],
-
   RESOLVE_OF: [
     `OF = ((flag_op < $\{FLAG_OP_RESOLVED}) && (flag_op & $\{FLAG_OP_NOOF} == 0))
       ? ((flag_op & $\{FLAG_OP_LOGIC}) > 0

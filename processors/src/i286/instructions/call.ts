@@ -412,14 +412,15 @@ export const call: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp = SP - 2',
-            'stack_address = SS_BASE + tmp',
-            '#GP if tmp == 0xffff',
-            'RAM:u16[stack_address] = IP',
-            'SP = tmp',
+            // Read target first (may #GP on segment boundary)
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            // Then push return address
+            'tmp = (SP - 2):u16',
+            '#GP if tmp == 0xffff',
+            'RAM:u16[SS_BASE + tmp] = IP',
+            'SP = tmp',
             'IP = RAM:u16[effective_address]',
           ],
         },
@@ -449,14 +450,15 @@ export const call: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp = SP - 2',
-            'stack_address = SS_BASE + tmp',
-            '#GP if tmp == 0xffff',
-            'RAM:u16[stack_address] = IP',
-            'SP = tmp',
+            // Read target first (may #GP on segment boundary)
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            // Then push return address
+            'tmp = (SP - 2):u16',
+            '#GP if tmp == 0xffff',
+            'RAM:u16[SS_BASE + tmp] = IP',
+            'SP = tmp',
             'IP = RAM:u16[effective_address]',
           ],
         },
@@ -486,14 +488,15 @@ export const call: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp = SP - 2',
-            'stack_address = SS_BASE + tmp',
-            '#GP if tmp == 0xffff',
-            'RAM:u16[stack_address] = IP',
-            'SP = tmp',
+            // Read target first (may #GP on segment boundary)
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            // Then push return address
+            'tmp = (SP - 2):u16',
+            '#GP if tmp == 0xffff',
+            'RAM:u16[SS_BASE + tmp] = IP',
+            'SP = tmp',
             'IP = RAM:u16[effective_address]',
           ],
         },
@@ -523,14 +526,15 @@ export const call: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp = SP - 2',
-            'stack_address = SS_BASE + tmp',
-            '#GP if tmp == 0xffff',
-            'RAM:u16[stack_address] = IP',
-            'SP = tmp',
+            // Read target first (may #GP on segment boundary)
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
+            // Then push return address
+            'tmp = (SP - 2):u16',
+            '#GP if tmp == 0xffff',
+            'RAM:u16[SS_BASE + tmp] = IP',
+            'SP = tmp',
             'IP = RAM:u16[effective_address]',
           ],
         },
@@ -560,23 +564,26 @@ export const call: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp = SP - 2',
-            'stack_address = SS_BASE + tmp',
+            // Read target before push (CALL SP must read original SP)
+            'effective_address = ${MOD_RM_RM16}',
+            'tmp = (SP - 2):u16',
             '#GP if tmp == 0xffff',
-            'RAM:u16[stack_address] = IP',
+            'RAM:u16[SS_BASE + tmp] = IP',
             'SP = tmp',
-            'IP = ${MOD_RM_RM16}',
+            'IP = effective_address',
           ],
         },
         protected: {
           operation: [
+            // Read target before push (CALL SP must read original SP)
+            'effective_address = ${MOD_RM_RM16}',
             'tmp = SP - 2',
             'stack_address = SS_BASE + tmp',
             '#GP if (tmp + 1) < SS_LIMIT_MIN',
             '#GP if (tmp + 1) > SS_LIMIT_MAX',
             'RAM:u16[stack_address] = IP',
             'SP = tmp',
-            'IP = ${MOD_RM_RM16}',
+            'IP = effective_address',
           ],
         },
       },
@@ -592,12 +599,12 @@ export const call: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp = SP - 4',
+            'tmp = (SP - 4):u16',
             'stack_address = SS_BASE + tmp',
             '#GP if tmp == 0xffff',
-            '#GP if (tmp + 2) == 0xffff',
+            '#GP if (tmp + 2):u16 == 0xffff',
             'RAM:u16[stack_address] = IP',
-            'RAM:u16[stack_address + 2] = CS',
+            'RAM:u16[SS_BASE + ((tmp + 2) & 0xffff):u16] = CS',
             'SP = tmp',
             'CS = NEW_CS',
             'IP = NEW_IP',
@@ -637,18 +644,21 @@ export const call: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp = SP - 4',
-            'stack_address = SS_BASE + tmp',
-            '#GP if tmp == 0xffff',
-            '#GP if (tmp + 2) == 0xffff',
-            'RAM:u16[stack_address] = IP',
-            'RAM:u16[stack_address + 2] = CS',
-            'SP = tmp',
+            // Read far pointer first (may #GP on segment boundary)
             'offset = %{DISP:u16}',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '#GP if offset == 0xffff',
+            '#GP if (offset + 2):u16 == 0xffff',
+            // Then push return address
+            'tmp = (SP - 4):u16',
+            'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            '#GP if (tmp + 2):u16 == 0xffff',
+            'RAM:u16[stack_address] = IP',
+            'RAM:u16[SS_BASE + ((tmp + 2) & 0xffff):u16] = CS',
+            'SP = tmp',
             'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'CS = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
           ],
         },
         protected: {
@@ -657,7 +667,7 @@ export const call: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'gate_off = RAM:u16[effective_address]',
-            'gate_sel = RAM:u16[effective_address + 2]',
+            'gate_sel = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
             '${CALL_FAR_PROTECTED}',
           ],
         },
@@ -673,18 +683,21 @@ export const call: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp = SP - 4',
-            'stack_address = SS_BASE + tmp',
-            '#GP if tmp == 0xffff',
-            '#GP if (tmp + 2) == 0xffff',
-            'RAM:u16[stack_address] = IP',
-            'RAM:u16[stack_address + 2] = CS',
-            'SP = tmp',
+            // Read far pointer first (may #GP on segment boundary)
             'offset = (${MOD_RM_OFFSET}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '#GP if offset == 0xffff',
+            '#GP if (offset + 2):u16 == 0xffff',
+            // Then push return address
+            'tmp = (SP - 4):u16',
+            'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            '#GP if (tmp + 2):u16 == 0xffff',
+            'RAM:u16[stack_address] = IP',
+            'RAM:u16[SS_BASE + ((tmp + 2) & 0xffff):u16] = CS',
+            'SP = tmp',
             'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'CS = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
           ],
         },
         protected: {
@@ -693,7 +706,7 @@ export const call: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'gate_off = RAM:u16[effective_address]',
-            'gate_sel = RAM:u16[effective_address + 2]',
+            'gate_sel = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
             '${CALL_FAR_PROTECTED}',
           ],
         },
@@ -709,18 +722,21 @@ export const call: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp = SP - 4',
-            'stack_address = SS_BASE + tmp',
-            '#GP if tmp == 0xffff',
-            '#GP if (tmp + 2) == 0xffff',
-            'RAM:u16[stack_address] = IP',
-            'RAM:u16[stack_address + 2] = CS',
-            'SP = tmp',
+            // Read far pointer first (may #GP on segment boundary)
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '#GP if offset == 0xffff',
+            '#GP if (offset + 2):u16 == 0xffff',
+            // Then push return address
+            'tmp = (SP - 4):u16',
+            'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            '#GP if (tmp + 2):u16 == 0xffff',
+            'RAM:u16[stack_address] = IP',
+            'RAM:u16[SS_BASE + ((tmp + 2) & 0xffff):u16] = CS',
+            'SP = tmp',
             'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'CS = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
           ],
         },
         protected: {
@@ -729,7 +745,7 @@ export const call: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'gate_off = RAM:u16[effective_address]',
-            'gate_sel = RAM:u16[effective_address + 2]',
+            'gate_sel = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
             '${CALL_FAR_PROTECTED}',
           ],
         },
@@ -745,18 +761,21 @@ export const call: InstructionInfo = {
       modes: {
         real: {
           operation: [
-            'tmp = SP - 4',
-            'stack_address = SS_BASE + tmp',
-            '#GP if tmp == 0xffff',
-            '#GP if (tmp + 2) == 0xffff',
-            'RAM:u16[stack_address] = IP',
-            'RAM:u16[stack_address + 2] = CS',
-            'SP = tmp',
+            // Read far pointer first (may #GP on segment boundary)
             'offset = (${MOD_RM_OFFSET} + %{DISP}):u16',
             'effective_address = ${MOD_RM_SEGMENT} + offset',
-            '${SEGMENT_LIMIT_CHECK_REAL}',
+            '#GP if offset == 0xffff',
+            '#GP if (offset + 2):u16 == 0xffff',
+            // Then push return address
+            'tmp = (SP - 4):u16',
+            'stack_address = SS_BASE + tmp',
+            '#GP if tmp == 0xffff',
+            '#GP if (tmp + 2):u16 == 0xffff',
+            'RAM:u16[stack_address] = IP',
+            'RAM:u16[SS_BASE + ((tmp + 2) & 0xffff):u16] = CS',
+            'SP = tmp',
             'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'CS = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
           ],
         },
         protected: {
@@ -765,7 +784,7 @@ export const call: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'gate_off = RAM:u16[effective_address]',
-            'gate_sel = RAM:u16[effective_address + 2]',
+            'gate_sel = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
             '${CALL_FAR_PROTECTED}',
           ],
         },
@@ -778,30 +797,8 @@ export const call: InstructionInfo = {
       cycles: 11,
     },
     {
-      modes: {
-        real: {
-          operation: [
-            'tmp = SP - 4',
-            'stack_address = SS_BASE + tmp',
-            '#GP if tmp == 0xffff',
-            '#GP if (tmp + 2) == 0xffff',
-            'RAM:u16[stack_address] = IP',
-            'RAM:u16[stack_address + 2] = CS',
-            'SP = tmp',
-            'effective_address = ${MOD_RM_RM16}',
-            'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
-          ],
-        },
-        protected: {
-          operation: [
-            'effective_address = ${MOD_RM_RM16}',
-            'gate_off = RAM:u16[effective_address]',
-            'gate_sel = RAM:u16[effective_address + 2]',
-            '${CALL_FAR_PROTECTED}',
-          ],
-        },
-      },
+      // Cannot use a register for far call — fault with #UD
+      operation: ['#UD if 1 == 1'],
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_011_11'],
       operands: ['rm'],
       operandSize: 16,

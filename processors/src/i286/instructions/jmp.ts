@@ -505,7 +505,7 @@ export const jmp: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'CS = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
           ],
         },
         protected: {
@@ -514,7 +514,7 @@ export const jmp: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'gate_off = RAM:u16[effective_address]',
-            'gate_sel = RAM:u16[effective_address + 2]',
+            'gate_sel = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
             '${JMP_FAR_PROTECTED}',
           ],
         },
@@ -534,7 +534,7 @@ export const jmp: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'CS = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
           ],
         },
         protected: {
@@ -543,7 +543,7 @@ export const jmp: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'gate_off = RAM:u16[effective_address]',
-            'gate_sel = RAM:u16[effective_address + 2]',
+            'gate_sel = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
             '${JMP_FAR_PROTECTED}',
           ],
         },
@@ -563,7 +563,7 @@ export const jmp: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'CS = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
           ],
         },
         protected: {
@@ -572,7 +572,7 @@ export const jmp: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'gate_off = RAM:u16[effective_address]',
-            'gate_sel = RAM:u16[effective_address + 2]',
+            'gate_sel = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
             '${JMP_FAR_PROTECTED}',
           ],
         },
@@ -592,7 +592,7 @@ export const jmp: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_REAL}',
             'IP = RAM:u16[effective_address]',
-            'CS = RAM:u16[effective_address + 2]',
+            'CS = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
           ],
         },
         protected: {
@@ -601,7 +601,7 @@ export const jmp: InstructionInfo = {
             'effective_address = ${MOD_RM_SEGMENT} + offset',
             '${SEGMENT_LIMIT_CHECK_PROTECTED16}',
             'gate_off = RAM:u16[effective_address]',
-            'gate_sel = RAM:u16[effective_address + 2]',
+            'gate_sel = RAM:u16[${MOD_RM_SEGMENT} + ((offset + 2) & 0xffff):u16]',
             '${JMP_FAR_PROTECTED}',
           ],
         },
@@ -615,8 +615,8 @@ export const jmp: InstructionInfo = {
     },
     {
       operation: [
-        // Raise error... cannot use a register
-        '#6',
+        // Raise error... cannot use a register (fault, not trap — IP must point to instruction start)
+        '#UD if 1 == 1',
       ],
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_101_11'],
       operands: ['rm'],

@@ -1459,7 +1459,7 @@ class TypeScriptBackend extends Backend {
     else size = 32;
 
     return [
-      `${signed ? '(' : ''}${destSize !== size ? '(' : ''}${offset !== undefined ? '((' : ''}this.mem${size}[${index}]${offset !== undefined ? `${offset ? ` >> ${offset}` : ''}) & 0x${(Math.pow(2, length || 0) - 1).toString(16)})` : ''}${destSize !== size ? ` & 0x${((1 << destSize) - 1).toString(16)})` : ''}${signed ? (destSize === 32 ? ' | 0)' : ` << ${32 - destSize} >> ${32 - destSize})`) : ''}`,
+      `${signed ? '(' : ''}${destSize < size ? '(' : ''}${offset !== undefined ? '((' : ''}this.mem${size}[${index}]${offset !== undefined ? `${offset ? ` >> ${offset}` : ''}) & 0x${(Math.pow(2, length || 0) - 1).toString(16)})` : ''}${destSize < size ? ` & 0x${((1 << destSize) - 1).toString(16)})` : ''}${signed ? (destSize === 32 ? ' | 0)' : ` << ${32 - destSize} >> ${32 - destSize})`) : ''}`,
     ];
   }
 
@@ -1818,7 +1818,7 @@ class TypeScriptBackend extends Backend {
     node: UnaryExpressionNode,
   ): string[] {
     return [
-      `${node.operator} ${this.fromOperandExpression(generated, node.operand)[0]}`,
+      `${node.operator}${this.fromOperandExpression(generated, node.operand)[0]}`,
     ];
   }
 
@@ -1838,6 +1838,16 @@ class TypeScriptBackend extends Backend {
       );
       return [
         `((value, amount) => ((value >> amount) | (value & ((1 << amount) - 1)) << (${width} - amount)))(${this.fromOperandExpression(generated, node.operand)[0]}, (${this.fromOperandExpression(generated, node.argument)[0]}) % ${width})`,
+      ];
+    } else if (
+      node.operator === '>>'
+    ) {
+      // Right shifts might be unsigned
+      // This is true if the left-hand side is unsigned already
+      const unsigned = (node.operand.coercion || 'u32').startsWith('u');
+      console.log(unsigned);
+      return [
+        `(${this.fromOperandExpression(generated, node.operand)[0]} ${node.operator}${unsigned ? '>' : ''} ${this.fromOperandExpression(generated, node.argument)[0]})`,
       ];
     } else if (
       node.operator === '&' ||

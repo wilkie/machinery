@@ -143,23 +143,22 @@ export const macros = {
     `OF = ((flag_op < $\{FLAG_OP_RESOLVED}) && (flag_op & $\{FLAG_OP_NOOF} == 0))
       ? ((flag_op & $\{FLAG_OP_LOGIC}) > 0
         ? 0
-        : ((flag_op & $\{FLAG_OP_SHIFT}) > 0
-          ? ((flag_op & $\{FLAG_OP_RIGHT}) > 0
-            ? (((((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (((flag_op & $\{FLAG_OP_SIGNED}) == 0 ? a >>> (b - 1) : ((flag_op & $\{FLAG_OP_BITS}) == 0 ? a:i8 : a:i16) >> (b - 1)) ^ alu_result)) > 0) ? 1 : 0)
-            : ((((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & ((a << (b - 1)) ^ alu_result)) > 0 ? 1 : 0))
-          : (((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (a ^ alu_result) & (((flag_op & $\{FLAG_OP_SUB}) > 0 ? a : alu_result) ^ b)) > 0 ? 1 : 0))
+        : ((flag_op & $\{FLAG_OP_DIV}) > 0
+          ? CARRY
+          : ((flag_op & $\{FLAG_OP_SHIFT}) > 0
+            ? ((flag_op & $\{FLAG_OP_RIGHT}) > 0
+              ? (((((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (((flag_op & $\{FLAG_OP_SIGNED}) == 0 ? a >>> (b - 1) : ((flag_op & $\{FLAG_OP_BITS}) == 0 ? a:i8 : a:i16) >> (b - 1)) ^ alu_result)) > 0) ? 1 : 0)
+              : ((((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & ((a << (b - 1)) ^ alu_result)) > 0 ? 1 : 0))
+            : (((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (a ^ alu_result) & (((flag_op & $\{FLAG_OP_SUB}) > 0 ? a : alu_result) ^ b)) > 0 ? 1 : 0)))
       : OF`,
-    'if (flag_op & ${FLAG_OP_DIV}) > 0',
-    [
-      'OF = CARRY',
-    ],
-    'end if',
   ],
 
   // Depending on the operation, understand the carry flag
   RESOLVE_CF: [
     // CARRY = CARRY (if flags are resolved or NOCF bit is set)
     // CARRY = 0 (if LOGIC bit is set)
+    // CARRY = (((AX & 1) ? ((AX & ~1) + (b << 8)) & 0xffff : AX) >> 8) < b (div8: undo the last nonrestoring division operation and re-perform the last compare)
+    // CARRY = (((AX & 1) ? (((AX & ~1) | (DX << 16)) + (b << 16)) & 0xffffffff : AX | (DX << 16)) >> 16) < b (div16: undo the last nonrestoring division operation and re-perform the last compare)
     // CARRY = (((a & b) | ((a | b) & ~alu_result)) >> 7) & 0x1 if non-sub 8-bit
     // CARRY = (((a & b) | ((a | b) & ~alu_result)) >> 15) & 0x1 if non-sub 8-bit
     // CARRY = (a >> (8 - b)) & 0x1 if 8-bit shift left
@@ -169,17 +168,16 @@ export const macros = {
     `CARRY = ((flag_op < $\{FLAG_OP_RESOLVED}) && (flag_op & $\{FLAG_OP_NOCF} == 0))
       ? ((flag_op & $\{FLAG_OP_LOGIC}) > 0
         ? 0
-        : ((flag_op & $\{FLAG_OP_SHIFT}) > 0
-          ? (((flag_op & $\{FLAG_OP_SIGNED}) == 0 ? a : ((flag_op & $\{FLAG_OP_BITS}) == 0 ? a:i8 : a:i16)) >> ((flag_op & $\{FLAG_OP_RIGHT}) == 0 ? ((((flag_op & $\{FLAG_OP_BITS}) == 0 ? 8 : 16) - b)) : (b - 1))) & 0x1
-          : ((flag_op & $\{FLAG_OP_SUB}) > 0
-            ? (a < (b + (flag_op & $\{FLAG_OP_CARRY})) ? 1 : 0)
-            : (((a & b) | ((a | b) & ~alu_result)) >> ((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 7 : 15)) & 0x1)))
+        : ((flag_op & $\{FLAG_OP_DIV}) > 0
+          ? ((flag_op & $\{FLAG_OP_BITS}) == 0
+            ? (((((AX & 1) > 0) ? ((AX & ~1) + (b << 8)):u16 >> 8 : AH) < b) ? 1 : 0)
+            : (((((AX & 1) > 0) ? (((AX & ~1) | (DX:u32 << 16)) + (b:u32 << 16)):u32 >> 16 : DX:u32) < b) ? 1 : 0))
+          : ((flag_op & $\{FLAG_OP_SHIFT}) > 0
+            ? (((flag_op & $\{FLAG_OP_SIGNED}) == 0 ? a : ((flag_op & $\{FLAG_OP_BITS}) == 0 ? a:i8 : a:i16)) >> ((flag_op & $\{FLAG_OP_RIGHT}) == 0 ? ((((flag_op & $\{FLAG_OP_BITS}) == 0 ? 8 : 16) - b)) : (b - 1))) & 0x1
+            : ((flag_op & $\{FLAG_OP_SUB}) > 0
+              ? (a < (b + (flag_op & $\{FLAG_OP_CARRY})) ? 1 : 0)
+              : (((a & b) | ((a | b) & ~alu_result)) >> ((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 7 : 15)) & 0x1))))
       : CARRY`,
-    'if (flag_op & ${FLAG_OP_DIV}) > 0',
-    [
-      '${RESOLVE_DIV_CARRY}',
-    ],
-    'end if',
   ],
 
   // Depending on the operation, understand the auxiliary carry flag

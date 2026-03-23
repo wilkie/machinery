@@ -6,7 +6,8 @@
  * naturally spreads the opcode ranges across separate worker processes.
  */
 
-import { existsSync, readdirSync } from 'fs';
+import { execSync } from 'child_process';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { resolve } from 'path';
 import Machine from './Machine';
 import { loadMooFile, type MooTest, type Registers } from '../../test/i286/moo';
@@ -15,10 +16,38 @@ import { loadMooFile, type MooTest, type Registers } from '../../test/i286/moo';
 const testDir = resolve(__dirname, '../../test/i286');
 const singleStepPath =
   process.env.SINGLE_STEP_TESTS_PATH ||
-  resolve(testDir, 'SingleStepTests/80286');
+  resolve(testDir, 'SingleStepTests');
 const realModeDir = resolve(singleStepPath, 'v1_real_mode');
 
+// Auto-clone the SingleStepTests repo if it doesn't exist
+if (!existsSync(realModeDir)) {
+  const repoDir = resolve(testDir, 'SingleStepTests');
+  if (!existsSync(repoDir)) {
+    try {
+      console.log('Cloning SingleStepTests repository...');
+      execSync(
+        'git clone https://github.com/SingleStepTests/80286 SingleStepTests',
+        { cwd: testDir, stdio: 'inherit', timeout: 120000 },
+      );
+    } catch {
+      // Clone failed — tests will be skipped
+    }
+  }
+}
+
 export const HAS_TESTS = existsSync(realModeDir);
+
+// Load revocation list (hashes of known-bad tests to skip)
+const revocationPath = resolve(singleStepPath, 'revocation_list.txt');
+const revokedHashes: Set<string> = new Set();
+if (existsSync(revocationPath)) {
+  for (const line of readFileSync(revocationPath, 'utf8').split('\n')) {
+    const hash = line.trim().toLowerCase();
+    if (hash && !hash.startsWith('#')) {
+      revokedHashes.add(hash);
+    }
+  }
+}
 
 // Register name -> Machine property mapping
 const REG_SETTERS: Record<keyof Registers, string> = {
@@ -219,6 +248,10 @@ export function runSingleStepTests(prefix: string): void {
           let failed = 0;
 
           for (const test of tests.tests) {
+            // Skip tests on the revocation list
+            if (test.hash && revokedHashes.has(test.hash.toLowerCase())) {
+              continue;
+            }
             const errors = runTest(test);
             if (errors.length > 0) {
               failed++;

@@ -15,6 +15,7 @@ export interface MooTest {
   initial: CpuState;
   final: CpuState;
   exception?: { code: number; flags: number };
+  hash?: string;
 }
 
 export interface CpuState {
@@ -208,9 +209,11 @@ function decodeTest(reader: Reader): MooTest {
       case 'CYCL':
         reader.skip(chunkLen); // Skip cycle data
         break;
-      case 'HASH':
-        reader.skip(chunkLen); // Skip hash
+      case 'HASH': {
+        const hashBytes = reader.readBytes(chunkLen);
+        test.hash = [...hashBytes].map((b) => b.toString(16).padStart(2, '0')).join('');
         break;
+      }
       default:
         reader.skip(chunkLen);
         break;

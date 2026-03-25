@@ -13,7 +13,7 @@ export const div: InstructionInfo = {
     ALU8_OP: [
       'if a >= (b:u16 << 8)',
       [
-        ';; compute flags by performing the nonrestoring division',
+        ';; compute flags by performing the restoring division',
         'b = b << 8',
         'a = ((a >= b) ? (a - b) | 1 : a):u16',
         'a = (((a << 1) >= b || (a & 0x8000) > 0) ? ((a << 1) - b) | 1 : a << 1):u16',
@@ -41,7 +41,7 @@ export const div: InstructionInfo = {
     ALU16_OP: [
       'if div_a >= (b << 16)',
       [
-        ';; compute flags by performing the nonrestoring division (16-bit)',
+        ';; compute flags by performing the restoring division (16-bit)',
         'div_b = b << 16',
         'div_a = ((div_a >= div_b) ? (div_a - div_b) | 1 : div_a):u32',
         'div_a = (((div_a << 1):u32 >= div_b || (div_a & 0x80000000) != 0) ? ((div_a << 1):u32 - div_b) | 1 : div_a << 1):u32',

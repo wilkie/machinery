@@ -391,7 +391,11 @@ class Resolver {
       throw new Error(`Unknown syntax node discovered.`);
     }
 
-    // Attach resolved type information
+    // Attach resolved type information.
+    // Ordering matters: most specific subclass first (instanceof checks
+    // match subclasses, so e.g. TernaryExpressionNode must come before
+    // the generic ExpressionNode branch).
+
     if (ret instanceof OperandNode && typeof ret.value === 'number') {
       ret.resolvedType = {
         size: minBits(ret.value),
@@ -434,15 +438,64 @@ class Resolver {
       } else {
         ret.resolvedType = inferBinaryType(ret.operator, leftType, rightType);
       }
-    } else if (ret instanceof ExpressionNode && ret.coercion) {
-      const coercionType = parseCoercion(ret.coercion);
-      // C rule: coercing to signed when the inner expression is unsigned
-      // still produces unsigned (unsigned wins in binary contexts).
-      const innerType = (ret.operand as Node).resolvedType;
-      if (coercionType.signed && innerType && !innerType.signed) {
-        coercionType.signed = false;
+    } else if (ret instanceof TernaryExpressionNode) {
+      // Widen to fit both branches; unsigned if either branch is unsigned
+      const trueType = (ret.operand as Node).resolvedType;
+      const falseType = (ret.whenFalse as Node).resolvedType;
+      if (trueType && falseType) {
+        ret.resolvedType = {
+          size: Math.max(trueType.size, falseType.size),
+          signed: trueType.signed && falseType.signed,
+        };
+      } else {
+        ret.resolvedType = trueType || falseType;
       }
-      ret.resolvedType = coercionType;
+    } else if (ret instanceof RegisterChoiceExpressionNode) {
+      if (ret.coercion) {
+        ret.resolvedType = parseCoercion(ret.coercion);
+      } else {
+        // Widen across all choices in the register set
+        let size = 0;
+        let signed = true;
+        for (const choice of ret.choices) {
+          const t = (choice as Node).resolvedType;
+          if (t) {
+            size = Math.max(size, t.size);
+            if (!t.signed) signed = false;
+          }
+        }
+        if (size > 0) {
+          ret.resolvedType = { size, signed };
+        }
+      }
+    } else if (ret instanceof ChoiceExpressionNode) {
+      if (ret.coercion) {
+        ret.resolvedType = parseCoercion(ret.coercion);
+      } else {
+        // Widen across all choices
+        let size = 0;
+        let signed = true;
+        for (const choice of ret.choices) {
+          const t = (choice as Node).resolvedType;
+          if (t) {
+            size = Math.max(size, t.size);
+            if (!t.signed) signed = false;
+          }
+        }
+        if (size > 0) {
+          ret.resolvedType = { size, signed };
+        }
+      }
+    } else if (ret instanceof ComparisonEvaluationNode) {
+      ret.resolvedType = { size: 1, signed: false };
+    } else if (ret instanceof BinaryLogicNode) {
+      ret.resolvedType = { size: 1, signed: false };
+    } else if (ret instanceof ComparisonNode) {
+      ret.resolvedType = { size: 1, signed: false };
+    } else if (ret instanceof ExpressionNode && ret.coercion) {
+      // Explicit cast is authoritative — the coercion overrides the
+      // inner expression's type.
+      ret.resolvedType = parseCoercion(ret.coercion);
     } else if (ret instanceof ExpressionNode && !ret.coercion) {
       // Passthrough: inherit operand's type
       ret.resolvedType = (ret.operand as Node).resolvedType;

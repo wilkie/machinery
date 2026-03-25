@@ -15,6 +15,7 @@ import {
   ComparisonEvaluationNode,
   ComparisonNode,
   ExpressionNode,
+  Node,
   OperandNode,
   NextIfNode,
   IfBlockNode,
@@ -1842,23 +1843,9 @@ class TypeScriptBackend extends Backend {
     } else if (
       node.operator === '>>'
     ) {
-      // Right shifts might be unsigned
-      // This is true if the left-hand side is unsigned already
-      // Walk into ternary expressions to find the effective coercion,
-      // since a ternary wrapping signed branches (e.g. (... ? a:i8 : a:i16))
-      // doesn't carry a coercion on the ternary node itself.
-      // Walk through expression wrappers and ternaries to find the effective
-      // coercion. A ternary like (... ? a:i8 : a:i16) doesn't carry a coercion
-      // on the wrapper nodes, but the inner branches do.
-      let operand: ExpressionNode | OperandNode = node.operand;
-      while (
-        !operand.coercion &&
-        operand instanceof ExpressionNode &&
-        !(operand instanceof BinaryExpressionNode)
-      ) {
-        operand = operand.operand;
-      }
-      const unsigned = (operand.coercion || 'u32').startsWith('u');
+      // Use the Resolver's type inference to determine signedness.
+      // Signed operands use >> (arithmetic shift), unsigned use >>> (logical shift).
+      const unsigned = !(node.operand as Node).resolvedType?.signed;
       return [
         `(${this.fromOperandExpression(generated, node.operand)[0]} ${node.operator}${unsigned ? '>' : ''} ${this.fromOperandExpression(generated, node.argument)[0]})`,
       ];
@@ -1867,10 +1854,11 @@ class TypeScriptBackend extends Backend {
       node.operator === '|' ||
       node.operator === '<<'
     ) {
-      // Need to ensure that it is an unsigned result
-      return [
-        `((${this.fromOperandExpression(generated, node.operand)[0]} ${node.operator} ${this.fromOperandExpression(generated, node.argument)[0]}) >>> 0)`,
-      ];
+      // JS bitwise ops return signed 32-bit integers. When the result type
+      // is unsigned, apply >>> 0 to convert to unsigned.
+      const result = `(${this.fromOperandExpression(generated, node.operand)[0]} ${node.operator} ${this.fromOperandExpression(generated, node.argument)[0]})`;
+      const unsigned = !(node as Node).resolvedType?.signed;
+      return [unsigned ? `(${result} >>> 0)` : result];
     } else if (node.operator.startsWith('<~[')) {
       // Rotation Left
       const width = parseInt(

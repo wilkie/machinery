@@ -132,7 +132,7 @@ export const macros = {
           ? ((flag_op & $\{FLAG_OP_SIGNED}) > 0
             ? ((flag_op & $\{FLAG_OP_BITS}) == 0
               ? (alu_result:i8 < b:i8 ? 1 : 0)
-              : 0)
+              : (alu_result:i16 < b:i16 ? 1 : 0))
             : ((flag_op & $\{FLAG_OP_BITS}) == 0
               ? (((((AX & 1) > 0) ? ((AX & ~1) + (b << 8)):u16 >> 8 : AH) < b) ? 1 : 0)
               : (((((AX & 1) > 0) ? (((AX & ~1) | (DX:u32 << 16)) + (b:u32 << 16)):u32 >> 16 : DX:u32) < b) ? 1 : 0)))

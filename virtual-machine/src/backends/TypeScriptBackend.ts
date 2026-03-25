@@ -1844,8 +1844,21 @@ class TypeScriptBackend extends Backend {
     ) {
       // Right shifts might be unsigned
       // This is true if the left-hand side is unsigned already
-      const unsigned = (node.operand.coercion || 'u32').startsWith('u');
-      console.log(unsigned);
+      // Walk into ternary expressions to find the effective coercion,
+      // since a ternary wrapping signed branches (e.g. (... ? a:i8 : a:i16))
+      // doesn't carry a coercion on the ternary node itself.
+      // Walk through expression wrappers and ternaries to find the effective
+      // coercion. A ternary like (... ? a:i8 : a:i16) doesn't carry a coercion
+      // on the wrapper nodes, but the inner branches do.
+      let operand: ExpressionNode | OperandNode = node.operand;
+      while (
+        !operand.coercion &&
+        operand instanceof ExpressionNode &&
+        !(operand instanceof BinaryExpressionNode)
+      ) {
+        operand = operand.operand;
+      }
+      const unsigned = (operand.coercion || 'u32').startsWith('u');
       return [
         `(${this.fromOperandExpression(generated, node.operand)[0]} ${node.operator}${unsigned ? '>' : ''} ${this.fromOperandExpression(generated, node.argument)[0]})`,
       ];

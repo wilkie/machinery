@@ -80,7 +80,7 @@ class Tokenizer {
       op_or: /\|/,
       op_xor: /\^/,
       op_and: /&/,
-      op_shift: />>>|>>|<</,
+      op_shift: />>|<</,
       op_add: /[+-]/,
       op_mul: /\/\/|[*/%]/,
       op_rotate: /~>\[\d+\]|<~\[\d+\]/,

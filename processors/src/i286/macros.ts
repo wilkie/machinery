@@ -107,7 +107,7 @@ export const macros = {
           ? CARRY
           : ((flag_op & $\{FLAG_OP_SHIFT}) > 0
             ? ((flag_op & $\{FLAG_OP_RIGHT}) > 0
-              ? (((((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (((flag_op & $\{FLAG_OP_SIGNED}) == 0 ? a >>> (b - 1) : ((flag_op & $\{FLAG_OP_BITS}) == 0 ? a:i8 : a:i16) >> (b - 1)) ^ alu_result)) > 0) ? 1 : 0)
+              ? (((((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (((flag_op & $\{FLAG_OP_SIGNED}) == 0 ? a >> (b - 1) : ((flag_op & $\{FLAG_OP_BITS}) == 0 ? a:i8 : a:i16) >> (b - 1)) ^ alu_result)) > 0) ? 1 : 0)
               : ((((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & ((a << (b - 1)) ^ alu_result)) > 0 ? 1 : 0))
             : (((flag_op & $\{FLAG_OP_BITS}) == 0x0 ? 0x80 : 0x8000) & (a ^ alu_result) & (((flag_op & $\{FLAG_OP_SUB}) > 0 ? a : alu_result) ^ b)) > 0 ? 1 : 0)))
       : OF`,

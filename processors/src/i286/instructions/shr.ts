@@ -11,11 +11,11 @@ export const shr: InstructionInfo = {
   undefined: ['AF'],
   macros: {
     ALU8_OP: [
-      'alu_result = a >>> b',
+      'alu_result = a >> b',
       'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_8BIT} | ${FLAG_OP_SHIFT_RIGHT}',
     ],
     ALU16_OP: [
-      'alu_result = a >>> b',
+      'alu_result = a >> b',
       'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_16BIT} | ${FLAG_OP_SHIFT_RIGHT}',
     ],
   },

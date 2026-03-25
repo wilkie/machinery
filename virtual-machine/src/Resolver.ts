@@ -105,9 +105,9 @@ function inferBinaryType(
       return { size: 32, signed: false };
     }
     case '>>':
-      return { size: left.size, signed: true };
-    case '>>>':
-      return { size: left.size, signed: false };
+      // Right shift preserves the left operand's signedness:
+      // signed operand => arithmetic shift, unsigned => logical shift
+      return { size: left.size, signed: left.signed };
     default:
       return undefined;
   }
@@ -274,9 +274,6 @@ class Resolver {
             break;
           case '>>':
             value = operand.value >> argument.value;
-            break;
-          case '>>>':
-            value = operand.value >>> argument.value;
             break;
           default:
             value = 0;

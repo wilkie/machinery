@@ -106,7 +106,6 @@ describe('Tokenizer', () => {
       const t = new Tokenizer();
       expect(t.tokenize('>> ;')[0].type).toBe('op_shift');
       expect(t.tokenize('<< ;')[0].type).toBe('op_shift');
-      expect(t.tokenize('>>> ;')[0].type).toBe('op_shift');
     });
 
     it('tokenizes arithmetic operators', () => {

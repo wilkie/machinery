@@ -15,6 +15,7 @@ import {
   ComparisonNode,
   ExpressionNode,
   LocalOperandNode,
+  Node,
   OperandNode,
   NextIfNode,
   IfBlockNode,
@@ -863,12 +864,15 @@ class WebAssemblyBackend extends Backend {
       '^': 'i32.xor',
       '<<': 'i32.shl',
       '>>': 'i32.shr_s',
-      '>>>': 'i32.shr_u',
     };
 
-    const op = opMap[node.operator];
+    let op = opMap[node.operator];
     if (!op) {
       throw new Error(`Unknown binary operator: ${node.operator}`);
+    }
+    // Right shift: use signed or unsigned based on left operand's resolved type
+    if (node.operator === '>>' && !(node.operand as Node).resolvedType?.signed) {
+      op = 'i32.shr_u';
     }
 
     return [`(${op} ${left} ${right})`];

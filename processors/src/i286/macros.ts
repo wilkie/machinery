@@ -129,9 +129,13 @@ export const macros = {
       ? ((flag_op & $\{FLAG_OP_LOGIC}) > 0
         ? 0
         : ((flag_op & $\{FLAG_OP_DIV}) > 0
-          ? ((flag_op & $\{FLAG_OP_BITS}) == 0
-            ? (((((AX & 1) > 0) ? ((AX & ~1) + (b << 8)):u16 >> 8 : AH) < b) ? 1 : 0)
-            : (((((AX & 1) > 0) ? (((AX & ~1) | (DX:u32 << 16)) + (b:u32 << 16)):u32 >> 16 : DX:u32) < b) ? 1 : 0))
+          ? ((flag_op & $\{FLAG_OP_SIGNED}) > 0
+            ? ((flag_op & $\{FLAG_OP_BITS}) == 0
+              ? (alu_result:i8 < b:i8 ? 1 : 0)
+              : 0)
+            : ((flag_op & $\{FLAG_OP_BITS}) == 0
+              ? (((((AX & 1) > 0) ? ((AX & ~1) + (b << 8)):u16 >> 8 : AH) < b) ? 1 : 0)
+              : (((((AX & 1) > 0) ? (((AX & ~1) | (DX:u32 << 16)) + (b:u32 << 16)):u32 >> 16 : DX:u32) < b) ? 1 : 0)))
           : ((flag_op & $\{FLAG_OP_SHIFT}) > 0
             ? (((flag_op & $\{FLAG_OP_SIGNED}) == 0 ? a : ((flag_op & $\{FLAG_OP_BITS}) == 0 ? a:i8 : a:i16)) >> ((flag_op & $\{FLAG_OP_RIGHT}) == 0 ? ((((flag_op & $\{FLAG_OP_BITS}) == 0 ? 8 : 16) - b)) : (b - 1))) & 0x1
             : ((flag_op & $\{FLAG_OP_SUB}) > 0

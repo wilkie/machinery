@@ -11,15 +11,95 @@ export const idiv: InstructionInfo = {
   undefined: ['OF', 'CF', 'SF', 'ZF', 'AF', 'PF'],
   macros: {
     ALU8_OP: [
-      '#0 if b == 0',
-      'alu_result = a:i16 // b:i8',
-      '#0 if alu_result:i32 > 127 || alu_result:i32 < -128',
-      'AL = alu_result',
-      'AH = a:i16 % b:i8',
-      // Flags: SF/ZF/PF from remainder (AH), AF=1, CF=OF (undefined)
-      'alu_result = AH',
-      'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_8BIT} | ${FLAG_OP_NOAF}',
       'AF = 1',
+      ';; detect overflow',
+      'if (((a & 0x8000) > 0) ? ~a : a):u16 >= (((((b & 0x80) > 0) ? ~b + 1 : b) & 0xff) << 7):u16',
+      [
+        ';; compute division manually since CPU bugs allow -0x80',
+        'a = (AX & 0x8000) > 0 ? ~a : a',
+        'offset = b:u8',
+        'b = ((((((b & 0x80) > 0) ? ~b + 1 : b) & 0xff) << 8) - 1)',
+        'a = a << 1',
+        'a = a - ((a > b) ? b : 0)',
+        'a = a << 1',
+        'a = a - ((a > b) ? b : 0)',
+        'a = a << 1',
+        'a = a - ((a > b) ? b : 0)',
+        'a = a << 1',
+        'a = a - ((a > b) ? b : 0)',
+        'a = a << 1',
+        'a = a - ((a > b) ? b : 0)',
+        'a = a << 1',
+        'a = a - ((a > b) ? b : 0)',
+        'a = a << 1',
+        'a = a - ((a > b) ? b : 0)',
+        'a = a << 1',
+        'a = a - ((a > b) ? b : 0)',
+        'b = (a >> 8) & 0xff',
+        'a = a & 0xff',
+        'alu_result = ((AX & 0x8000) > 0 ? ~b : b) & 0xff',
+
+        ';; compute the carry flag as r < d but with the computed partially restored remainder',
+        'CARRY = (((((offset & 0x80) > 0) ? ~b : b) & 0xff) < offset:u8) ? 1 : 0',
+        'CF = CARRY',
+        'OF = CARRY',
+        'flag_op = ${FLAG_OP_RESOLVED}',
+
+        'if (AX & 0x8000) > 0',
+        [
+          'b = (b + 1) & 0xff',
+        ],
+        'end if',
+        'if b == (((offset & 0x80) > 0 ? ~offset + 1 : offset) & 0xff)',
+        [
+          'b = 0',
+          'a = (a + 1) & 0xff',
+          'alu_result = 0',
+        ],
+        'end if',
+        'if (AX & 0x8000) > 0',
+        [
+          'b = (~b + 1) & 0xff',
+        ],
+        'end if',
+        'ZF = alu_result == 0x00 ? 1 : 0',
+        'SF = alu_result & 0x80 > 0 ? 1 : 0',
+        'PF = ROM.PARITY[alu_result]',
+        'if ((AX & 0x8000) >> 8) != (offset & 0x80)',
+        [
+          'a = (~a + 1) & 0xff',
+          'if a != 0x80',
+          [
+            '#DE if 1 == 1',
+          ],
+          'end if',
+        ],
+        'else',
+        [
+          '#DE if 1 == 1',
+        ],
+        'end if',
+
+        ';; Special case CPU bug where computed quotients of -128 is for some reason always allowed',
+        'AL = a',
+        'AH = b',
+        'alu_result = AH',
+        'b = offset',
+        // Flags: SF/ZF/PF from remainder (AH), AF=1, CF=OF (undefined)
+        // However, CF/OF is just whether or not AH is less than b
+        'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_DIV} | ${FLAG_OP_8BIT} | ${FLAG_OP_SIGNED} | ${FLAG_OP_NOAF}',
+      ],
+      'else',
+      [
+        ';; normal case',
+        'AL = a:i16 // b:i8',
+        'AH = a:i16 % b:i8',
+        'alu_result = AH',
+        // Flags: SF/ZF/PF from remainder (AH), AF=1, CF=OF (undefined)
+        // However, CF/OF is just whether or not AH is less than b
+        'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_DIV} | ${FLAG_OP_8BIT} | ${FLAG_OP_SIGNED} | ${FLAG_OP_NOAF}',
+      ],
+      'end if',
     ],
     ALU16_OP: [
       '#0 if b == 0',
@@ -28,6 +108,7 @@ export const idiv: InstructionInfo = {
       'AX = alu_result',
       'DX = div_a:i32 % b:i16',
       // Flags: SF/ZF/PF from remainder (DX), AF=1, CF=OF (undefined)
+      // However, CF/OF is just whether or not DX is less than b
       'alu_result = DX',
       'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_16BIT} | ${FLAG_OP_NOAF}',
       'AF = 1',

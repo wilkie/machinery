@@ -252,6 +252,8 @@ export function runSingleStepTests(prefix: string): void {
             if (test.hash && revokedHashes.has(test.hash.toLowerCase())) {
               continue;
             }
+            const highlightIndex = parseInt(process.env.SINGLE_STEP_INDEX || '-1');
+            if (highlightIndex >= 0 && test.idx !== highlightIndex) { continue; }
             const errors = runTest(test);
             if (errors.length > 0) {
               failed++;

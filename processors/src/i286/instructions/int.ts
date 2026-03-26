@@ -79,14 +79,14 @@ export const int: InstructionInfo = {
     {
       opcode: [Opcodes.INT_3],
       operands: [],
-      operation: ['${RESOLVE_FLAGS}', 'SOFTWARE_INT = 1', '#3'],
+      operation: ['${RESOLVE_FLAGS}', 'SOFTWARE_INT = 1', '#3:trap'],
       cycles: 23, // protected-mode: 40 to same privilege, 78 raised privilege, 167 if via task gate
     },
     // 0xCD - INT db
     {
       opcode: [Opcodes.INT_DB, 'IMM_u8'],
       operands: ['imm'],
-      operation: ['${RESOLVE_FLAGS}', 'SOFTWARE_INT = 1', '#%{imm}'],
+      operation: ['${RESOLVE_FLAGS}', 'SOFTWARE_INT = 1', '#%{imm}:trap'],
       cycles: 23, // protected-mode: 40 to same privilege, 78 raised privilege, 167 if via task gate
     },
     // 0xCE - INTO
@@ -96,7 +96,7 @@ export const int: InstructionInfo = {
       operation: [
         '${RESOLVE_FLAGS}',
         'if OF > 0x0',
-        ['SOFTWARE_INT = 1', '#4'],
+        ['SOFTWARE_INT = 1', '#4:trap'],
         'end if',
       ],
       cycles: 24, // 3, if no jump occurs

@@ -798,7 +798,7 @@ export const call: InstructionInfo = {
     },
     {
       // Cannot use a register for far call — fault with #UD
-      operation: ['#UD if 1 == 1'],
+      operation: ['#UD'],
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_011_11'],
       operands: ['rm'],
       operandSize: 16,

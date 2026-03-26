@@ -346,6 +346,7 @@ class WebAssemblyBackend extends Backend {
     generated: GeneratedStatement,
     value: string,
     condition?: ComparisonNode,
+    fault = true,
   ): string[] {
     // In register getter/setter helpers, suppress raises — returning from the
     // helper is not the same as returning from the decode function.
@@ -355,8 +356,9 @@ class WebAssemblyBackend extends Backend {
 
     // Build IP rollback so fault frame points to the faulting instruction
     // (before any prefix bytes were consumed).
+    // Only faults roll back; traps keep IP pointing past the instruction.
     let rollback = '';
-    if (generated.context.ipAdvance) {
+    if (fault && generated.context.ipAdvance) {
       const ip =
         this.target.fetch?.effectiveRegister ||
         (Array.isArray(this.target.fetch?.register)

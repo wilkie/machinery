@@ -110,6 +110,7 @@ class Backend {
     generated: GeneratedStatement,
     value: string,
     condition?: ComparisonNode,
+    fault = true,
   ): string[] {
     return [
       `raise ${value}${condition ? ` if ${this.fromComparison(generated, condition)}` : ''}`,
@@ -723,6 +724,7 @@ class Backend {
       generated,
       this.fromNode(generated, node.operand)[0],
       node.condition,
+      node.fault,
     );
   }
 

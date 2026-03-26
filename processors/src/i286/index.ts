@@ -51,11 +51,11 @@ const Target286: Target = {
           operation: ['ip = FETCH_IP'],
         },
         unknown: {
-          operation: ['#UD if 1 == 1'],
+          operation: ['#UD'],
         },
         limit: {
           bytes: 10,
-          operation: ['#GP if 1 == 1'],
+          operation: ['#GP'],
         },
         read: {
           byte: {
@@ -106,11 +106,11 @@ const Target286: Target = {
           operation: ['ip = FETCH_IP'],
         },
         unknown: {
-          operation: ['#UD if 1 == 1'],
+          operation: ['#UD'],
         },
         limit: {
           bytes: 10,
-          operation: ['#GP if 1 == 1'],
+          operation: ['#GP'],
         },
         read: {
           byte: {

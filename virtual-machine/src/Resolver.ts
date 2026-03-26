@@ -341,6 +341,7 @@ class Resolver {
         node.condition
           ? this.resolveNode(node.condition, locals, localMap)
           : undefined,
+        node.fault,
       );
     } else if (node instanceof IfBlockNode) {
       ret = new IfBlockNode(

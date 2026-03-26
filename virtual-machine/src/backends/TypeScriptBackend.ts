@@ -1410,6 +1410,7 @@ class TypeScriptBackend extends Backend {
     generated: GeneratedStatement,
     value: string,
     condition?: ComparisonNode,
+    fault = true,
   ): string[] {
     // In register setter helpers, suppress raises — returning from the helper
     // is not the same as returning from the decode function.
@@ -1419,8 +1420,9 @@ class TypeScriptBackend extends Backend {
 
     // Build IP rollback code so the fault frame points to the faulting
     // instruction (before any prefix bytes were consumed) rather than past it.
+    // Only faults roll back; traps keep IP pointing past the instruction.
     let rollback = '';
-    if (generated.context.ipAdvance) {
+    if (fault && generated.context.ipAdvance) {
       const ip =
         this.target.fetch?.effectiveRegister ||
         (Array.isArray(this.target.fetch?.register)
@@ -1443,7 +1445,7 @@ class TypeScriptBackend extends Backend {
       ];
     }
 
-    return [`this.interrupt_${generated.context.mode}(${value}); return;`];
+    return [`${rollback}this.interrupt_${generated.context.mode}(${value}); return;`];
   }
 
   readRegister(

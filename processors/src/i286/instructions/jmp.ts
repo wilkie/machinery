@@ -616,7 +616,7 @@ export const jmp: InstructionInfo = {
     {
       operation: [
         // Raise error... cannot use a register (fault, not trap — IP must point to instruction start)
-        '#UD if 1 == 1',
+        '#UD',
       ],
       opcode: [Opcodes.CALL_JMP_INC_DEC_PUSH, 'ModRM_rm16_101_11'],
       operands: ['rm'],

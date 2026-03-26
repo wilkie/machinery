@@ -70,13 +70,13 @@ export const idiv: InstructionInfo = {
           'a = (~a + 1) & 0xff',
           'if a != 0x80',
           [
-            '#DE if 1 == 1',
+            '#DE',
           ],
           'end if',
         ],
         'else',
         [
-          '#DE if 1 == 1',
+          '#DE',
         ],
         'end if',
 
@@ -179,13 +179,13 @@ export const idiv: InstructionInfo = {
           'a = (~a + 1) & 0xffff',
           'if a != 0x8000',
           [
-            '#DE if 1 == 1',
+            '#DE',
           ],
           'end if',
         ],
         'else',
         [
-          '#DE if 1 == 1',
+          '#DE',
         ],
         'end if',
 

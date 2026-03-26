@@ -54,6 +54,7 @@ const assignment = { test: (x: Token) => x.type === 'assignment' };
 const left_paren = { test: (x: Token) => x.type === 'left_paren' };
 const right_paren = { test: (x: Token) => x.type === 'right_paren' };
 const raise = { test: (x: Token) => x.type === 'raise' };
+const raise_qualifier = { test: (x: Token) => x.type === 'raise_qualifier' };
 const ternary_if = { test: (x: Token) => x.type === 'ternary_if' };
 const ternary_else = { test: (x: Token) => x.type === 'ternary_else' };
 const terminator = { test: (x: Token) => x.type === 'terminator' };
@@ -154,6 +155,9 @@ const grammar: Grammar = {
     {"name": "statement$ebnf$26", "symbols": ["statement"], "postprocess": id},
     {"name": "statement$ebnf$26", "symbols": [], "postprocess": () => null},
     {"name": "statement", "symbols": [raise, "operand", if_, "comparison", "statement$ebnf$25", "statement$ebnf$26"], "postprocess": (data) => new StatementNode(new RaiseExpressionNode(data[1], data[3]), data[5] || undefined)},
+    {"name": "statement", "symbols": [raise, "operand", raise_qualifier, if_, "comparison", "statement$ebnf$25", "statement$ebnf$26"], "postprocess": (data) => new StatementNode(new RaiseExpressionNode(data[1], data[4], data[2].coercion !== 'trap'), data[6] || undefined)},
+    {"name": "statement", "symbols": [raise, "operand", raise_qualifier, "statement$ebnf$25", "statement$ebnf$26"], "postprocess": (data) => new StatementNode(new RaiseExpressionNode(data[1], undefined, data[2].coercion !== 'trap'), data[4] || undefined)},
+    {"name": "statement", "symbols": [raise, "operand", "statement$ebnf$25", "statement$ebnf$26"], "postprocess": (data) => new StatementNode(new RaiseExpressionNode(data[1]), data[3] || undefined)},
     {"name": "statement$ebnf$27", "symbols": []},
     {"name": "statement$ebnf$27", "symbols": ["statement$ebnf$27", terminator], "postprocess": (d) => d[0].concat([d[1]])},
     {"name": "statement$ebnf$28", "symbols": ["statement"], "postprocess": id},
@@ -184,7 +188,6 @@ const grammar: Grammar = {
     {"name": "expr_unary", "symbols": [unary_operator, "expr_unary"], "postprocess": (data) => new UnaryExpressionNode(data[1], data[0].value.toString())},
     {"name": "expr_unary", "symbols": ["expr_atom"], "postprocess": (data) => data[0]},
     {"name": "expr_atom", "symbols": [left_paren, "expression", right_paren], "postprocess": (data) => new ExpressionNode(data[1], data[2].coercion)},
-    {"name": "expr_atom", "symbols": [raise, "operand"], "postprocess": (data) => new RaiseExpressionNode(data[1])},
     {"name": "expr_atom", "symbols": [macro_start, identifier, macro_end], "postprocess": (data) => new OperandNode(data[1].value, data[1].coercion)},
     {"name": "expr_atom$ebnf$1", "symbols": []},
     {"name": "expr_atom$ebnf$1$subexpression$1", "symbols": [list_delimiter, "operand"]},

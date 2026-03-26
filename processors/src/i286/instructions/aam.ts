@@ -23,7 +23,7 @@ export const aam: InstructionInfo = {
           ';; So the flags are actually reflecting the 16-bit zero-extended AL with bit 0 cleared',
           'flag_op = ${FLAG_OP_ALU} | ${FLAG_OP_16BIT} | ${FLAG_OP_LOGIC}',
           'alu_result = AL & 0xFE',
-          '#0 if 1 == 1',
+          '#0',
         ],
         'end if',
         'if %{imm} == 10',

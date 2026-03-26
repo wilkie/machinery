@@ -90,6 +90,7 @@ class Tokenizer {
       unary_operator: /[~]/,
       unary_logic_operator: /[!]/,
       ternary_if: /\?/,
+      raise_qualifier: /:(?:fault|trap)/,
       ternary_else: /:/,
       raise: /#/,
       // Parentheses

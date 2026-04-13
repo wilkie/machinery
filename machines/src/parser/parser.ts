@@ -1,11 +1,32 @@
 // MachineParser — the Chevrotain CstParser for .machine files.
 //
-// First-slice grammar: recognize every top-level declaration, capture its
-// name and (for unit/routine) signature, and skip the body. Body grammars
-// land incrementally in follow-up passes — the block rule just walks
-// INDENT...OUTDENT pairs and consumes whatever's inside.
+// Covered today:
+//
+//   * Top-level declarations: register, enum, bundle, union, microword,
+//     operand, unit, machine, routine. Every declaration's name and
+//     signature is captured. Declaration-body coverage varies:
+//
+//       - enum, bundle, union, register, microword, operand        full body
+//       - unit, machine, routine                                    opaque body
+//
+//   * A full C-family expression grammar (literals, identifiers,
+//     member/call/index/cast postfix ops, unary ops, binary ops with
+//     standard precedence, record literals) — see the "Expression
+//     grammar" section further down.
+//
+// Not yet covered, still consumed opaquely via the generic `block`
+// skipper when they appear inside a body:
+//
+//   * Statement grammar for `effect` blocks (inside microwords) and
+//     `fetch` blocks (inside operands).
+//   * Unit and machine bodies (wires, registers, mux/when/if, etc.).
+//   * Routine bodies (entry, allow, modifies, semantic, micro).
+//   * Ternary `? :` expressions.
+//   * Type-parameterized function calls `f<T>(...)`.
+//
+// See the comment blocks above individual rules for per-rule details.
 
-import { CstParser } from 'chevrotain';
+import { CstParser, tokenMatcher } from 'chevrotain';
 import {
   allTokens,
   // Keywords
@@ -62,6 +83,7 @@ import {
   LBracket,
   RBracket,
   Colon,
+  TightColon,
   Comma,
   Dot,
   At,
@@ -121,9 +143,17 @@ export class MachineParser extends CstParser {
   // Top-level declarations
   //
   // Each rule parses its header (the part before the indented body) and
-  // then optionally consumes a Newline followed by an indented block. The
-  // block's contents are consumed opaquely by `block` / `anyBodyToken` —
-  // real body grammars will replace this in later slices.
+  // then optionally consumes a Newline followed by an indented block.
+  // Body handling varies by declaration kind:
+  //
+  //   - enum, bundle, union, register, microword, operand:
+  //       the body is parsed by a dedicated rule that understands its
+  //       internal structure (variants, named fields, field+offset,
+  //       section markers, etc.).
+  //
+  //   - unit, machine, routine:
+  //       the body is still consumed opaquely by `block` / `anyBodyToken`.
+  //       A real grammar for each lands in future slices.
   // =========================================================================
 
   public registerDecl = this.RULE('registerDecl', () => {
@@ -142,10 +172,10 @@ export class MachineParser extends CstParser {
    * `field NAME:TYPE @ OFFSET` entries, one per line. Blank and
    * comment-only lines between fields are absorbed by the inner OR.
    *
-   * Does not yet handle the bit-range form `field[HI:LO] NAME:TYPE` used
-   * by registers declared inside `machine` bodies (e.g. executionUnit's
-   * `modrm` sub-register); that lives in machine-body grammar, which is
-   * still covered by the opaque `block` fallback.
+   * The same `fieldDecl` rule will be reused for registers declared
+   * inside `machine` bodies (e.g. executionUnit's nested `modrm` sub-
+   * register) once machine-body grammar lands; the syntax has been
+   * unified on the `@ OFFSET` form in both positions.
    */
   public registerBody = this.RULE('registerBody', () => {
     this.CONSUME(Indent);
@@ -310,11 +340,15 @@ export class MachineParser extends CstParser {
    *
    *   description       — prose, inline `description: "..."` or block form
    *   fields            — typed field list (inline `{...}` or block form)
-   *   ready             — single-line readiness expression (opaque)
-   *   effect            — indented block of statements (opaque)
+   *   ready             — single-line readiness expression
+   *   effect            — indented block of statements
    *
-   * Only `fields` is interpreted by the walker today. The expression and
-   * statement grammars for `ready` and `effect` arrive in a later slice.
+   * `description`, `fields`, and `ready` are parsed structurally: the
+   * description's block body is still consumed opaquely via `block`, but
+   * the fields list and the ready expression are fully-formed CST nodes
+   * (fields via `namedField`, ready via the full expression grammar).
+   * `effect` is still consumed opaquely until statement grammar arrives.
+   * The walker today only surfaces the `fields` section.
    */
   public microwordBody = this.RULE('microwordBody', () => {
     this.CONSUME(Indent);
@@ -409,15 +443,13 @@ export class MachineParser extends CstParser {
   });
 
   /**
-   * A `ready: <expression>` clause. The expression is an arbitrary
-   * single-line sub-language (`1`, `prefetch.valid`, `busResponse.done`,
-   * boolean combinations, etc.); we don't yet have an expression grammar
-   * so we consume tokens opaquely up to the terminating Newline.
+   * A `ready: <expression>` clause. Parses the expression via the real
+   * expression grammar below and then expects a terminating Newline.
    */
   public readyClause = this.RULE('readyClause', () => {
     this.CONSUME(Ready);
     this.CONSUME(Colon);
-    this.MANY(() => this.SUBRULE(this.anyInlineToken));
+    this.SUBRULE(this.expression);
     this.CONSUME(Newline);
   });
 
@@ -445,13 +477,18 @@ export class MachineParser extends CstParser {
    * Indented body of an operand declaration. Sections can appear in any
    * order and any subset; each section is one of:
    *
-   *   description    — prose (inline or block), opaque
+   *   description    — prose, inline `description: "..."` or block form
    *   size: N        — a single numeric literal (byte count)
    *   fields         — typed fields with optional @ offset (operand slots)
-   *   fetch          — block of microword record literals, opaque
+   *   fetch          — indented block of microword record literals
    *
-   * `description` and `fields` are reused directly from the microword
-   * body grammar — they share the same rule.
+   * `description`, `fields`, and `size` are parsed structurally:
+   * `description`'s block body is still consumed opaquely via `block`,
+   * but everything else surfaces as real CST nodes. `fetch` is still
+   * consumed opaquely until statement grammar arrives.
+   *
+   * `descriptionSection` and `fieldsSection` are reused directly from
+   * the microword body grammar — they share the same rules.
    */
   public operandBody = this.RULE('operandBody', () => {
     this.CONSUME(Indent);
@@ -484,9 +521,10 @@ export class MachineParser extends CstParser {
   /**
    * A `fetch` section — the block of microword record literals that
    * pull the operand's bytes out of the instruction stream. The inner
-   * block is consumed opaquely via the general `block` skipper; a later
-   * slice will replace this with real statement grammar once expressions
-   * and record literals are in place.
+   * block is still consumed opaquely via the general `block` skipper
+   * until statement grammar lands; the expression grammar (including
+   * record literals) is already in place, so the only missing piece is
+   * the statement-level rule that strings them together.
    */
   public fetchSection = this.RULE('fetchSection', () => {
     this.CONSUME(Fetch);
@@ -625,6 +663,299 @@ export class MachineParser extends CstParser {
     this.CONSUME(Outdent);
   });
 
+  // =========================================================================
+  // Expression grammar
+  //
+  // Standard C-family precedence, lowest-binding at the top:
+  //
+  //   logicalOr  →  logicalAnd  →  bitOr  →  bitXor  →  bitAnd  →
+  //   equality   →  relational  →  shift  →  additive  →  multiplicative →
+  //   unary      →  postfix     →  primary
+  //
+  // Postfix operators (left-associative, freely composable):
+  //
+  //   memberOp   `.ident`
+  //   callOp     `(args)`
+  //   indexOp    `[expr]` or `[hi:lo]`
+  //   castOp     `:Type`   — requires `TightColon` (no whitespace around
+  //                          the `:`), which is how cast avoids colliding
+  //                          with other uses of `:` in the grammar
+  //
+  // Deferred to later slices:
+  //   - ternary `? :` — no longer blocked by a cast-vs-ternary conflict
+  //     (the ternary separator is always loose `Colon`, cast is always
+  //     `TightColon`), but not yet implemented.
+  //   - type-parameterized calls `f<T>(...)` — the `<` ambiguity with
+  //     comparison still needs a design decision.
+  //
+  // `readyClause` is the main parser site that currently uses the
+  // expression grammar. Operand and microword bodies with a `fetch` or
+  // `effect` block still use the opaque `block` skipper.
+  // =========================================================================
+
+  public expression = this.RULE('expression', () => {
+    this.SUBRULE(this.logicalOrExpr);
+  });
+
+  public logicalOrExpr = this.RULE('logicalOrExpr', () => {
+    this.SUBRULE(this.logicalAndExpr);
+    this.MANY(() => {
+      this.CONSUME(OrOr);
+      this.SUBRULE2(this.logicalAndExpr);
+    });
+  });
+
+  public logicalAndExpr = this.RULE('logicalAndExpr', () => {
+    this.SUBRULE(this.bitOrExpr);
+    this.MANY(() => {
+      this.CONSUME(AndAnd);
+      this.SUBRULE2(this.bitOrExpr);
+    });
+  });
+
+  public bitOrExpr = this.RULE('bitOrExpr', () => {
+    this.SUBRULE(this.bitXorExpr);
+    this.MANY(() => {
+      this.CONSUME(Pipe);
+      this.SUBRULE2(this.bitXorExpr);
+    });
+  });
+
+  public bitXorExpr = this.RULE('bitXorExpr', () => {
+    this.SUBRULE(this.bitAndExpr);
+    this.MANY(() => {
+      this.CONSUME(Caret);
+      this.SUBRULE2(this.bitAndExpr);
+    });
+  });
+
+  public bitAndExpr = this.RULE('bitAndExpr', () => {
+    this.SUBRULE(this.equalityExpr);
+    this.MANY(() => {
+      this.CONSUME(Amp);
+      this.SUBRULE2(this.equalityExpr);
+    });
+  });
+
+  public equalityExpr = this.RULE('equalityExpr', () => {
+    this.SUBRULE(this.relationalExpr);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(EqualEqual) },
+        { ALT: () => this.CONSUME(NotEqual) },
+      ]);
+      this.SUBRULE2(this.relationalExpr);
+    });
+  });
+
+  public relationalExpr = this.RULE('relationalExpr', () => {
+    this.SUBRULE(this.shiftExpr);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(LessEqual) },
+        { ALT: () => this.CONSUME(GreaterEqual) },
+        { ALT: () => this.CONSUME(Less) },
+        { ALT: () => this.CONSUME(Greater) },
+      ]);
+      this.SUBRULE2(this.shiftExpr);
+    });
+  });
+
+  public shiftExpr = this.RULE('shiftExpr', () => {
+    this.SUBRULE(this.additiveExpr);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(ShiftLeft) },
+        { ALT: () => this.CONSUME(ShiftRight) },
+      ]);
+      this.SUBRULE2(this.additiveExpr);
+    });
+  });
+
+  public additiveExpr = this.RULE('additiveExpr', () => {
+    this.SUBRULE(this.multiplicativeExpr);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Plus) },
+        { ALT: () => this.CONSUME(Minus) },
+      ]);
+      this.SUBRULE2(this.multiplicativeExpr);
+    });
+  });
+
+  public multiplicativeExpr = this.RULE('multiplicativeExpr', () => {
+    this.SUBRULE(this.unaryExpr);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Star) },
+        { ALT: () => this.CONSUME(Slash) },
+      ]);
+      this.SUBRULE2(this.unaryExpr);
+    });
+  });
+
+  /**
+   * Unary prefix operators: `!expr`, `~expr`, `-expr`. Any of these can
+   * stack (`--x`, `!!x`) via the recursive call.
+   */
+  public unaryExpr = this.RULE('unaryExpr', () => {
+    this.OR([
+      {
+        ALT: () => {
+          this.OR2([
+            { ALT: () => this.CONSUME(Bang) },
+            { ALT: () => this.CONSUME(Tilde) },
+            { ALT: () => this.CONSUME(Minus) },
+          ]);
+          this.SUBRULE(this.unaryExpr);
+        },
+      },
+      { ALT: () => this.SUBRULE2(this.postfixExpr) },
+    ]);
+  });
+
+  /**
+   * Postfix operator chain: member access, function call, index/slice,
+   * and cast. All left-associative and freely composable — `a.b[3]():u8`
+   * is four postfix ops applied in order.
+   *
+   * Cast specifically consumes `TightColon`, not `Colon`, so a ternary
+   * separator (which is always loose `Colon`) can't be mistaken for a
+   * cast. See the `TightColon` token declaration for the full story.
+   *
+   * Type-parameterized calls `f<T>(...)` are still deferred — the `<`
+   * ambiguity with comparison isn't resolved yet.
+   */
+  public postfixExpr = this.RULE('postfixExpr', () => {
+    this.SUBRULE(this.primaryExpr);
+    this.MANY({
+      // MANY-level GATE decides whether to continue looping. Putting
+      // the cast check here (rather than on the OR alternative) means
+      // that when LA(1)=TightColon but LA(2) is not an identifier
+      // (e.g., inside a bit slice `[7:0]`), MANY exits cleanly instead
+      // of trying to enter the cast alt and raising NoViableAlt. The
+      // unconsumed TightColon then falls through to indexOp's slice
+      // branch, which consumes it via the Colon category.
+      GATE: () => {
+        const la1 = this.LA(1);
+        if (tokenMatcher(la1, Dot)) return true;
+        if (tokenMatcher(la1, LParen)) return true;
+        if (tokenMatcher(la1, LBracket)) return true;
+        if (tokenMatcher(la1, TightColon)) {
+          return tokenMatcher(this.LA(2), Identifier);
+        }
+        return false;
+      },
+      DEF: () => {
+        this.OR([
+          { ALT: () => this.SUBRULE2(this.memberOp) },
+          { ALT: () => this.SUBRULE3(this.callOp) },
+          { ALT: () => this.SUBRULE4(this.indexOp) },
+          { ALT: () => this.SUBRULE5(this.castOp) },
+        ]);
+      },
+    });
+  });
+
+  public memberOp = this.RULE('memberOp', () => {
+    this.CONSUME(Dot);
+    this.CONSUME(Identifier);
+  });
+
+  /**
+   * Function call: `name(arg, arg, ...)`. Zero or more comma-separated
+   * expression arguments. Type-parameterized form `f<T>(...)` is not
+   * yet supported.
+   */
+  public callOp = this.RULE('callOp', () => {
+    this.CONSUME(LParen);
+    this.OPTION(() => {
+      this.SUBRULE(this.expression);
+      this.MANY(() => {
+        this.CONSUME(Comma);
+        this.SUBRULE2(this.expression);
+      });
+    });
+    this.CONSUME(RParen);
+  });
+
+  /**
+   * Index / bit-slice: `expr[i]` for a single bit or `expr[hi:lo]` for a
+   * range. Both the lo and hi positions are themselves expressions, so
+   * `raw[W+1]` and `disp[7:0]` both parse naturally.
+   */
+  public indexOp = this.RULE('indexOp', () => {
+    this.CONSUME(LBracket);
+    this.SUBRULE(this.expression);
+    this.OPTION(() => {
+      this.CONSUME(Colon);
+      this.SUBRULE2(this.expression);
+    });
+    this.CONSUME(RBracket);
+  });
+
+  /**
+   * Cast: `expr:Type`. The `TightColon` token only matches a colon with
+   * no whitespace on either side, so loose `:` (record fields, ternary
+   * separators, declaration annotations with spaces) don't collide. The
+   * type reference is a plain identifier for now; parameterized types
+   * like `Local<8>` come with the type-parameterized-call story.
+   */
+  public castOp = this.RULE('castOp', () => {
+    this.CONSUME(TightColon);
+    this.SUBRULE(this.typeRef);
+  });
+
+  /**
+   * Primary expressions — the atoms the rest of the precedence ladder
+   * builds on. Numeric and string literals, identifiers, parenthesized
+   * sub-expressions, and record literals.
+   */
+  public primaryExpr = this.RULE('primaryExpr', () => {
+    this.OR([
+      { ALT: () => this.CONSUME(DecimalLiteral) },
+      { ALT: () => this.CONSUME(HexLiteral) },
+      { ALT: () => this.CONSUME(StringLiteral) },
+      { ALT: () => this.CONSUME(Identifier) },
+      { ALT: () => this.SUBRULE(this.parenExpr) },
+      { ALT: () => this.SUBRULE(this.recordLiteral) },
+    ]);
+  });
+
+  public parenExpr = this.RULE('parenExpr', () => {
+    this.CONSUME(LParen);
+    this.SUBRULE(this.expression);
+    this.CONSUME(RParen);
+  });
+
+  /**
+   * Record literal: `{ field: value, field: value, ... }`. Possibly
+   * empty. Fields are name/expression pairs in any order. Used in
+   * microword construction (`AluMicro { op: add, width: u8, ... }`) and
+   * anywhere a structured value is needed.
+   */
+  public recordLiteral = this.RULE('recordLiteral', () => {
+    this.CONSUME(LBrace);
+    this.OPTION(() => {
+      this.SUBRULE(this.recordField);
+      this.MANY(() => {
+        this.CONSUME(Comma);
+        this.SUBRULE2(this.recordField);
+      });
+    });
+    this.CONSUME(RBrace);
+  });
+
+  public recordField = this.RULE('recordField', () => {
+    this.CONSUME(Identifier);
+    this.CONSUME(Colon);
+    this.SUBRULE(this.expression);
+  });
+
+  // =========================================================================
+  // Opaque token skippers (used by declarations still on the skeleton)
+  // =========================================================================
+
   /**
    * Consume any single token that can appear inside a block body, except
    * the structural Indent / Outdent markers. Newlines inside blocks are
@@ -705,78 +1036,6 @@ export class MachineParser extends CstParser {
     ]);
   });
 
-  /**
-   * Same set of alternatives as `anyBodyToken` except Newline is
-   * excluded. Used by `readyClause` to consume the single-line opaque
-   * expression up to (but not including) the terminating Newline. When
-   * expression grammar lands, `readyClause` swaps `anyInlineToken` for
-   * a proper expression rule and this helper can be deleted.
-   */
-  public anyInlineToken = this.RULE('anyInlineToken', () => {
-    this.OR([
-      { ALT: () => this.CONSUME(Identifier) },
-      { ALT: () => this.CONSUME(HexLiteral) },
-      { ALT: () => this.CONSUME(DecimalLiteral) },
-      { ALT: () => this.CONSUME(StringLiteral) },
-      { ALT: () => this.CONSUME(Unit) },
-      { ALT: () => this.CONSUME(Machine) },
-      { ALT: () => this.CONSUME(Register) },
-      { ALT: () => this.CONSUME(Enum) },
-      { ALT: () => this.CONSUME(Bundle) },
-      { ALT: () => this.CONSUME(Union) },
-      { ALT: () => this.CONSUME(Microword) },
-      { ALT: () => this.CONSUME(Operand) },
-      { ALT: () => this.CONSUME(Routine) },
-      { ALT: () => this.CONSUME(Call) },
-      { ALT: () => this.CONSUME(Fetch) },
-      { ALT: () => this.CONSUME(Field) },
-      { ALT: () => this.CONSUME(Description) },
-      { ALT: () => this.CONSUME(Fields) },
-      { ALT: () => this.CONSUME(Ready) },
-      { ALT: () => this.CONSUME(Effect) },
-      { ALT: () => this.CONSUME(Mux) },
-      { ALT: () => this.CONSUME(When) },
-      { ALT: () => this.CONSUME(If) },
-      { ALT: () => this.CONSUME(Elif) },
-      { ALT: () => this.CONSUME(Else) },
-      { ALT: () => this.CONSUME(Assert) },
-      { ALT: () => this.CONSUME(Arrow) },
-      { ALT: () => this.CONSUME(BackArrow) },
-      { ALT: () => this.CONSUME(ColonEqual) },
-      { ALT: () => this.CONSUME(EqualEqual) },
-      { ALT: () => this.CONSUME(NotEqual) },
-      { ALT: () => this.CONSUME(LessEqual) },
-      { ALT: () => this.CONSUME(GreaterEqual) },
-      { ALT: () => this.CONSUME(AndAnd) },
-      { ALT: () => this.CONSUME(OrOr) },
-      { ALT: () => this.CONSUME(ShiftLeft) },
-      { ALT: () => this.CONSUME(ShiftRight) },
-      { ALT: () => this.CONSUME(DotDot) },
-      { ALT: () => this.CONSUME(LBrace) },
-      { ALT: () => this.CONSUME(RBrace) },
-      { ALT: () => this.CONSUME(LParen) },
-      { ALT: () => this.CONSUME(RParen) },
-      { ALT: () => this.CONSUME(LBracket) },
-      { ALT: () => this.CONSUME(RBracket) },
-      { ALT: () => this.CONSUME(Colon) },
-      { ALT: () => this.CONSUME(Comma) },
-      { ALT: () => this.CONSUME(Dot) },
-      { ALT: () => this.CONSUME(At) },
-      { ALT: () => this.CONSUME(Equal) },
-      { ALT: () => this.CONSUME(Less) },
-      { ALT: () => this.CONSUME(Greater) },
-      { ALT: () => this.CONSUME(Plus) },
-      { ALT: () => this.CONSUME(Minus) },
-      { ALT: () => this.CONSUME(Star) },
-      { ALT: () => this.CONSUME(Slash) },
-      { ALT: () => this.CONSUME(Pipe) },
-      { ALT: () => this.CONSUME(Amp) },
-      { ALT: () => this.CONSUME(Caret) },
-      { ALT: () => this.CONSUME(Tilde) },
-      { ALT: () => this.CONSUME(Bang) },
-      { ALT: () => this.CONSUME(Question) },
-    ]);
-  });
 }
 
 /**

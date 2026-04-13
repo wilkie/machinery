@@ -157,6 +157,29 @@ export const RParen = createToken({ name: 'RParen', pattern: /\)/ });
 export const LBracket = createToken({ name: 'LBracket', pattern: /\[/ });
 export const RBracket = createToken({ name: 'RBracket', pattern: /\]/ });
 export const Colon = createToken({ name: 'Colon', pattern: /:/ });
+
+/**
+ * A `:` with no whitespace on either side — used exclusively to mark a
+ * cast in expression position (`a:u8`, `raw:u16`, `(x + y):u8`). The
+ * lookbehind/lookahead ensures the lexer picks this token over regular
+ * `Colon` only when the colon is "tight" against both neighbors.
+ *
+ * Categorized as `Colon` so every parser rule that currently does
+ * `CONSUME(Colon)` (register declarations, bundle/microword fields,
+ * bit slices, record fields written without a space, etc.) still
+ * matches transparently. Only the cast rule in the expression grammar
+ * consumes `TightColon` specifically, so cast is the only place the
+ * distinction is observable.
+ *
+ * This is how we avoid the cast-vs-ternary ambiguity: `a ? b : c`
+ * tokenizes the separator as loose `Colon`, while `a:u8` tokenizes
+ * as `TightColon` — cast can't accidentally swallow a ternary's `:`.
+ */
+export const TightColon = createToken({
+  name: 'TightColon',
+  pattern: /(?<=\S):(?=\S)/,
+  categories: Colon,
+});
 export const Comma = createToken({ name: 'Comma', pattern: /,/ });
 export const Dot = createToken({ name: 'Dot', pattern: /\./ });
 export const At = createToken({ name: 'At', pattern: /@/ });
@@ -249,6 +272,10 @@ export const allTokens: TokenType[] = [
   RParen,
   LBracket,
   RBracket,
+  // `TightColon` must come before `Colon` so the lexer tries the
+  // narrower pattern first. Tokens categorized under Colon still match
+  // any parser rule that CONSUME(Colon)s them.
+  TightColon,
   Colon,
   Comma,
   Dot,

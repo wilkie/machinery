@@ -91,9 +91,14 @@ export function injectIndentation(rawTokens: IToken[]): IToken[] {
         }
       }
       // indent === stack top: same level, no INDENT/OUTDENT.
-
-      atLineStart = false;
     }
+
+    // Any real token clears the "at line start" flag, even inside
+    // brackets (where we skip the indent check entirely). Without this
+    // reset, a closing bracket that drops bracketDepth back to 0 would
+    // re-enter the indent check and emit spurious INDENT/OUTDENT tokens
+    // against the bracket's own column.
+    atLineStart = false;
 
     result.push(tok);
     lastToken = tok;

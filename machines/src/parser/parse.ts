@@ -45,6 +45,33 @@ export function parse(source: string): ParseResult {
   };
 }
 
+/**
+ * Parse a bare expression (no surrounding declaration context). Used by
+ * expression grammar tests and available as a public API for tools that
+ * need to parse expressions in isolation.
+ *
+ * The source should contain exactly one expression; trailing tokens
+ * are not consumed and will not produce an error by themselves, but the
+ * expression rule's own errors will be reported.
+ */
+export function parseExpression(source: string): ParseResult {
+  const lexResult = lex(source);
+  if (lexResult.errors.length > 0) {
+    return {
+      cst: undefined,
+      lexErrors: lexResult.errors,
+      parseErrors: [],
+    };
+  }
+  machineParser.input = lexResult.tokens;
+  const cst = machineParser.expression();
+  return {
+    cst,
+    lexErrors: [],
+    parseErrors: machineParser.errors,
+  };
+}
+
 /** The nine top-level declaration kinds recognized by the skeleton parser. */
 export type DeclarationKind =
   | 'registerDecl'

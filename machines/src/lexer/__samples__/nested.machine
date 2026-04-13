@@ -1,0 +1,13 @@
+; Nested blocks — exercises multiple levels of INDENT and the
+; OUTDENT-drain on the way back out to base level.
+
+unit select
+  mux x
+    when 0
+      mux y
+        when 0
+          1
+        when 1
+          2
+    when 1
+      3

@@ -1,0 +1,10 @@
+; Bracket-spanning record literals. The newlines inside the `{ ... }`
+; must be suppressed so the whole microword reads as one logical token
+; stream for the parser.
+
+routine foo
+  micro
+    AluMicro { op: add, width: u8,
+               srcA: mem, srcB: ModRM.reg,
+               dest: tmp, writeFlags: 1, commit: onRetire }
+    Retire {}

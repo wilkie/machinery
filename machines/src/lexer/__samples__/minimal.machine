@@ -1,0 +1,12 @@
+; Minimal sample: a couple of top-level declarations at the base indent
+; level, with one-level-deep child blocks. Exercises keyword recognition,
+; typed identifiers, numeric literals, and the basic INDENT/OUTDENT flow.
+
+enum Foo
+  a
+  b
+  c
+
+register AX:u16
+  field AL:u8 @ 0
+  field AH:u8 @ 8

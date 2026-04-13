@@ -9,5 +9,6 @@ packages:
   - 'assemblers'
   - 'disassemblers'
   - 'formats'
+  - 'machines'
 onlyBuiltDependencies:
   - 'esbuild'

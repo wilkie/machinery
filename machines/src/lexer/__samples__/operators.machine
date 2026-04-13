@@ -1,0 +1,22 @@
+; Operator coverage — makes sure every multi-char operator tokenizes as
+; a single unit (Arrow vs Minus+Greater, etc.) and the register/flag
+; update operators are distinct.
+
+unit alu
+  wires in
+    a:u16
+    b:u16
+  wires out
+    *:u16
+
+  wire raw:u17 = a:u17 + b:u17
+  flags <- aluFlags(a, b, raw)
+  result <- raw:u16
+
+  ; Arrow, BackArrow, ColonEqual, EqualEqual, NotEqual, range, etc.
+  ; These are all in expression position; the parser decides shape.
+  wire tmp := a == b
+  wire neq := a != b
+  wire r1 := a -> b
+  wire r2 := a <- b
+  wire r3 := 0xB0..0xB7

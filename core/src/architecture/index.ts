@@ -24,3 +24,14 @@ export type { ToolchainProcessorOptions } from './Process';
 export type { LineMessage } from './Process';
 export type { Executable } from './Executable';
 export type { FileFormat } from './FileFormat';
+
+export * from './Processor';
+export * from './Instruction';
+export * from './Interrupt';
+export * from './Opcode';
+export * from './Operation';
+export * from './Macro';
+export * from './Register';
+export * from './Memory';
+export * from './Bus';
+export * from './Local';

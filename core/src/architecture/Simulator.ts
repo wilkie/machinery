@@ -1,7 +1,7 @@
 import Video from './Video';
 import Serial from './Serial';
 
-import type { RegisterInfo } from './Target';
+import type { RegisterInfo } from './Register';
 
 export const SimulatorStates = {
   Uninitialized: 0,

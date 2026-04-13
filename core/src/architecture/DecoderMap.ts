@@ -1,9 +1,13 @@
 import type {
   Target,
+} from './Target';
+import type {
   InstructionInfo,
   InstructionForm,
+} from './Instruction';
+import type {
   OpcodeMatcher,
-} from './Target';
+} from './Opcode';
 
 const BYTE_MAX = 256;
 

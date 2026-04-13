@@ -78,7 +78,7 @@ const Target286: Target = {
             ],
             operation: ['w = RAM:u16[ip]', 'ip = ip + 2'],
           },
-          double: {
+          dword: {
             locals: [
               {
                 identifier: 'd',
@@ -133,7 +133,7 @@ const Target286: Target = {
             ],
             operation: ['w = RAM:u16[ip]', 'ip = ip + 2'],
           },
-          double: {
+          dword: {
             locals: [
               {
                 identifier: 'd',

@@ -1024,7 +1024,7 @@ describe('parser — top-level declaration skeleton', () => {
         '  ready: 1',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1039,7 +1039,7 @@ describe('parser — top-level declaration skeleton', () => {
         '  terminal: done',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1600,7 +1600,7 @@ describe('parser — top-level declaration skeleton', () => {
         '      af = 0',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1707,7 +1707,7 @@ describe('parser — top-level declaration skeleton', () => {
         '      state <- 0',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1760,7 +1760,7 @@ describe('parser — top-level declaration skeleton', () => {
         '    movRmReg8',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1775,7 +1775,7 @@ describe('parser — top-level declaration skeleton', () => {
         '    otherRoutine',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1785,7 +1785,7 @@ describe('parser — top-level declaration skeleton', () => {
         '  rom microcode:MicroOp[]',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1832,7 +1832,7 @@ describe('parser — top-level declaration skeleton', () => {
         '  rom microops',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1843,7 +1843,7 @@ describe('parser — top-level declaration skeleton', () => {
         '    microcode:MicroOp[]',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1870,7 +1870,7 @@ describe('parser — top-level declaration skeleton', () => {
         '    microPC <- microops.systemcode.decode(0)',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1889,7 +1889,7 @@ describe('parser — top-level declaration skeleton', () => {
         '      lgdt',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1912,7 +1912,7 @@ describe('parser — top-level declaration skeleton', () => {
         '    valid = 0',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 
@@ -1935,7 +1935,7 @@ describe('parser — top-level declaration skeleton', () => {
         '  data:u{W}[]',
         '',
       ].join('\n');
-      const { cst, parseErrors } = parse(src);
+      const { cst: _cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
     });
 

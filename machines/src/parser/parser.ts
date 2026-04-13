@@ -13,10 +13,11 @@
 //     grammar" section further down.
 //
 //   * A full statement grammar covering `call` / `fetch` directives,
-//     `mux` with when/else arms, `wire` declarations, `if`/`elif`/
-//     `else`, `assert`, assignments (combinational `=` and register
-//     `<-`), anonymous output assignment (`= expr`), and bare
-//     expression statements.
+//     `mux` with when/else arms, `wire` declarations, `instance`
+//     declarations (with inline or block-form port bindings),
+//     `if`/`elif`/`else`, `assert`, assignments (combinational `=`
+//     and register `<-`), anonymous output assignment (`= expr`),
+//     and bare expression statements.
 //
 //   * Unit and machine body grammar with `wires in`/`wires out`,
 //     `registers` (with optional nested `field` blocks), `id`,
@@ -40,6 +41,7 @@ import {
   // Keywords
   Unit,
   Machine,
+  Instance,
   Register,
   Enum,
   Bundle,
@@ -1024,6 +1026,7 @@ export class MachineParser extends CstParser {
       { ALT: () => this.SUBRULE(this.callStmt) },
       { ALT: () => this.SUBRULE(this.fetchStmt) },
       { ALT: () => this.SUBRULE(this.wireDeclStmt) },
+      { ALT: () => this.SUBRULE(this.instanceStmt) },
       { ALT: () => this.SUBRULE(this.ifStmt) },
       { ALT: () => this.SUBRULE(this.assertStmt) },
       { ALT: () => this.SUBRULE(this.anonAssignStmt) },
@@ -1264,6 +1267,116 @@ export class MachineParser extends CstParser {
   public anonAssignStmt = this.RULE('anonAssignStmt', () => {
     this.CONSUME(Equal);
     this.SUBRULE(this.expression);
+  });
+
+  /**
+   * Named instance declaration:
+   *
+   *   instance NAME : unit                        ; header only, no pins
+   *   instance NAME : unit { p: expr, p: expr }   ; inline pinned ports
+   *   instance NAME : unit                        ; block pinned ports
+   *     p = expr
+   *     p = expr
+   *
+   * The `decl` after the colon is a `typeRef`, so turbofish
+   * instantiations like `alu::<u8>` land naturally — `typeRef`
+   * already accepts an identifier optionally followed by curly-brace
+   * type parameters (`Local{8}`). Turbofish (`::<...>`) works
+   * through a separate pathway that we'll grow later if needed;
+   * for now the block pin form handles the common cases cleanly.
+   *
+   * The port binding list uses `name = expr` syntax in both forms
+   * (inline and block). Inline entries are comma-separated; block
+   * entries are newline-separated. An instance with no pinned ports
+   * is legal — all ports must then be driven at statement level.
+   *
+   * See core/ALU_UNITS_MACHINES.md for the semantic model this
+   * parses against.
+   */
+  public instanceStmt = this.RULE('instanceStmt', () => {
+    this.CONSUME(Instance);
+    this.CONSUME(Identifier);
+    this.CONSUME(Colon);
+    this.SUBRULE(this.instanceTypeRef);
+    this.OPTION(() => {
+      this.OR([
+        // Inline form: `{ p: expr, p: expr }`
+        {
+          ALT: () => {
+            this.CONSUME(LBrace);
+            this.OPTION1(() => {
+              this.SUBRULE(this.instancePortBinding);
+              this.MANY(() => {
+                this.CONSUME(Comma);
+                this.SUBRULE2(this.instancePortBinding);
+              });
+            });
+            this.CONSUME(RBrace);
+          },
+        },
+        // Block form: indented `p = expr` lines.
+        {
+          ALT: () => {
+            this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+            this.OPTION2(() => this.SUBRULE(this.instancePortBody));
+          },
+        },
+      ]);
+    });
+  });
+
+  /**
+   * The `: type` reference after an instance name. Handles both the
+   * bare-unit form (`instance foo : myUnit`) and the turbofish
+   * type-parameterized form (`instance foo : alu::<u8>`). The
+   * turbofish path is a thin wrapper around the call-form's
+   * turbofish rule but without the call arguments.
+   */
+  public instanceTypeRef = this.RULE('instanceTypeRef', () => {
+    this.CONSUME(Identifier);
+    this.OPTION(() => {
+      this.CONSUME(DoubleColon);
+      this.CONSUME(Less);
+      this.SUBRULE(this.typeRef);
+      this.MANY(() => {
+        this.CONSUME(Comma);
+        this.SUBRULE2(this.typeRef);
+      });
+      this.CONSUME(Greater);
+    });
+  });
+
+  /**
+   * A single port binding inside an instance's inline or block form.
+   * Inline form uses `name: expr` (colon, reusing record-literal
+   * shape) and block form uses `name = expr`. Both are represented
+   * by the same rule with an OR on the separator — semantic analysis
+   * doesn't care which form was used.
+   */
+  public instancePortBinding = this.RULE('instancePortBinding', () => {
+    this.CONSUME(Identifier);
+    this.OR([
+      { ALT: () => this.CONSUME(Colon) },
+      { ALT: () => this.CONSUME(Equal) },
+    ]);
+    this.SUBRULE(this.expression);
+  });
+
+  /**
+   * Indented block of port bindings inside an instance's block form.
+   * Each line is an `instancePortBinding` using `=` as the
+   * separator. Blank and comment-only lines between bindings are
+   * absorbed by the inner OR.
+   */
+  public instancePortBody = this.RULE('instancePortBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.instancePortBinding) },
+      ]);
+    });
+    this.CONSUME(Outdent);
   });
 
   // =========================================================================
@@ -1671,6 +1784,7 @@ export class MachineParser extends CstParser {
       // and as field names that aren't yet reserved context-free).
       { ALT: () => this.CONSUME(Unit) },
       { ALT: () => this.CONSUME(Machine) },
+      { ALT: () => this.CONSUME(Instance) },
       { ALT: () => this.CONSUME(Register) },
       { ALT: () => this.CONSUME(Enum) },
       { ALT: () => this.CONSUME(Bundle) },

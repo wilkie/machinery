@@ -31,6 +31,7 @@ function stmtSexp(node: CstElement): string {
         'callStmt',
         'fetchStmt',
         'wireDeclStmt',
+        'instanceStmt',
         'ifStmt',
         'assertStmt',
         'anonAssignStmt',
@@ -40,6 +41,36 @@ function stmtSexp(node: CstElement): string {
         if (child) return stmtSexp(child);
       }
       return '<statement?>';
+    }
+
+    case 'instanceStmt': {
+      const name = firstToken(node, 'Identifier').image;
+      const typeNode = firstChild(node, 'instanceTypeRef');
+      const typeName = firstToken(typeNode, 'Identifier').image;
+      const typeArgs = asCstNodes(typeNode.children['typeRef']).map((t) =>
+        firstToken(t, 'Identifier').image,
+      );
+      const typeStr = typeArgs.length > 0
+        ? `${typeName}::<${typeArgs.join(',')}>`
+        : typeName;
+
+      // Port bindings can come from either the inline form (direct
+      // instancePortBinding children) or the block form (wrapped in
+      // an instancePortBody). Gather from both.
+      const inlineBindings = asCstNodes(node.children['instancePortBinding']);
+      const body = asCstNodes(node.children['instancePortBody'])[0];
+      const blockBindings = body
+        ? asCstNodes(body.children['instancePortBinding'])
+        : [];
+      const bindings = [...inlineBindings, ...blockBindings].map((b) => {
+        const pname = firstToken(b, 'Identifier').image;
+        const pval = exprSexp(firstChild(b, 'expression'));
+        return `${pname}=${pval}`;
+      });
+
+      return bindings.length > 0
+        ? `(instance ${name}:${typeStr} ${bindings.join(' ')})`
+        : `(instance ${name}:${typeStr})`;
     }
 
     case 'anonAssignStmt': {
@@ -660,6 +691,95 @@ describe('statement grammar — assert', () => {
     expect(
       stmtSexp(parseStmtOrFail('assert !(control.pop && out.empty)')),
     ).toBe('(assert (! (&& (. control pop) (. out empty))))');
+  });
+});
+
+describe('statement grammar — instance declaration', () => {
+  it('parses a bare instance with no port bindings', () => {
+    expect(stmtSexp(parseStmtOrFail('instance foo : myUnit'))).toBe(
+      '(instance foo:myUnit)',
+    );
+  });
+
+  it('parses an inline instance with one port binding', () => {
+    expect(
+      stmtSexp(parseStmtOrFail('instance foo : myUnit { x: 1 }')),
+    ).toBe('(instance foo:myUnit x=1)');
+  });
+
+  it('parses an inline instance with multiple port bindings', () => {
+    const src = 'instance foo : myUnit { x: 1, y: 2, z: 3 }';
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(instance foo:myUnit x=1 y=2 z=3)',
+    );
+  });
+
+  it('parses a block-form instance with one binding', () => {
+    const src = ['instance foo : myUnit', '  x = 1'].join('\n');
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(instance foo:myUnit x=1)',
+    );
+  });
+
+  it('parses a block-form instance with multiple bindings', () => {
+    const src = [
+      'instance aluSrcA : aluSelect',
+      '  reg = regRead.out',
+      '  imm = imm',
+      '  tmp = tmp',
+      '  mdr = mdr',
+      '  ea  = ea',
+      '  ip  = ip',
+    ].join('\n');
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(instance aluSrcA:aluSelect reg=(. regRead out) imm=imm tmp=tmp mdr=mdr ea=ea ip=ip)',
+    );
+  });
+
+  it('parses an instance with a turbofish type argument', () => {
+    expect(
+      stmtSexp(parseStmtOrFail('instance aluU8 : alu::<u8>')),
+    ).toBe('(instance aluU8:alu::<u8>)');
+  });
+
+  it('parses an instance with turbofish and block-form bindings', () => {
+    const src = [
+      'instance aluU8 : alu::<u8>',
+      '  cin = FLAGS.CF',
+    ].join('\n');
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(instance aluU8:alu::<u8> cin=(. FLAGS CF))',
+    );
+  });
+
+  it('parses an instance with expression-valued port bindings', () => {
+    const src = [
+      'instance foo : myUnit',
+      '  a = x + y',
+      '  b = bar(z)',
+      '  c = baz::<u8>(1, 2)',
+    ].join('\n');
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(instance foo:myUnit a=(+ x y) b=(call bar z) c=(call<u8> baz 1 2))',
+    );
+  });
+
+  it('parses an instance with blank lines between block-form bindings', () => {
+    const src = [
+      'instance foo : myUnit',
+      '  a = 1',
+      '',
+      '  b = 2',
+    ].join('\n');
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(instance foo:myUnit a=1 b=2)',
+    );
+  });
+
+  it('parses an instance with an empty inline binding list', () => {
+    expect(stmtSexp(parseStmtOrFail('instance foo : myUnit {}'))).toBe(
+      '(instance foo:myUnit)',
+    );
   });
 });
 

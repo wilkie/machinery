@@ -1684,6 +1684,64 @@ describe('parser — top-level declaration skeleton', () => {
       ]);
     });
 
+    it('parses a machine with instance declarations mirroring executionUnit', () => {
+      // Exercises the `instance` syntax in a realistic shape: a
+      // stateful machine that instantiates several combinational
+      // unit instances for its operand muxes and ALU stages, with
+      // both inline and block-form port bindings.
+      const src = [
+        'machine executionUnit',
+        '  registers',
+        '    state:u8 = 0',
+        '    ea:u16 = 0',
+        '    tmp:u16 = 0',
+        '    mdr:u16 = 0',
+        '    imm:u16 = 0',
+        '    ip:u16 = 0',
+        '',
+        '  wires in',
+        '    prefetch:PrefetchOut',
+        '',
+        '  wires out',
+        '    prefetchControl:PrefetchControl',
+        '',
+        '  default',
+        '    prefetchControl = { pop: 0 }',
+        '',
+        '  instance regRead : registerSelect',
+        '    sel = 0',
+        '    width = Width.u16',
+        '',
+        '  instance aluSrcA : aluSelect',
+        '    reg = regRead.out',
+        '    imm = imm',
+        '    tmp = tmp',
+        '    mdr = mdr',
+        '    ea  = ea',
+        '    ip  = ip',
+        '',
+        '  instance aluSrcB : aluSelect',
+        '    reg = regRead.out',
+        '    imm = imm',
+        '    tmp = tmp',
+        '    mdr = mdr',
+        '    ea  = ea',
+        '    ip  = ip',
+        '',
+        '  instance aluU8 : alu::<u8>',
+        '    cin = 0',
+        '',
+        '  instance aluU16 : alu::<u16>',
+        '    cin = 0',
+        '',
+      ].join('\n');
+      const { cst, lexErrors, parseErrors } = parse(src);
+      expect(lexErrors).toEqual([]);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['machineDecl']);
+      expect(names(cst)).toEqual(['executionUnit']);
+    });
+
     it('parses the real core/ALU_NEW.machine file end to end', () => {
       // The acid test: can the parser consume the full hand-written
       // i286 design doc from core/ALU_NEW.machine without any lex or

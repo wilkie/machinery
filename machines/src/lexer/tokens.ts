@@ -86,6 +86,14 @@ function keyword(name: string, lexeme: string): TokenType {
 // Top-level construct keywords.
 export const Unit = keyword('Unit', 'unit');
 export const Machine = keyword('Machine', 'machine');
+/**
+ * `instance NAME : decl { port: expr, ... }` — declares a named
+ * long-lived instance of a unit or machine. Legal inside unit and
+ * machine bodies, both at the top of a body and inline with other
+ * statements. See core/ALU_UNITS_MACHINES.md for the full semantic
+ * model.
+ */
+export const Instance = keyword('Instance', 'instance');
 export const Register = keyword('Register', 'register');
 // `Registers` is the plural section marker used inside machine bodies
 // (a block of per-register declarations). Declared here so both live
@@ -312,6 +320,7 @@ export const allTokens: TokenType[] = [
   // Keywords (longer_alt on each defers to Identifier for `unitX`-like words).
   Unit,
   Machine,
+  Instance,
   // `Registers` must come before `Register` so the lexer matches the
   // longer keyword first.
   Registers,

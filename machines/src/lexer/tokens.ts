@@ -83,6 +83,14 @@ export const Fetch = keyword('Fetch', 'fetch');
 // Block-level keywords used inside declaration bodies.
 export const Field = keyword('Field', 'field');
 
+// Section markers used inside microword (and later operand / routine)
+// bodies. Reserved globally by the lexer; meaningful only in the contexts
+// the grammar places them.
+export const Description = keyword('Description', 'description');
+export const Fields = keyword('Fields', 'fields');
+export const Ready = keyword('Ready', 'ready');
+export const Effect = keyword('Effect', 'effect');
+
 // Control-flow keywords.
 export const Mux = keyword('Mux', 'mux');
 export const When = keyword('When', 'when');
@@ -184,7 +192,13 @@ export const allTokens: TokenType[] = [
   Routine,
   Call,
   Fetch,
+  // `Fields` must come before `Field` so the lexer matches the longer
+  // keyword first — Chevrotain uses list order to break prefix ties.
+  Fields,
   Field,
+  Description,
+  Ready,
+  Effect,
   Mux,
   When,
   If,

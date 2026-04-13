@@ -176,6 +176,50 @@ export interface UnionInfo {
   arms: UnionArm[];
 }
 
+export interface MicrowordInfo {
+  name: string;
+  fields: BundleField[];
+}
+
+/**
+ * Walk a `file` CST and return every microword declaration as a plain
+ * data object, with its name and `fields` section contents in source
+ * order. Only the `fields` section is interpreted today — description,
+ * ready, and effect are parsed structurally but their contents are
+ * opaque until expression grammar lands.
+ *
+ * Microwords with no body, no `fields` section, or an empty inline
+ * `fields {}` all return with an empty fields list.
+ */
+export function getMicrowords(file: CstNode): MicrowordInfo[] {
+  const result: MicrowordInfo[] = [];
+  const declNodes = asCstNodes(file.children['declaration']);
+  for (const decl of declNodes) {
+    const microwordDecls = asCstNodes(decl.children['microwordDecl']);
+    for (const mwDecl of microwordDecls) {
+      const nameToken = asTokens(mwDecl.children['Identifier'])[0];
+      if (!nameToken) continue;
+      const body = asCstNodes(mwDecl.children['microwordBody'])[0];
+      const fields: BundleField[] = [];
+      if (body) {
+        const fieldsSections = asCstNodes(body.children['fieldsSection']);
+        for (const fs of fieldsSections) {
+          // Block form: fields live inside a fieldsBody sub-node.
+          const fieldsBodyNode = asCstNodes(fs.children['fieldsBody'])[0];
+          if (fieldsBodyNode) {
+            fields.push(...extractNamedFields(fieldsBodyNode));
+          } else {
+            // Inline form: namedFields are direct children of fieldsSection.
+            fields.push(...extractNamedFields(fs));
+          }
+        }
+      }
+      result.push({ name: nameToken.image, fields });
+    }
+  }
+  return result;
+}
+
 export interface FieldInfo {
   name: string;
   type: string;

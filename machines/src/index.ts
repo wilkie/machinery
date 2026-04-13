@@ -20,6 +20,7 @@ export {
   getBundles,
   getUnions,
   getRegisters,
+  getMicrowords,
   type ParseResult,
   type TopLevelDecl,
   type DeclarationKind,
@@ -30,5 +31,6 @@ export {
   type UnionArm,
   type RegisterInfo,
   type FieldInfo,
+  type MicrowordInfo,
 } from './parser/parse.js';
 export { MachineParser, machineParser } from './parser/parser.js';

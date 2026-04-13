@@ -1,0 +1,85 @@
+; Microword declarations mirroring the six primitives in ALU_NEW.machine.
+; Exercises every shape the microword body grammar needs to handle:
+;
+;   * description block form followed by fields/ready/effect (AluMicro)
+;   * all four sections present (IStreamRead, BusRead)
+;   * no description section (BusWrite)
+;   * inline empty `fields {}` (Retire)
+;   * only fields + ready, no effect (Branch)
+
+microword AluMicro
+  description
+    The one-cycle ALU-shaped microword. Reads two operand sources via
+    aluSelect, runs alu of the given width, optionally updates FLAGS,
+    and writes the result to dest subject to commit semantics.
+
+  fields
+    op:AluOp
+    width:Width
+    srcA:AluSrc
+    srcB:AluSrc
+    dest:AluDest
+    commit:Commit
+    writeFlags:b
+
+  ready: 1
+
+  effect
+    wire a = aluSelect(srcA)
+    wire b = aluSelect(srcB)
+    wire r = alu(op, a, b)
+    if writeFlags
+      FLAGS <- r.flags
+
+microword IStreamRead
+  description
+    Read one byte from the instruction stream into a local.
+
+  fields
+    dest:Local
+
+  ready: prefetch.valid
+
+  effect
+    dest <- prefetch.byte
+    prefetchControl.pop = 1
+
+microword BusRead
+  description
+    Issue a read on the bus interface unit.
+
+  fields
+    width:BusSize
+    addr:Local
+    dest:Local
+
+  ready: busResponse.done
+
+  effect
+    dest <- busResponse.data
+
+microword BusWrite
+  fields
+    width:BusSize
+    addr:Local
+    value:Local
+
+  ready: busResponse.done
+
+  effect
+    busRequest.valid = 1
+
+microword Branch
+  fields
+    cond:BranchCond
+    target:MicroAddr
+
+  ready: 1
+
+microword Retire
+  fields {}
+
+  ready: 1
+
+  effect
+    commitStaged()

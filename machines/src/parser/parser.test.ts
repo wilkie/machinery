@@ -6,6 +6,7 @@ import {
   getBundles,
   getUnions,
   getRegisters,
+  getMicrowords,
 } from './parse.js';
 
 const readSample = (name: string): string =>
@@ -771,6 +772,227 @@ describe('parser — top-level declaration skeleton', () => {
       const { cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
       expect(getRegisters(cst!)).toEqual([]);
+    });
+  });
+
+  describe('microword body parsing', () => {
+    it('captures fields from a microword with every section present', () => {
+      const src = [
+        'microword AluMicro',
+        '  description',
+        '    The one-cycle ALU-shaped microword.',
+        '',
+        '  fields',
+        '    op:AluOp',
+        '    width:Width',
+        '    dest:AluDest',
+        '',
+        '  ready: 1',
+        '',
+        '  effect',
+        '    wire a = aluSelect(srcA)',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)).toEqual([
+        {
+          name: 'AluMicro',
+          fields: [
+            { name: 'op', type: 'AluOp' },
+            { name: 'width', type: 'Width' },
+            { name: 'dest', type: 'AluDest' },
+          ],
+        },
+      ]);
+    });
+
+    it('handles an inline empty fields section (fields {})', () => {
+      const src = [
+        'microword Retire',
+        '  fields {}',
+        '  ready: 1',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)).toEqual([
+        { name: 'Retire', fields: [] },
+      ]);
+    });
+
+    it('handles an inline non-empty fields section', () => {
+      const src = [
+        'microword Mini',
+        '  fields { dest:Local }',
+        '  ready: 1',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)).toEqual([
+        { name: 'Mini', fields: [{ name: 'dest', type: 'Local' }] },
+      ]);
+    });
+
+    it('handles an inline fields section with multiple entries', () => {
+      const src = [
+        'microword Foo',
+        '  fields { a:u8, b:u16, c:Local }',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)[0]!.fields).toEqual([
+        { name: 'a', type: 'u8' },
+        { name: 'b', type: 'u16' },
+        { name: 'c', type: 'Local' },
+      ]);
+    });
+
+    it('handles a microword with no body', () => {
+      const { cst, parseErrors } = parse('microword Empty\n');
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)).toEqual([
+        { name: 'Empty', fields: [] },
+      ]);
+    });
+
+    it('handles a microword with only a fields section', () => {
+      const src = 'microword Foo\n  fields\n    x:b\n    y:u8\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)[0]!.fields).toEqual([
+        { name: 'x', type: 'b' },
+        { name: 'y', type: 'u8' },
+      ]);
+    });
+
+    it('handles ready with a complex expression opaquely', () => {
+      // The readyClause rule skips the expression, so any token
+      // sequence on the line should be accepted.
+      const src = [
+        'microword Foo',
+        '  fields',
+        '    dest:Local',
+        '  ready: prefetch.valid && !hold && cycleCount > 0',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)[0]!.fields).toEqual([
+        { name: 'dest', type: 'Local' },
+      ]);
+    });
+
+    it('handles an effect block full of arbitrary tokens', () => {
+      const src = [
+        'microword Foo',
+        '  fields',
+        '    dest:Local',
+        '  effect',
+        '    dest <- prefetch.byte',
+        '    prefetchControl.pop = 1',
+        '    if dest == 0',
+        '      FLAGS.ZF <- 1',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)[0]!.fields).toEqual([
+        { name: 'dest', type: 'Local' },
+      ]);
+    });
+
+    it('accepts sections in an unusual order', () => {
+      // Real files always use description → fields → ready → effect,
+      // but the grammar doesn't enforce order.
+      const src = [
+        'microword Foo',
+        '  effect',
+        '    a <- b',
+        '  ready: 1',
+        '  fields',
+        '    x:b',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)[0]!.fields).toEqual([
+        { name: 'x', type: 'b' },
+      ]);
+    });
+
+    it('captures multiple microwords in the same file in source order', () => {
+      const src = [
+        'microword A',
+        '  fields',
+        '    x:b',
+        '',
+        'microword B',
+        '  fields',
+        '    y:u8',
+        '  ready: 1',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)).toEqual([
+        { name: 'A', fields: [{ name: 'x', type: 'b' }] },
+        { name: 'B', fields: [{ name: 'y', type: 'u8' }] },
+      ]);
+    });
+
+    it('parses every microword shape from microwords.machine', () => {
+      const { cst, parseErrors } = parse(readSample('microwords.machine'));
+      expect(parseErrors).toEqual([]);
+      const mws = getMicrowords(cst!);
+      expect(mws.map((m) => m.name)).toEqual([
+        'AluMicro',
+        'IStreamRead',
+        'BusRead',
+        'BusWrite',
+        'Branch',
+        'Retire',
+      ]);
+
+      // Spot-check each shape:
+      expect(mws.find((m) => m.name === 'AluMicro')!.fields).toEqual([
+        { name: 'op', type: 'AluOp' },
+        { name: 'width', type: 'Width' },
+        { name: 'srcA', type: 'AluSrc' },
+        { name: 'srcB', type: 'AluSrc' },
+        { name: 'dest', type: 'AluDest' },
+        { name: 'commit', type: 'Commit' },
+        { name: 'writeFlags', type: 'b' },
+      ]);
+      expect(mws.find((m) => m.name === 'IStreamRead')!.fields).toEqual([
+        { name: 'dest', type: 'Local' },
+      ]);
+      expect(mws.find((m) => m.name === 'BusRead')!.fields).toEqual([
+        { name: 'width', type: 'BusSize' },
+        { name: 'addr', type: 'Local' },
+        { name: 'dest', type: 'Local' },
+      ]);
+      expect(mws.find((m) => m.name === 'Branch')!.fields).toEqual([
+        { name: 'cond', type: 'BranchCond' },
+        { name: 'target', type: 'MicroAddr' },
+      ]);
+      expect(mws.find((m) => m.name === 'Retire')!.fields).toEqual([]);
+    });
+
+    it('does not treat bundle or register decls as microwords', () => {
+      const src = [
+        'bundle Foo',
+        '  a:b',
+        '',
+        'register AX:u16',
+        '  field AL:u8 @ 0',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)).toEqual([]);
     });
   });
 

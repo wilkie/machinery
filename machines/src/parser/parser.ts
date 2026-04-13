@@ -21,6 +21,10 @@ import {
   Call,
   Fetch,
   Field,
+  Description,
+  Fields,
+  Ready,
+  Effect,
   Mux,
   When,
   If,
@@ -284,7 +288,138 @@ export class MachineParser extends CstParser {
   public microwordDecl = this.RULE('microwordDecl', () => {
     this.CONSUME(Microword);
     this.CONSUME(Identifier);
-    this.OPTION(() => this.SUBRULE(this.headerTerminator));
+    this.OPTION(() => {
+      this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+      this.OPTION1(() => this.SUBRULE(this.microwordBody));
+    });
+  });
+
+  /**
+   * Indented body of a microword declaration. Sections can appear in any
+   * order and any subset; each section is one of:
+   *
+   *   description       — prose, inline `description: "..."` or block form
+   *   fields            — typed field list (inline `{...}` or block form)
+   *   ready             — single-line readiness expression (opaque)
+   *   effect            — indented block of statements (opaque)
+   *
+   * Only `fields` is interpreted by the walker today. The expression and
+   * statement grammars for `ready` and `effect` arrive in a later slice.
+   */
+  public microwordBody = this.RULE('microwordBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.descriptionSection) },
+        { ALT: () => this.SUBRULE(this.fieldsSection) },
+        { ALT: () => this.SUBRULE(this.readyClause) },
+        { ALT: () => this.SUBRULE(this.effectSection) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  /**
+   * A `description` section — either inline (`description: "text"`) or
+   * block form (`description\n  indented prose...`). In the block form
+   * the prose is consumed opaquely via the general `block` skipper; a
+   * later slice can swap in structured prose extraction if we want to
+   * surface descriptions in generated documentation.
+   */
+  public descriptionSection = this.RULE('descriptionSection', () => {
+    this.CONSUME(Description);
+    this.OR([
+      {
+        ALT: () => {
+          this.CONSUME(Colon);
+          this.CONSUME(StringLiteral);
+        },
+      },
+      {
+        ALT: () => {
+          this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+          this.OPTION(() => this.SUBRULE(this.block));
+        },
+      },
+    ]);
+  });
+
+  /**
+   * A `fields` section. Two forms:
+   *
+   *   fields { a:T, b:U }     inline record-literal form, possibly empty
+   *   fields
+   *     a:T                   block form — indented namedField list
+   *     b:U
+   *
+   * The block form is what ALU_NEW.machine's microwords actually use; the
+   * inline form covers the `Retire` case where the microword has no
+   * fields (`fields {}`).
+   */
+  public fieldsSection = this.RULE('fieldsSection', () => {
+    this.CONSUME(Fields);
+    this.OR([
+      {
+        ALT: () => {
+          this.CONSUME(LBrace);
+          this.OPTION1(() => {
+            this.SUBRULE(this.namedField);
+            this.MANY(() => {
+              this.CONSUME(Comma);
+              this.SUBRULE2(this.namedField);
+            });
+          });
+          this.CONSUME(RBrace);
+        },
+      },
+      {
+        ALT: () => {
+          this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+          this.OPTION2(() => this.SUBRULE(this.fieldsBody));
+        },
+      },
+    ]);
+  });
+
+  /**
+   * Block-form body of a `fields` section: an indented list of
+   * `name:type` entries. Structurally identical to bundleBody and
+   * unionBody — reuses the same `namedField` rule.
+   */
+  public fieldsBody = this.RULE('fieldsBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.namedField) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  /**
+   * A `ready: <expression>` clause. The expression is an arbitrary
+   * single-line sub-language (`1`, `prefetch.valid`, `busResponse.done`,
+   * boolean combinations, etc.); we don't yet have an expression grammar
+   * so we consume tokens opaquely up to the terminating Newline.
+   */
+  public readyClause = this.RULE('readyClause', () => {
+    this.CONSUME(Ready);
+    this.CONSUME(Colon);
+    this.MANY(() => this.SUBRULE(this.anyInlineToken));
+    this.CONSUME(Newline);
+  });
+
+  /**
+   * An `effect` section: keyword followed by an indented block of
+   * statements. The statement grammar lives in a later slice; today the
+   * block is consumed opaquely via the general `block` skipper.
+   */
+  public effectSection = this.RULE('effectSection', () => {
+    this.CONSUME(Effect);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+    this.OPTION(() => this.SUBRULE(this.block));
   });
 
   public operandDecl = this.RULE('operandDecl', () => {
@@ -452,6 +587,10 @@ export class MachineParser extends CstParser {
       { ALT: () => this.CONSUME(Call) },
       { ALT: () => this.CONSUME(Fetch) },
       { ALT: () => this.CONSUME(Field) },
+      { ALT: () => this.CONSUME(Description) },
+      { ALT: () => this.CONSUME(Fields) },
+      { ALT: () => this.CONSUME(Ready) },
+      { ALT: () => this.CONSUME(Effect) },
       { ALT: () => this.CONSUME(Mux) },
       { ALT: () => this.CONSUME(When) },
       { ALT: () => this.CONSUME(If) },
@@ -497,6 +636,79 @@ export class MachineParser extends CstParser {
       { ALT: () => this.CONSUME(Question) },
       // Newlines are part of body content (statement separators).
       { ALT: () => this.CONSUME(Newline) },
+    ]);
+  });
+
+  /**
+   * Same set of alternatives as `anyBodyToken` except Newline is
+   * excluded. Used by `readyClause` to consume the single-line opaque
+   * expression up to (but not including) the terminating Newline. When
+   * expression grammar lands, `readyClause` swaps `anyInlineToken` for
+   * a proper expression rule and this helper can be deleted.
+   */
+  public anyInlineToken = this.RULE('anyInlineToken', () => {
+    this.OR([
+      { ALT: () => this.CONSUME(Identifier) },
+      { ALT: () => this.CONSUME(HexLiteral) },
+      { ALT: () => this.CONSUME(DecimalLiteral) },
+      { ALT: () => this.CONSUME(StringLiteral) },
+      { ALT: () => this.CONSUME(Unit) },
+      { ALT: () => this.CONSUME(Machine) },
+      { ALT: () => this.CONSUME(Register) },
+      { ALT: () => this.CONSUME(Enum) },
+      { ALT: () => this.CONSUME(Bundle) },
+      { ALT: () => this.CONSUME(Union) },
+      { ALT: () => this.CONSUME(Microword) },
+      { ALT: () => this.CONSUME(Operand) },
+      { ALT: () => this.CONSUME(Routine) },
+      { ALT: () => this.CONSUME(Call) },
+      { ALT: () => this.CONSUME(Fetch) },
+      { ALT: () => this.CONSUME(Field) },
+      { ALT: () => this.CONSUME(Description) },
+      { ALT: () => this.CONSUME(Fields) },
+      { ALT: () => this.CONSUME(Ready) },
+      { ALT: () => this.CONSUME(Effect) },
+      { ALT: () => this.CONSUME(Mux) },
+      { ALT: () => this.CONSUME(When) },
+      { ALT: () => this.CONSUME(If) },
+      { ALT: () => this.CONSUME(Elif) },
+      { ALT: () => this.CONSUME(Else) },
+      { ALT: () => this.CONSUME(Assert) },
+      { ALT: () => this.CONSUME(Arrow) },
+      { ALT: () => this.CONSUME(BackArrow) },
+      { ALT: () => this.CONSUME(ColonEqual) },
+      { ALT: () => this.CONSUME(EqualEqual) },
+      { ALT: () => this.CONSUME(NotEqual) },
+      { ALT: () => this.CONSUME(LessEqual) },
+      { ALT: () => this.CONSUME(GreaterEqual) },
+      { ALT: () => this.CONSUME(AndAnd) },
+      { ALT: () => this.CONSUME(OrOr) },
+      { ALT: () => this.CONSUME(ShiftLeft) },
+      { ALT: () => this.CONSUME(ShiftRight) },
+      { ALT: () => this.CONSUME(DotDot) },
+      { ALT: () => this.CONSUME(LBrace) },
+      { ALT: () => this.CONSUME(RBrace) },
+      { ALT: () => this.CONSUME(LParen) },
+      { ALT: () => this.CONSUME(RParen) },
+      { ALT: () => this.CONSUME(LBracket) },
+      { ALT: () => this.CONSUME(RBracket) },
+      { ALT: () => this.CONSUME(Colon) },
+      { ALT: () => this.CONSUME(Comma) },
+      { ALT: () => this.CONSUME(Dot) },
+      { ALT: () => this.CONSUME(At) },
+      { ALT: () => this.CONSUME(Equal) },
+      { ALT: () => this.CONSUME(Less) },
+      { ALT: () => this.CONSUME(Greater) },
+      { ALT: () => this.CONSUME(Plus) },
+      { ALT: () => this.CONSUME(Minus) },
+      { ALT: () => this.CONSUME(Star) },
+      { ALT: () => this.CONSUME(Slash) },
+      { ALT: () => this.CONSUME(Pipe) },
+      { ALT: () => this.CONSUME(Amp) },
+      { ALT: () => this.CONSUME(Caret) },
+      { ALT: () => this.CONSUME(Tilde) },
+      { ALT: () => this.CONSUME(Bang) },
+      { ALT: () => this.CONSUME(Question) },
     ]);
   });
 }

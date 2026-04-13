@@ -1728,10 +1728,7 @@ describe('parser — top-level declaration skeleton', () => {
         '    ea  = ea',
         '    ip  = ip',
         '',
-        '  instance aluU8 : alu::<u8>',
-        '    cin = 0',
-        '',
-        '  instance aluU16 : alu::<u16>',
+        '  instance mainAlu : alu::<u16>',
         '    cin = 0',
         '',
       ].join('\n');

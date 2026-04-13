@@ -12,3 +12,12 @@
 export { lex, type LexResult } from './lexer/lex.js';
 export { injectIndentation } from './lexer/indent.js';
 export * as tokens from './lexer/tokens.js';
+
+export {
+  parse,
+  getDeclarations,
+  type ParseResult,
+  type TopLevelDecl,
+  type DeclarationKind,
+} from './parser/parse.js';
+export { MachineParser, machineParser } from './parser/parser.js';

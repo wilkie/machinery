@@ -1,5 +1,5 @@
 ; Top-level register declarations covering the shapes used throughout
-; ALU_NEW.machine — bare registers with no body, registers with two
+; EXEMPLAR.machine — bare registers with no body, registers with two
 ; typed bit fields, and the full FLAGS layout with non-contiguous bit
 ; offsets.
 

@@ -1,5 +1,5 @@
 ; Multiple enum declarations covering the shapes that appear in
-; ALU_NEW.machine — simple two-variant enums, long variant lists,
+; EXEMPLAR.machine — simple two-variant enums, long variant lists,
 ; single-variant enums, and enums with interleaved comments.
 
 enum Width

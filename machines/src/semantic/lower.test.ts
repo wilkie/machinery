@@ -573,14 +573,14 @@ describe('ast lowering — routine declarations', () => {
   });
 });
 
-describe('ast lowering — ALU_NEW.machine integration', () => {
-  it('lowers the real ALU_NEW.machine file without errors', async () => {
+describe('ast lowering — EXEMPLAR.machine integration', () => {
+  it('lowers the real EXEMPLAR.machine file without errors', async () => {
     // The acid test for AST lowering: read the full design file,
     // parse and lower it, and verify that every declaration kind
     // shows up in the AST.
     const { readFileSync } = await import('node:fs');
     const aluPath = new URL(
-      '../../../core/ALU_NEW.machine',
+      '../../EXEMPLAR.machine',
       import.meta.url,
     );
     const src = readFileSync(aluPath, 'utf-8');

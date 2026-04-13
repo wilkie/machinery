@@ -1,4 +1,4 @@
-; Unit and machine body sample covering the shapes in ALU_NEW.machine:
+; Unit and machine body sample covering the shapes in EXEMPLAR.machine:
 ; anonymous single-output unit (`parity8`), multi-port input/output unit
 ; (`aluSelect`), width-parameterized unit with typeRef `u{W}` and
 ; `u{W+1}`, and a machine body with id, description, registers (with a

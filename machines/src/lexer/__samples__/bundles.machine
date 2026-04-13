@@ -1,5 +1,5 @@
 ; Bundle and union declarations covering the shapes used throughout
-; ALU_NEW.machine — pure-bit bundles, mixed-width bundles with comments
+; EXEMPLAR.machine — pure-bit bundles, mixed-width bundles with comments
 ; between fields, and a tagged union with varying arm widths.
 
 bundle Flags

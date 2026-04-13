@@ -1,4 +1,4 @@
-; Operand declarations mirroring the three in ALU_NEW.machine — a
+; Operand declarations mirroring the three in EXEMPLAR.machine — a
 ; fixed-size operand with a bit-layout (ModRM), a single-byte
 ; sign-extended immediate (Disp8), and a two-byte little-endian
 ; immediate (Disp16).

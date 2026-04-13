@@ -435,7 +435,7 @@ describe('expression grammar — binary precedence', () => {
   });
 });
 
-describe('expression grammar — realistic cases from ALU_NEW.machine', () => {
+describe('expression grammar — realistic cases from EXEMPLAR.machine', () => {
   it('parses a flag computation', () => {
     // From aluFlags<W>: `af = raw[4] ^ a[4] ^ b[4]`
     expect(toSexp(parseOrFail('raw[4] ^ a[4] ^ b[4]'))).toBe(
@@ -627,13 +627,13 @@ describe('expression grammar — turbofish (type-parameterized calls)', () => {
     );
   });
 
-  it('parses the ALU_NEW.machine aluFlags::<W> call', () => {
+  it('parses the EXEMPLAR.machine aluFlags::<W> call', () => {
     expect(toSexp(parseOrFail('aluFlags::<W>(op, a, b, raw)'))).toBe(
       '(call<W> aluFlags op a b raw)',
     );
   });
 
-  it('parses the ALU_NEW.machine alu::<width> call', () => {
+  it('parses the EXEMPLAR.machine alu::<width> call', () => {
     expect(toSexp(parseOrFail('alu::<width>(op, a, b, FLAGS.CF)'))).toBe(
       '(call<width> alu op a b (. FLAGS CF))',
     );

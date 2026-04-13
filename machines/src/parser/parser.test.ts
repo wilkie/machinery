@@ -2009,14 +2009,14 @@ describe('parser — top-level declaration skeleton', () => {
       expect(names(cst)).toEqual(['executionUnit']);
     });
 
-    it('parses the real core/ALU_NEW.machine file end to end', () => {
+    it('parses the real EXEMPLAR.machine file end to end', () => {
       // The acid test: can the parser consume the full hand-written
-      // i286 design doc from core/ALU_NEW.machine without any lex or
+      // i286 design doc from EXEMPLAR.machine without any lex or
       // parse errors? Every declaration kind, every section marker,
       // every expression form, and the full statement grammar get
       // exercised by this file.
       const aluPath = new URL(
-        '../../../core/ALU_NEW.machine',
+        '../../EXEMPLAR.machine',
         import.meta.url,
       );
       const src = readFileSync(aluPath, 'utf-8');

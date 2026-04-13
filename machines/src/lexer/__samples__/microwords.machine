@@ -1,4 +1,4 @@
-; Microword declarations mirroring the six primitives in ALU_NEW.machine.
+; Microword declarations mirroring the six primitives in EXEMPLAR.machine.
 ; Exercises every shape the microword body grammar needs to handle:
 ;
 ;   * description block form followed by fields/ready/effect (AluMicro)

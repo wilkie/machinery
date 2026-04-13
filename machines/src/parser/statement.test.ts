@@ -28,8 +28,11 @@ function stmtSexp(node: CstElement): string {
       for (const key of [
         'callStmt',
         'fetchStmt',
+        'wireDeclStmt',
+        'ifStmt',
+        'assertStmt',
         'muxStmt',
-        'bareExprStmt',
+        'exprOrAssignStmt',
       ]) {
         const child = asCstNodes(node.children[key])[0];
         if (child) return stmtSexp(child);
@@ -49,14 +52,53 @@ function stmtSexp(node: CstElement): string {
       return `(fetch ${name})`;
     }
 
+    case 'wireDeclStmt': {
+      const name = firstToken(node, 'Identifier').image;
+      const typeNode = firstChildOrUndefined(node, 'typeRef');
+      const typed = typeNode
+        ? `${name}:${firstToken(typeNode, 'Identifier').image}`
+        : name;
+      const value = exprSexp(firstChild(node, 'expression'));
+      return `(wire ${typed} ${value})`;
+    }
+
+    case 'ifStmt': {
+      const cond = exprSexp(firstChild(node, 'expression'));
+      const thenBlock = blockSexp(firstChild(node, 'statementBlock'));
+      const elifs = asCstNodes(node.children['elifBranch']).map((elif) => {
+        const c = exprSexp(firstChild(elif, 'expression'));
+        const b = blockSexp(firstChild(elif, 'statementBlock'));
+        return `(elif ${c} ${b})`;
+      });
+      const elseNode = firstChildOrUndefined(node, 'elseBranch');
+      const elseStr = elseNode
+        ? ` (else ${blockSexp(firstChild(elseNode, 'statementBlock'))})`
+        : '';
+      const elifStr = elifs.length > 0 ? ' ' + elifs.join(' ') : '';
+      return `(if ${cond} ${thenBlock}${elifStr}${elseStr})`;
+    }
+
+    case 'assertStmt': {
+      const expr = exprSexp(firstChild(node, 'expression'));
+      return `(assert ${expr})`;
+    }
+
     case 'muxStmt': {
       const cond = exprSexp(firstChild(node, 'expression'));
       const arms = asCstNodes(node.children['muxArm']).map(armSexp);
       return `(mux ${cond} ${arms.join(' ')})`;
     }
 
-    case 'bareExprStmt':
-      return exprSexp(firstChild(node, 'expression'));
+    case 'exprOrAssignStmt': {
+      const exprs = asCstNodes(node.children['expression']);
+      const lhs = exprSexp(exprs[0]!);
+      if (exprs.length === 1) return lhs;
+      // Assignment form — find which operator was consumed.
+      const eq = asTokens(node.children['Equal'])[0];
+      const op = eq ? '=' : '<-';
+      const rhs = exprSexp(exprs[1]!);
+      return `(${op} ${lhs} ${rhs})`;
+    }
 
     default:
       return `<${node.name}>`;
@@ -118,8 +160,20 @@ function exprSexp(node: CstElement): string {
     case 'shiftExpr':
     case 'additiveExpr':
     case 'multiplicativeExpr':
-    case 'unaryExpr':
       return collapsePassThrough(node);
+    case 'unaryExpr': {
+      // Unary form carries a leading Bang / Tilde / Minus token and
+      // recurses into another unaryExpr. The non-unary form just
+      // wraps a postfixExpr. Distinguish by checking for the
+      // prefix token.
+      for (const op of ['Bang', 'Tilde', 'Minus'] as const) {
+        const opTok = firstTokenOrUndefined(node, op);
+        if (opTok) {
+          return `(${opTok.image} ${exprSexp(firstChild(node, 'unaryExpr'))})`;
+        }
+      }
+      return exprSexp(firstChild(node, 'postfixExpr'));
+    }
     case 'postfixExpr':
       return postfixSexp(node);
     case 'primaryExpr': {
@@ -166,7 +220,10 @@ function postfixSexp(node: CstNode): string {
   ]);
   for (const op of ops) {
     if (op.name === 'memberOp') {
-      const name = firstToken(op, 'Identifier').image;
+      const nameTok =
+        firstTokenOrUndefined(op, 'Identifier') ??
+        firstTokenOrUndefined(op, 'Fetch');
+      const name = nameTok?.image ?? '?';
       out = `(. ${out} ${name})`;
     } else if (op.name === 'callOp') {
       const args = asCstNodes(op.children['expression']).map(exprSexp);
@@ -438,6 +495,258 @@ describe('statement grammar — mux statement', () => {
     expect(stmtSexp(parseStmtOrFail(src))).toBe(
       '(mux (| (. AluOp add) (. AluOp adc)) (when 0 foo))',
     );
+  });
+});
+
+describe('statement grammar — assignment', () => {
+  it('parses a combinational assignment with `=`', () => {
+    expect(stmtSexp(parseStmtOrFail('cf = raw'))).toBe('(= cf raw)');
+  });
+
+  it('parses a register next-state assignment with `<-`', () => {
+    expect(stmtSexp(parseStmtOrFail('state <- ExecuteState.fetch'))).toBe(
+      '(<- state (. ExecuteState fetch))',
+    );
+  });
+
+  it('parses an assignment with a member-access LHS', () => {
+    expect(stmtSexp(parseStmtOrFail('busRequest.valid = 1'))).toBe(
+      '(= (. busRequest valid) 1)',
+    );
+  });
+
+  it('parses an assignment with a deep member-access LHS', () => {
+    expect(stmtSexp(parseStmtOrFail('FLAGS.CF <- raw[W]'))).toBe(
+      '(<- (. FLAGS CF) (index raw W))',
+    );
+  });
+
+  it('parses a record-literal RHS on `=`', () => {
+    const src = 'pfResponse = { grant: 0, done: 0, data: 0 }';
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(= pfResponse {grant=0 done=0 data=0})',
+    );
+  });
+
+  it('parses an assignment with a call RHS', () => {
+    expect(
+      stmtSexp(parseStmtOrFail('FLAGS <- applyFlags(FLAGS, r.flags)')),
+    ).toBe('(<- FLAGS (call applyFlags FLAGS (. r flags)))');
+  });
+
+  it('parses a complex comparison RHS', () => {
+    expect(stmtSexp(parseStmtOrFail('out.empty = qCount == 0'))).toBe(
+      '(= (. out empty) (== qCount 0))',
+    );
+  });
+
+  it('parses a shift + cast assignment', () => {
+    expect(
+      stmtSexp(parseStmtOrFail('q1 <- (busResponse.data >> 8):u8')),
+    ).toBe('(<- q1 (cast (>> (. busResponse data) 8) u8))');
+  });
+
+  it('still parses a bare expression statement without an assignment', () => {
+    expect(stmtSexp(parseStmtOrFail('foo'))).toBe('foo');
+  });
+
+  it('still parses a microword constructor without an assignment', () => {
+    expect(stmtSexp(parseStmtOrFail('Retire {}'))).toBe('(cstr Retire)');
+  });
+});
+
+describe('statement grammar — wire declaration', () => {
+  it('parses a plain wire declaration', () => {
+    expect(stmtSexp(parseStmtOrFail('wire a = aluSelect(srcA)'))).toBe(
+      '(wire a (call aluSelect srcA))',
+    );
+  });
+
+  it('parses a typed wire declaration', () => {
+    expect(stmtSexp(parseStmtOrFail('wire raw:u17 = a + b'))).toBe(
+      '(wire raw:u17 (+ a b))',
+    );
+  });
+
+  it('parses a wire with a cast RHS', () => {
+    expect(stmtSexp(parseStmtOrFail('wire head:u8 = raw:u8'))).toBe(
+      '(wire head:u8 (cast raw u8))',
+    );
+  });
+
+  it('parses a wire with a turbofish call RHS', () => {
+    expect(
+      stmtSexp(parseStmtOrFail('wire r = alu::<width>(op, a, b)')),
+    ).toBe('(wire r (call<width> alu op a b))');
+  });
+});
+
+describe('statement grammar — if / elif / else', () => {
+  it('parses a plain if with a single-statement body', () => {
+    const src = ['if cond', '  foo'].join('\n');
+    expect(stmtSexp(parseStmtOrFail(src))).toBe('(if cond foo)');
+  });
+
+  it('parses an if with a multi-statement body', () => {
+    const src = ['if cond', '  foo', '  bar'].join('\n');
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(if cond (block foo bar))',
+    );
+  });
+
+  it('parses an if / else', () => {
+    const src = ['if cond', '  foo', 'else', '  bar'].join('\n');
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(if cond foo (else bar))',
+    );
+  });
+
+  it('parses an if / elif / else', () => {
+    const src = [
+      'if a',
+      '  foo',
+      'elif b',
+      '  bar',
+      'elif c',
+      '  baz',
+      'else',
+      '  qux',
+    ].join('\n');
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(if a foo (elif b bar) (elif c baz) (else qux))',
+    );
+  });
+
+  it('parses an if with an assignment body (writeFlags case)', () => {
+    const src = ['if writeFlags', '  FLAGS <- applyFlags(FLAGS, r.flags)'].join(
+      '\n',
+    );
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(if writeFlags (<- FLAGS (call applyFlags FLAGS (. r flags))))',
+    );
+  });
+
+  it('parses an if nested inside another if', () => {
+    const src = [
+      'if outer',
+      '  if inner',
+      '    foo',
+      '  else',
+      '    bar',
+      'else',
+      '  baz',
+    ].join('\n');
+    expect(stmtSexp(parseStmtOrFail(src))).toBe(
+      '(if outer (if inner foo (else bar)) (else baz))',
+    );
+  });
+});
+
+describe('statement grammar — assert', () => {
+  it('parses a simple assert', () => {
+    expect(stmtSexp(parseStmtOrFail('assert cond'))).toBe('(assert cond)');
+  });
+
+  it('parses an assert with a complex expression', () => {
+    expect(
+      stmtSexp(parseStmtOrFail('assert !(control.pop && out.empty)')),
+    ).toBe('(assert (! (&& (. control pop) (. out empty))))');
+  });
+});
+
+describe('statement grammar — integration with microword effect blocks', () => {
+  it('parses IStreamRead\'s effect block', () => {
+    const src = [
+      'microword IStreamRead',
+      '  fields',
+      '    dest:Local',
+      '  ready: prefetch.valid',
+      '  effect',
+      '    dest <- prefetch.byte',
+      '    prefetchControl.pop = 1',
+      '',
+    ].join('\n');
+    const { cst, parseErrors } = parse(src);
+    expect(parseErrors).toEqual([]);
+    expect(cst).toBeDefined();
+  });
+
+  it('parses BusRead\'s effect block with a record-literal assignment', () => {
+    const src = [
+      'microword BusRead',
+      '  fields',
+      '    width:BusSize',
+      '    addr:Local',
+      '    dest:Local',
+      '  ready: busResponse.done',
+      '  effect',
+      '    busRequest = { valid: 1, op: BusOp.read, size: width,',
+      '                   address: addr, data: 0 }',
+      '    dest <- busResponse.data',
+      '',
+    ].join('\n');
+    const { cst, parseErrors } = parse(src);
+    expect(parseErrors).toEqual([]);
+    expect(cst).toBeDefined();
+  });
+
+  it('parses Branch\'s effect block with an if', () => {
+    const src = [
+      'microword Branch',
+      '  fields',
+      '    cond:BranchCond',
+      '    target:MicroAddr',
+      '  ready: 1',
+      '  effect',
+      '    if evalCond(cond)',
+      '      microPc <- target',
+      '',
+    ].join('\n');
+    const { cst, parseErrors } = parse(src);
+    expect(parseErrors).toEqual([]);
+    expect(cst).toBeDefined();
+  });
+
+  it('parses Retire\'s effect block with a bare call and assignment', () => {
+    const src = [
+      'microword Retire',
+      '  fields {}',
+      '  ready: 1',
+      '  effect',
+      '    commitStaged()',
+      '    state <- ExecuteState.fetch',
+      '',
+    ].join('\n');
+    const { cst, parseErrors } = parse(src);
+    expect(parseErrors).toEqual([]);
+    expect(cst).toBeDefined();
+  });
+
+  it('parses AluMicro\'s effect block with wires and an if', () => {
+    // A minimally-simplified AluMicro effect (omitting the elided
+    // "..." placeholder args the real source uses).
+    const src = [
+      'microword AluMicro',
+      '  fields',
+      '    op:AluOp',
+      '    width:Width',
+      '    srcA:AluSrc',
+      '    srcB:AluSrc',
+      '    dest:AluDest',
+      '    commit:Commit',
+      '    writeFlags:b',
+      '  ready: 1',
+      '  effect',
+      '    wire a = aluSelect(srcA)',
+      '    wire b = aluSelect(srcB)',
+      '    wire r = alu::<width>(op, a, b, FLAGS.CF)',
+      '    if writeFlags',
+      '      FLAGS <- applyFlags(FLAGS, r.flags)',
+      '',
+    ].join('\n');
+    const { cst, parseErrors } = parse(src);
+    expect(parseErrors).toEqual([]);
+    expect(cst).toBeDefined();
   });
 });
 

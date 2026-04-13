@@ -16,18 +16,20 @@
 //     turbofish type-parameterized calls) — see the "Expression
 //     grammar" section further down.
 //
-//   * A statement grammar covering `call` / `fetch` directives, `mux`
-//     statements with when/else arms, and bare expression statements
-//     (used for microword record-literal construction). This unlocks
-//     routine `micro` bodies and operand `fetch` bodies as real CSTs.
+//   * A full statement grammar covering `call` / `fetch` directives,
+//     `mux` with when/else arms, `wire` declarations, `if`/`elif`/
+//     `else`, `assert`, assignments (combinational `=` and register
+//     `<-`), and bare expression statements. This unlocks routine
+//     `micro` bodies, operand `fetch` bodies, and microword `effect`
+//     bodies as real CSTs.
 //
 // Not yet covered, still consumed opaquely via the generic `block`
 // skipper when they appear inside a body:
 //
-//   * Assignments (`lhs = expr`, `lhs <- expr`) and wire declarations.
-//   * If / elif / else conditionals.
-//   * Microword `effect` blocks (need assignments).
-//   * Unit and machine bodies (wires, registers, mux/when/if, etc.).
+//   * Unit and machine bodies (`wires in`/`wires out` sections,
+//     `registers` declarations, `default` clauses).
+//   * Parameterized type references like `u{W+1}` (typeRef is still
+//     a bare identifier).
 //
 // See the comment blocks above individual rules for per-rule details.
 
@@ -47,6 +49,7 @@ import {
   Call,
   Fetch,
   Field,
+  Wire,
   Description,
   Fields,
   Ready,
@@ -465,13 +468,14 @@ export class MachineParser extends CstParser {
 
   /**
    * An `effect` section: keyword followed by an indented block of
-   * statements. The statement grammar lives in a later slice; today the
-   * block is consumed opaquely via the general `block` skipper.
+   * statements. Parses via the real statement grammar — assignments
+   * (`FLAGS <- ...`, `dest <- prefetch.byte`), wire declarations,
+   * `if` conditionals, and bare expression statements all land here.
    */
   public effectSection = this.RULE('effectSection', () => {
     this.CONSUME(Effect);
     this.AT_LEAST_ONE(() => this.CONSUME(Newline));
-    this.OPTION(() => this.SUBRULE(this.block));
+    this.OPTION(() => this.SUBRULE(this.statementBlock));
   });
 
   public operandDecl = this.RULE('operandDecl', () => {
@@ -815,34 +819,46 @@ export class MachineParser extends CstParser {
   // Statement grammar
   //
   // Statements appear inside routine `micro` blocks, operand `fetch`
-  // blocks, and (once expression-only statements extend to assignments)
-  // microword `effect` blocks and unit / machine bodies. The supported
-  // forms today are:
+  // blocks, and microword `effect` blocks. The supported forms are:
   //
-  //   callStmt      `call NAME(args) -> dest`
-  //   fetchStmt     `fetch NAME`
-  //   muxStmt       `mux EXPR\n  when V ...\n  when V ...\n  else ...`
-  //   bareExprStmt  any expression (typically a microword record literal
-  //                 like `AluMicro { ... }` via the constructOp postfix)
+  //   callStmt          `call NAME(args) -> dest`
+  //   fetchStmt         `fetch NAME`
+  //   wireDeclStmt      `wire NAME[:type] = expr`
+  //   ifStmt            `if EXPR\n  ... elif EXPR\n  ... else\n  ...`
+  //   assertStmt        `assert EXPR`
+  //   muxStmt           `mux EXPR\n  when V ...\n  ... else ...`
+  //   exprOrAssignStmt  any expression, possibly followed by
+  //                     `= expr` or `<- expr` for combinational and
+  //                     register-next-state assignments respectively
   //
-  // Deferred to the next statement slice:
-  //   assignments (`lhs = expr`, `lhs <- expr`)
-  //   wire declarations (`wire name = expr`)
-  //   if / elif / else
-  //   assert
+  // `exprOrAssignStmt` handles both bare expressions (like microword
+  // record literals `AluMicro { ... }`) and assignments (`FLAGS <-
+  // applyFlags(...)`). The parser can't distinguish them from the
+  // first token alone — LHS and a bare expression both start with an
+  // expression — so the rule parses an expression first, then checks
+  // whether `=` or `<-` follows. Neither is an expression-level
+  // operator, so the lookahead is unambiguous after the LHS parses.
   //
   // `statementBlock` is the shared indented block used by routine
-  // micro, operand fetch, and mux arm bodies. It's a MANY over
-  // `(Newline | statement)` so blank and comment-only lines between
-  // statements are absorbed naturally.
+  // micro, operand fetch, microword effect, and all control-flow arm
+  // bodies. It's a MANY over `(Newline | statement)` so blank and
+  // comment-only lines between statements are absorbed naturally.
+  //
+  // Not yet covered:
+  //   * Unit and machine bodies (`wires in`/`wires out` sections,
+  //     `registers` declarations, `default` clauses). These need new
+  //     section markers on top of the current statement grammar.
   // =========================================================================
 
   public statement = this.RULE('statement', () => {
     this.OR([
       { ALT: () => this.SUBRULE(this.callStmt) },
       { ALT: () => this.SUBRULE(this.fetchStmt) },
+      { ALT: () => this.SUBRULE(this.wireDeclStmt) },
+      { ALT: () => this.SUBRULE(this.ifStmt) },
+      { ALT: () => this.SUBRULE(this.assertStmt) },
       { ALT: () => this.SUBRULE(this.muxStmt) },
-      { ALT: () => this.SUBRULE(this.bareExprStmt) },
+      { ALT: () => this.SUBRULE(this.exprOrAssignStmt) },
     ]);
   });
 
@@ -978,12 +994,89 @@ export class MachineParser extends CstParser {
   });
 
   /**
-   * Bare expression statement — any expression standing alone as a
-   * statement. The most common cases are microword constructions like
-   * `AluMicro { op: add, width: u8 }` and `Retire {}`, which parse as
-   * an identifier followed by a `constructOp` postfix op.
+   * Expression-or-assignment statement. Parses an expression first; if
+   * followed by `=` (combinational drive) or `<-` (register next-state),
+   * consumes the operator and a right-hand-side expression. Otherwise
+   * the parsed expression stands alone as a bare expression statement
+   * — the common case for microword construction like `AluMicro {
+   * ... }` or `Retire {}`.
+   *
+   * Assignment forms parsed here include:
+   *   `FLAGS <- applyFlags(FLAGS, r.flags)`
+   *   `busRequest.valid = 1`
+   *   `dest <- prefetch.byte`
+   *   `out.empty = qCount == 0`
+   *
+   * The LHS is any postfix expression, which is loose enough to accept
+   * whatever combination of identifier, member access, index, and cast
+   * the author wants. Semantic analysis validates whether the LHS is a
+   * legal assignment target.
    */
-  public bareExprStmt = this.RULE('bareExprStmt', () => {
+  public exprOrAssignStmt = this.RULE('exprOrAssignStmt', () => {
+    this.SUBRULE(this.expression);
+    this.OPTION(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Equal) },
+        { ALT: () => this.CONSUME(BackArrow) },
+      ]);
+      this.SUBRULE2(this.expression);
+    });
+  });
+
+  /**
+   * Wire declaration: `wire NAME = expr` or `wire NAME:type = expr`.
+   * Binds a local intermediate name inside a body. The optional type
+   * annotation is a simple typeRef (an identifier) for now;
+   * parameterized types like `u{W+1}` need typeRef to grow in a later
+   * slice when unit/machine bodies land.
+   */
+  public wireDeclStmt = this.RULE('wireDeclStmt', () => {
+    this.CONSUME(Wire);
+    this.CONSUME(Identifier);
+    this.OPTION(() => {
+      this.CONSUME(Colon);
+      this.SUBRULE(this.typeRef);
+    });
+    this.CONSUME(Equal);
+    this.SUBRULE(this.expression);
+  });
+
+  /**
+   * If / elif / else statement. The then branch is a required
+   * statementBlock; zero or more `elif` branches follow, and an
+   * optional `else` branch closes it. Each branch's body is its own
+   * indented statementBlock, so indent tracking naturally scopes
+   * nested ifs to their closest containing block.
+   */
+  public ifStmt = this.RULE('ifStmt', () => {
+    this.CONSUME(If);
+    this.SUBRULE(this.expression);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+    this.SUBRULE(this.statementBlock);
+    this.MANY(() => this.SUBRULE(this.elifBranch));
+    this.OPTION(() => this.SUBRULE(this.elseBranch));
+  });
+
+  public elifBranch = this.RULE('elifBranch', () => {
+    this.CONSUME(Elif);
+    this.SUBRULE(this.expression);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+    this.SUBRULE(this.statementBlock);
+  });
+
+  public elseBranch = this.RULE('elseBranch', () => {
+    this.CONSUME(Else);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+    this.SUBRULE(this.statementBlock);
+  });
+
+  /**
+   * Assert statement: `assert EXPR`. Expected to hold at runtime; the
+   * semantic pass and downstream generators decide how violations are
+   * reported (build-time panic, runtime trap, etc.).
+   */
+  public assertStmt = this.RULE('assertStmt', () => {
+    this.CONSUME(Assert);
     this.SUBRULE(this.expression);
   });
 
@@ -1220,7 +1313,18 @@ export class MachineParser extends CstParser {
 
   public memberOp = this.RULE('memberOp', () => {
     this.CONSUME(Dot);
-    this.CONSUME(Identifier);
+    // After a `.`, the member name is an identifier (usually) or one
+    // of a handful of contextual keywords that are only reserved at
+    // specific grammar positions. `fetch` is the only real-world
+    // collision today — `ExecuteState.fetch` references the `fetch`
+    // variant of the ExecuteState enum, where `fetch` is the same
+    // word as the routine-level `fetch` directive. We resolve the
+    // collision here by accepting either token as a member name.
+    // Extend this OR when new collisions surface.
+    this.OR([
+      { ALT: () => this.CONSUME(Identifier) },
+      { ALT: () => this.CONSUME(Fetch) },
+    ]);
   });
 
   /**
@@ -1384,6 +1488,7 @@ export class MachineParser extends CstParser {
       { ALT: () => this.CONSUME(Call) },
       { ALT: () => this.CONSUME(Fetch) },
       { ALT: () => this.CONSUME(Field) },
+      { ALT: () => this.CONSUME(Wire) },
       { ALT: () => this.CONSUME(Description) },
       { ALT: () => this.CONSUME(Fields) },
       { ALT: () => this.CONSUME(Ready) },

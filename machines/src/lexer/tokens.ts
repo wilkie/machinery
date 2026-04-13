@@ -82,6 +82,7 @@ export const Fetch = keyword('Fetch', 'fetch');
 
 // Block-level keywords used inside declaration bodies.
 export const Field = keyword('Field', 'field');
+export const Wire = keyword('Wire', 'wire');
 
 // Section markers used inside microword / operand / routine bodies.
 // Reserved globally by the lexer; meaningful only in the contexts the
@@ -252,6 +253,7 @@ export const allTokens: TokenType[] = [
   // keyword first — Chevrotain uses list order to break prefix ties.
   Fields,
   Field,
+  Wire,
   Description,
   Ready,
   Effect,

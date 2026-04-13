@@ -105,7 +105,12 @@ function toSexp(node: CstElement): string {
       ]);
       for (const op of ops) {
         if (op.name === 'memberOp') {
-          const name = firstToken(op, 'Identifier').image;
+          // Member name is an Identifier or one of the contextual
+          // keywords accepted by the memberOp rule (currently Fetch).
+          const nameTok =
+            firstTokenOrUndefined(op, 'Identifier') ??
+            firstTokenOrUndefined(op, 'Fetch');
+          const name = nameTok?.image ?? '?';
           out = `(. ${out} ${name})`;
         } else if (op.name === 'callOp') {
           const args = asCstNodes(op.children['expression']).map(toSexp);

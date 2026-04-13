@@ -681,10 +681,14 @@ export class MachineParser extends CstParser {
   //                          the `:`), which is how cast avoids colliding
   //                          with other uses of `:` in the grammar
   //
+  // The ternary `cond ? a : b` lives above `logicalOrExpr` at the top of
+  // the precedence ladder and is right-associative. The separator must
+  // be a loose `Colon` (i.e. have whitespace around it); fully-tight
+  // `a?b:c` is a known edge case — the cast rule greedily consumes the
+  // inner `:` and the ternary fails to find its separator. Real code
+  // always writes `a ? b : c` with spaces, and that parses cleanly.
+  //
   // Deferred to later slices:
-  //   - ternary `? :` — no longer blocked by a cast-vs-ternary conflict
-  //     (the ternary separator is always loose `Colon`, cast is always
-  //     `TightColon`), but not yet implemented.
   //   - type-parameterized calls `f<T>(...)` — the `<` ambiguity with
   //     comparison still needs a design decision.
   //
@@ -694,7 +698,28 @@ export class MachineParser extends CstParser {
   // =========================================================================
 
   public expression = this.RULE('expression', () => {
+    this.SUBRULE(this.ternaryExpr);
+  });
+
+  /**
+   * Ternary conditional expression: `cond ? a : b`. Right-associative, so
+   * `a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`.
+   *
+   * The condition is parsed at `logicalOrExpr` (one level tighter), so
+   * binary operators bind tighter than the ternary — `a || b ? c : d`
+   * is `(a || b) ? c : d`, not `a || (b ? c : d)`.
+   *
+   * Both branches recurse back into `ternaryExpr` so they can themselves
+   * be full expressions, including nested ternaries.
+   */
+  public ternaryExpr = this.RULE('ternaryExpr', () => {
     this.SUBRULE(this.logicalOrExpr);
+    this.OPTION(() => {
+      this.CONSUME(Question);
+      this.SUBRULE2(this.ternaryExpr);
+      this.CONSUME(Colon);
+      this.SUBRULE3(this.ternaryExpr);
+    });
   });
 
   public logicalOrExpr = this.RULE('logicalOrExpr', () => {

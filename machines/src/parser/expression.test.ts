@@ -43,7 +43,19 @@ function toSexp(node: CstElement): string {
 
   switch (node.name) {
     case 'expression':
-      return toSexp(firstChild(node, 'logicalOrExpr'));
+      return toSexp(firstChild(node, 'ternaryExpr'));
+
+    case 'ternaryExpr': {
+      const cond = toSexp(firstChild(node, 'logicalOrExpr'));
+      const branches = asCstNodes(node.children['ternaryExpr']);
+      if (branches.length === 0) {
+        // No `?` — ternaryExpr is transparent, pass the condition through.
+        return cond;
+      }
+      const thenB = toSexp(branches[0]!);
+      const elseB = toSexp(branches[1]!);
+      return `(? ${cond} ${thenB} ${elseB})`;
+    }
 
     case 'logicalOrExpr':
       return binaryChain(node, 'logicalAndExpr', ['OrOr']);
@@ -558,6 +570,109 @@ describe('expression grammar — cast', () => {
 
   it('keeps bit slices working with loose colons', () => {
     expect(toSexp(parseOrFail('raw[7 : 0]'))).toBe('(slice raw 7 0)');
+  });
+});
+
+describe('expression grammar — ternary', () => {
+  it('parses a basic ternary', () => {
+    expect(toSexp(parseOrFail('a ? b : c'))).toBe('(? a b c)');
+  });
+
+  it('parses a ternary with literal branches', () => {
+    expect(toSexp(parseOrFail('1 ? 2 : 3'))).toBe('(? 1 2 3)');
+  });
+
+  it('is right-associative on the else branch', () => {
+    // `a ? b : c ? d : e` parses as `a ? b : (c ? d : e)`.
+    expect(toSexp(parseOrFail('a ? b : c ? d : e'))).toBe(
+      '(? a b (? c d e))',
+    );
+  });
+
+  it('allows a nested ternary in the then branch', () => {
+    expect(toSexp(parseOrFail('a ? b ? c : d : e'))).toBe(
+      '(? a (? b c d) e)',
+    );
+  });
+
+  it('allows nested ternaries in both branches', () => {
+    expect(toSexp(parseOrFail('a ? b ? c : d : e ? f : g'))).toBe(
+      '(? a (? b c d) (? e f g))',
+    );
+  });
+
+  it('binds looser than logical-or', () => {
+    // `a || b ? c : d` parses as `(a || b) ? c : d`, not
+    // `a || (b ? c : d)`.
+    expect(toSexp(parseOrFail('a || b ? c : d'))).toBe(
+      '(? (|| a b) c d)',
+    );
+  });
+
+  it('binds looser than every binary operator', () => {
+    // Each branch is a full binary expression.
+    expect(toSexp(parseOrFail('a + b ? c * d : e - f'))).toBe(
+      '(? (+ a b) (* c d) (- e f))',
+    );
+  });
+
+  it('parses with a comparison in the condition', () => {
+    // From the prefetcher: `qRead == 5 ? 0 : qRead + 1`.
+    expect(toSexp(parseOrFail('qRead == 5 ? 0 : qRead + 1'))).toBe(
+      '(? (== qRead 5) 0 (+ qRead 1))',
+    );
+  });
+
+  it('parses with member-access branches', () => {
+    expect(toSexp(parseOrFail('cond ? foo.bar : baz.qux'))).toBe(
+      '(? cond (. foo bar) (. baz qux))',
+    );
+  });
+
+  it('parses with function-call branches', () => {
+    expect(toSexp(parseOrFail('cond ? foo(x) : bar(y)'))).toBe(
+      '(? cond (call foo x) (call bar y))',
+    );
+  });
+
+  it('parses with cast branches (tight colon unaffected)', () => {
+    // Both `a:u8` and `b:u16` are tight casts; the separator `:` has
+    // spaces around it and is loose. The grammar distinguishes them
+    // via TightColon vs Colon.
+    expect(toSexp(parseOrFail('cond ? a:u8 : b:u16'))).toBe(
+      '(? cond (cast a u8) (cast b u16))',
+    );
+  });
+
+  it('parses ternary inside parentheses', () => {
+    expect(toSexp(parseOrFail('(a ? b : c) + 1'))).toBe(
+      '(+ (? a b c) 1)',
+    );
+  });
+
+  it('parses ternary as a function argument', () => {
+    expect(toSexp(parseOrFail('foo(a ? b : c)'))).toBe(
+      '(call foo (? a b c))',
+    );
+  });
+
+  it('parses ternary as a record field value', () => {
+    expect(toSexp(parseOrFail('{x: a ? b : c}'))).toBe(
+      '{x=(? a b c)}',
+    );
+  });
+
+  it('rejects fully-tight ternary (a?b:c all no-whitespace)', () => {
+    // `a?b:c` — the inner `:` is tight (b before, c after, no spaces),
+    // so the cast rule consumes it greedily. The ternary then fails
+    // to find its separator.
+    expectParseErrors('a?b:c');
+  });
+
+  it('accepts half-tight ternary with loose colon', () => {
+    // `a?b : c` — `?` is tight but the `:` has spaces, so it tokenizes
+    // as a loose Colon and the ternary works.
+    expect(toSexp(parseOrFail('a?b : c'))).toBe('(? a b c)');
   });
 });
 

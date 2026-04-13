@@ -176,6 +176,85 @@ export interface UnionInfo {
   arms: UnionArm[];
 }
 
+export interface FieldInfo {
+  name: string;
+  type: string;
+  /** Bit offset from `@ N`, or undefined if the field had no `@` clause. */
+  offset: number | undefined;
+}
+
+export interface RegisterInfo {
+  name: string;
+  /** The register's overall type, e.g. `u16` or `seg16`. */
+  type: string;
+  fields: FieldInfo[];
+}
+
+/**
+ * Walk a `file` CST and return every top-level register declaration as a
+ * plain data object, with the register's overall type and any bit fields
+ * in source order. Registers without a body return with an empty fields
+ * list; fields without an `@ N` offset clause return with `offset: undefined`.
+ */
+export function getRegisters(file: CstNode): RegisterInfo[] {
+  const result: RegisterInfo[] = [];
+  const declNodes = asCstNodes(file.children['declaration']);
+  for (const decl of declNodes) {
+    const registerDecls = asCstNodes(decl.children['registerDecl']);
+    for (const registerDecl of registerDecls) {
+      const nameToken = asTokens(registerDecl.children['Identifier'])[0];
+      if (!nameToken) continue;
+      const typeNode = asCstNodes(registerDecl.children['typeRef'])[0];
+      const typeName = typeNode
+        ? asTokens(typeNode.children['Identifier'])[0]?.image
+        : undefined;
+      if (!typeName) continue;
+
+      const fields: FieldInfo[] = [];
+      const body = asCstNodes(registerDecl.children['registerBody'])[0];
+      if (body) {
+        const fieldNodes = asCstNodes(body.children['fieldDecl']);
+        for (const f of fieldNodes) {
+          const fieldNameToken = asTokens(f.children['Identifier'])[0];
+          const fieldTypeNode = asCstNodes(f.children['typeRef'])[0];
+          const fieldTypeToken = fieldTypeNode
+            ? asTokens(fieldTypeNode.children['Identifier'])[0]
+            : undefined;
+          if (!fieldNameToken || !fieldTypeToken) continue;
+          const offset = parseFieldOffset(f);
+          fields.push({
+            name: fieldNameToken.image,
+            type: fieldTypeToken.image,
+            offset,
+          });
+        }
+      }
+      result.push({ name: nameToken.image, type: typeName, fields });
+    }
+  }
+  return result;
+}
+
+/**
+ * Pull the bit offset out of a fieldDecl CST node. Returns the parsed
+ * numeric value (handling both decimal and hex literals) or `undefined`
+ * when the field had no `@ N` clause.
+ */
+function parseFieldOffset(fieldDecl: CstNode): number | undefined {
+  const decTokens = asTokens(fieldDecl.children['DecimalLiteral']);
+  const hexTokens = asTokens(fieldDecl.children['HexLiteral']);
+  const literal = decTokens[0] ?? hexTokens[0];
+  if (!literal) return undefined;
+  return parseNumericLiteral(literal.image);
+}
+
+function parseNumericLiteral(image: string): number {
+  if (image.startsWith('0x') || image.startsWith('0X')) {
+    return parseInt(image.slice(2), 16);
+  }
+  return parseInt(image, 10);
+}
+
 /**
  * Walk a `file` CST and return every union declaration as a plain data
  * object, with its arms in source order. Unions without a body are

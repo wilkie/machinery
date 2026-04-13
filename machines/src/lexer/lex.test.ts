@@ -38,6 +38,12 @@ describe('lexer — basic tokenization', () => {
     ]);
   });
 
+  it('recognizes the field keyword', () => {
+    const { tokens, errors } = lex('field');
+    expect(errors).toEqual([]);
+    expect(names(tokens)).toEqual(['Field']);
+  });
+
   it('recognizes control-flow keywords', () => {
     const { tokens, errors } = lex('mux when if elif else assert');
     expect(errors).toEqual([]);

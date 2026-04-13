@@ -20,6 +20,7 @@ import {
   Routine,
   Call,
   Fetch,
+  Field,
   Mux,
   When,
   If,
@@ -125,7 +126,51 @@ export class MachineParser extends CstParser {
     this.CONSUME(Identifier);
     this.CONSUME(Colon);
     this.SUBRULE(this.typeRef);
-    this.OPTION(() => this.SUBRULE(this.headerTerminator));
+    this.OPTION(() => {
+      this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+      this.OPTION1(() => this.SUBRULE(this.registerBody));
+    });
+  });
+
+  /**
+   * Indented body of a top-level register declaration: a sequence of
+   * `field NAME:TYPE @ OFFSET` entries, one per line. Blank and
+   * comment-only lines between fields are absorbed by the inner OR.
+   *
+   * Does not yet handle the bit-range form `field[HI:LO] NAME:TYPE` used
+   * by registers declared inside `machine` bodies (e.g. executionUnit's
+   * `modrm` sub-register); that lives in machine-body grammar, which is
+   * still covered by the opaque `block` fallback.
+   */
+  public registerBody = this.RULE('registerBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.fieldDecl) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  /**
+   * A single bit field inside a register body:
+   *   `field NAME:TYPE @ OFFSET`
+   *
+   * The offset literal can be either decimal (`@ 8`) or hex (`@ 0x11`).
+   */
+  public fieldDecl = this.RULE('fieldDecl', () => {
+    this.CONSUME(Field);
+    this.CONSUME(Identifier);
+    this.CONSUME(Colon);
+    this.SUBRULE(this.typeRef);
+    this.OPTION(() => {
+      this.CONSUME(At);
+      this.OR([
+        { ALT: () => this.CONSUME(DecimalLiteral) },
+        { ALT: () => this.CONSUME(HexLiteral) },
+      ]);
+    });
   });
 
   public enumDecl = this.RULE('enumDecl', () => {
@@ -406,6 +451,7 @@ export class MachineParser extends CstParser {
       { ALT: () => this.CONSUME(Routine) },
       { ALT: () => this.CONSUME(Call) },
       { ALT: () => this.CONSUME(Fetch) },
+      { ALT: () => this.CONSUME(Field) },
       { ALT: () => this.CONSUME(Mux) },
       { ALT: () => this.CONSUME(When) },
       { ALT: () => this.CONSUME(If) },

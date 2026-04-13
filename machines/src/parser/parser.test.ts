@@ -5,6 +5,7 @@ import {
   getEnums,
   getBundles,
   getUnions,
+  getRegisters,
 } from './parse.js';
 
 const readSample = (name: string): string =>
@@ -596,6 +597,180 @@ describe('parser — top-level declaration skeleton', () => {
         'bundleDecl:BusResponse',
         'unionDecl:MicroOp',
       ]);
+    });
+  });
+
+  describe('register body parsing', () => {
+    it('captures fields with decimal bit offsets', () => {
+      const src = 'register AX:u16\n  field AL:u8 @ 0\n  field AH:u8 @ 8\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRegisters(cst!)).toEqual([
+        {
+          name: 'AX',
+          type: 'u16',
+          fields: [
+            { name: 'AL', type: 'u8', offset: 0 },
+            { name: 'AH', type: 'u8', offset: 8 },
+          ],
+        },
+      ]);
+    });
+
+    it('captures fields with hex bit offsets', () => {
+      const src = 'register R:u32\n  field lo:u8 @ 0x0\n  field hi:u8 @ 0x10\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRegisters(cst!)[0]!.fields).toEqual([
+        { name: 'lo', type: 'u8', offset: 0 },
+        { name: 'hi', type: 'u8', offset: 16 },
+      ]);
+    });
+
+    it('captures fields with non-contiguous offsets', () => {
+      const src = [
+        'register FLAGS:u16',
+        '  field CF:b @ 0',
+        '  field PF:b @ 2',
+        '  field AF:b @ 4',
+        '  field ZF:b @ 6',
+        '  field SF:b @ 7',
+        '  field OF:b @ 11',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRegisters(cst!)[0]!.fields.map((f) => f.offset)).toEqual([
+        0, 2, 4, 6, 7, 11,
+      ]);
+    });
+
+    it('handles a register with no body (bare declaration)', () => {
+      const { cst, parseErrors } = parse('register SI:u16\n');
+      expect(parseErrors).toEqual([]);
+      expect(getRegisters(cst!)).toEqual([
+        { name: 'SI', type: 'u16', fields: [] },
+      ]);
+    });
+
+    it('handles a register at EOF with no trailing newline', () => {
+      const { cst, parseErrors } = parse('register AX:u16\n  field AL:u8 @ 0');
+      expect(parseErrors).toEqual([]);
+      expect(getRegisters(cst!)).toEqual([
+        {
+          name: 'AX',
+          type: 'u16',
+          fields: [{ name: 'AL', type: 'u8', offset: 0 }],
+        },
+      ]);
+    });
+
+    it('handles a field with no offset clause', () => {
+      // Shape the grammar tolerates but real files don't use yet.
+      const src = 'register Foo:u8\n  field x:b\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRegisters(cst!)[0]!.fields).toEqual([
+        { name: 'x', type: 'b', offset: undefined },
+      ]);
+    });
+
+    it('tolerates comments interleaved with fields', () => {
+      const src = [
+        'register AX:u16',
+        '  ; low byte',
+        '  field AL:u8 @ 0',
+        '  ; high byte',
+        '  field AH:u8 @ 8',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRegisters(cst!)[0]!.fields.map((f) => f.name)).toEqual([
+        'AL',
+        'AH',
+      ]);
+    });
+
+    it('captures multiple registers in the same file in source order', () => {
+      const src = [
+        'register AX:u16',
+        '  field AL:u8 @ 0',
+        '',
+        'register SI:u16',
+        '',
+        'register FLAGS:u16',
+        '  field CF:b @ 0',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRegisters(cst!).map((r) => r.name)).toEqual([
+        'AX',
+        'SI',
+        'FLAGS',
+      ]);
+      expect(getRegisters(cst!)[1]!.fields).toEqual([]);
+    });
+
+    it('parses every shape from registers.machine', () => {
+      const { cst, parseErrors } = parse(readSample('registers.machine'));
+      expect(parseErrors).toEqual([]);
+      const regs = getRegisters(cst!);
+      expect(regs.map((r) => r.name)).toEqual([
+        'AX',
+        'BX',
+        'CX',
+        'DX',
+        'SI',
+        'DI',
+        'BP',
+        'SP',
+        'CS',
+        'DS',
+        'ES',
+        'SS',
+        'IP',
+        'FLAGS',
+      ]);
+
+      // Spot-check a few shapes: general-purpose register, bare segment
+      // register, and FLAGS' non-contiguous bit layout.
+      expect(regs.find((r) => r.name === 'AX')).toEqual({
+        name: 'AX',
+        type: 'u16',
+        fields: [
+          { name: 'AL', type: 'u8', offset: 0 },
+          { name: 'AH', type: 'u8', offset: 8 },
+        ],
+      });
+      expect(regs.find((r) => r.name === 'CS')).toEqual({
+        name: 'CS',
+        type: 'seg16',
+        fields: [],
+      });
+      expect(regs.find((r) => r.name === 'FLAGS')!.fields).toEqual([
+        { name: 'CF', type: 'b', offset: 0 },
+        { name: 'PF', type: 'b', offset: 2 },
+        { name: 'AF', type: 'b', offset: 4 },
+        { name: 'ZF', type: 'b', offset: 6 },
+        { name: 'SF', type: 'b', offset: 7 },
+        { name: 'OF', type: 'b', offset: 11 },
+      ]);
+    });
+
+    it('does not treat enum or bundle decls as registers', () => {
+      const src = [
+        'enum Foo',
+        '  a',
+        '',
+        'bundle Bar',
+        '  x:b',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRegisters(cst!)).toEqual([]);
     });
   });
 

@@ -80,6 +80,9 @@ export const Routine = keyword('Routine', 'routine');
 export const Call = keyword('Call', 'call');
 export const Fetch = keyword('Fetch', 'fetch');
 
+// Block-level keywords used inside declaration bodies.
+export const Field = keyword('Field', 'field');
+
 // Control-flow keywords.
 export const Mux = keyword('Mux', 'mux');
 export const When = keyword('When', 'when');
@@ -181,6 +184,7 @@ export const allTokens: TokenType[] = [
   Routine,
   Call,
   Fetch,
+  Field,
   Mux,
   When,
   If,

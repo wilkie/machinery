@@ -1,0 +1,40 @@
+; Top-level register declarations covering the shapes used throughout
+; ALU_NEW.machine — bare registers with no body, registers with two
+; typed bit fields, and the full FLAGS layout with non-contiguous bit
+; offsets.
+
+register AX:u16
+  field AL:u8 @ 0
+  field AH:u8 @ 8
+
+register BX:u16
+  field BL:u8 @ 0
+  field BH:u8 @ 8
+
+register CX:u16
+  field CL:u8 @ 0
+  field CH:u8 @ 8
+
+register DX:u16
+  field DL:u8 @ 0
+  field DH:u8 @ 8
+
+register SI:u16
+register DI:u16
+register BP:u16
+register SP:u16
+
+register CS:seg16
+register DS:seg16
+register ES:seg16
+register SS:seg16
+
+register IP:u16
+
+register FLAGS:u16
+  field CF:b @ 0
+  field PF:b @ 2
+  field AF:b @ 4
+  field ZF:b @ 6
+  field SF:b @ 7
+  field OF:b @ 11

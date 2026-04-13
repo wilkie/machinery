@@ -19,6 +19,7 @@ export {
   getEnums,
   getBundles,
   getUnions,
+  getRegisters,
   type ParseResult,
   type TopLevelDecl,
   type DeclarationKind,
@@ -27,5 +28,7 @@ export {
   type BundleField,
   type UnionInfo,
   type UnionArm,
+  type RegisterInfo,
+  type FieldInfo,
 } from './parser/parse.js';
 export { MachineParser, machineParser } from './parser/parser.js';

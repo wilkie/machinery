@@ -23,6 +23,7 @@ export {
   getRegisters,
   getMicrowords,
   getOperands,
+  getRoutines,
   type ParseResult,
   type TopLevelDecl,
   type DeclarationKind,
@@ -36,5 +37,6 @@ export {
   type MicrowordInfo,
   type OperandInfo,
   type OperandField,
+  type RoutineInfo,
 } from './parser/parse.js';
 export { MachineParser, machineParser } from './parser/parser.js';

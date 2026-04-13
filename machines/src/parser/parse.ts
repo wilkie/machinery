@@ -288,6 +288,125 @@ function extractNamedFieldsWithOffsets(container: CstNode): OperandField[] {
   return result;
 }
 
+export interface RoutineInfo {
+  name: string;
+  /** Entry opcode value if `entry:` is a single bare numeric literal,
+   *  otherwise undefined. Richer entry forms (escape sequences, group
+   *  constraints) are not yet surfaced by the walker. */
+  entry: number | undefined;
+  allow: string[];
+  modifies: string[];
+  references: string[];
+}
+
+/**
+ * Walk a `file` CST and return every routine declaration as a plain
+ * data object, with author-written metadata surfaced: name, entry
+ * opcode (for simple cases), allow/modifies lists, and references.
+ *
+ * `description` prose and the `micro` block are parsed structurally
+ * but not surfaced by the walker — prose is opaque today and the
+ * micro block still needs statement grammar.
+ */
+export function getRoutines(file: CstNode): RoutineInfo[] {
+  const result: RoutineInfo[] = [];
+  const declNodes = asCstNodes(file.children['declaration']);
+  for (const decl of declNodes) {
+    const routineDecls = asCstNodes(decl.children['routineDecl']);
+    for (const rd of routineDecls) {
+      const nameToken = asTokens(rd.children['Identifier'])[0];
+      if (!nameToken) continue;
+
+      let entry: number | undefined;
+      const allow: string[] = [];
+      const modifies: string[] = [];
+      const references: string[] = [];
+
+      const body = asCstNodes(rd.children['routineBody'])[0];
+      if (body) {
+        for (const section of asCstNodes(body.children['entrySection'])) {
+          entry = extractEntryLiteral(section);
+        }
+        for (const section of asCstNodes(body.children['allowSection'])) {
+          allow.push(...extractIdentifierList(section));
+        }
+        for (const section of asCstNodes(body.children['modifiesSection'])) {
+          modifies.push(...extractIdentifierList(section));
+        }
+        for (const section of asCstNodes(body.children['referencesSection'])) {
+          references.push(...extractReferenceList(section));
+        }
+      }
+
+      result.push({ name: nameToken.image, entry, allow, modifies, references });
+    }
+  }
+  return result;
+}
+
+/**
+ * Pull a numeric value out of an `entry: N` section when `N` is a
+ * single bare literal. Returns `undefined` for richer forms (expressions,
+ * comma lists, byte sequences) — those need the walker to grow.
+ */
+function extractEntryLiteral(
+  entrySection: CstNode,
+): number | undefined {
+  const expressions = asCstNodes(entrySection.children['expression']);
+  if (expressions.length !== 1) return undefined;
+  const allTokens: IToken[] = [];
+  collectAllTokens(expressions[0]!, allTokens);
+  if (allTokens.length !== 1) return undefined;
+  const tok = allTokens[0]!;
+  const name = tok.tokenType.name;
+  if (name !== 'HexLiteral' && name !== 'DecimalLiteral') return undefined;
+  return parseNumericLiteral(tok.image);
+}
+
+/**
+ * Pull the identifiers out of an `allow` or `modifies` section's
+ * bracketed list.
+ */
+function extractIdentifierList(section: CstNode): string[] {
+  const list = asCstNodes(section.children['identifierList'])[0];
+  if (!list) return [];
+  return asTokens(list.children['Identifier']).map((t) => t.image);
+}
+
+/**
+ * Pull the quoted string values out of a `references` section's
+ * bulleted list. The surrounding quotes are stripped.
+ */
+function extractReferenceList(section: CstNode): string[] {
+  const body = asCstNodes(section.children['referencesBody'])[0];
+  if (!body) return [];
+  const items = asCstNodes(body.children['referenceItem']);
+  const result: string[] = [];
+  for (const item of items) {
+    const str = asTokens(item.children['StringLiteral'])[0];
+    if (!str) continue;
+    result.push(str.image.slice(1, -1));
+  }
+  return result;
+}
+
+/**
+ * Recursively collect every leaf token from a CST node, in source
+ * order. Used by the entry-literal extractor to count tokens and
+ * confirm the expression is a single bare literal.
+ */
+function collectAllTokens(node: CstNode, out: IToken[]): void {
+  for (const children of Object.values(node.children)) {
+    for (const c of children) {
+      if (isCstNode(c)) {
+        collectAllTokens(c, out);
+      } else {
+        out.push(c as IToken);
+      }
+    }
+  }
+}
+
 export interface MicrowordInfo {
   name: string;
   fields: BundleField[];

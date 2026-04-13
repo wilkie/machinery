@@ -83,13 +83,18 @@ export const Fetch = keyword('Fetch', 'fetch');
 // Block-level keywords used inside declaration bodies.
 export const Field = keyword('Field', 'field');
 
-// Section markers used inside microword (and later operand / routine)
-// bodies. Reserved globally by the lexer; meaningful only in the contexts
-// the grammar places them.
+// Section markers used inside microword / operand / routine bodies.
+// Reserved globally by the lexer; meaningful only in the contexts the
+// grammar places them.
 export const Description = keyword('Description', 'description');
 export const Fields = keyword('Fields', 'fields');
 export const Ready = keyword('Ready', 'ready');
 export const Effect = keyword('Effect', 'effect');
+export const Entry = keyword('Entry', 'entry');
+export const Allow = keyword('Allow', 'allow');
+export const Modifies = keyword('Modifies', 'modifies');
+export const References = keyword('References', 'references');
+export const Micro = keyword('Micro', 'micro');
 
 /**
  * `Size` is a soft keyword — it marks the `size:` section inside an operand
@@ -251,6 +256,13 @@ export const allTokens: TokenType[] = [
   Description,
   Ready,
   Effect,
+  Entry,
+  Allow,
+  Modifies,
+  References,
+  // `Microword` (declared earlier) must precede `Micro` for the same
+  // longest-prefix-first reason as Fields/Field.
+  Micro,
   // `Size` is a soft keyword; must come before Identifier so the lexer
   // produces Size tokens for bare `size`. Parser rules that consume
   // Identifier also accept Size via its `categories: Identifier`.

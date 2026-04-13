@@ -44,6 +44,11 @@ import {
   Fields,
   Ready,
   Effect,
+  Entry,
+  Allow,
+  Modifies,
+  References,
+  Micro,
   Size,
   Mux,
   When,
@@ -536,7 +541,148 @@ export class MachineParser extends CstParser {
     this.CONSUME(Identifier);
     this.OPTION1(() => this.SUBRULE(this.paramList));
     this.OPTION2(() => this.SUBRULE(this.returnType));
-    this.OPTION3(() => this.SUBRULE(this.headerTerminator));
+    this.OPTION3(() => {
+      this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+      this.OPTION4(() => this.SUBRULE(this.routineBody));
+    });
+  });
+
+  /**
+   * Indented body of a routine declaration. Sections can appear in any
+   * order and any subset; each section is one of:
+   *
+   *   description    — prose, inline `description: "..."` or block form
+   *   references     — bulleted list of `- "string"` items
+   *   entry          — opcode byte(s) that dispatch to this routine
+   *   allow          — bracketed list of prefix-policy identifiers
+   *   modifies       — bracketed list of modified flags / state names
+   *   micro          — indented statement block (opaque for now)
+   *
+   * `description` is reused from the microword/operand body grammar.
+   * `micro`'s body is still consumed opaquely via `block`; the other
+   * sections surface as real CST nodes the walker can inspect.
+   *
+   * Per ALU_REVIEW.md, several fields that look like metadata
+   * (`operands`, `operandSize`, `modifies`, `semantic`) are expected to
+   * be derived by the build-time inference pass from the microcode
+   * body rather than written by the author. The grammar accepts them
+   * anyway so existing files keep parsing, and so that an author who
+   * wants to provide them explicitly can.
+   */
+  public routineBody = this.RULE('routineBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.descriptionSection) },
+        { ALT: () => this.SUBRULE(this.referencesSection) },
+        { ALT: () => this.SUBRULE(this.entrySection) },
+        { ALT: () => this.SUBRULE(this.allowSection) },
+        { ALT: () => this.SUBRULE(this.modifiesSection) },
+        { ALT: () => this.SUBRULE(this.microSection) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  /**
+   * `entry: expr` or `entry: expr, expr, ...` — the opcode byte (or
+   * byte sequence for escape-prefixed instructions) that the decode
+   * table will dispatch to this routine on. For now each item is a
+   * plain expression; future work will grow a richer constraint
+   * language for group-instruction refinements like `ModRM.reg = 0`.
+   */
+  public entrySection = this.RULE('entrySection', () => {
+    this.CONSUME(Entry);
+    this.CONSUME(Colon);
+    this.SUBRULE(this.expression);
+    this.MANY(() => {
+      this.CONSUME(Comma);
+      this.SUBRULE2(this.expression);
+    });
+    this.CONSUME(Newline);
+  });
+
+  /**
+   * `allow: [lock, rep, repne, ...]` — policy list declaring which
+   * instruction prefixes are legal in front of this routine. The list
+   * is bracketed identifiers, possibly empty.
+   */
+  public allowSection = this.RULE('allowSection', () => {
+    this.CONSUME(Allow);
+    this.CONSUME(Colon);
+    this.SUBRULE(this.identifierList);
+    this.CONSUME(Newline);
+  });
+
+  /**
+   * `modifies: [OF, SF, ZF, ...]` — list of architectural flags or
+   * registers this routine writes. Same shape as `allow`. In practice
+   * the build-time inference pass derives this from the microcode
+   * body; the grammar accepts it for cases where the author wants to
+   * state it explicitly.
+   */
+  public modifiesSection = this.RULE('modifiesSection', () => {
+    this.CONSUME(Modifies);
+    this.CONSUME(Colon);
+    this.SUBRULE(this.identifierList);
+    this.CONSUME(Newline);
+  });
+
+  /**
+   * Generic bracketed identifier list used by `allow` and `modifies`.
+   * Possibly empty. Trailing comma not supported.
+   */
+  public identifierList = this.RULE('identifierList', () => {
+    this.CONSUME(LBracket);
+    this.OPTION(() => {
+      this.CONSUME(Identifier);
+      this.MANY(() => {
+        this.CONSUME(Comma);
+        this.CONSUME2(Identifier);
+      });
+    });
+    this.CONSUME(RBracket);
+  });
+
+  /**
+   * `references` section: a `references` keyword on its own line
+   * followed by an indented block of `- "string"` bullet items. Each
+   * item is one reference (typically a citation like "Intel 80286
+   * Programmer's Reference Manual, ADD").
+   */
+  public referencesSection = this.RULE('referencesSection', () => {
+    this.CONSUME(References);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+    this.OPTION(() => this.SUBRULE(this.referencesBody));
+  });
+
+  public referencesBody = this.RULE('referencesBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.referenceItem) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  public referenceItem = this.RULE('referenceItem', () => {
+    this.CONSUME(Minus);
+    this.CONSUME(StringLiteral);
+  });
+
+  /**
+   * `micro` section: the statement block containing `call`, `fetch`,
+   * and microword record literals that make up the routine's
+   * execution. The inner block is still consumed opaquely via `block`
+   * until statement grammar lands.
+   */
+  public microSection = this.RULE('microSection', () => {
+    this.CONSUME(Micro);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+    this.OPTION(() => this.SUBRULE(this.block));
   });
 
   // =========================================================================
@@ -1031,6 +1177,11 @@ export class MachineParser extends CstParser {
       { ALT: () => this.CONSUME(Fields) },
       { ALT: () => this.CONSUME(Ready) },
       { ALT: () => this.CONSUME(Effect) },
+      { ALT: () => this.CONSUME(Entry) },
+      { ALT: () => this.CONSUME(Allow) },
+      { ALT: () => this.CONSUME(Modifies) },
+      { ALT: () => this.CONSUME(References) },
+      { ALT: () => this.CONSUME(Micro) },
       { ALT: () => this.CONSUME(Mux) },
       { ALT: () => this.CONSUME(When) },
       { ALT: () => this.CONSUME(If) },

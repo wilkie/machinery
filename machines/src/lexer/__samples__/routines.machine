@@ -1,0 +1,41 @@
+; Routine declarations covering every metadata shape the walker
+; surfaces today — inline descriptions, block descriptions, bulleted
+; references, entry opcodes, allow/modifies lists, and micro blocks
+; that still pass through the opaque block skipper.
+
+routine eaCalc(mod:u2, rm:u3) -> (ea:u16)
+  description: "Compute effective address for all ModR/M addressing modes."
+
+routine memRead8(addr:u16) -> (mdr:u8)
+  description: "Issue a u8 read via the BIU, stall until response."
+
+routine memWrite8(addr:u16, value:u8) -> ()
+  description: "Issue a u8 write via the BIU, stall until response."
+
+routine addRmReg8
+  description
+    Integer addition of an 8-bit register into an 8-bit r/m operand.
+
+  references
+    - "Intel 80286 Programmer's Reference Manual, ADD"
+
+  entry: 0x00
+  allow: [lock]
+  modifies: [OF, SF, ZF, AF, PF, CF]
+
+  micro
+    fetch ModRM
+    call eaCalc(ModRM.mod, ModRM.rm) -> ea
+    call memRead8(ea) -> mdr
+    AluMicro { op: add, width: u8, srcA: mem, srcB: ModRM.reg,
+               dest: tmp, writeFlags: 1, commit: onRetire }
+    call memWrite8(ea, tmp)
+    Retire {}
+
+routine nop
+  description: "Do nothing. One cycle, no state change."
+  entry: 0x90
+  allow: []
+  modifies: []
+  micro
+    Retire {}

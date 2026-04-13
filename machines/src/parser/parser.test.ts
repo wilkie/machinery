@@ -8,6 +8,7 @@ import {
   getRegisters,
   getMicrowords,
   getOperands,
+  getRoutines,
 } from './parse.js';
 
 const readSample = (name: string): string =>
@@ -151,13 +152,18 @@ describe('parser — top-level declaration skeleton', () => {
 
   describe('block skipping', () => {
     it('skips over an indented body containing arbitrary tokens', () => {
+      // Wrap the statement-y content in a `micro` section. The micro
+      // section's body is still consumed opaquely via the `block`
+      // skipper until statement grammar lands, which is what this
+      // test exercises.
       const src = [
         'routine foo',
-        '  fetch ModRM',
-        '  call eaCalc(mod, rm) -> ea',
-        '  AluMicro { op: add, width: u8, srcA: mem, srcB: ModRM.reg,',
-        '             dest: tmp, writeFlags: 1, commit: onRetire }',
-        '  Retire {}',
+        '  micro',
+        '    fetch ModRM',
+        '    call eaCalc(mod, rm) -> ea',
+        '    AluMicro { op: add, width: u8, srcA: mem, srcB: ModRM.reg,',
+        '               dest: tmp, writeFlags: 1, commit: onRetire }',
+        '    Retire {}',
         '',
       ].join('\n');
       const { cst, lexErrors, parseErrors } = parse(src);
@@ -361,7 +367,7 @@ describe('parser — top-level declaration skeleton', () => {
         '  field AL:u8 @ 0',
         '',
         'routine foo',
-        '  bar',
+        '  entry: 0x00',
         '',
       ].join('\n');
       const { cst, parseErrors } = parse(src);
@@ -1202,6 +1208,269 @@ describe('parser — top-level declaration skeleton', () => {
       expect(getUnions(cst!)[0]!.arms).toEqual([
         { name: 'size', type: 'SizeInfo' },
       ]);
+    });
+  });
+
+  describe('routine body parsing', () => {
+    it('parses a routine with an inline description', () => {
+      const { cst, parseErrors } = parse(
+        'routine foo\n  description: "a single-line description"\n',
+      );
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)).toEqual([
+        {
+          name: 'foo',
+          entry: undefined,
+          allow: [],
+          modifies: [],
+          references: [],
+        },
+      ]);
+    });
+
+    it('parses a routine with a block description', () => {
+      const src = [
+        'routine foo',
+        '  description',
+        '    A multi-line description',
+        '    that spans several lines.',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)[0]!.name).toBe('foo');
+    });
+
+    it('captures entry as a decimal value', () => {
+      const { cst, parseErrors } = parse('routine foo\n  entry: 42\n');
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)[0]!.entry).toBe(42);
+    });
+
+    it('captures entry as a hex value', () => {
+      const { cst, parseErrors } = parse('routine foo\n  entry: 0xB0\n');
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)[0]!.entry).toBe(0xb0);
+    });
+
+    it('returns undefined for a complex entry expression', () => {
+      // An expression like `0x80 + 1` is not a bare literal, so the
+      // walker reports it as undefined until the extractor grows.
+      const { cst, parseErrors } = parse('routine foo\n  entry: 0x80 + 1\n');
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)[0]!.entry).toBeUndefined();
+    });
+
+    it('parses an allow list with one entry', () => {
+      const { cst, parseErrors } = parse(
+        'routine foo\n  allow: [lock]\n',
+      );
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)[0]!.allow).toEqual(['lock']);
+    });
+
+    it('parses an empty allow list', () => {
+      const { cst, parseErrors } = parse('routine foo\n  allow: []\n');
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)[0]!.allow).toEqual([]);
+    });
+
+    it('parses a modifies list with multiple entries', () => {
+      const { cst, parseErrors } = parse(
+        'routine foo\n  modifies: [OF, SF, ZF, AF, PF, CF]\n',
+      );
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)[0]!.modifies).toEqual([
+        'OF',
+        'SF',
+        'ZF',
+        'AF',
+        'PF',
+        'CF',
+      ]);
+    });
+
+    it('parses a references block with one entry', () => {
+      const src = [
+        'routine foo',
+        '  references',
+        '    - "Intel 80286 Programmer\'s Reference Manual, ADD"',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)[0]!.references).toEqual([
+        "Intel 80286 Programmer's Reference Manual, ADD",
+      ]);
+    });
+
+    it('parses a references block with multiple entries', () => {
+      const src = [
+        'routine foo',
+        '  references',
+        '    - "manual A"',
+        '    - "manual B"',
+        '    - "manual C"',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)[0]!.references).toEqual([
+        'manual A',
+        'manual B',
+        'manual C',
+      ]);
+    });
+
+    it('skips over a micro block opaquely', () => {
+      // The micro block contains call directives and record literals
+      // that we don't have statement grammar for yet, but the opaque
+      // block skipper should still consume them without errors.
+      const src = [
+        'routine addRmReg8',
+        '  entry: 0x00',
+        '  micro',
+        '    fetch ModRM',
+        '    call eaCalc(ModRM.mod, ModRM.rm) -> ea',
+        '    call memRead8(ea) -> mdr',
+        '    AluMicro { op: add, width: u8, srcA: mem, srcB: ModRM.reg,',
+        '               dest: tmp, writeFlags: 1, commit: onRetire }',
+        '    call memWrite8(ea, tmp)',
+        '    Retire {}',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)[0]!.entry).toBe(0);
+    });
+
+    it('parses a routine with every section present', () => {
+      const src = [
+        'routine addRmReg8',
+        '  description',
+        '    Integer addition of an 8-bit register into an 8-bit r/m operand.',
+        '',
+        '  references',
+        '    - "Intel 80286 Programmer\'s Reference Manual, ADD"',
+        '',
+        '  entry: 0x00',
+        '  allow: [lock]',
+        '  modifies: [OF, SF, ZF, AF, PF, CF]',
+        '',
+        '  micro',
+        '    Retire {}',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      const routines = getRoutines(cst!);
+      expect(routines).toEqual([
+        {
+          name: 'addRmReg8',
+          entry: 0,
+          allow: ['lock'],
+          modifies: ['OF', 'SF', 'ZF', 'AF', 'PF', 'CF'],
+          references: ["Intel 80286 Programmer's Reference Manual, ADD"],
+        },
+      ]);
+    });
+
+    it('accepts sections in an unusual order', () => {
+      const src = [
+        'routine foo',
+        '  modifies: [CF]',
+        '  entry: 0x01',
+        '  allow: [lock]',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)[0]).toEqual({
+        name: 'foo',
+        entry: 1,
+        allow: ['lock'],
+        modifies: ['CF'],
+        references: [],
+      });
+    });
+
+    it('captures multiple routines in source order', () => {
+      const src = [
+        'routine foo',
+        '  entry: 0x10',
+        '',
+        'routine bar',
+        '  entry: 0x20',
+        '',
+        'routine baz',
+        '  entry: 0x30',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!).map((r) => ({ name: r.name, entry: r.entry }))).toEqual([
+        { name: 'foo', entry: 0x10 },
+        { name: 'bar', entry: 0x20 },
+        { name: 'baz', entry: 0x30 },
+      ]);
+    });
+
+    it('preserves routine parameter and return-type parsing', () => {
+      // Regression: the earlier routine-signature tests should still
+      // pass after the body grammar change.
+      const src = 'routine eaCalc(mod:u2, rm:u3) -> (ea:u16)\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)).toEqual([
+        {
+          name: 'eaCalc',
+          entry: undefined,
+          allow: [],
+          modifies: [],
+          references: [],
+        },
+      ]);
+    });
+
+    it('parses every routine shape from routines.machine', () => {
+      const { cst, parseErrors } = parse(readSample('routines.machine'));
+      expect(parseErrors).toEqual([]);
+      const routines = getRoutines(cst!);
+      expect(routines.map((r) => r.name)).toEqual([
+        'eaCalc',
+        'memRead8',
+        'memWrite8',
+        'addRmReg8',
+        'nop',
+      ]);
+      expect(routines.find((r) => r.name === 'addRmReg8')).toEqual({
+        name: 'addRmReg8',
+        entry: 0,
+        allow: ['lock'],
+        modifies: ['OF', 'SF', 'ZF', 'AF', 'PF', 'CF'],
+        references: ["Intel 80286 Programmer's Reference Manual, ADD"],
+      });
+      expect(routines.find((r) => r.name === 'nop')).toEqual({
+        name: 'nop',
+        entry: 0x90,
+        allow: [],
+        modifies: [],
+        references: [],
+      });
+    });
+
+    it('does not treat microword or operand decls as routines', () => {
+      const src = [
+        'microword Foo',
+        '  ready: 1',
+        '',
+        'operand Bar',
+        '  size: 1',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getRoutines(cst!)).toEqual([]);
     });
   });
 

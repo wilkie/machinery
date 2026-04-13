@@ -1,5 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { parse, getDeclarations, getEnums } from './parse.js';
+import {
+  parse,
+  getDeclarations,
+  getEnums,
+  getBundles,
+  getUnions,
+} from './parse.js';
 
 const readSample = (name: string): string =>
   readFileSync(new URL(`../lexer/__samples__/${name}`, import.meta.url), 'utf-8');
@@ -358,6 +364,238 @@ describe('parser — top-level declaration skeleton', () => {
       const { cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
       expect(getEnums(cst!)).toEqual([]);
+    });
+  });
+
+  describe('bundle body parsing', () => {
+    it('captures field names and types in a simple bundle', () => {
+      const src = 'bundle Flags\n  cf:b\n  zf:b\n  sf:b\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getBundles(cst!)).toEqual([
+        {
+          name: 'Flags',
+          fields: [
+            { name: 'cf', type: 'b' },
+            { name: 'zf', type: 'b' },
+            { name: 'sf', type: 'b' },
+          ],
+        },
+      ]);
+    });
+
+    it('captures bundle fields with mixed widths and user types', () => {
+      const src = [
+        'bundle BusRequest',
+        '  valid:b',
+        '  address:u20',
+        '  op:BusOp',
+        '  size:BusSize',
+        '  data:u16',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getBundles(cst!)).toEqual([
+        {
+          name: 'BusRequest',
+          fields: [
+            { name: 'valid', type: 'b' },
+            { name: 'address', type: 'u20' },
+            { name: 'op', type: 'BusOp' },
+            { name: 'size', type: 'BusSize' },
+            { name: 'data', type: 'u16' },
+          ],
+        },
+      ]);
+    });
+
+    it('tolerates whitespace after the field colon', () => {
+      // `op: BusOp` with a space after the colon — the lexer strips
+      // horizontal whitespace so it should tokenize the same as `op:BusOp`.
+      const src = 'bundle Foo\n  op: BusOp\n  size:   BusSize\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getBundles(cst!)[0]!.fields).toEqual([
+        { name: 'op', type: 'BusOp' },
+        { name: 'size', type: 'BusSize' },
+      ]);
+    });
+
+    it('handles a bundle with no body', () => {
+      const { cst, parseErrors } = parse('bundle Empty\n');
+      expect(parseErrors).toEqual([]);
+      expect(getBundles(cst!)).toEqual([{ name: 'Empty', fields: [] }]);
+    });
+
+    it('handles a bundle at EOF with no trailing newline', () => {
+      const { cst, parseErrors } = parse('bundle Foo\n  a:b\n  c:u8');
+      expect(parseErrors).toEqual([]);
+      expect(getBundles(cst!)[0]!.fields).toEqual([
+        { name: 'a', type: 'b' },
+        { name: 'c', type: 'u8' },
+      ]);
+    });
+
+    it('tolerates comments interleaved with fields', () => {
+      const src = [
+        'bundle Foo',
+        '  ; the first field',
+        '  a:b',
+        '  ; the second field',
+        '  b:u8',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getBundles(cst!)[0]!.fields).toEqual([
+        { name: 'a', type: 'b' },
+        { name: 'b', type: 'u8' },
+      ]);
+    });
+
+    it('captures multiple bundles in the same file in source order', () => {
+      const src = [
+        'bundle A',
+        '  x:b',
+        '',
+        'bundle B',
+        '  y:u8',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getBundles(cst!)).toEqual([
+        { name: 'A', fields: [{ name: 'x', type: 'b' }] },
+        { name: 'B', fields: [{ name: 'y', type: 'u8' }] },
+      ]);
+    });
+
+    it('does not treat enum or register decls as bundles', () => {
+      const src = ['enum Foo', '  a', '', 'register AX:u16', ''].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getBundles(cst!)).toEqual([]);
+    });
+  });
+
+  describe('union body parsing', () => {
+    it('captures arms and their payload types', () => {
+      const src = [
+        'union MicroOp',
+        '  alu:AluMicro',
+        '  istreamRead:IStreamRead',
+        '  busRead:BusRead',
+        '  retire:Retire',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getUnions(cst!)).toEqual([
+        {
+          name: 'MicroOp',
+          arms: [
+            { name: 'alu', type: 'AluMicro' },
+            { name: 'istreamRead', type: 'IStreamRead' },
+            { name: 'busRead', type: 'BusRead' },
+            { name: 'retire', type: 'Retire' },
+          ],
+        },
+      ]);
+    });
+
+    it('handles a union with no body', () => {
+      const { cst, parseErrors } = parse('union Empty\n');
+      expect(parseErrors).toEqual([]);
+      expect(getUnions(cst!)).toEqual([{ name: 'Empty', arms: [] }]);
+    });
+
+    it('tolerates comments interleaved with arms', () => {
+      const src = [
+        'union Op',
+        '  ; the ALU path',
+        '  alu:AluMicro',
+        '',
+        '  ; the bus path',
+        '  bus:BusRead',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getUnions(cst!)[0]!.arms).toEqual([
+        { name: 'alu', type: 'AluMicro' },
+        { name: 'bus', type: 'BusRead' },
+      ]);
+    });
+
+    it('does not treat bundle decls as unions', () => {
+      const { cst, parseErrors } = parse('bundle Foo\n  a:b\n');
+      expect(parseErrors).toEqual([]);
+      expect(getUnions(cst!)).toEqual([]);
+    });
+  });
+
+  describe('bundles and unions together', () => {
+    it('parses bundles.machine and captures every declaration', () => {
+      const { cst, parseErrors } = parse(readSample('bundles.machine'));
+      expect(parseErrors).toEqual([]);
+
+      expect(getBundles(cst!)).toEqual([
+        {
+          name: 'Flags',
+          fields: [
+            { name: 'cf', type: 'b' },
+            { name: 'pf', type: 'b' },
+            { name: 'af', type: 'b' },
+            { name: 'zf', type: 'b' },
+            { name: 'sf', type: 'b' },
+            { name: 'of', type: 'b' },
+          ],
+        },
+        {
+          name: 'BusRequest',
+          fields: [
+            { name: 'valid', type: 'b' },
+            { name: 'address', type: 'u20' },
+            { name: 'op', type: 'BusOp' },
+            { name: 'size', type: 'BusSize' },
+            { name: 'data', type: 'u16' },
+          ],
+        },
+        {
+          name: 'BusResponse',
+          fields: [
+            { name: 'grant', type: 'b' },
+            { name: 'done', type: 'b' },
+            { name: 'data', type: 'u16' },
+          ],
+        },
+      ]);
+
+      expect(getUnions(cst!)).toEqual([
+        {
+          name: 'MicroOp',
+          arms: [
+            { name: 'alu', type: 'AluMicro' },
+            { name: 'istreamRead', type: 'IStreamRead' },
+            { name: 'busRead', type: 'BusRead' },
+            { name: 'busWrite', type: 'BusWrite' },
+            { name: 'branch', type: 'Branch' },
+            { name: 'retire', type: 'Retire' },
+          ],
+        },
+      ]);
+
+      // The getDeclarations skeleton still sees all four top-level decls
+      // in source order.
+      expect(
+        getDeclarations(cst!).map((d) => `${d.kind}:${d.name}`),
+      ).toEqual([
+        'bundleDecl:Flags',
+        'bundleDecl:BusRequest',
+        'bundleDecl:BusResponse',
+        'unionDecl:MicroOp',
+      ]);
     });
   });
 

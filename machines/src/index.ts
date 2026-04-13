@@ -17,9 +17,15 @@ export {
   parse,
   getDeclarations,
   getEnums,
+  getBundles,
+  getUnions,
   type ParseResult,
   type TopLevelDecl,
   type DeclarationKind,
   type EnumInfo,
+  type BundleInfo,
+  type BundleField,
+  type UnionInfo,
+  type UnionArm,
 } from './parser/parse.js';
 export { MachineParser, machineParser } from './parser/parser.js';

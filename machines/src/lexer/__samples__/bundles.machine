@@ -1,0 +1,36 @@
+; Bundle and union declarations covering the shapes used throughout
+; ALU_NEW.machine — pure-bit bundles, mixed-width bundles with comments
+; between fields, and a tagged union with varying arm widths.
+
+bundle Flags
+  cf:b
+  pf:b
+  af:b
+  zf:b
+  sf:b
+  of:b
+
+bundle BusRequest
+  ; Whether or not the address is active
+  valid:b
+  ; The address to pull/push data from on the bus
+  address:u20
+  ; The operation we want to perform on the bus
+  op:BusOp
+  ; The amount to read
+  size:BusSize
+  ; The data to write
+  data:u16
+
+bundle BusResponse
+  grant:b
+  done:b
+  data:u16
+
+union MicroOp
+  alu:AluMicro
+  istreamRead:IStreamRead
+  busRead:BusRead
+  busWrite:BusWrite
+  branch:Branch
+  retire:Retire

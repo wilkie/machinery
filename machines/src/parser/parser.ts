@@ -165,13 +165,62 @@ export class MachineParser extends CstParser {
   public bundleDecl = this.RULE('bundleDecl', () => {
     this.CONSUME(Bundle);
     this.CONSUME(Identifier);
-    this.OPTION(() => this.SUBRULE(this.headerTerminator));
+    this.OPTION(() => {
+      this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+      this.OPTION1(() => this.SUBRULE(this.bundleBody));
+    });
+  });
+
+  /**
+   * Indented body of a bundle: a sequence of `name: typeRef` fields, one
+   * per line. Same Newline tolerance as enumBody — blank/comment-only
+   * lines between fields are absorbed by the inner OR.
+   */
+  public bundleBody = this.RULE('bundleBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.namedField) },
+      ]);
+    });
+    this.CONSUME(Outdent);
   });
 
   public unionDecl = this.RULE('unionDecl', () => {
     this.CONSUME(Union);
     this.CONSUME(Identifier);
-    this.OPTION(() => this.SUBRULE(this.headerTerminator));
+    this.OPTION(() => {
+      this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+      this.OPTION1(() => this.SUBRULE(this.unionBody));
+    });
+  });
+
+  /**
+   * Indented body of a union: structurally identical to a bundle body
+   * (each arm is `tagName: payloadType`), but kept as its own rule so
+   * the CST distinguishes "bundle field" from "union arm" by node name.
+   */
+  public unionBody = this.RULE('unionBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.namedField) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  /**
+   * Shared by bundleBody and unionBody: `Identifier ':' typeRef`. The
+   * downstream walker interprets it as a bundle field or union arm based
+   * on which container it sits inside.
+   */
+  public namedField = this.RULE('namedField', () => {
+    this.CONSUME(Identifier);
+    this.CONSUME(Colon);
+    this.SUBRULE(this.typeRef);
   });
 
   public unitDecl = this.RULE('unitDecl', () => {

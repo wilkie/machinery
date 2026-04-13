@@ -135,6 +135,88 @@ export function getEnums(file: CstNode): EnumInfo[] {
   return result;
 }
 
+export interface BundleField {
+  name: string;
+  type: string;
+}
+
+export interface BundleInfo {
+  name: string;
+  fields: BundleField[];
+}
+
+/**
+ * Walk a `file` CST and return every bundle declaration as a plain data
+ * object, with its fields in source order. Bundles without a body are
+ * reported with an empty fields list.
+ */
+export function getBundles(file: CstNode): BundleInfo[] {
+  const result: BundleInfo[] = [];
+  const declNodes = asCstNodes(file.children['declaration']);
+  for (const decl of declNodes) {
+    const bundleDecls = asCstNodes(decl.children['bundleDecl']);
+    for (const bundleDecl of bundleDecls) {
+      const nameToken = asTokens(bundleDecl.children['Identifier'])[0];
+      if (!nameToken) continue;
+      const body = asCstNodes(bundleDecl.children['bundleBody'])[0];
+      const fields = body ? extractNamedFields(body) : [];
+      result.push({ name: nameToken.image, fields });
+    }
+  }
+  return result;
+}
+
+export interface UnionArm {
+  name: string;
+  type: string;
+}
+
+export interface UnionInfo {
+  name: string;
+  arms: UnionArm[];
+}
+
+/**
+ * Walk a `file` CST and return every union declaration as a plain data
+ * object, with its arms in source order. Unions without a body are
+ * reported with an empty arms list.
+ */
+export function getUnions(file: CstNode): UnionInfo[] {
+  const result: UnionInfo[] = [];
+  const declNodes = asCstNodes(file.children['declaration']);
+  for (const decl of declNodes) {
+    const unionDecls = asCstNodes(decl.children['unionDecl']);
+    for (const unionDecl of unionDecls) {
+      const nameToken = asTokens(unionDecl.children['Identifier'])[0];
+      if (!nameToken) continue;
+      const body = asCstNodes(unionDecl.children['unionBody'])[0];
+      const arms = body ? extractNamedFields(body) : [];
+      result.push({ name: nameToken.image, arms });
+    }
+  }
+  return result;
+}
+
+/**
+ * Shared helper: pull a list of `Identifier ':' typeRef` entries out of a
+ * bundle or union body CST node. Fields are returned in source order.
+ */
+function extractNamedFields(body: CstNode): { name: string; type: string }[] {
+  const result: { name: string; type: string }[] = [];
+  const fieldNodes = asCstNodes(body.children['namedField']);
+  for (const f of fieldNodes) {
+    const fieldName = asTokens(f.children['Identifier'])[0]?.image;
+    const typeNode = asCstNodes(f.children['typeRef'])[0];
+    const typeName = typeNode
+      ? asTokens(typeNode.children['Identifier'])[0]?.image
+      : undefined;
+    if (fieldName && typeName) {
+      result.push({ name: fieldName, type: typeName });
+    }
+  }
+  return result;
+}
+
 // ---- CST-element narrowing helpers ---------------------------------------
 // CstElement is `CstNode | IToken`; the two are distinguished by whether
 // the value has a `children` field. These helpers pick one or the other

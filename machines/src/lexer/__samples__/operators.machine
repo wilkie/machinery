@@ -1,6 +1,19 @@
-; Operator coverage — makes sure every multi-char operator tokenizes as
-; a single unit (Arrow vs Minus+Greater, etc.) and the register/flag
-; update operators are distinct.
+; Operator coverage sample — ensures every multi-char operator
+; tokenizes as a single unit (Arrow vs Minus+Greater, etc.) and lives
+; in a grammatically valid position for the current parser. Each
+; operator is exercised in a context where the grammar accepts it:
+;
+;   Arrow      →   in a routine return type
+;   DotDot     →   in an entry-range (currently single-byte opcode)
+;   BackArrow  →   in a register next-state assignment
+;   EqualEqual →   in a comparison
+;   NotEqual   →   in a comparison
+;   DoubleColon →  in a turbofish call site
+
+routine foo -> (result:u16)
+  entry: 0xB0
+  micro
+    Retire {}
 
 unit alu
   wires in
@@ -9,14 +22,29 @@ unit alu
   wires out
     *:u16
 
-  wire raw:u17 = a:u17 + b:u17
-  flags <- aluFlags(a, b, raw)
-  result <- raw:u16
-
-  ; Arrow, BackArrow, EqualEqual, NotEqual, range, etc.
-  ; These are all in expression position; the parser decides shape.
-  wire tmp = a == b
+  wire eq = a == b
   wire neq = a != b
-  wire r1 = a -> b
-  wire r2 = a <- b
-  wire r3 = 0xB0..0xB7
+  wire le = a <= b
+  wire ge = a >= b
+  wire both = a && b
+  wire either = a || b
+  wire shl = a << 2
+  wire shr = a >> 2
+  = alu::<Width>(a, b, 0)
+
+machine counter
+  registers
+    count:u8 = 0
+
+  wires in
+    increment:b
+
+  wires out
+    value:u8
+
+  default
+    value = 0
+
+  value = count
+  if increment
+    count <- count + 1

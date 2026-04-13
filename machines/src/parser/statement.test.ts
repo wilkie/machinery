@@ -25,19 +25,26 @@ function stmtSexp(node: CstElement): string {
   switch (node.name) {
     case 'statement': {
       // Exactly one child: the specific statement kind.
+      // `muxStmt` is no longer a direct child — it's now reachable
+      // via `exprOrAssignStmt → expression → primary → muxStmt`.
       for (const key of [
         'callStmt',
         'fetchStmt',
         'wireDeclStmt',
         'ifStmt',
         'assertStmt',
-        'muxStmt',
+        'anonAssignStmt',
         'exprOrAssignStmt',
       ]) {
         const child = asCstNodes(node.children[key])[0];
         if (child) return stmtSexp(child);
       }
       return '<statement?>';
+    }
+
+    case 'anonAssignStmt': {
+      const expr = exprSexp(firstChild(node, 'expression'));
+      return `(= * ${expr})`;
     }
 
     case 'callStmt': {
@@ -189,6 +196,8 @@ function exprSexp(node: CstElement): string {
       if (paren) return exprSexp(paren);
       const rec = firstChildOrUndefined(node, 'recordLiteral');
       if (rec) return exprSexp(rec);
+      const mux = firstChildOrUndefined(node, 'muxStmt');
+      if (mux) return stmtSexp(mux);
       return '?';
     }
     case 'parenExpr': {

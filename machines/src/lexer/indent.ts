@@ -60,14 +60,6 @@ export function injectIndentation(rawTokens: IToken[]): IToken[] {
   let lastToken: IToken | undefined;
 
   for (const tok of rawTokens) {
-    // Track bracket nesting. Inside brackets, newlines are ignored so a
-    // record literal can span multiple physical lines.
-    if (OPEN_BRACKETS.has(tok.tokenType)) {
-      bracketDepth++;
-    } else if (CLOSE_BRACKETS.has(tok.tokenType)) {
-      bracketDepth = Math.max(0, bracketDepth - 1);
-    }
-
     if (tok.tokenType === Newline) {
       if (bracketDepth === 0) {
         result.push(tok);
@@ -77,6 +69,13 @@ export function injectIndentation(rawTokens: IToken[]): IToken[] {
       continue;
     }
 
+    // Compute indent BEFORE updating bracket depth. This matters when
+    // an open bracket like `(` or `{` is itself the first non-newline
+    // token on a line — e.g. an empty-parens no-op `()` as a statement
+    // body, or a record literal `{ ... }` standing alone. Updating
+    // bracketDepth first would skip the indent check (which gates on
+    // `bracketDepth === 0`) and silently lose the INDENT/OUTDENT that
+    // the line's column otherwise implies.
     if (atLineStart && bracketDepth === 0) {
       const indent = (tok.startColumn ?? 1) - 1;
       const top = stack[stack.length - 1] ?? 0;
@@ -91,6 +90,15 @@ export function injectIndentation(rawTokens: IToken[]): IToken[] {
         }
       }
       // indent === stack top: same level, no INDENT/OUTDENT.
+    }
+
+    // Update bracket depth AFTER the indent check so opening brackets
+    // at line start are counted as real tokens for indentation, but
+    // newlines inside the bracket region are still suppressed.
+    if (OPEN_BRACKETS.has(tok.tokenType)) {
+      bracketDepth++;
+    } else if (CLOSE_BRACKETS.has(tok.tokenType)) {
+      bracketDepth = Math.max(0, bracketDepth - 1);
     }
 
     // Any real token clears the "at line start" flag, even inside

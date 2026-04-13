@@ -1,0 +1,87 @@
+; Unit and machine body sample covering the shapes in ALU_NEW.machine:
+; anonymous single-output unit (`parity8`), multi-port input/output unit
+; (`aluSelect`), width-parameterized unit with typeRef `u{W}` and
+; `u{W+1}`, and a machine body with id, description, registers (with a
+; nested field block), wires in/out, default clause, assertions, and
+; an if/else with nested mux.
+
+unit parity8
+  wires in
+    v:u8
+  wires out
+    *:b
+
+  = ~(v[0] ^ v[1] ^ v[2] ^ v[3] ^ v[4] ^ v[5] ^ v[6] ^ v[7])
+
+unit aluSelect
+  wires in
+    sel:AluSrc
+    reg:u16
+    imm:u16
+    tmp:u16
+  wires out
+    *:u16
+
+  mux sel
+    when AluSrc.zero: 0
+    when AluSrc.one:  1
+    when AluSrc.tmp:  tmp
+    when AluSrc.imm:  imm
+    when AluSrc.reg:  reg
+
+unit aluFlags<W:Width>
+  wires in
+    op:AluOp
+    a:u{W}
+    b:u{W}
+    raw:u{W+1}
+  wires out
+    *:Flags
+
+  wire r:u{W} = raw:u{W}
+  wire msb = W - 1
+
+  mux op
+    when AluOp.add
+      cf = raw[W]
+      af = raw[4] ^ a[4] ^ b[4]
+      of = (a[msb] ^ b[msb]) & (a[msb] ^ r[msb])
+    else
+      cf = 0
+      af = 0
+      of = 0
+
+  sf = r[msb]
+  zf = r == 0
+
+machine executionUnit
+  id i286
+  description
+    Toy execute unit that demonstrates every machine-body section.
+
+  registers
+    state:ExecuteState = ExecuteState.fetch
+    modrm:u8 = 0
+      field mod:u2 @ 6
+      field reg:u3 @ 3
+      field rm:u3 @ 0
+    microPc:u8 = 0
+
+  wires in
+    prefetch:PrefetchOut
+
+  wires out
+    prefetchControl:PrefetchControl
+
+  default
+    prefetchControl = { pop: 0, flush: 0, redirect: 0, hold: 0 }
+
+  assert !(prefetchControl.pop && prefetch.empty)
+
+  mux state
+    when ExecuteState.fetch
+      if prefetch.valid
+        prefetchControl.pop = 1
+        state <- ExecuteState.execute
+    when ExecuteState.execute
+      microPc <- microPc + 1

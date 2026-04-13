@@ -175,7 +175,9 @@ export function getEnums(file: CstNode): EnumInfo[] {
       if (body) {
         const variantNodes = asCstNodes(body.children['enumVariant']);
         for (const v of variantNodes) {
-          const variantToken = asTokens(v.children['Identifier'])[0];
+          const variantToken =
+            asTokens(v.children['Identifier'])[0] ??
+            asTokens(v.children['Fetch'])[0];
           if (variantToken) variants.push(variantToken.image);
         }
       }

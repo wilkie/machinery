@@ -2,13 +2,9 @@
 //
 // Covered today:
 //
-//   * Top-level declarations: register, enum, bundle, union, microword,
-//     operand, unit, machine, routine. Every declaration's name and
-//     signature is captured. Declaration-body coverage varies:
-//
-//       - enum, bundle, union, register, microword, operand,
-//         routine (all metadata sections, incl. `micro`)            full body
-//       - unit, machine                                             opaque body
+//   * Every top-level declaration (register, enum, bundle, union,
+//     microword, operand, unit, machine, routine) parses as a real
+//     CST — no opaque body fallback remains for any declaration kind.
 //
 //   * A full C-family expression grammar (literals, identifiers,
 //     member/call/index/cast/constructor postfix ops, unary ops,
@@ -19,17 +15,22 @@
 //   * A full statement grammar covering `call` / `fetch` directives,
 //     `mux` with when/else arms, `wire` declarations, `if`/`elif`/
 //     `else`, `assert`, assignments (combinational `=` and register
-//     `<-`), and bare expression statements. This unlocks routine
-//     `micro` bodies, operand `fetch` bodies, and microword `effect`
-//     bodies as real CSTs.
+//     `<-`), anonymous output assignment (`= expr`), and bare
+//     expression statements.
 //
-// Not yet covered, still consumed opaquely via the generic `block`
-// skipper when they appear inside a body:
+//   * Unit and machine body grammar with `wires in`/`wires out`,
+//     `registers` (with optional nested `field` blocks), `id`,
+//     `description`, and `default` sections, all interleaved freely
+//     with statements.
 //
-//   * Unit and machine bodies (`wires in`/`wires out` sections,
-//     `registers` declarations, `default` clauses).
-//   * Parameterized type references like `u{W+1}` (typeRef is still
-//     a bare identifier).
+//   * Parameterized type references via the `{...}` form:
+//     `u{W+1}`, `Local{8}`. Declaration-site type parameters
+//     (`unit alu<W:Width>`) and turbofish call sites
+//     (`alu::<width>(...)`) continue to use `<...>`.
+//
+// The opaque `block` / `anyBodyToken` rules are kept as a safety net
+// for grammar contexts we add in the future, but nothing in the
+// current top-level dispatch routes to them anymore.
 //
 // See the comment blocks above individual rules for per-rule details.
 
@@ -50,6 +51,12 @@ import {
   Fetch,
   Field,
   Wire,
+  Wires,
+  In,
+  Out,
+  Registers,
+  Default,
+  Id,
   Description,
   Fields,
   Ready,
@@ -252,7 +259,13 @@ export class MachineParser extends CstParser {
   });
 
   public enumVariant = this.RULE('enumVariant', () => {
-    this.CONSUME(Identifier);
+    // `Fetch` is a hard keyword but can appear as a legitimate enum
+    // variant name (e.g., `ExecuteState.fetch`). The same contextual
+    // accommodation memberOp uses for `.fetch` applies here.
+    this.OR([
+      { ALT: () => this.CONSUME(Identifier) },
+      { ALT: () => this.CONSUME(Fetch) },
+    ]);
   });
 
   public bundleDecl = this.RULE('bundleDecl', () => {
@@ -329,13 +342,19 @@ export class MachineParser extends CstParser {
     this.CONSUME(Unit);
     this.CONSUME(Identifier);
     this.OPTION1(() => this.SUBRULE(this.typeParams));
-    this.OPTION2(() => this.SUBRULE(this.headerTerminator));
+    this.OPTION2(() => {
+      this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+      this.OPTION3(() => this.SUBRULE(this.unitBody));
+    });
   });
 
   public machineDecl = this.RULE('machineDecl', () => {
     this.CONSUME(Machine);
     this.CONSUME(Identifier);
-    this.OPTION(() => this.SUBRULE(this.headerTerminator));
+    this.OPTION(() => {
+      this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+      this.OPTION1(() => this.SUBRULE(this.machineBody));
+    });
   });
 
   public microwordDecl = this.RULE('microwordDecl', () => {
@@ -693,27 +712,160 @@ export class MachineParser extends CstParser {
   });
 
   // =========================================================================
-  // Shared pieces
+  // Unit and machine body grammar
+  //
+  // Unit bodies are sequences of `wires in` / `wires out` port
+  // declarations interleaved with statements and anonymous
+  // assignments (the `= expr` form used for single-output units like
+  // `parity8`).
+  //
+  // Machine bodies add five more sections: `id NAME` (machine tag),
+  // `description` (prose), `registers` (per-register declarations
+  // with optional nested field blocks), `wires in` / `wires out`
+  // (same as unit bodies), and `default` (initial-state assignments).
+  // Everything else is statement-level and goes through the
+  // `statement` rule.
+  //
+  // Sections can appear in any order; the grammar doesn't enforce a
+  // conventional order. Semantic analysis can later warn on
+  // non-standard orderings if we want that.
   // =========================================================================
 
+  public unitBody = this.RULE('unitBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.wiresSection) },
+        { ALT: () => this.SUBRULE(this.statement) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  public machineBody = this.RULE('machineBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.idSection) },
+        { ALT: () => this.SUBRULE(this.descriptionSection) },
+        { ALT: () => this.SUBRULE(this.registersSection) },
+        { ALT: () => this.SUBRULE(this.wiresSection) },
+        { ALT: () => this.SUBRULE(this.defaultSection) },
+        { ALT: () => this.SUBRULE(this.statement) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
   /**
-   * After a declaration header, the source can end in three ways:
-   *   1. Newline(+) + INDENT block  → declaration with a body
-   *   2. Newline(+) only            → one-liner, next declaration follows
-   *   3. EOF                        → last declaration has no trailing newline
-   *
-   * This rule handles cases 1 and 2 — the OPTION wrapper on each callsite
-   * handles case 3 by not entering this rule at all.
-   *
-   * The `AT_LEAST_ONE` on Newlines covers the case where blank lines or
-   * comment-only lines sit between the header and the body: each such
-   * line produces a Newline token in the stream (the lexer strips the
-   * comment body and horizontal whitespace), so we may see several in a
-   * row before the block's INDENT arrives.
+   * `id NAME` — a single-line machine tag. Used by `machine
+   * executionUnit\n  id i286` to declare that executionUnit
+   * represents the i286 target.
    */
-  public headerTerminator = this.RULE('headerTerminator', () => {
+  public idSection = this.RULE('idSection', () => {
+    this.CONSUME(Id);
+    this.CONSUME(Identifier);
+    this.CONSUME(Newline);
+  });
+
+  /**
+   * `wires in` or `wires out` section — an indented list of port
+   * declarations. Each port is `NAME:type` or `*:type` (anonymous
+   * output, used by units with a single unnamed return value like
+   * `parity8` and `aluSelect`).
+   */
+  public wiresSection = this.RULE('wiresSection', () => {
+    this.CONSUME(Wires);
+    this.OR([
+      { ALT: () => this.CONSUME(In) },
+      { ALT: () => this.CONSUME(Out) },
+    ]);
     this.AT_LEAST_ONE(() => this.CONSUME(Newline));
-    this.OPTION(() => this.SUBRULE(this.block));
+    this.OPTION(() => this.SUBRULE(this.wiresBody));
+  });
+
+  public wiresBody = this.RULE('wiresBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.wirePort) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  public wirePort = this.RULE('wirePort', () => {
+    this.OR([
+      { ALT: () => this.CONSUME(Identifier) },
+      { ALT: () => this.CONSUME(Star) },
+    ]);
+    this.CONSUME(Colon);
+    this.SUBRULE(this.typeRef);
+  });
+
+  /**
+   * `registers` section — an indented list of register entries. Each
+   * entry is `NAME:type = initialValue` optionally followed by a
+   * nested `field NAME:type @ offset` block (as in `executionUnit`'s
+   * `modrm` sub-register, which has three nested fields).
+   */
+  public registersSection = this.RULE('registersSection', () => {
+    this.CONSUME(Registers);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+    this.OPTION(() => this.SUBRULE(this.registersBody));
+  });
+
+  public registersBody = this.RULE('registersBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.registerEntry) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  /**
+   * Register entry inside a `registers` block:
+   *
+   *   NAME:type                            // no initial value
+   *   NAME:type = initialValueExpression
+   *   NAME:type = initialValueExpression
+   *     field subName:subType @ offset     // optional nested field block
+   *     field subName:subType @ offset
+   *
+   * The entry consumes its trailing Newline plus any blank Newlines,
+   * then optionally consumes an indented `field ...` block if one
+   * follows. That way the outer `registersBody` MANY doesn't need a
+   * peek for INDENT — the decision lives inside the entry itself.
+   */
+  public registerEntry = this.RULE('registerEntry', () => {
+    this.CONSUME(Identifier);
+    this.CONSUME(Colon);
+    this.SUBRULE(this.typeRef);
+    this.OPTION(() => {
+      this.CONSUME(Equal);
+      this.SUBRULE(this.expression);
+    });
+    this.CONSUME(Newline);
+    this.MANY(() => this.CONSUME2(Newline));
+    this.OPTION2(() => this.SUBRULE(this.registerBody));
+  });
+
+  /**
+   * `default` section — a block of initial-value assignments for the
+   * machine's output wires (record literals, constants, etc.). Reuses
+   * `statementBlock` so any statement form is parseable; semantic
+   * analysis can restrict to assignments only if we want.
+   */
+  public defaultSection = this.RULE('defaultSection', () => {
+    this.CONSUME(Default);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+    this.OPTION(() => this.SUBRULE(this.statementBlock));
   });
 
   /** `<W:Width>` or `<W:Width, T:Type>` — unit/microword type parameters. */
@@ -784,13 +936,30 @@ export class MachineParser extends CstParser {
   });
 
   /**
-   * First-slice type reference: just an identifier. No parameterization
-   * (`Local<8>`), no interpolation (`u{W+1}`), no slice types yet. These
-   * only appear in declaration signatures right now, which for ALU_NEW
-   * are always simple names (`u8`, `u16`, `Width`, `AluOp`, etc.).
+   * Type reference: an identifier, optionally parameterized with an
+   * expression in curly braces — `u{W+1}`, `Local{8}`, `u{W}`. Curly
+   * braces (not angle brackets) are used for use-site type parameters
+   * because expressions inside `<...>` collide with the `<`/`>`
+   * relational operators (same problem that gave us `::<>` turbofish
+   * at call sites). Declaration-site type parameters on units
+   * (`unit alu<W:Width>`) and turbofish call sites
+   * (`alu::<width>(...)`) keep `<...>` — they don't embed
+   * arbitrary expressions, so the collision doesn't arise there.
+   *
+   * typeRef is only called from type positions (cast targets, field
+   * type annotations, register type annotations, return-type
+   * specifications, etc.) so there's no ambiguity with the
+   * expression-level `constructOp` which also consumes `{...}`: those
+   * are in different parse contexts and Chevrotain dispatches them
+   * independently based on which rule is invoked.
    */
   public typeRef = this.RULE('typeRef', () => {
     this.CONSUME(Identifier);
+    this.OPTION(() => {
+      this.CONSUME(LBrace);
+      this.SUBRULE(this.expression);
+      this.CONSUME(RBrace);
+    });
   });
 
   // =========================================================================
@@ -857,7 +1026,11 @@ export class MachineParser extends CstParser {
       { ALT: () => this.SUBRULE(this.wireDeclStmt) },
       { ALT: () => this.SUBRULE(this.ifStmt) },
       { ALT: () => this.SUBRULE(this.assertStmt) },
-      { ALT: () => this.SUBRULE(this.muxStmt) },
+      { ALT: () => this.SUBRULE(this.anonAssignStmt) },
+      // `muxStmt` is intentionally NOT here — it's reachable via
+      // `exprOrAssignStmt → expression → primary → muxStmt`, which
+      // also makes it work as a value-producing form inside wire RHS
+      // expressions like `wire raw = mux op when X: expr when Y: expr`.
       { ALT: () => this.SUBRULE(this.exprOrAssignStmt) },
     ]);
   });
@@ -1077,6 +1250,19 @@ export class MachineParser extends CstParser {
    */
   public assertStmt = this.RULE('assertStmt', () => {
     this.CONSUME(Assert);
+    this.SUBRULE(this.expression);
+  });
+
+  /**
+   * Anonymous output assignment: `= expr`. Used by units with a
+   * single unnamed output (the `*:type` form) like `parity8` — the
+   * bare `= ~(v[0] ^ ...)` line at the end of the unit body assigns
+   * the expression to the unnamed output. At the grammar level it's
+   * just a leading `=` followed by an expression; semantic analysis
+   * binds it to the output declared in `wires out *:type`.
+   */
+  public anonAssignStmt = this.RULE('anonAssignStmt', () => {
+    this.CONSUME(Equal);
     this.SUBRULE(this.expression);
   });
 
@@ -1407,7 +1593,13 @@ export class MachineParser extends CstParser {
   /**
    * Primary expressions — the atoms the rest of the precedence ladder
    * builds on. Numeric and string literals, identifiers, parenthesized
-   * sub-expressions, and record literals.
+   * sub-expressions, record literals, and mux expressions.
+   *
+   * `muxStmt` appears here so it can be used in both statement
+   * contexts (`mux x when 0 ...`) and expression contexts (`wire raw
+   * = mux op when ...`). The arm bodies accept either inline
+   * expressions or indented statement blocks; semantic analysis
+   * decides what's legal in each calling context.
    */
   public primaryExpr = this.RULE('primaryExpr', () => {
     this.OR([
@@ -1417,6 +1609,7 @@ export class MachineParser extends CstParser {
       { ALT: () => this.CONSUME(Identifier) },
       { ALT: () => this.SUBRULE(this.parenExpr) },
       { ALT: () => this.SUBRULE(this.recordLiteral) },
+      { ALT: () => this.SUBRULE(this.muxStmt) },
     ]);
   });
 
@@ -1489,15 +1682,16 @@ export class MachineParser extends CstParser {
       { ALT: () => this.CONSUME(Fetch) },
       { ALT: () => this.CONSUME(Field) },
       { ALT: () => this.CONSUME(Wire) },
+      { ALT: () => this.CONSUME(Wires) },
+      { ALT: () => this.CONSUME(Registers) },
+      { ALT: () => this.CONSUME(Default) },
+      // Soft-keyword section markers (`In`, `Out`, `Id`, `Fields`,
+      // `Ready`, `Effect`, `Entry`, `Allow`, `Modifies`, `References`,
+      // `Micro`) are matched by the `Identifier` alternative above via
+      // the category mechanism; listing them here explicitly would
+      // cause ambiguous-alternative errors in Chevrotain's
+      // self-analysis.
       { ALT: () => this.CONSUME(Description) },
-      { ALT: () => this.CONSUME(Fields) },
-      { ALT: () => this.CONSUME(Ready) },
-      { ALT: () => this.CONSUME(Effect) },
-      { ALT: () => this.CONSUME(Entry) },
-      { ALT: () => this.CONSUME(Allow) },
-      { ALT: () => this.CONSUME(Modifies) },
-      { ALT: () => this.CONSUME(References) },
-      { ALT: () => this.CONSUME(Micro) },
       { ALT: () => this.CONSUME(Mux) },
       { ALT: () => this.CONSUME(When) },
       { ALT: () => this.CONSUME(If) },

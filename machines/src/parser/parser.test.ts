@@ -261,8 +261,8 @@ describe('parser — top-level declaration skeleton', () => {
       const { cst, lexErrors, parseErrors } = parse(readSample('operators.machine'));
       expect(lexErrors).toEqual([]);
       expect(parseErrors).toEqual([]);
-      expect(kinds(cst)).toEqual(['unitDecl']);
-      expect(names(cst)).toEqual(['alu']);
+      expect(kinds(cst)).toEqual(['routineDecl', 'unitDecl', 'machineDecl']);
+      expect(names(cst)).toEqual(['foo', 'alu', 'counter']);
     });
   });
 
@@ -1471,6 +1471,243 @@ describe('parser — top-level declaration skeleton', () => {
       const { cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
       expect(getRoutines(cst!)).toEqual([]);
+    });
+  });
+
+  describe('unit body parsing', () => {
+    it('parses an anonymous single-output unit with a bare `= expr`', () => {
+      const src = [
+        'unit parity8',
+        '  wires in',
+        '    v:u8',
+        '  wires out',
+        '    *:b',
+        '',
+        '  = ~(v[0] ^ v[1])',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['unitDecl']);
+      expect(names(cst)).toEqual(['parity8']);
+    });
+
+    it('parses a unit with both wires in and wires out sections', () => {
+      const src = [
+        'unit aluSelect',
+        '  wires in',
+        '    sel:AluSrc',
+        '    reg:u16',
+        '  wires out',
+        '    *:u16',
+        '',
+        '  mux sel',
+        '    when AluSrc.zero: 0',
+        '    when AluSrc.reg:  reg',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['unitDecl']);
+    });
+
+    it('parses a unit with type parameters and parameterized types', () => {
+      const src = [
+        'unit aluFlags<W:Width>',
+        '  wires in',
+        '    a:u{W}',
+        '    b:u{W}',
+        '    raw:u{W+1}',
+        '  wires out',
+        '    *:Flags',
+        '',
+        '  wire r:u{W} = raw:u{W}',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['unitDecl']);
+    });
+
+    it('parses a unit with mux and multi-statement arms', () => {
+      const src = [
+        'unit flagCompute',
+        '  wires in',
+        '    op:AluOp',
+        '    raw:u8',
+        '  wires out',
+        '    *:Flags',
+        '',
+        '  mux op',
+        '    when AluOp.add',
+        '      cf = raw[7]',
+        '      af = raw[3]',
+        '    else',
+        '      cf = 0',
+        '      af = 0',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('parses a unit with an empty body', () => {
+      const { cst, parseErrors } = parse('unit empty\n');
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['unitDecl']);
+    });
+
+    it('does not treat routine or machine decls as units', () => {
+      const src = [
+        'routine foo',
+        '  entry: 0x00',
+        '',
+        'machine bar',
+        '  wires in',
+        '    x:b',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['routineDecl', 'machineDecl']);
+    });
+  });
+
+  describe('machine body parsing', () => {
+    it('parses a machine with id, description, registers, wires, default', () => {
+      const src = [
+        'machine cpu',
+        '  id i286',
+        '  description',
+        '    A tiny CPU.',
+        '',
+        '  registers',
+        '    state:ExecuteState = ExecuteState.fetch',
+        '    microPc:u8 = 0',
+        '',
+        '  wires in',
+        '    prefetch:PrefetchOut',
+        '',
+        '  wires out',
+        '    prefetchControl:PrefetchControl',
+        '',
+        '  default',
+        '    prefetchControl = { pop: 0 }',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['machineDecl']);
+      expect(names(cst)).toEqual(['cpu']);
+    });
+
+    it('parses a machine with a register that has nested field decls', () => {
+      const src = [
+        'machine cpu',
+        '  registers',
+        '    modrm:u8 = 0',
+        '      field mod:u2 @ 6',
+        '      field reg:u3 @ 3',
+        '      field rm:u3 @ 0',
+        '    state:u8 = 0',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['machineDecl']);
+    });
+
+    it('parses a machine with assert and if/else statement bodies', () => {
+      const src = [
+        'machine cpu',
+        '  wires in',
+        '    valid:b',
+        '    pop:b',
+        '  wires out',
+        '    ack:b',
+        '',
+        '  assert !(pop && !valid)',
+        '',
+        '  if valid',
+        '    ack = 1',
+        '  else',
+        '    ack = 0',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['machineDecl']);
+    });
+
+    it('parses a machine with a top-level mux', () => {
+      const src = [
+        'machine cpu',
+        '  registers',
+        '    state:u8 = 0',
+        '',
+        '  mux state',
+        '    when 0',
+        '      state <- 1',
+        '    when 1',
+        '      state <- 2',
+        '    else',
+        '      state <- 0',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('parses a machine with an empty body', () => {
+      const { cst, parseErrors } = parse('machine cpu\n');
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['machineDecl']);
+    });
+
+    it('parses the full units-and-machines sample file', () => {
+      const { cst, lexErrors, parseErrors } = parse(
+        readSample('units-and-machines.machine'),
+      );
+      expect(lexErrors).toEqual([]);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual([
+        'unitDecl',
+        'unitDecl',
+        'unitDecl',
+        'machineDecl',
+      ]);
+      expect(names(cst)).toEqual([
+        'parity8',
+        'aluSelect',
+        'aluFlags',
+        'executionUnit',
+      ]);
+    });
+
+    it('parses the real core/ALU_NEW.machine file end to end', () => {
+      // The acid test: can the parser consume the full hand-written
+      // i286 design doc from core/ALU_NEW.machine without any lex or
+      // parse errors? Every declaration kind, every section marker,
+      // every expression form, and the full statement grammar get
+      // exercised by this file.
+      const aluPath = new URL(
+        '../../../core/ALU_NEW.machine',
+        import.meta.url,
+      );
+      const src = readFileSync(aluPath, 'utf-8');
+      const { cst, lexErrors, parseErrors } = parse(src);
+      expect(lexErrors).toEqual([]);
+      expect(parseErrors).toEqual([]);
+      expect(cst).toBeDefined();
+      // Spot-check that the expected top-level declarations are all
+      // present in source order. If the count or names drift because
+      // the file was edited, this test will flag it.
+      const decls = getDeclarations(cst!);
+      expect(decls.length).toBeGreaterThan(40);
+      expect(decls.map((d) => d.name)).toContain('addRmReg8');
+      expect(decls.map((d) => d.name)).toContain('executionUnit');
+      expect(decls.map((d) => d.name)).toContain('aluFlags');
+      expect(decls.map((d) => d.name)).toContain('prefetcher');
     });
   });
 

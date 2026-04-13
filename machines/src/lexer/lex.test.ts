@@ -296,6 +296,9 @@ describe('lexer — sample files', () => {
     expect(n).toContain('NotEqual');
     expect(n).toContain('Arrow');
     expect(n).toContain('BackArrow');
-    expect(n).toContain('DotDot');
+    // DotDot is a separate lex test — `..` isn't a binary expression
+    // operator in the grammar yet, so it can't appear in
+    // operators.machine (which the parser now fully parses). Range
+    // expressions are a future slice.
   });
 });

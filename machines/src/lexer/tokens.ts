@@ -24,6 +24,24 @@ export const Comment = createToken({
   group: Lexer.SKIPPED,
 });
 
+/**
+ * Prose trivia — punctuation characters that only appear in
+ * `description` block prose (backticks for inline code, em/en dashes,
+ * curly quotes). They aren't part of the grammar but they also
+ * shouldn't fail the lexer. Grouped as skipped so the parser never
+ * sees them.
+ */
+export const ProseTrivia = createToken({
+  name: 'ProseTrivia',
+  // U+0027 ASCII apostrophe (e.g. "prefetcher's"),
+  // U+0060 backtick (inline code in prose),
+  // U+2013 en dash, U+2014 em dash,
+  // U+2018/U+2019 curly single quotes, U+201C/U+201D curly doubles,
+  // U+2026 ellipsis.
+  pattern: /['`\u2013\u2014\u2018\u2019\u201C\u201D\u2026]+/,
+  group: Lexer.SKIPPED,
+});
+
 /** End-of-line. NOT skipped — the indent processor needs line boundaries. */
 export const Newline = createToken({
   name: 'Newline',
@@ -69,6 +87,11 @@ function keyword(name: string, lexeme: string): TokenType {
 export const Unit = keyword('Unit', 'unit');
 export const Machine = keyword('Machine', 'machine');
 export const Register = keyword('Register', 'register');
+// `Registers` is the plural section marker used inside machine bodies
+// (a block of per-register declarations). Declared here so both live
+// in the same place, but must be listed before `Register` in
+// `allTokens` for the longest-prefix lexer rule.
+export const Registers = keyword('Registers', 'registers');
 export const Enum = keyword('Enum', 'enum');
 export const Bundle = keyword('Bundle', 'bundle');
 export const Union = keyword('Union', 'union');
@@ -83,19 +106,67 @@ export const Fetch = keyword('Fetch', 'fetch');
 // Block-level keywords used inside declaration bodies.
 export const Field = keyword('Field', 'field');
 export const Wire = keyword('Wire', 'wire');
+// `Wires` is the plural section marker (`wires in`, `wires out`).
+// Must be listed before `Wire` in `allTokens` for longest-prefix match.
+export const Wires = keyword('Wires', 'wires');
+export const Default = keyword('Default', 'default');
+
+/**
+ * `In`, `Out`, and `Id` are soft keywords — they mark specific
+ * grammar positions (`wires in`, `wires out`, `id NAME`) but are
+ * common short words that users naturally use as identifiers
+ * (`out.empty`, `control.in`, a field named `id`, and so on).
+ * Categorizing them under `Identifier` lets parser rules that do
+ * `CONSUME(Identifier)` accept them transparently in
+ * identifier-position contexts, while the grammar rules that need
+ * the specific keyword (`CONSUME(In)`, etc.) still dispatch on them
+ * unambiguously.
+ */
+export const In = createToken({
+  name: 'In',
+  pattern: /in/,
+  longer_alt: Identifier,
+  categories: Identifier,
+});
+export const Out = createToken({
+  name: 'Out',
+  pattern: /out/,
+  longer_alt: Identifier,
+  categories: Identifier,
+});
+export const Id = createToken({
+  name: 'Id',
+  pattern: /id/,
+  longer_alt: Identifier,
+  categories: Identifier,
+});
 
 // Section markers used inside microword / operand / routine bodies.
-// Reserved globally by the lexer; meaningful only in the contexts the
-// grammar places them.
+// `Description` is a hard keyword because machineBody's section
+// dispatch would collide with the `statement` alternative if it were
+// categorized as Identifier. The others are soft keywords — they
+// dispatch to specific sections via `CONSUME(Fields)` /
+// `CONSUME(Ready)` / etc. while also acting as identifiers when used
+// as bundle field names, enum variants, member accesses, etc.
 export const Description = keyword('Description', 'description');
-export const Fields = keyword('Fields', 'fields');
-export const Ready = keyword('Ready', 'ready');
-export const Effect = keyword('Effect', 'effect');
-export const Entry = keyword('Entry', 'entry');
-export const Allow = keyword('Allow', 'allow');
-export const Modifies = keyword('Modifies', 'modifies');
-export const References = keyword('References', 'references');
-export const Micro = keyword('Micro', 'micro');
+
+function softKeyword(name: string, lexeme: string) {
+  return createToken({
+    name,
+    pattern: new RegExp(lexeme),
+    longer_alt: Identifier,
+    categories: Identifier,
+  });
+}
+
+export const Fields = softKeyword('Fields', 'fields');
+export const Ready = softKeyword('Ready', 'ready');
+export const Effect = softKeyword('Effect', 'effect');
+export const Entry = softKeyword('Entry', 'entry');
+export const Allow = softKeyword('Allow', 'allow');
+export const Modifies = softKeyword('Modifies', 'modifies');
+export const References = softKeyword('References', 'references');
+export const Micro = softKeyword('Micro', 'micro');
 
 /**
  * `Size` is a soft keyword — it marks the `size:` section inside an operand
@@ -225,6 +296,7 @@ export const allTokens: TokenType[] = [
   // Trivia and newlines.
   Comment,
   Spaces,
+  ProseTrivia,
   Newline,
 
   // Synthetic indent tokens (Lexer.NA pattern, never matched by the raw
@@ -240,6 +312,9 @@ export const allTokens: TokenType[] = [
   // Keywords (longer_alt on each defers to Identifier for `unitX`-like words).
   Unit,
   Machine,
+  // `Registers` must come before `Register` so the lexer matches the
+  // longer keyword first.
+  Registers,
   Register,
   Enum,
   Bundle,
@@ -253,7 +328,13 @@ export const allTokens: TokenType[] = [
   // keyword first — Chevrotain uses list order to break prefix ties.
   Fields,
   Field,
+  // Same story: `Wires` before `Wire`.
+  Wires,
   Wire,
+  In,
+  Out,
+  Default,
+  Id,
   Description,
   Ready,
   Effect,

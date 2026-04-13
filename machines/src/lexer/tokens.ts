@@ -156,7 +156,6 @@ export const DoubleColon = createToken({
   name: 'DoubleColon',
   pattern: /::/,
 });
-export const ColonEqual = createToken({ name: 'ColonEqual', pattern: /:=/ });
 export const EqualEqual = createToken({ name: 'EqualEqual', pattern: /==/ });
 export const NotEqual = createToken({ name: 'NotEqual', pattern: /!=/ });
 export const LessEqual = createToken({ name: 'LessEqual', pattern: /<=/ });
@@ -283,7 +282,6 @@ export const allTokens: TokenType[] = [
   // `DoubleColon` must come before `TightColon` / `Colon` so the lexer
   // matches `::` as one token rather than two single colons.
   DoubleColon,
-  ColonEqual,
   EqualEqual,
   NotEqual,
   LessEqual,

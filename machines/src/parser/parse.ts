@@ -72,6 +72,29 @@ export function parseExpression(source: string): ParseResult {
   };
 }
 
+/**
+ * Parse a bare statement (no surrounding declaration context). Used
+ * by statement grammar tests. Like `parseExpression`, the source
+ * should contain exactly one statement.
+ */
+export function parseStatement(source: string): ParseResult {
+  const lexResult = lex(source);
+  if (lexResult.errors.length > 0) {
+    return {
+      cst: undefined,
+      lexErrors: lexResult.errors,
+      parseErrors: [],
+    };
+  }
+  machineParser.input = lexResult.tokens;
+  const cst = machineParser.statement();
+  return {
+    cst,
+    lexErrors: [],
+    parseErrors: machineParser.errors,
+  };
+}
+
 /** The nine top-level declaration kinds recognized by the skeleton parser. */
 export type DeclarationKind =
   | 'registerDecl'

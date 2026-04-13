@@ -149,8 +149,10 @@ function toSexp(node: CstElement): string {
       return '?';
     }
 
-    case 'parenExpr':
-      return toSexp(firstChild(node, 'expression'));
+    case 'parenExpr': {
+      const inner = firstChildOrUndefined(node, 'expression');
+      return inner ? toSexp(inner) : '()';
+    }
 
     case 'recordLiteral': {
       const fields = asCstNodes(node.children['recordField']).map(toSexp);

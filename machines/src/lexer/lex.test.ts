@@ -90,12 +90,11 @@ describe('lexer — basic tokenization', () => {
   });
 
   it('lexes multi-char operators as single tokens', () => {
-    const { tokens, errors } = lex('-> <- := == != <= >= && || << >> ..');
+    const { tokens, errors } = lex('-> <- == != <= >= && || << >> ..');
     expect(errors).toEqual([]);
     expect(names(tokens)).toEqual([
       'Arrow',
       'BackArrow',
-      'ColonEqual',
       'EqualEqual',
       'NotEqual',
       'LessEqual',
@@ -293,7 +292,6 @@ describe('lexer — sample files', () => {
     const { tokens, errors } = lex(readSample('operators.machine'));
     expect(errors).toEqual([]);
     const n = names(tokens);
-    expect(n).toContain('ColonEqual');
     expect(n).toContain('EqualEqual');
     expect(n).toContain('NotEqual');
     expect(n).toContain('Arrow');

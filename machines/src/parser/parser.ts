@@ -6,21 +6,28 @@
 //     operand, unit, machine, routine. Every declaration's name and
 //     signature is captured. Declaration-body coverage varies:
 //
-//       - enum, bundle, union, register, microword, operand        full body
-//       - unit, machine, routine                                    opaque body
+//       - enum, bundle, union, register, microword, operand,
+//         routine (all metadata sections, incl. `micro`)            full body
+//       - unit, machine                                             opaque body
 //
 //   * A full C-family expression grammar (literals, identifiers,
-//     member/call/index/cast postfix ops, unary ops, binary ops with
-//     standard precedence, record literals) — see the "Expression
+//     member/call/index/cast/constructor postfix ops, unary ops,
+//     binary ops with standard precedence, ternary, record literals,
+//     turbofish type-parameterized calls) — see the "Expression
 //     grammar" section further down.
+//
+//   * A statement grammar covering `call` / `fetch` directives, `mux`
+//     statements with when/else arms, and bare expression statements
+//     (used for microword record-literal construction). This unlocks
+//     routine `micro` bodies and operand `fetch` bodies as real CSTs.
 //
 // Not yet covered, still consumed opaquely via the generic `block`
 // skipper when they appear inside a body:
 //
-//   * Statement grammar for `effect` blocks (inside microwords) and
-//     `fetch` blocks (inside operands).
+//   * Assignments (`lhs = expr`, `lhs <- expr`) and wire declarations.
+//   * If / elif / else conditionals.
+//   * Microword `effect` blocks (need assignments).
 //   * Unit and machine bodies (wires, registers, mux/when/if, etc.).
-//   * Routine bodies (entry, allow, modifies, semantic, micro).
 //
 // See the comment blocks above individual rules for per-rule details.
 
@@ -69,7 +76,6 @@ import {
   Arrow,
   BackArrow,
   DoubleColon,
-  ColonEqual,
   EqualEqual,
   NotEqual,
   LessEqual,
@@ -524,16 +530,14 @@ export class MachineParser extends CstParser {
 
   /**
    * A `fetch` section — the block of microword record literals that
-   * pull the operand's bytes out of the instruction stream. The inner
-   * block is still consumed opaquely via the general `block` skipper
-   * until statement grammar lands; the expression grammar (including
-   * record literals) is already in place, so the only missing piece is
-   * the statement-level rule that strings them together.
+   * pull the operand's bytes out of the instruction stream. Parses
+   * via the statement grammar, so each line is a `statement` (usually
+   * a bare microword construction like `IStreamRead { dest: modrm }`).
    */
   public fetchSection = this.RULE('fetchSection', () => {
     this.CONSUME(Fetch);
     this.AT_LEAST_ONE(() => this.CONSUME(Newline));
-    this.OPTION(() => this.SUBRULE(this.block));
+    this.OPTION(() => this.SUBRULE(this.statementBlock));
   });
 
   public routineDecl = this.RULE('routineDecl', () => {
@@ -675,14 +679,13 @@ export class MachineParser extends CstParser {
 
   /**
    * `micro` section: the statement block containing `call`, `fetch`,
-   * and microword record literals that make up the routine's
-   * execution. The inner block is still consumed opaquely via `block`
-   * until statement grammar lands.
+   * `mux`, and microword record literals that make up the routine's
+   * execution. Parses via the statement grammar.
    */
   public microSection = this.RULE('microSection', () => {
     this.CONSUME(Micro);
     this.AT_LEAST_ONE(() => this.CONSUME(Newline));
-    this.OPTION(() => this.SUBRULE(this.block));
+    this.OPTION(() => this.SUBRULE(this.statementBlock));
   });
 
   // =========================================================================
@@ -806,6 +809,182 @@ export class MachineParser extends CstParser {
       ]);
     });
     this.CONSUME(Outdent);
+  });
+
+  // =========================================================================
+  // Statement grammar
+  //
+  // Statements appear inside routine `micro` blocks, operand `fetch`
+  // blocks, and (once expression-only statements extend to assignments)
+  // microword `effect` blocks and unit / machine bodies. The supported
+  // forms today are:
+  //
+  //   callStmt      `call NAME(args) -> dest`
+  //   fetchStmt     `fetch NAME`
+  //   muxStmt       `mux EXPR\n  when V ...\n  when V ...\n  else ...`
+  //   bareExprStmt  any expression (typically a microword record literal
+  //                 like `AluMicro { ... }` via the constructOp postfix)
+  //
+  // Deferred to the next statement slice:
+  //   assignments (`lhs = expr`, `lhs <- expr`)
+  //   wire declarations (`wire name = expr`)
+  //   if / elif / else
+  //   assert
+  //
+  // `statementBlock` is the shared indented block used by routine
+  // micro, operand fetch, and mux arm bodies. It's a MANY over
+  // `(Newline | statement)` so blank and comment-only lines between
+  // statements are absorbed naturally.
+  // =========================================================================
+
+  public statement = this.RULE('statement', () => {
+    this.OR([
+      { ALT: () => this.SUBRULE(this.callStmt) },
+      { ALT: () => this.SUBRULE(this.fetchStmt) },
+      { ALT: () => this.SUBRULE(this.muxStmt) },
+      { ALT: () => this.SUBRULE(this.bareExprStmt) },
+    ]);
+  });
+
+  /**
+   * Indented block of statements, shared by routine micro sections,
+   * operand fetch sections, and mux arm bodies. Newlines between
+   * statements (and blank lines) are consumed by the inner OR.
+   */
+  public statementBlock = this.RULE('statementBlock', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.statement) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  /**
+   * Routine call directive: `call NAME(args) -> dest`. The call target
+   * is parsed as a full expression so the function-call syntax
+   * (`eaCalc(ModRM.mod, ModRM.rm)`) is handled by the existing
+   * postfixExpr grammar. Argumentless calls like `call fetchModRm`
+   * parse as `call <Identifier>` with no callOp.
+   *
+   * The optional `-> dest` clause captures the routine's return value
+   * into a target. A target is either a single identifier (`-> ea`)
+   * or a parenthesized tuple (`-> (a, b)`).
+   */
+  public callStmt = this.RULE('callStmt', () => {
+    this.CONSUME(Call);
+    this.SUBRULE(this.expression);
+    this.OPTION(() => {
+      this.CONSUME(Arrow);
+      this.SUBRULE(this.callReturnTarget);
+    });
+  });
+
+  public callReturnTarget = this.RULE('callReturnTarget', () => {
+    this.OR([
+      { ALT: () => this.CONSUME(Identifier) },
+      {
+        ALT: () => {
+          this.CONSUME(LParen);
+          this.OPTION(() => {
+            this.CONSUME2(Identifier);
+            this.MANY(() => {
+              this.CONSUME(Comma);
+              this.CONSUME3(Identifier);
+            });
+          });
+          this.CONSUME(RParen);
+        },
+      },
+    ]);
+  });
+
+  /**
+   * Operand fetch directive: `fetch NAME`. Inlines the named operand's
+   * fetch block at the inliner level. No arguments, no return binding.
+   */
+  public fetchStmt = this.RULE('fetchStmt', () => {
+    this.CONSUME(Fetch);
+    this.CONSUME(Identifier);
+  });
+
+  /**
+   * Mux (switch-like) statement:
+   *
+   *   mux EXPR
+   *     when PATTERN ...
+   *     when PATTERN ...
+   *     else ...
+   *
+   * Each arm's body is either an inline `: statement` form or a block
+   * form with indented statements. Arms can appear in any order; the
+   * `else` arm is optional (and typically last).
+   */
+  public muxStmt = this.RULE('muxStmt', () => {
+    this.CONSUME(Mux);
+    this.SUBRULE(this.expression);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+    this.CONSUME(Indent);
+    // Inside the mux body, accept newlines (blank or end-of-arm
+    // terminators) interleaved with `when` / `else` arms. Block arms
+    // don't leave a trailing Newline at this level (their
+    // statementBlock consumes up to Outdent), but inline arms like
+    // `when 0: ()` do leave a Newline, and that Newline needs to be
+    // absorbed here before the next arm can fire.
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME2(Newline) },
+        { ALT: () => this.SUBRULE(this.muxArm) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  public muxArm = this.RULE('muxArm', () => {
+    this.OR([
+      { ALT: () => this.SUBRULE(this.whenArm) },
+      { ALT: () => this.SUBRULE(this.elseArm) },
+    ]);
+  });
+
+  public whenArm = this.RULE('whenArm', () => {
+    this.CONSUME(When);
+    this.SUBRULE(this.expression);
+    this.SUBRULE(this.muxArmBody);
+  });
+
+  public elseArm = this.RULE('elseArm', () => {
+    this.CONSUME(Else);
+    this.SUBRULE(this.muxArmBody);
+  });
+
+  public muxArmBody = this.RULE('muxArmBody', () => {
+    this.OR([
+      {
+        ALT: () => {
+          this.CONSUME(Colon);
+          this.SUBRULE(this.statement);
+        },
+      },
+      {
+        ALT: () => {
+          this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+          this.SUBRULE(this.statementBlock);
+        },
+      },
+    ]);
+  });
+
+  /**
+   * Bare expression statement — any expression standing alone as a
+   * statement. The most common cases are microword constructions like
+   * `AluMicro { op: add, width: u8 }` and `Retire {}`, which parse as
+   * an identifier followed by a `constructOp` postfix op.
+   */
+  public bareExprStmt = this.RULE('bareExprStmt', () => {
+    this.SUBRULE(this.expression);
   });
 
   // =========================================================================
@@ -988,8 +1167,9 @@ export class MachineParser extends CstParser {
 
   /**
    * Postfix operator chain: member access, function call, index/slice,
-   * and cast. All left-associative and freely composable — `a.b[3]():u8`
-   * is four postfix ops applied in order.
+   * cast, and constructor (record literal after an identifier). All
+   * left-associative and freely composable — `a.b[3]():u8` is four
+   * postfix ops applied in order.
    *
    * Cast specifically consumes `TightColon`, not `Colon`, so a ternary
    * separator (which is always loose `Colon`) can't be mistaken for a
@@ -998,6 +1178,11 @@ export class MachineParser extends CstParser {
    * Function calls support an optional Rust-style turbofish type-arg
    * prefix: `f::<T>(...)`. The bare form `f<T>(...)` is not accepted —
    * the `::` disambiguates from a `<` comparison. See `callOp` below.
+   *
+   * The `constructOp` (`Name { field: value, ... }`) is how microword
+   * construction like `AluMicro { op: add, width: u8 }` parses as a
+   * single expression rather than an identifier followed by a bare
+   * record literal on the same line.
    */
   public postfixExpr = this.RULE('postfixExpr', () => {
     this.SUBRULE(this.primaryExpr);
@@ -1015,6 +1200,7 @@ export class MachineParser extends CstParser {
         if (tokenMatcher(la1, LParen)) return true;
         if (tokenMatcher(la1, DoubleColon)) return true;
         if (tokenMatcher(la1, LBracket)) return true;
+        if (tokenMatcher(la1, LBrace)) return true;
         if (tokenMatcher(la1, TightColon)) {
           return tokenMatcher(this.LA(2), Identifier);
         }
@@ -1026,6 +1212,7 @@ export class MachineParser extends CstParser {
           { ALT: () => this.SUBRULE3(this.callOp) },
           { ALT: () => this.SUBRULE4(this.indexOp) },
           { ALT: () => this.SUBRULE5(this.castOp) },
+          { ALT: () => this.SUBRULE6(this.constructOp) },
         ]);
       },
     });
@@ -1096,6 +1283,24 @@ export class MachineParser extends CstParser {
   });
 
   /**
+   * Constructor / record-literal postfix: `Name { field: value, ... }`.
+   * Structurally identical to the primary-form `recordLiteral` but
+   * attached as a postfix op so `Name { ... }` parses as one
+   * expression rather than `Name` followed by a bare `{ ... }`.
+   */
+  public constructOp = this.RULE('constructOp', () => {
+    this.CONSUME(LBrace);
+    this.OPTION(() => {
+      this.SUBRULE(this.recordField);
+      this.MANY(() => {
+        this.CONSUME(Comma);
+        this.SUBRULE2(this.recordField);
+      });
+    });
+    this.CONSUME(RBrace);
+  });
+
+  /**
    * Primary expressions — the atoms the rest of the precedence ladder
    * builds on. Numeric and string literals, identifiers, parenthesized
    * sub-expressions, and record literals.
@@ -1111,9 +1316,15 @@ export class MachineParser extends CstParser {
     ]);
   });
 
+  /**
+   * Parenthesized expression, possibly empty. Empty parens `()` parse
+   * as a "unit value" — semantically a no-op in contexts like
+   * `when 0: ()` where an empty statement is needed. Semantic
+   * analysis can restrict empty parens to those specific positions.
+   */
   public parenExpr = this.RULE('parenExpr', () => {
     this.CONSUME(LParen);
-    this.SUBRULE(this.expression);
+    this.OPTION(() => this.SUBRULE(this.expression));
     this.CONSUME(RParen);
   });
 
@@ -1191,7 +1402,6 @@ export class MachineParser extends CstParser {
       // Multi-char operators
       { ALT: () => this.CONSUME(Arrow) },
       { ALT: () => this.CONSUME(BackArrow) },
-      { ALT: () => this.CONSUME(ColonEqual) },
       { ALT: () => this.CONSUME(EqualEqual) },
       { ALT: () => this.CONSUME(NotEqual) },
       { ALT: () => this.CONSUME(LessEqual) },

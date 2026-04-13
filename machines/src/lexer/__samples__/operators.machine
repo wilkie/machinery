@@ -13,10 +13,10 @@ unit alu
   flags <- aluFlags(a, b, raw)
   result <- raw:u16
 
-  ; Arrow, BackArrow, ColonEqual, EqualEqual, NotEqual, range, etc.
+  ; Arrow, BackArrow, EqualEqual, NotEqual, range, etc.
   ; These are all in expression position; the parser decides shape.
-  wire tmp := a == b
-  wire neq := a != b
-  wire r1 := a -> b
-  wire r2 := a <- b
-  wire r3 := 0xB0..0xB7
+  wire tmp = a == b
+  wire neq = a != b
+  wire r1 = a -> b
+  wire r2 = a <- b
+  wire r3 = 0xB0..0xB7

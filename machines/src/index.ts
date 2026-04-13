@@ -16,6 +16,7 @@ export * as tokens from './lexer/tokens.js';
 export {
   parse,
   parseExpression,
+  parseStatement,
   getDeclarations,
   getEnums,
   getBundles,

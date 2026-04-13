@@ -16,8 +16,10 @@ export * as tokens from './lexer/tokens.js';
 export {
   parse,
   getDeclarations,
+  getEnums,
   type ParseResult,
   type TopLevelDecl,
   type DeclarationKind,
+  type EnumInfo,
 } from './parser/parse.js';
 export { MachineParser, machineParser } from './parser/parser.js';

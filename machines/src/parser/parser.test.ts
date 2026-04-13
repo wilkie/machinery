@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { parse, getDeclarations } from './parse.js';
+import { parse, getDeclarations, getEnums } from './parse.js';
 
 const readSample = (name: string): string =>
   readFileSync(new URL(`../lexer/__samples__/${name}`, import.meta.url), 'utf-8');
@@ -248,6 +248,116 @@ describe('parser — top-level declaration skeleton', () => {
       expect(parseErrors).toEqual([]);
       expect(kinds(cst)).toEqual(['unitDecl']);
       expect(names(cst)).toEqual(['alu']);
+    });
+  });
+
+  describe('enum body parsing', () => {
+    it('captures variant names in an enum declaration', () => {
+      const { cst, parseErrors } = parse('enum Foo\n  a\n  b\n  c\n');
+      expect(parseErrors).toEqual([]);
+      expect(cst).toBeDefined();
+      expect(getEnums(cst!)).toEqual([
+        { name: 'Foo', variants: ['a', 'b', 'c'] },
+      ]);
+    });
+
+    it('handles a single-variant enum', () => {
+      const { cst, parseErrors } = parse('enum Solo\n  only\n');
+      expect(parseErrors).toEqual([]);
+      expect(getEnums(cst!)).toEqual([{ name: 'Solo', variants: ['only'] }]);
+    });
+
+    it('handles an enum with no body', () => {
+      const { cst, parseErrors } = parse('enum Foo\n');
+      expect(parseErrors).toEqual([]);
+      expect(getEnums(cst!)).toEqual([{ name: 'Foo', variants: [] }]);
+    });
+
+    it('handles an enum declared at EOF with no trailing newline', () => {
+      const { cst, parseErrors } = parse('enum Foo\n  a\n  b');
+      expect(parseErrors).toEqual([]);
+      expect(getEnums(cst!)).toEqual([
+        { name: 'Foo', variants: ['a', 'b'] },
+      ]);
+    });
+
+    it('tolerates blank lines between variants', () => {
+      const src = ['enum Foo', '  a', '', '  b', '', '  c', ''].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getEnums(cst!)[0]!.variants).toEqual(['a', 'b', 'c']);
+    });
+
+    it('tolerates comments interleaved with variants', () => {
+      const src = [
+        'enum Foo',
+        '  ; first',
+        '  a',
+        '  ; second',
+        '  b',
+        '  ; third',
+        '  c',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getEnums(cst!)[0]!.variants).toEqual(['a', 'b', 'c']);
+    });
+
+    it('captures multiple enums in the same file in source order', () => {
+      const src = [
+        'enum Width',
+        '  u8',
+        '  u16',
+        '',
+        'enum AluOp',
+        '  add',
+        '  or',
+        '  xor',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getEnums(cst!)).toEqual([
+        { name: 'Width', variants: ['u8', 'u16'] },
+        { name: 'AluOp', variants: ['add', 'or', 'xor'] },
+      ]);
+    });
+
+    it('captures Foo\'s variants from minimal.machine', () => {
+      const { cst, parseErrors } = parse(readSample('minimal.machine'));
+      expect(parseErrors).toEqual([]);
+      expect(getEnums(cst!)).toEqual([
+        { name: 'Foo', variants: ['a', 'b', 'c'] },
+      ]);
+    });
+
+    it('parses every enum shape from enums.machine', () => {
+      const { cst, parseErrors } = parse(readSample('enums.machine'));
+      expect(parseErrors).toEqual([]);
+      expect(getEnums(cst!)).toEqual([
+        { name: 'Width', variants: ['u8', 'u16'] },
+        {
+          name: 'AluOp',
+          variants: ['add', 'or', 'adc', 'sbb', 'and', 'sub', 'xor', 'passA'],
+        },
+        { name: 'Commit', variants: ['onIssue', 'onRetire', 'never'] },
+        { name: 'Solo', variants: ['only'] },
+      ]);
+    });
+
+    it('does not treat register or routine decls as enums', () => {
+      const src = [
+        'register AX:u16',
+        '  field AL:u8 @ 0',
+        '',
+        'routine foo',
+        '  bar',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getEnums(cst!)).toEqual([]);
     });
   });
 

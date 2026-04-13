@@ -131,7 +131,35 @@ export class MachineParser extends CstParser {
   public enumDecl = this.RULE('enumDecl', () => {
     this.CONSUME(Enum);
     this.CONSUME(Identifier);
-    this.OPTION(() => this.SUBRULE(this.headerTerminator));
+    this.OPTION(() => {
+      // A declaration's header line ends with a Newline. Blank or
+      // comment-only lines between the header and the body appear as
+      // additional Newline tokens (the lexer skips the comment body),
+      // so we have to consume 1+ Newlines before looking for INDENT.
+      this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+      this.OPTION1(() => this.SUBRULE(this.enumBody));
+    });
+  });
+
+  /**
+   * Indented body of an enum: a sequence of identifier variants, one per
+   * line. Blank lines and comment-only lines between variants are
+   * tolerated (comments are stripped by the lexer; blank lines appear as
+   * Newline tokens that the inner OR consumes without producing a variant).
+   */
+  public enumBody = this.RULE('enumBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.enumVariant) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  public enumVariant = this.RULE('enumVariant', () => {
+    this.CONSUME(Identifier);
   });
 
   public bundleDecl = this.RULE('bundleDecl', () => {
@@ -185,15 +213,21 @@ export class MachineParser extends CstParser {
 
   /**
    * After a declaration header, the source can end in three ways:
-   *   1. Newline + INDENT block  → declaration with a body
-   *   2. Newline only            → one-liner, next declaration follows
-   *   3. EOF                     → last declaration has no trailing newline
+   *   1. Newline(+) + INDENT block  → declaration with a body
+   *   2. Newline(+) only            → one-liner, next declaration follows
+   *   3. EOF                        → last declaration has no trailing newline
    *
    * This rule handles cases 1 and 2 — the OPTION wrapper on each callsite
    * handles case 3 by not entering this rule at all.
+   *
+   * The `AT_LEAST_ONE` on Newlines covers the case where blank lines or
+   * comment-only lines sit between the header and the body: each such
+   * line produces a Newline token in the stream (the lexer strips the
+   * comment body and horizontal whitespace), so we may see several in a
+   * row before the block's INDENT arrives.
    */
   public headerTerminator = this.RULE('headerTerminator', () => {
-    this.CONSUME(Newline);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
     this.OPTION(() => this.SUBRULE(this.block));
   });
 

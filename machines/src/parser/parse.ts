@@ -79,9 +79,9 @@ const DECLARATION_KINDS: readonly DeclarationKind[] = [
  * source order. Each entry is the kind (which top-level grammar rule
  * matched) and the declared name.
  *
- * The skeleton parser only captures kind and name; richer metadata
- * (parameters, return types, bodies) requires real body grammars which
- * haven't landed yet.
+ * The skeleton parser captures kind and name for every declaration;
+ * richer per-construct information (enum variants, register fields,
+ * routine bodies) comes from dedicated accessors like `getEnums`.
  */
 export function getDeclarations(file: CstNode): TopLevelDecl[] {
   const result: TopLevelDecl[] = [];
@@ -97,6 +97,39 @@ export function getDeclarations(file: CstNode): TopLevelDecl[] {
       if (!nameToken) continue;
       result.push({ kind, name: nameToken.image });
       break;
+    }
+  }
+  return result;
+}
+
+export interface EnumInfo {
+  name: string;
+  variants: string[];
+}
+
+/**
+ * Walk a `file` CST and return every enum declaration as a plain data
+ * object, with the enum's name and its variants in source order. Enums
+ * without a body are reported with an empty variants list.
+ */
+export function getEnums(file: CstNode): EnumInfo[] {
+  const result: EnumInfo[] = [];
+  const declNodes = asCstNodes(file.children['declaration']);
+  for (const decl of declNodes) {
+    const enumDecls = asCstNodes(decl.children['enumDecl']);
+    for (const enumDecl of enumDecls) {
+      const nameToken = asTokens(enumDecl.children['Identifier'])[0];
+      if (!nameToken) continue;
+      const variants: string[] = [];
+      const body = asCstNodes(enumDecl.children['enumBody'])[0];
+      if (body) {
+        const variantNodes = asCstNodes(body.children['enumVariant']);
+        for (const v of variantNodes) {
+          const variantToken = asTokens(v.children['Identifier'])[0];
+          if (variantToken) variants.push(variantToken.image);
+        }
+      }
+      result.push({ name: nameToken.image, variants });
     }
   }
   return result;

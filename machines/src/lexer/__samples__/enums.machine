@@ -1,0 +1,29 @@
+; Multiple enum declarations covering the shapes that appear in
+; ALU_NEW.machine — simple two-variant enums, long variant lists,
+; single-variant enums, and enums with interleaved comments.
+
+enum Width
+  u8
+  u16
+
+enum AluOp
+  add
+  or
+  adc
+  sbb
+  and
+  sub
+  xor
+  passA
+
+enum Commit
+  ; The write is visible immediately, cannot be rolled back (bus write, etc).
+  onIssue
+  ; The write is staged and commits when the routine retires successfully.
+  onRetire
+  ; Purely scratch; never architecturally visible.
+  never
+
+; Single-variant enum
+enum Solo
+  only

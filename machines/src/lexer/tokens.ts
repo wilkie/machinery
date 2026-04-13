@@ -120,6 +120,23 @@ export const Wires = keyword('Wires', 'wires');
 export const Default = keyword('Default', 'default');
 
 /**
+ * `rom` is the section marker for read-only build-time-populated
+ * arrays inside a machine body. Used as `rom NAME:Type[]` followed
+ * by an indented listing of identifiers (typically routines). See
+ * core/ALU_UNITS_MACHINES.md for the semantic model.
+ *
+ * Soft keyword (categorized as Identifier) so files with a field
+ * or local named `rom` still parse — the section dispatch checks
+ * for the literal token at section-open positions in machineBody.
+ */
+export const Rom = createToken({
+  name: 'Rom',
+  pattern: /rom/,
+  longer_alt: Identifier,
+  categories: Identifier,
+});
+
+/**
  * `In`, `Out`, and `Id` are soft keywords — they mark specific
  * grammar positions (`wires in`, `wires out`, `id NAME`) but are
  * common short words that users naturally use as identifiers
@@ -170,6 +187,7 @@ function softKeyword(name: string, lexeme: string) {
 export const Fields = softKeyword('Fields', 'fields');
 export const Ready = softKeyword('Ready', 'ready');
 export const Effect = softKeyword('Effect', 'effect');
+export const Terminal = softKeyword('Terminal', 'terminal');
 export const Entry = softKeyword('Entry', 'entry');
 export const Allow = softKeyword('Allow', 'allow');
 export const Modifies = softKeyword('Modifies', 'modifies');
@@ -344,9 +362,14 @@ export const allTokens: TokenType[] = [
   Out,
   Default,
   Id,
+  // `Rom` is a soft keyword — must precede Identifier so the lexer
+  // produces Rom tokens for bare `rom`. Parser rules that consume
+  // Identifier also accept Rom via its `categories: Identifier`.
+  Rom,
   Description,
   Ready,
   Effect,
+  Terminal,
   Entry,
   Allow,
   Modifies,

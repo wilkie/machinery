@@ -21,8 +21,11 @@
 //
 //   * Unit and machine body grammar with `wires in`/`wires out`,
 //     `registers` (with optional nested `field` blocks), `id`,
-//     `description`, and `default` sections, all interleaved freely
-//     with statements.
+//     `description`, `default`, and `rom` sections, all interleaved
+//     freely with statements. The `rom` section declares
+//     build-time-populated read-only arrays whose bodies are lists
+//     of routine identifiers — see core/ALU_UNITS_MACHINES.md for
+//     the semantic model.
 //
 //   * Parameterized type references via the `{...}` form:
 //     `u{W+1}`, `Local{8}`. Declaration-site type parameters
@@ -59,10 +62,12 @@ import {
   Registers,
   Default,
   Id,
+  Rom,
   Description,
   Fields,
   Ready,
   Effect,
+  Terminal,
   Entry,
   Allow,
   Modifies,
@@ -375,14 +380,23 @@ export class MachineParser extends CstParser {
    *   description       — prose, inline `description: "..."` or block form
    *   fields            — typed field list (inline `{...}` or block form)
    *   ready             — single-line readiness expression
+   *   terminal          — single-line terminal-flag expression
    *   effect            — indented block of statements
    *
-   * `description`, `fields`, and `ready` are parsed structurally: the
-   * description's block body is still consumed opaquely via `block`, but
-   * the fields list and the ready expression are fully-formed CST nodes
-   * (fields via `namedField`, ready via the full expression grammar).
-   * `effect` is still consumed opaquely until statement grammar arrives.
-   * The walker today only surfaces the `fields` section.
+   * `ready`, `terminal`, `fields`, and `effect` are the four sequencer-
+   * interface clauses the execute unit reads from every microword
+   * variant. `ready` tells the sequencer whether to advance or stall;
+   * `terminal` tells it whether to increment microPc or hand off
+   * state transitions to the effect block; `effect` is the work; and
+   * `fields` is the per-instance parameter bundle. All four are
+   * expected to be declared on every variant so the union-level
+   * auto-dispatch (mw.ready, mw.terminal, mw.effect) is well-formed.
+   *
+   * `description`, `fields`, `ready`, and `terminal` are parsed into
+   * fully-formed CST nodes. `effect` and the block form of
+   * `description` are still consumed opaquely via `block` until
+   * statement grammar arrives for effect and structured prose
+   * extraction for description.
    */
   public microwordBody = this.RULE('microwordBody', () => {
     this.CONSUME(Indent);
@@ -392,6 +406,7 @@ export class MachineParser extends CstParser {
         { ALT: () => this.SUBRULE(this.descriptionSection) },
         { ALT: () => this.SUBRULE(this.fieldsSection) },
         { ALT: () => this.SUBRULE(this.readyClause) },
+        { ALT: () => this.SUBRULE(this.terminalClause) },
         { ALT: () => this.SUBRULE(this.effectSection) },
       ]);
     });
@@ -482,6 +497,33 @@ export class MachineParser extends CstParser {
    */
   public readyClause = this.RULE('readyClause', () => {
     this.CONSUME(Ready);
+    this.CONSUME(Colon);
+    this.SUBRULE(this.expression);
+    this.CONSUME(Newline);
+  });
+
+  /**
+   * A `terminal: <expression>` clause. Declares whether this microword
+   * variant ends a routine and transitions the execute unit's state
+   * itself, or is a normal mid-routine microword whose sequencer
+   * should advance microPc after the effect runs.
+   *
+   * In practice the expression is a literal `0` for most variants
+   * and `1` for `Retire` (which commits and loops back to fetch).
+   * The full expression grammar is allowed for flexibility — a
+   * future variant could depend on a runtime field — but the
+   * sequencer expects the value to be combinationally computable
+   * from the microword's own fields.
+   *
+   * Structurally identical to `readyClause`. Both are auto-dispatched
+   * union field accesses at use time: the sequencer reads
+   * `mw.terminal` and the type checker expands it into a `mux mw.kind`
+   * over the variants, each arm evaluating the matching variant's
+   * declared clause. Every variant must declare `terminal` for the
+   * access to be well-formed.
+   */
+  public terminalClause = this.RULE('terminalClause', () => {
+    this.CONSUME(Terminal);
     this.CONSUME(Colon);
     this.SUBRULE(this.expression);
     this.CONSUME(Newline);
@@ -753,6 +795,7 @@ export class MachineParser extends CstParser {
         { ALT: () => this.SUBRULE(this.idSection) },
         { ALT: () => this.SUBRULE(this.descriptionSection) },
         { ALT: () => this.SUBRULE(this.registersSection) },
+        { ALT: () => this.SUBRULE(this.romDecl) },
         { ALT: () => this.SUBRULE(this.wiresSection) },
         { ALT: () => this.SUBRULE(this.defaultSection) },
         { ALT: () => this.SUBRULE(this.statement) },
@@ -870,6 +913,122 @@ export class MachineParser extends CstParser {
     this.OPTION(() => this.SUBRULE(this.statementBlock));
   });
 
+  /**
+   * A rom declaration inside a machine body. Two forms:
+   *
+   *   rom NAME:Type[]                        ; shorthand — single surface
+   *     entry1
+   *     entry2
+   *
+   *   rom STORAGE                            ; nested — multiple surfaces
+   *     SURFACE1:Type[]
+   *       entry1
+   *     SURFACE2:Type[]
+   *       entry2
+   *
+   * The **shorthand** form declares a single storage and a single
+   * decode surface that share the same name. Used when the machine
+   * has exactly one way to dispatch into the rom — the common case.
+   *
+   * The **nested** form declares one storage and multiple named
+   * decode surfaces over it. Each surface has its own slice of the
+   * storage and its own `.decode(opcode)` dispatch method. Used when
+   * the machine has multiple decode surfaces over one physical ROM
+   * — e.g. an x86-style execute unit with a primary opcode space
+   * and a 0x0F-prefixed escape opcode space.
+   *
+   * Operations:
+   *   NAME[pc]                 — storage read, returns Type
+   *   NAME.decode(op)          — shorthand decode
+   *   STORAGE[pc]              — nested storage read
+   *   STORAGE.SURFACE.decode(op)  — nested decode via named surface
+   *
+   * The parser distinguishes the two forms on the token after
+   * `Rom Identifier`: `Colon` → shorthand, `Newline` → nested.
+   *
+   * See core/ALU_UNITS_MACHINES.md for the full semantic model.
+   */
+  public romDecl = this.RULE('romDecl', () => {
+    this.CONSUME(Rom);
+    this.CONSUME(Identifier);
+    this.OR([
+      {
+        // Shorthand: `: Type[]` inline on the same line.
+        ALT: () => {
+          this.CONSUME(Colon);
+          this.SUBRULE(this.typeRef);
+          this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+          this.OPTION(() => this.SUBRULE(this.romBody));
+        },
+      },
+      {
+        // Nested: no inline type, followed by an indented block of
+        // decode-surface declarations.
+        ALT: () => {
+          this.AT_LEAST_ONE2(() => this.CONSUME2(Newline));
+          this.OPTION2(() => this.SUBRULE(this.romSurfaceBlock));
+        },
+      },
+    ]);
+  });
+
+  /**
+   * Indented block of decode surfaces under a nested-form rom. Each
+   * entry is a `romSurfaceDecl` — the same shape as the shorthand
+   * rom but without the leading `rom` keyword, since we're already
+   * inside one.
+   */
+  public romSurfaceBlock = this.RULE('romSurfaceBlock', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.romSurfaceDecl) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  /**
+   * A single decode surface inside a nested-form rom:
+   *
+   *   SURFACE:Type[]
+   *     entry1
+   *     entry2
+   *
+   * Each surface declares its own element type (must match across
+   * surfaces in the same storage — semantic phase enforces) and its
+   * own body of listed routines. The decode method is accessed as
+   * `STORAGE.SURFACE.decode(opcode)`.
+   */
+  public romSurfaceDecl = this.RULE('romSurfaceDecl', () => {
+    this.CONSUME(Identifier);
+    this.CONSUME(Colon);
+    this.SUBRULE(this.typeRef);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+    this.OPTION(() => this.SUBRULE(this.romBody));
+  });
+
+  /**
+   * Indented body of a rom declaration: a sequence of identifier
+   * entries, one per line. Each identifier names a routine the
+   * build tool will linearize into the rom's storage.
+   */
+  public romBody = this.RULE('romBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.romEntry) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  public romEntry = this.RULE('romEntry', () => {
+    this.CONSUME(Identifier);
+  });
+
   /** `<W:Width>` or `<W:Width, T:Type>` — unit/microword type parameters. */
   public typeParams = this.RULE('typeParams', () => {
     this.CONSUME(Less);
@@ -939,21 +1098,28 @@ export class MachineParser extends CstParser {
 
   /**
    * Type reference: an identifier, optionally parameterized with an
-   * expression in curly braces — `u{W+1}`, `Local{8}`, `u{W}`. Curly
-   * braces (not angle brackets) are used for use-site type parameters
-   * because expressions inside `<...>` collide with the `<`/`>`
-   * relational operators (same problem that gave us `::<>` turbofish
-   * at call sites). Declaration-site type parameters on units
-   * (`unit alu<W:Width>`) and turbofish call sites
-   * (`alu::<width>(...)`) keep `<...>` — they don't embed
-   * arbitrary expressions, so the collision doesn't arise there.
+   * expression in curly braces — `u{W+1}`, `Local{8}`, `u{W}` — and
+   * optionally followed by an array suffix `[]` for runtime-sized
+   * arrays. Examples:
+   *
+   *   u8                — plain unsigned 8-bit
+   *   u{W+1}            — width-parameterized unsigned int
+   *   Local{8}          — parameterized type reference
+   *   MicroOp[]         — runtime-sized array of MicroOp
+   *
+   * Curly braces (not angle brackets) are used for use-site type
+   * parameters because expressions inside `<...>` collide with the
+   * `<`/`>` relational operators. Declaration-site type parameters
+   * on units (`unit alu<W:Width>`) and turbofish call sites
+   * (`alu::<width>(...)`) keep `<...>` because they don't embed
+   * arbitrary expressions.
    *
    * typeRef is only called from type positions (cast targets, field
    * type annotations, register type annotations, return-type
-   * specifications, etc.) so there's no ambiguity with the
-   * expression-level `constructOp` which also consumes `{...}`: those
-   * are in different parse contexts and Chevrotain dispatches them
-   * independently based on which rule is invoked.
+   * specifications, rom element types, etc.) so there's no ambiguity
+   * with the expression-level `constructOp` which also consumes
+   * `{...}`: those are in different parse contexts and Chevrotain
+   * dispatches them independently based on which rule is invoked.
    */
   public typeRef = this.RULE('typeRef', () => {
     this.CONSUME(Identifier);
@@ -961,6 +1127,10 @@ export class MachineParser extends CstParser {
       this.CONSUME(LBrace);
       this.SUBRULE(this.expression);
       this.CONSUME(RBrace);
+    });
+    this.OPTION1(() => {
+      this.CONSUME(LBracket);
+      this.CONSUME(RBracket);
     });
   });
 

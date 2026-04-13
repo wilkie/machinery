@@ -1001,6 +1001,59 @@ describe('parser — top-level declaration skeleton', () => {
       expect(parseErrors).toEqual([]);
       expect(getMicrowords(cst!)).toEqual([]);
     });
+
+    it('parses a microword with a terminal clause', () => {
+      const src = [
+        'microword Retire',
+        '  fields {}',
+        '  ready: 1',
+        '  terminal: 1',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)).toEqual([{ name: 'Retire', fields: [] }]);
+    });
+
+    it('parses ready and terminal clauses in either order', () => {
+      const src = [
+        'microword Foo',
+        '  fields',
+        '    x:u8',
+        '  terminal: 0',
+        '  ready: 1',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('parses a terminal clause with a complex expression', () => {
+      // Rare but legal — the clause takes any expression, so a
+      // field-dependent terminal flag is parseable.
+      const src = [
+        'microword Foo',
+        '  fields',
+        '    done:b',
+        '  ready: 1',
+        '  terminal: done',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('still accepts `terminal` as a regular identifier elsewhere', () => {
+      // Soft-keyword regression: bundle fields named `terminal`
+      // should still work.
+      const src = 'bundle Foo\n  terminal:b\n  value:u8\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getBundles(cst!)[0]!.fields).toEqual([
+        { name: 'terminal', type: 'b' },
+        { name: 'value', type: 'u8' },
+      ]);
+    });
   });
 
   describe('operand body parsing', () => {
@@ -1684,6 +1737,220 @@ describe('parser — top-level declaration skeleton', () => {
       ]);
     });
 
+    it('parses a rom declaration listing one routine', () => {
+      const src = [
+        'machine cpu',
+        '  rom microcode:MicroOp[]',
+        '    addRmReg8',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['machineDecl']);
+    });
+
+    it('parses a rom declaration listing multiple routines', () => {
+      const src = [
+        'machine cpu',
+        '  rom microcode:MicroOp[]',
+        '    addRmReg8',
+        '    addRmReg16',
+        '    subRmReg8',
+        '    subRmReg16',
+        '    movRmReg8',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('parses multiple rom declarations in one machine', () => {
+      const src = [
+        'machine cpu',
+        '  rom microcode:MicroOp[]',
+        '    addRmReg8',
+        '    subRmReg8',
+        '',
+        '  rom altRom:MicroOp[]',
+        '    otherRoutine',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('parses a rom declaration with an empty listing', () => {
+      const src = [
+        'machine cpu',
+        '  rom microcode:MicroOp[]',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('parses a nested-form rom with one decode surface', () => {
+      const src = [
+        'machine cpu',
+        '  rom microops',
+        '    microcode:MicroOp[]',
+        '      addRmReg8',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['machineDecl']);
+    });
+
+    it('parses a nested-form rom with multiple decode surfaces', () => {
+      // The motivating case: x86-style execute unit with a primary
+      // opcode space and a 0x0F-prefixed escape opcode space.
+      const src = [
+        'machine executionUnit',
+        '  rom microops',
+        '    microcode:MicroOp[]',
+        '      addRmReg8',
+        '      subRmReg8',
+        '      movRmReg8',
+        '    systemcode:MicroOp[]',
+        '      lgdt',
+        '      sgdt',
+        '      lldt',
+        '      sldt',
+        '      lmsw',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['machineDecl']);
+      expect(names(cst)).toEqual(['executionUnit']);
+    });
+
+    it('parses a nested rom with an empty body', () => {
+      const src = [
+        'machine cpu',
+        '  rom microops',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('parses a nested rom with an empty surface listing', () => {
+      const src = [
+        'machine cpu',
+        '  rom microops',
+        '    microcode:MicroOp[]',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('parses nested rom with member-access decode references', () => {
+      // Verify that `microops.microcode.decode(prefetch.byte)` parses
+      // as an expression inside a machine body statement. This is the
+      // call shape the execute unit uses to dispatch via a nested
+      // rom's decode surfaces.
+      const src = [
+        'machine executionUnit',
+        '  registers',
+        '    microPC:u16 = 0',
+        '    state:u8 = 0',
+        '',
+        '  rom microops',
+        '    microcode:MicroOp[]',
+        '      addRmReg8',
+        '    systemcode:MicroOp[]',
+        '      lgdt',
+        '',
+        '  if state == 0',
+        '    microPC <- microops.microcode.decode(0)',
+        '  else',
+        '    microPC <- microops.systemcode.decode(0)',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('parses a mix of shorthand and nested roms in one machine', () => {
+      // Edge case: a machine can declare a shorthand rom alongside
+      // a nested one. Both forms are first-class and coexist.
+      const src = [
+        'machine cpu',
+        '  rom simpleRom:MicroOp[]',
+        '    onlyRoutine',
+        '',
+        '  rom complexRom',
+        '    primary:MicroOp[]',
+        '      addRmReg8',
+        '    secondary:MicroOp[]',
+        '      lgdt',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('parses a rom declaration interleaved with other machine sections', () => {
+      const src = [
+        'machine executionUnit',
+        '  registers',
+        '    state:u8 = 0',
+        '',
+        '  rom microcode:MicroOp[]',
+        '    addRmReg8',
+        '',
+        '  wires in',
+        '    prefetch:b',
+        '',
+        '  wires out',
+        '    valid:b',
+        '',
+        '  default',
+        '    valid = 0',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('parses array typeRefs in field positions', () => {
+      // Verify array type works elsewhere typeRef is consumed.
+      const src = [
+        'bundle Buffer',
+        '  storage:MicroOp[]',
+        '  count:u8',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(kinds(cst)).toEqual(['bundleDecl']);
+    });
+
+    it('parses an array of a parameterized type', () => {
+      const src = [
+        'bundle Foo',
+        '  data:u{W}[]',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+    });
+
+    it('still accepts `rom` as a regular identifier elsewhere', () => {
+      // The Rom token is a soft keyword categorized as Identifier, so
+      // existing uses of `rom` as a field/local name should still work.
+      const src = 'bundle Foo\n  rom:u8\n  size:u16\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getBundles(cst!)[0]!.fields).toEqual([
+        { name: 'rom', type: 'u8' },
+        { name: 'size', type: 'u16' },
+      ]);
+    });
+
     it('parses a machine with instance declarations mirroring executionUnit', () => {
       // Exercises the `instance` syntax in a realistic shape: a
       // stateful machine that instantiates several combinational
@@ -1730,6 +1997,9 @@ describe('parser — top-level declaration skeleton', () => {
         '',
         '  instance mainAlu : alu::<u16>',
         '    cin = 0',
+        '',
+        '  rom microcode:MicroOp[]',
+        '    addRmReg8',
         '',
       ].join('\n');
       const { cst, lexErrors, parseErrors } = parse(src);

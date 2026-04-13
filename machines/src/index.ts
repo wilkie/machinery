@@ -41,3 +41,23 @@ export {
   type RoutineInfo,
 } from './parser/parse.js';
 export { MachineParser, machineParser } from './parser/parser.js';
+
+// Semantic phase — slice 1: AST lowering.
+export { lowerFile } from './semantic/lower.js';
+export type {
+  SourceLocation,
+  File as AstFile,
+  Declaration as AstDeclaration,
+  EnumDeclaration as AstEnumDeclaration,
+  EnumVariant as AstEnumVariant,
+  BundleDeclaration as AstBundleDeclaration,
+  UnionDeclaration as AstUnionDeclaration,
+  NamedField as AstNamedField,
+  TypeRef as AstTypeRef,
+  TypeRefSimple as AstTypeRefSimple,
+} from './semantic/ast.js';
+export {
+  isEnumDeclaration,
+  isBundleDeclaration,
+  isUnionDeclaration,
+} from './semantic/ast.js';

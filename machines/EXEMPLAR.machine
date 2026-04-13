@@ -1,0 +1,1140 @@
+; i286 processor description — proposed revision of ALU.machine
+;
+; Differences from ALU.machine are motivated in ALU_REVIEW.md. The highlights:
+;
+;   * Operators are unified:
+;       =   drive a combinational wire (exactly once per evaluation)
+;       <-  schedule a register next-state update (commit at clock edge)
+;
+;   * Top-level constructs accept `description`, `references`, `since`/`until`
+;     metadata blocks.
+;
+;   * `register` fields use the compact `field NAME:TYPE @ OFFSET` syntax
+;     everywhere — both for top-level registers and for nested registers
+;     inside machine bodies (e.g. executionUnit's modrm). The bit width
+;     comes from the field's type; the offset names the least-significant
+;     bit.
+;
+;   * `unit` can take type parameters; `aluFlags` is parameterized over width
+;     instead of duplicating the u8 and u16 cases.
+;
+;   * `machine` outputs require a `default` clause so combinational outputs
+;     cannot be left undriven on some path.
+;
+;   * Microcode is expressed as named `routine`s whose `micro:` blocks list
+;     `microword` primitives, routine `call`s, and operand `fetch` directives.
+;     The execute unit is a dispatcher + sequencer; all per-instruction
+;     behavior lives in routines.
+;
+;   * Top-level constructs fall into four categories:
+;
+;       microword  one-cycle execute-unit primitives (AluMicro, IStreamRead,
+;                  BusRead, BusWrite, Branch, Retire). Each declares its
+;                  fields, a `ready` stall predicate, and an `effect` block.
+;                  Combined into a tagged `union MicroOp`.
+;
+;       operand    named groups of IStreamReads (plus post-processing) that
+;                  consume a semantically-meaningful chunk of the instruction
+;                  stream: ModRM, Disp8, Disp16, Imm8, Imm16, etc. Declared
+;                  with `size`, `fields` (bit layout), and a `fetch` body.
+;                  Invoked from routines via the `fetch <Name>` directive.
+;
+;       routine    sequences of microwords, `call`s, and `fetch`es. Routines
+;                  with an `entry:` field are instructions and appear in the
+;                  decode table. Routines without one are sub-routines
+;                  reachable only via `call`.
+;
+;       unit /     combinational units and stateful machines, covering the
+;       machine    ALU, bus interface, prefetcher, and execute unit.
+;
+;   * An inference pass derives most instruction metadata from the microcode
+;     body, instead of the author writing it in parallel with the `micro:`
+;     block. From a routine's `micro:` block plus the `operand` declarations
+;     it fetches, the pass derives:
+;       - encoding shape (trailing bytes, operand layout, total length)
+;       - `operands` / `operandSize` / `modifies` metadata
+;       - a symbolic semantic summary for the assembler/disassembler/emulator
+;     Only things that cannot be inferred stay as author input: `entry:`, the
+;     `allow:` policy, prose `description`, and manual `references`.
+;
+; One full instruction (ADD r/m8, r8 — opcode 0x00) is modeled end to end
+; below to show how the pieces fit.
+
+
+; =============================================================================
+; Registers
+; =============================================================================
+
+register AX:u16
+  field AL:u8 @ 0
+  field AH:u8 @ 8
+
+register BX:u16
+  field BL:u8 @ 0
+  field BH:u8 @ 8
+
+register CX:u16
+  field CL:u8 @ 0
+  field CH:u8 @ 8
+
+register DX:u16
+  field DL:u8 @ 0
+  field DH:u8 @ 8
+
+register SI:u16
+register DI:u16
+register BP:u16
+register SP:u16
+
+register CS:seg16
+register DS:seg16
+register ES:seg16
+register SS:seg16
+
+register IP:u16
+
+register FLAGS:u16
+  field CF:b @ 0
+  field PF:b @ 2
+  field AF:b @ 4
+  field ZF:b @ 6
+  field SF:b @ 7
+  field OF:b @ 11
+
+
+; =============================================================================
+; Datatypes
+; =============================================================================
+
+enum Width
+  u8
+  u16
+
+enum AluOp
+  add
+  or
+  adc
+  sbb
+  and
+  sub
+  xor
+  passA
+
+enum AluSrc
+  zero
+  one
+  tmp
+  imm
+  reg
+  mem
+  ea
+  ip
+
+enum AluDest
+  none
+  tmp
+  reg
+  mem
+  ip
+
+bundle Flags
+  cf:b
+  pf:b
+  af:b
+  zf:b
+  sf:b
+  of:b
+
+
+; =============================================================================
+; ALU — width-parameterized
+; =============================================================================
+
+; Selects one of the possible operand sources onto an ALU input rail. Same
+; shape for srcA and srcB; the execute unit instantiates this twice.
+unit aluSelect
+  wires in
+    sel:AluSrc
+    reg:u16
+    imm:u16
+    tmp:u16
+    mdr:u16
+    ea:u16
+    ip:u16
+  wires out
+    *:u16
+
+  mux sel
+    when AluSrc.zero: 0
+    when AluSrc.one:  1
+    when AluSrc.tmp:  tmp
+    when AluSrc.imm:  imm
+    when AluSrc.reg:  reg
+    when AluSrc.mem:  mdr
+    when AluSrc.ea:   ea
+    when AluSrc.ip:   ip
+
+; Parity over the low byte of a value (the 286 only parity-checks the low 8
+; bits even for 16-bit operations).
+unit parity8
+  wires in
+    v:u8
+  wires out
+    *:b
+
+  = ~(v[0] ^ v[1] ^ v[2] ^ v[3] ^ v[4] ^ v[5] ^ v[6] ^ v[7])
+
+; Computes the post-operation flags for an ALU op of a given width. Width is a
+; compile-time parameter so the u8 and u16 bodies are shared.
+unit aluFlags<W:Width>
+  wires in
+    op:AluOp
+    a:u{W}
+    b:u{W}
+    raw:u{W+1}
+  wires out
+    *:Flags
+
+  wire r:u{W} = raw:u{W}
+  wire msb   = W - 1
+
+  ; Carry / overflow / aux-carry depend on the operation class; sign, zero,
+  ; and parity are uniform.
+  mux op
+    when AluOp.add | AluOp.adc
+      cf = raw[W]
+      af = raw[4] ^ a[4] ^ b[4]
+      of = (~(a[msb] ^ b[msb])) & (a[msb] ^ r[msb])
+    when AluOp.sub | AluOp.sbb
+      cf = raw[W]
+      af = raw[4] ^ a[4] ^ b[4]
+      of = (a[msb] ^ b[msb]) & (a[msb] ^ r[msb])
+    else
+      cf = 0
+      af = 0
+      of = 0
+
+  sf = r[msb]
+  zf = r == 0
+  pf = parity8(r:u8)
+
+; Combinational ALU datapath — pure adder/logical core, no flag output.
+;
+; This unit is the datapath only. It computes the result of the op on
+; the two operands and exposes two outputs:
+;
+;   result:u{W}     — the width-truncated architectural result.
+;   raw:u{W+1}      — the un-truncated result, one bit wider than the
+;                     operand width, so downstream flag computation can
+;                     see the carry-out bit at position W.
+;
+; Flag computation is a separate unit (aluFlags) that the caller
+; invokes with the desired flag width. Splitting the two lets the
+; execute unit share one physical u16 ALU across both 8-bit and
+; 16-bit operations: 8-bit ops zero-extend into the u16 datapath,
+; run through `alu::<u16>`, then call `aluFlags::<u8>` with the
+; narrowed operands to get 8-bit-semantics flags.
+;
+; Multi-cycle operations like mul / div will drive this same unit
+; repeatedly across cycles, with scratch state (remainder, quotient,
+; step counter) living on the execute unit. Not modeled yet.
+
+unit alu<W:Width>
+  wires in
+    op:AluOp
+    a:u{W}
+    b:u{W}
+    cin:b
+  wires out
+    result:u{W}
+    raw:u{W+1}
+
+  wire rawWire:u{W+1} = mux op
+    when AluOp.add:   a:u{W+1} + b:u{W+1}
+    when AluOp.adc:   a:u{W+1} + b:u{W+1} + cin:u{W+1}
+    when AluOp.sub:   a:u{W+1} + ~b:u{W+1} + 1
+    when AluOp.sbb:   a:u{W+1} + ~b:u{W+1} + 1 + ~cin:u{W+1} + 1
+    when AluOp.and:   a:u{W+1} & b:u{W+1}
+    when AluOp.or:    a:u{W+1} | b:u{W+1}
+    when AluOp.xor:   a:u{W+1} ^ b:u{W+1}
+    when AluOp.passA: a:u{W+1}
+
+  raw    = rawWire
+  result = rawWire:u{W}
+
+
+; =============================================================================
+; Register file selection
+; =============================================================================
+
+unit registerSelect
+  wires in
+    sel:u3
+    width:Width
+  wires out
+    *:u16
+
+  mux width
+    when Width.u8
+      mux sel
+        when 0: AX.AL:u16
+        when 1: CX.CL:u16
+        when 2: DX.DL:u16
+        when 3: BX.BL:u16
+        when 4: AX.AH:u16
+        when 5: CX.CH:u16
+        when 6: DX.DH:u16
+        when 7: BX.BH:u16
+    when Width.u16
+      mux sel
+        when 0: AX
+        when 1: CX
+        when 2: DX
+        when 3: BX
+        when 4: SP
+        when 5: BP
+        when 6: SI
+        when 7: DI
+
+
+; =============================================================================
+; Prefetch queue
+; =============================================================================
+
+bundle PrefetchOut
+  empty:b
+  full:b
+  valid:b
+  byte:u8
+  count:u3
+
+bundle PrefetchControl
+  pop:b
+  flush:b
+  redirect:u16
+  hold:b
+
+machine prefetcher
+  description
+    The i286 prefetch queue is six bytes. It fills from the bus interface unit
+    whenever (a) the queue has room for a full 16-bit fetch and (b) the execute
+    unit is not redirecting flow (jump, call, interrupt). Draining is one byte
+    at a time under control of the execute unit.
+
+  registers
+    q0:u8 = 0
+    q1:u8 = 0
+    q2:u8 = 0
+    q3:u8 = 0
+    q4:u8 = 0
+    q5:u8 = 0
+
+    qRead:u3 = 0
+    qWrite:u3 = 0
+    qCount:u3 = 0
+
+    fetchIP:u20 = 0
+    requestOutstanding:b = 0
+
+  wires in
+    control:PrefetchControl
+    busResponse:BusResponse
+
+  wires out
+    output:PrefetchOut
+    busRequest:BusRequest
+
+  default
+    output     = { empty: 1, full: 0, valid: 0, byte: 0, count: 0 }
+    busRequest = { valid: 0, address: 0, op: BusOp.read,
+                   size: BusSize.u16, data: 0 }
+
+  wire head:u8 = mux qRead
+    when 0: q0
+    when 1: q1
+    when 2: q2
+    when 3: q3
+    when 4: q4
+    when 5: q5
+
+  output.empty = qCount == 0
+  output.full  = qCount == 6
+  output.valid = !output.empty
+  output.byte  = head
+  output.count = qCount
+
+  busRequest.valid   = !output.full && !requestOutstanding && !control.hold
+  busRequest.op      = BusOp.read
+  busRequest.size    = BusSize.u16
+  busRequest.data    = 0
+  busRequest.address = fetchIP
+
+  assert !(control.pop && output.empty)
+
+  if control.flush
+    qRead              <- 0
+    qWrite             <- 0
+    qCount             <- 0
+    fetchIP            <- control.redirect
+    requestOutstanding <- 0
+  else
+    wire popFire  = control.pop && output.valid
+    wire pushFire = busResponse.done && requestOutstanding
+
+    if popFire
+      qRead <- qRead == 5 ? 0 : qRead + 1
+
+    if busRequest.valid && busResponse.grant
+      requestOutstanding <- 1
+
+    if pushFire
+      mux qWrite
+        when 0
+          q0 <- busResponse.data:u8
+          q1 <- (busResponse.data >> 8):u8
+        when 1
+          q2 <- busResponse.data:u8
+          q3 <- (busResponse.data >> 8):u8
+        when 2
+          q4 <- busResponse.data:u8
+          q5 <- (busResponse.data >> 8):u8
+
+      qWrite             <- qWrite == 2 ? 0 : qWrite + 1
+      fetchIP            <- fetchIP + 2
+      requestOutstanding <- 0
+
+    qCount <- qCount - (popFire ? 1 : 0) + (pushFire ? 2 : 0)
+
+
+; =============================================================================
+; Bus interface unit
+; =============================================================================
+
+enum BusOp
+  read
+  write
+
+enum BusSize
+  u8
+  u16
+
+enum BusOwner
+  none
+  prefetch
+  eu
+
+enum BusState
+  idle
+  waitReady
+
+bundle BusRequest
+  valid:b
+  address:u20
+  op:BusOp
+  size:BusSize
+  data:u16
+
+bundle BusResponse
+  grant:b
+  done:b
+  data:u16
+
+bundle ExternalBusOut
+  valid:b
+  op:BusOp
+  address:u20
+  size:BusSize
+  data:u16
+
+bundle ExternalBusIn
+  ready:b
+  data:u16
+
+machine busInterfaceUnit
+  description
+    Arbitrates bus access between the prefetch queue and the execute unit. The
+    execute unit wins ties since a prefetch stall is cheaper than an execute
+    stall. The latched-request state exists so that we can keep driving the
+    external pins stably across multiple wait cycles.
+
+  registers
+    state:BusState       = BusState.idle
+    owner:BusOwner       = BusOwner.none
+    latchedOp:BusOp      = BusOp.read
+    latchedAddress:u20   = 0
+    latchedSize:BusSize  = BusSize.u8
+    latchedData:u16      = 0
+
+  wires in
+    pfRequest:BusRequest
+    euRequest:BusRequest
+    extIn:ExternalBusIn
+
+  wires out
+    extOut:ExternalBusOut
+    pfResponse:BusResponse
+    euResponse:BusResponse
+
+  default
+    pfResponse = { grant: 0, done: 0, data: 0 }
+    euResponse = { grant: 0, done: 0, data: 0 }
+    extOut     = { valid: 0, op: BusOp.read, address: 0,
+                   size: BusSize.u8, data: 0 }
+
+  mux state
+    when BusState.idle
+      wire pickEu = euRequest.valid
+      wire pickPf = !pickEu && pfRequest.valid
+
+      if pickEu || pickPf
+        wire req = pickEu ? euRequest : pfRequest
+
+        owner          <- pickEu ? BusOwner.eu : BusOwner.prefetch
+        latchedOp      <- req.op
+        latchedAddress <- req.address
+        latchedSize    <- req.size
+        latchedData    <- req.data
+
+        extOut = { valid: 1, op: req.op, address: req.address,
+                   size: req.size, data: req.data }
+
+        if pickEu
+          euResponse.grant = 1
+        else
+          pfResponse.grant = 1
+
+        ; No-wait path: bus is already ready this cycle.
+        if extIn.ready
+          if pickEu
+            euResponse.done = 1
+            euResponse.data = extIn.data
+          else
+            pfResponse.done = 1
+            pfResponse.data = extIn.data
+          owner <- BusOwner.none
+          state <- BusState.idle
+        else
+          state <- BusState.waitReady
+
+    when BusState.waitReady
+      extOut = { valid: 1, op: latchedOp, address: latchedAddress,
+                 size: latchedSize, data: latchedData }
+
+      if extIn.ready
+        if owner == BusOwner.eu
+          euResponse.done = 1
+          euResponse.data = extIn.data
+        elif owner == BusOwner.prefetch
+          pfResponse.done = 1
+          pfResponse.data = extIn.data
+        owner <- BusOwner.none
+        state <- BusState.idle
+
+
+; =============================================================================
+; Microcode model
+; =============================================================================
+
+; Reasons a register write may or may not survive a mid-instruction fault.
+; See ALU_REVIEW.md section "One more thing worth flagging".
+enum Commit
+  ; The write is visible immediately, cannot be rolled back (bus write, etc).
+  onIssue
+  ; The write is staged and commits when the routine retires successfully.
+  onRetire
+  ; Purely scratch; never architecturally visible.
+  never
+
+; `Local{N}` is a built-in type recognized by the compiler (alongside the
+; built-in scalar widths `u8`, `u16`, `u20`, `b`, etc.). There is no user
+; declaration for it — it's a language primitive, not something you can
+; define with `enum` / `bundle` / `union` / `register`.
+;
+; A `Local{N}` is a compile-time reference to a named storage slot inside
+; executionUnit. Locals are NOT values — they are resolved identifiers that
+; the sequencer uses to pick which register the effect block reads from or
+; writes to.
+;
+; Legal Local identifiers refer to:
+;   * scratch registers declared in executionUnit.registers
+;       (ea, tmp, mdr, disp, modrm)
+;   * architectural registers
+;       (AX, BX, CX, DX, SI, DI, BP, SP, IP, FLAGS, CS, DS, ES, SS)
+;   * named fields or bit slices of either
+;       (AX.AL, modrm.mod, disp[7:0], FLAGS.CF)
+;
+; Memory is NOT a Local. Memory access goes through BusRead / BusWrite
+; microwords, not through Local references.
+;
+; The width parameter `N` names the bit width expected at the reference
+; site. The compiler checks that the named slot's width matches at
+; construction time: `IStreamRead { dest: modrm }` is legal because modrm
+; is u8, but `IStreamRead { dest: AX }` would be rejected because AX is u16.
+;
+; An unparameterized `Local` means "width determined by another field on
+; this same microword" — used for BusRead.dest and BusWrite.value, which
+; inherit their width from the sibling `width:BusSize` field.
+
+; MicroOp is a tagged union: each variant is declared as its own `microword`
+; with three pieces — its field layout, a `ready` predicate (stall condition),
+; and an `effect` block describing the state update. The executionUnit's
+; sequencer is generic: it looks up ready/effect by variant tag and otherwise
+; knows nothing about what any individual microword does. Adding a new
+; primitive is a matter of declaring a new `microword` — no changes to the
+; sequencer.
+;
+; `ready` is evaluated combinationally each cycle. If false, microPc is not
+; advanced and the same microword re-issues next cycle.
+
+; ---- Primitive microword kinds ---------------------------------------------
+
+microword AluMicro
+  description
+    The one-cycle ALU-shaped microword. Drives the shared operand
+    muxes and the shared u16 ALU instance declared on executionUnit,
+    optionally updates FLAGS, and writes the result to `dest` subject
+    to `commit` semantics.
+
+    There is only one physical ALU — a u16 datapath. 8-bit operations
+    run through it by zero-extending the operands on the way in and
+    narrowing the result on the way out, with flags computed at u8
+    width using the narrowed operands and a narrowed view of the raw
+    output. This matches real i286 hardware.
+
+  fields
+    op:AluOp
+    width:Width
+    srcA:AluSrc
+    srcB:AluSrc
+    dest:AluDest
+    commit:Commit
+    writeFlags:b
+
+  ready: 1
+  terminal: 0
+
+  effect
+    ; Steer the two operand muxes. `aluSrcA` / `aluSrcB` are shared
+    ; on executionUnit with their six operand rails pinned; only
+    ; `sel` varies per microword.
+    aluSrcA.sel = srcA
+    aluSrcB.sel = srcB
+
+    ; The shared ALU always runs at u16 width. 8-bit operations
+    ; narrow the operands and then re-widen via zero-extension so
+    ; the two's-complement arithmetic still produces the correct
+    ; bottom byte.
+    mainAlu.op = op
+    mainAlu.a  = aluSrcA.out
+    mainAlu.b  = aluSrcB.out
+
+    ; Flag computation runs at the architectural width of the
+    ; microword: u8 flags for 8-bit ops, u16 flags for 16-bit ops.
+    ; The narrowed `raw` is what aluFlags needs to compute CF / OF
+    ; for 8-bit ops correctly (carry is at bit 8, not bit 16).
+    mux width
+      when Width.u8
+        if writeFlags
+          FLAGS <- applyFlags(FLAGS,
+            aluFlags::<u8>(op, aluSrcA.out:u8, aluSrcB.out:u8,
+                           mainAlu.raw:u9))
+        dest <- mainAlu.result:u8
+      when Width.u16
+        if writeFlags
+          FLAGS <- applyFlags(FLAGS,
+            aluFlags::<u16>(op, aluSrcA.out, aluSrcB.out, mainAlu.raw))
+        dest <- mainAlu.result
+
+microword IStreamRead
+  description
+    Read one byte from the instruction stream into a local. This is the
+    only way the execute unit consumes prefetched instruction bytes — all
+    opcode, ModR/M, SIB, displacement, and immediate fetches flow through
+    this primitive. The stall rule sits on the prefetcher's valid line,
+    so a cold queue just re-issues until a byte arrives.
+
+    On a processor with no prefetch queue, this primitive would be backed
+    by a direct bus read instead — the routine-level interface stays the
+    same either way.
+
+  fields
+    ; Always one byte — the prefetch queue hands out bytes, not words.
+    dest:Local{8}
+
+  ready: prefetch.valid
+  terminal: 0
+
+  effect
+    dest <- prefetch.byte
+    prefetchControl.pop = 1
+
+microword BusRead
+  description
+    Issue a read on the bus interface unit and latch the response into a
+    local. Stalls until the BIU reports `done`.
+
+  fields
+    width:BusSize
+    ; 20-bit physical address handed to the BIU (real mode). In protected
+    ; mode this widens to 24 bits; the Local{N} width tracks whatever the
+    ; current mode's address space is.
+    addr:Local{20}
+    ; Destination width must match `width` — u8 for BusSize.u8, u16 for
+    ; BusSize.u16. The compiler enforces this at construction time.
+    dest:Local
+
+  ready: busResponse.done
+  terminal: 0
+
+  effect
+    busRequest = { valid: 1, op: BusOp.read, size: width,
+                   address: addr, data: 0 }
+    dest <- busResponse.data
+
+microword BusWrite
+  description
+    Issue a write on the bus interface unit. Stalls until the BIU reports
+    `done`. BusWrite microwords cannot be rolled back — see `commit:
+    onIssue` in ALU_REVIEW.md.
+
+  fields
+    width:BusSize
+    ; Same addressing rules as BusRead.addr.
+    addr:Local{20}
+    ; Value width must match `width` (u8 or u16).
+    value:Local
+
+  ready: busResponse.done
+  terminal: 0
+
+  effect
+    busRequest = { valid: 1, op: BusOp.write, size: width,
+                   address: addr, data: value }
+
+microword Branch
+  description
+    Microcode-internal branch. Unconditional or predicated on a routine-
+    local condition code; target is a microPc within the current routine.
+    Used to implement mux-shaped routine bodies (e.g. eaCalc's per-rm
+    base-address selection) after linearization.
+
+  fields
+    cond:BranchCond
+    target:MicroAddr
+
+  ready: 1
+  ; Branch microwords are not terminal — they jump within a routine
+  ; via the `microPc <- target` write in their effect block, and the
+  ; sequencer's post-effect increment is suppressed by making them
+  ; count as "handling microPc themselves" through another route.
+  ; At the language level `terminal: 1` would also work for Branch
+  ; (it tells the sequencer not to auto-increment), but the semantic
+  ; distinction is worth preserving: terminal means "end of routine,
+  ; return to fetch," which branches do not. Instead branches rely
+  ; on the effect block writing microPc explicitly and the sequencer
+  ; detecting the write, same as the Retire case for state. For now
+  ; we mark Branch as non-terminal and let the effect block's
+  ; explicit microPc write override the sequencer's increment via a
+  ; later semantic-phase rule.
+  terminal: 0
+
+  effect
+    if evalCond(cond)
+      microPc <- target
+
+microword Retire
+  description
+    End of a routine. Commits any `onRetire` writes from the scratch
+    staging buffer into architectural state and returns control to the
+    fetch stage.
+
+  fields {}
+
+  ready: 1
+  terminal: 1
+
+  effect
+    commitStaged()
+    state <- ExecuteState.fetch
+
+; The tagged union the sequencer actually stores and dispatches on. The
+; generator turns this into a discriminated struct with one arm per variant.
+union MicroOp
+  alu:         AluMicro
+  istreamRead: IStreamRead
+  busRead:     BusRead
+  busWrite:    BusWrite
+  branch:      Branch
+  retire:      Retire
+
+; Routines construct microwords using plain record-literal syntax: the
+; variant name followed by a braced list of field bindings. `call` and
+; `fetch` are routine-level directives (inlined at generation time), not
+; microwords themselves. `mux` blocks inside a routine become runtime
+; `Branch` microwords after linearization — see ALU_REVIEW.md for the
+; inlining story.
+
+; =============================================================================
+; Operands
+; =============================================================================
+;
+; An `operand` is a named chunk of the instruction encoding that the execute
+; unit consumes from the prefetch queue. It groups one or more IStreamReads
+; (plus any immediate post-processing like sign extension) under a name that
+; the inference pass uses to:
+;
+;   1. Build the encoding: the sequence of `fetch` directives in a routine,
+;      in program order, is the trailing-byte layout for that instruction.
+;   2. Derive `operands:` / `operandSize:` / instruction length metadata
+;      without the author writing them.
+;   3. Resolve dispatch refinements in `entry:` — a constraint like
+;      `entry: 0x80, ModRM.reg = 0` references the `reg` field of the
+;      `ModRM` operand declared below, so the generator knows which bit
+;      position to match during decode.
+;
+; Operands are file-scoped so they can be shared across every routine that
+; fetches them. `fields` are declared with bit offsets so the inference
+; pass can translate `ModRM.reg = 0` into the correct match expression.
+; `size` is the number of instruction-stream bytes consumed; 0 means the
+; operand is encoded in the opcode byte itself (e.g. `0xB0+r` inline reg).
+
+operand ModRM
+  description
+    The ModR/M byte common to most x86 memory/register instructions. The
+    `mod` field selects the addressing mode, `reg` selects a GPR (or, for
+    group instructions, acts as an opcode extension), and `rm` selects a
+    register or the base addressing mode for effective-address computation.
+
+  size: 1
+  fields
+    mod:u2 @ 6
+    reg:u3 @ 3
+    rm:u3  @ 0
+  fetch
+    IStreamRead { dest: modrm }
+
+operand Disp8
+  description
+    8-bit sign-extended displacement. Fetched as one byte and widened to
+    u16 via a passA ALU microword so downstream address arithmetic can
+    treat all displacements uniformly.
+
+  size: 1
+  fetch
+    IStreamRead { dest: tmp }
+    AluMicro { op: passA, width: u8, srcA: tmp, srcB: zero,
+               dest: disp, writeFlags: 0, commit: never }
+
+operand Disp16
+  description: "16-bit little-endian displacement."
+  size: 2
+  fetch
+    IStreamRead { dest: disp[7:0] }
+    IStreamRead { dest: disp[15:8] }
+
+; ---- Shared sub-routines ---------------------------------------------------
+
+routine eaCalc(mod:u2, rm:u3) -> (ea:u16)
+  description: "Compute effective address for all ModR/M addressing modes."
+  micro
+    ; Base address selection per rm field.
+    mux rm
+      when 0
+        AluMicro { op: add, width: u16, srcA: BX, srcB: SI,
+                   dest: ea, writeFlags: 0, commit: never }
+      when 1
+        AluMicro { op: add, width: u16, srcA: BX, srcB: DI,
+                   dest: ea, writeFlags: 0, commit: never }
+      when 2
+        AluMicro { op: add, width: u16, srcA: BP, srcB: SI,
+                   dest: ea, writeFlags: 0, commit: never }
+      when 3
+        AluMicro { op: add, width: u16, srcA: BP, srcB: DI,
+                   dest: ea, writeFlags: 0, commit: never }
+      when 4
+        AluMicro { op: passA, width: u16, srcA: SI, srcB: zero,
+                   dest: ea, writeFlags: 0, commit: never }
+      when 5
+        AluMicro { op: passA, width: u16, srcA: DI, srcB: zero,
+                   dest: ea, writeFlags: 0, commit: never }
+      when 6
+        AluMicro { op: passA, width: u16, srcA: BP, srcB: zero,
+                   dest: ea, writeFlags: 0, commit: never }
+      when 7
+        AluMicro { op: passA, width: u16, srcA: BX, srcB: zero,
+                   dest: ea, writeFlags: 0, commit: never }
+
+    ; Optional displacement fetch based on mod field. Note that `fetch`
+    ; inside a nested mux arm still counts toward the calling routine's
+    ; operand list — the inference pass walks sub-routine bodies from
+    ; every call site to collect the full set of fetched operands.
+    mux mod
+      when 0: ()                              ; no displacement
+      when 1
+        fetch Disp8
+        AluMicro { op: add, width: u16, srcA: ea, srcB: disp,
+                   dest: ea, writeFlags: 0, commit: never }
+      when 2
+        fetch Disp16
+        AluMicro { op: add, width: u16, srcA: ea, srcB: disp,
+                   dest: ea, writeFlags: 0, commit: never }
+      when 3: ()                              ; register-direct, ea unused
+
+routine memRead8(addr:u16) -> (mdr:u8)
+  description: "Issue a u8 read via the BIU, stall until response."
+  micro
+    BusRead { width: u8, addr: addr, dest: mdr }
+
+routine memWrite8(addr:u16, value:u8) -> ()
+  description: "Issue a u8 write via the BIU, stall until response."
+  micro
+    BusWrite { width: u8, addr: addr, value: value }
+
+; ---- The ADD instruction family --------------------------------------------
+;
+; The 286 reference encodes ADD as eight forms (0x00..0x05 plus 0x80/0x81/0x83
+; group members). Only 0x00 (ADD r/m8, r8) is modeled here; the others follow
+; the same pattern.
+
+routine addRmReg8
+  description
+    Integer addition of an 8-bit register into an 8-bit r/m operand.
+
+  references
+    - "Intel 80286 Programmer's Reference Manual, ADD"
+
+  entry: 0x00
+  allow: [lock]
+
+  ; ---- What the inference pass derives from the microcode below ------------
+  ;
+  ; operands:      [ModRM]          from the fetch directives in program order
+  ; operandSize:   u8               from AluMicro.width
+  ; modifies:      [OF,SF,ZF,AF,    from writeFlags:1 on an AluMicro with
+  ;                 PF,CF]           op=add (ADD affects all six)
+  ; length:        2..4 bytes       1 (opcode) + 1 (ModRM) + 0/1/2 (disp
+  ;                                  depending on ModRM.mod, walked through
+  ;                                  eaCalc's mux)
+  ; semantic:      RAM[ea] <-       from symbolic execution of the inlined
+  ;                 RAM[ea] + R8[    microword list — see the worked trace in
+  ;                 ModRM.reg];      ALU_REVIEW.md section 2(e).
+  ;                 FLAGS <- addF8
+  ;
+  ; None of these are written by the author; the build tool emits them into
+  ; a generated .d.machine sidecar that the assembler / disassembler /
+  ; emulator backends consume.
+
+  micro
+    fetch ModRM
+    call eaCalc(ModRM.mod, ModRM.rm) -> ea
+    call memRead8(ea) -> mdr
+    AluMicro { op: add, width: u8, srcA: mem, srcB: ModRM.reg,
+               dest: tmp, writeFlags: 1, commit: onRetire }
+    call memWrite8(ea, tmp)
+    Retire {}
+
+; The cross-check: symbolically executing the `micro` block starting from
+; (RAM[ea] = opaque_a, reg = opaque_b) must yield the same register, memory,
+; and flag writes as the `semantic` block. The build tool enforces this under
+; `--check-micro`.
+
+
+; =============================================================================
+; Execute unit — routine dispatcher and microword sequencer
+; =============================================================================
+
+enum ExecuteState
+  fetch
+  decode
+  execute
+  fault
+
+machine executionUnit
+  id i286
+  description
+    Top-level execute unit. Owns the decode FSM and drives the microcode
+    sequencer. All per-instruction behavior lives in routines above — this
+    machine only knows how to (a) fetch an opcode byte from the instruction
+    stream, (b) pick a routine from the generated decodeTable, and (c) walk
+    that routine's microword list one per clock, stalling whenever the
+    current microword's `ready` predicate is false.
+
+  registers
+    state:ExecuteState = ExecuteState.fetch
+
+    ; Decoded ModR/M byte, populated by the fetchModRm sub-routine via an
+    ; IStreamRead microword. Exposed here because many routines read its
+    ; sub-fields as operands to `eaCalc`, `registerSelect`, etc.
+    modrm:u8 = 0
+      field mod:u2 @ 6
+      field reg:u3 @ 3
+      field rm:u3 @ 0
+
+    ; Micro program counter — a flat index into the microcode ROM
+    ; declared below. At fetch time we set microPc from
+    ; `microcode.decode(prefetch.byte)`, which produces the start
+    ; address of whichever routine matched the opcode byte; from
+    ; then on the sequencer advances microPc linearly until a
+    ; terminal microword (Retire) fires. No separate
+    ; currentRoutine register is needed — the flat microPc fully
+    ; identifies the execution position, and debug tooling can
+    ; reverse-map an address to a routine via the build-time
+    ; linearization table the ROM generator produces.
+    microPc:u16 = 0
+
+    ; Scratch locals shared across microwords within a routine. These are
+    ; the real storage behind routine-local names like `ea`, `tmp`, `mdr`,
+    ; `disp`. The cross-checker treats them as live only for the duration
+    ; of the routine that wrote them.
+    ea:u16   = 0
+    tmp:u16  = 0
+    mdr:u16  = 0
+    disp:u16 = 0
+
+    ; Operand rails for the aluSelect mux. Populated by surrounding
+    ; microwords so that when an AluMicro fires, its `srcA` / `srcB`
+    ; fields pick the right pre-computed value off these rails:
+    ;
+    ;   reg — current value from the register file (driven by regRead)
+    ;   imm — current immediate value (populated by istream.read
+    ;         microwords for Imm8 / Imm16 operands)
+    ;   ip  — machine-local copy of the instruction pointer; the
+    ;         prefetcher owns fetchIP, but the execute unit needs its
+    ;         own IP snapshot for instructions that read it as an
+    ;         operand (LEA-style addressing, PC-relative branches).
+    reg:u16 = 0
+    imm:u16 = 0
+    ip:u16  = 0
+
+    ; Staging buffer for onRetire writes. Drained by the Retire microword;
+    ; discarded by the fault handler.
+    stagedCount:u3 = 0
+    ; (staged entries elided here — structure is an array of {dest, value})
+
+  wires in
+    prefetch:PrefetchOut
+    busResponse:BusResponse
+
+  wires out
+    prefetchControl:PrefetchControl
+    busRequest:BusRequest
+
+  default
+    prefetchControl = { pop: 0, flush: 0, redirect: 0, hold: 0 }
+    busRequest      = { valid: 0, address: 0, op: BusOp.read,
+                        size: BusSize.u16, data: 0 }
+
+  ; ---- Shared hardware instances -------------------------------------------
+  ;
+  ; These instances are the physical hardware that microword effect
+  ; blocks drive and read. Because they're instantiated here once
+  ; rather than per call-site, every AluMicro in every routine shares
+  ; the same two operand muxes and the same ALU datapath. Runtime
+  ; dispatch (which source select to pick, which op to run, which
+  ; flag width to compute) happens inside the microword effect block
+  ; by driving the unpinned inputs of these instances.
+  ;
+  ; There is only one physical ALU, matching real i286 hardware: a
+  ; single u16 datapath that handles 8-bit operations by zero-extending
+  ; the operands on the way in and narrowing the result on the way
+  ; out, with flag computation done separately at the appropriate
+  ; width. Multi-cycle operations (mul, div, imul, idiv — future
+  ; slice) will drive this same datapath across cycles with scratch
+  ; state on the execute unit.
+  ;
+  ; Inputs that don't vary per microword (the six operand rails for
+  ; `aluSelect`, and `cin` for the ALU) are pinned at instantiation.
+  ; Inputs that do vary are left drivable and get assigned from each
+  ; AluMicro's effect block.
+
+  instance regRead : registerSelect
+    sel   = modrm.reg
+    width = Width.u16
+
+  instance aluSrcA : aluSelect
+    reg = regRead.out
+    imm = imm
+    tmp = tmp
+    mdr = mdr
+    ea  = ea
+    ip  = ip
+
+  instance aluSrcB : aluSelect
+    reg = regRead.out
+    imm = imm
+    tmp = tmp
+    mdr = mdr
+    ea  = ea
+    ip  = ip
+
+  instance mainAlu : alu::<u16>
+    cin = FLAGS.CF
+
+  ; ---- Microcode ROM -------------------------------------------------------
+  ;
+  ; The microcode ROM is the dispatchable instruction set of this
+  ; execute unit. Each listed routine must have an `entry:` field;
+  ; the build tool walks the listing, linearizes each routine's
+  ; `micro:` block into the flat MicroOp[] storage, and generates
+  ; a decode lookup from every routine's `entry:` pattern.
+  ;
+  ; Reads: `microcode[microPc]` returns the MicroOp at the given
+  ; address in the flat storage.
+  ;
+  ; Dispatch: `microcode.decode(opcode)` takes an opcode byte and
+  ; returns the start-address microPc of whichever routine matched
+  ; the opcode's `entry:` pattern.
+  ;
+  ; This uses the shorthand rom form because the i286 has one decode
+  ; surface (the primary opcode space). Adding support for the
+  ; 0x0F-prefixed opcodes will require switching to the nested form
+  ; — see core/ALU_UNITS_MACHINES.md section 4.
+  ;
+  ; As written, only `addRmReg8` is listed; the rest of the
+  ; instruction set will be added as more routines land.
+
+  rom microcode:MicroOp[]
+    addRmReg8
+
+  mux state
+    when ExecuteState.fetch
+      ; Fetch the opcode byte from the prefetch queue, dispatch via
+      ; the microcode ROM's decode method, and enter execute. The
+      ; decode method handles the lookup; we don't need a separate
+      ; decodeTable register.
+      if prefetch.valid
+        prefetchControl.pop = 1
+        microPc <- microcode.decode(prefetch.byte)
+        state   <- ExecuteState.execute
+
+    when ExecuteState.execute
+      ; Generic microword dispatcher. The sequencer doesn't know what
+      ; any microword means; it only knows how to look up `ready`,
+      ; `effect`, and `terminal` via auto-dispatched union-field
+      ; access. Both `ready` and `effect` are declared on every
+      ; microword variant, so `mw.ready` and `mw.effect` expand at
+      ; type-check time into a mux on the underlying variant tag.
+      ; `mw.terminal` is true only for Retire.
+      wire mw = microcode[microPc]
+
+      if !mw.ready
+        ; Stall: hold microPc, re-issue same microword next clock.
+        ; The stall condition is whatever the microword kind
+        ; declared — for IStreamRead that's `prefetch.valid`, for
+        ; BusRead/BusWrite that's `busResponse.done`, for AluMicro
+        ; it's always 1.
+        ()
+      else
+        mw.effect
+        ; Retire microwords advance state themselves, so only
+        ; increment microPc for non-terminal microwords.
+        if !mw.terminal
+          microPc <- microPc + 1
+
+    when ExecuteState.fault
+      ; Discard any onRetire writes from the faulting routine and
+      ; dispatch into the interrupt handler routine. The IP-rollback
+      ; rule from 8716ae3 lives here: staged writes are dropped
+      ; rather than drained.
+      stagedCount <- 0
+      state       <- ExecuteState.fetch

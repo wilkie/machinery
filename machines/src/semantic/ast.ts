@@ -65,10 +65,13 @@ export interface File {
 export type Declaration =
   | EnumDeclaration
   | BundleDeclaration
-  | UnionDeclaration;
-// NOTE: Other declaration kinds (`register`, `unit`, `machine`,
-// `microword`, `operand`, `routine`) extend this union in follow-up
-// slices.
+  | UnionDeclaration
+  | RegisterDeclaration
+  | UnitDeclaration
+  | MachineDeclaration
+  | MicrowordDeclaration
+  | OperandDeclaration
+  | RoutineDeclaration;
 
 // ---- Enum ----
 
@@ -103,10 +106,152 @@ export interface UnionDeclaration {
   loc: SourceLocation;
 }
 
+// ---- Register ----
+
+export interface RegisterDeclaration {
+  kind: 'RegisterDeclaration';
+  name: string;
+  /** The register's overall type (e.g., `u16`, `seg16`). */
+  type: TypeRef;
+  /** Named bit fields of the register, in source order. Empty for
+   *  registers without a body. */
+  fields: RegisterField[];
+  loc: SourceLocation;
+}
+
+export interface RegisterField {
+  kind: 'RegisterField';
+  name: string;
+  type: TypeRef;
+  /** Bit offset from the `@ N` clause. `undefined` when the source
+   *  omits the offset (rare but legal). */
+  offset: number | undefined;
+  loc: SourceLocation;
+}
+
+// ---- Unit ----
+
+/**
+ * A `unit` declaration. First-slice coverage captures name and type
+ * parameters only; the body (combinational statements, `wires in/out`
+ * sections, etc.) is parsed but not yet lowered — it requires
+ * statement/expression AST support which lands in a follow-up slice.
+ */
+export interface UnitDeclaration {
+  kind: 'UnitDeclaration';
+  name: string;
+  typeParams: TypeParameter[];
+  loc: SourceLocation;
+}
+
+export interface TypeParameter {
+  kind: 'TypeParameter';
+  name: string;
+  /** The constraint type (e.g. `Width` in `<W:Width>`). */
+  type: TypeRef;
+  loc: SourceLocation;
+}
+
+// ---- Machine ----
+
+/**
+ * A `machine` declaration. First-slice coverage captures name and the
+ * optional `id` tag; every other machine-body section (registers,
+ * wires in/out, default, instances, rom, and statement-level body
+ * content) requires downstream AST support and lands in follow-up
+ * slices.
+ */
+export interface MachineDeclaration {
+  kind: 'MachineDeclaration';
+  name: string;
+  /** The `id NAME` tag from the machine body, if present. Used by the
+   *  executionUnit to identify which processor it represents. */
+  id: string | undefined;
+  loc: SourceLocation;
+}
+
+// ---- Microword ----
+
+/**
+ * A `microword` declaration. Captures the variant name and its field
+ * list. The `description`, `ready`, `terminal`, and `effect` sections
+ * are parsed but not yet lowered — they contain expressions / prose /
+ * statement blocks that require follow-up slices.
+ */
+export interface MicrowordDeclaration {
+  kind: 'MicrowordDeclaration';
+  name: string;
+  /** Typed fields from the `fields` section, in source order. May be
+   *  empty when the microword has no per-instance parameters
+   *  (`fields {}` case). */
+  fields: NamedField[];
+  loc: SourceLocation;
+}
+
+// ---- Operand ----
+
+/**
+ * An `operand` declaration. Captures name, size, and bit-offset
+ * fields. The `description` and `fetch` sections are parsed but not
+ * yet lowered.
+ */
+export interface OperandDeclaration {
+  kind: 'OperandDeclaration';
+  name: string;
+  /** Byte count from the `size: N` clause. `undefined` if omitted. */
+  size: number | undefined;
+  /** The operand's bit-layout fields, in source order. */
+  fields: OperandField[];
+  loc: SourceLocation;
+}
+
+export interface OperandField {
+  kind: 'OperandField';
+  name: string;
+  type: TypeRef;
+  /** Bit offset from `@ N`, or undefined when the field has no
+   *  explicit offset. */
+  offset: number | undefined;
+  loc: SourceLocation;
+}
+
+// ---- Routine ----
+
+/**
+ * A `routine` declaration. Captures name, parameter list, return
+ * type, and author-written metadata (entry, allow, modifies,
+ * references). The `description` block and `micro` body are parsed
+ * but not yet lowered — they contain prose and statement blocks
+ * respectively.
+ */
+export interface RoutineDeclaration {
+  kind: 'RoutineDeclaration';
+  name: string;
+  /** Parameter list from `(...)`. Empty for routines with no params. */
+  params: NamedField[];
+  /** Return type fields from `-> (...)`. Undefined when the routine
+   *  has no return-type clause at all. An empty array represents
+   *  the `-> ()` form (explicit no-return). */
+  returnType: NamedField[] | undefined;
+  /** Opcode value from an `entry: N` clause, when N is a single bare
+   *  numeric literal. More complex entry forms (expressions, group
+   *  constraints, byte sequences) are not yet lowered; this field is
+   *  undefined in those cases. */
+  entry: number | undefined;
+  /** Identifiers from the `allow: [...]` policy list. */
+  allow: string[];
+  /** Identifiers from the `modifies: [...]` list. */
+  modifies: string[];
+  /** Quoted strings (with quotes stripped) from the `references`
+   *  bullet list. */
+  references: string[];
+  loc: SourceLocation;
+}
+
 // ---- Shared field node ----
 
-/** A `name: type` field used by bundles (as fields) and unions (as arms).
- *  Operand and microword fields land here too in a later slice. */
+/** A `name: type` field used by bundles (as fields), unions (as arms),
+ *  microword field sections, and routine parameter / return lists. */
 export interface NamedField {
   kind: 'NamedField';
   name: string;
@@ -145,4 +290,38 @@ export function isBundleDeclaration(d: Declaration): d is BundleDeclaration {
 
 export function isUnionDeclaration(d: Declaration): d is UnionDeclaration {
   return d.kind === 'UnionDeclaration';
+}
+
+export function isRegisterDeclaration(
+  d: Declaration,
+): d is RegisterDeclaration {
+  return d.kind === 'RegisterDeclaration';
+}
+
+export function isUnitDeclaration(d: Declaration): d is UnitDeclaration {
+  return d.kind === 'UnitDeclaration';
+}
+
+export function isMachineDeclaration(
+  d: Declaration,
+): d is MachineDeclaration {
+  return d.kind === 'MachineDeclaration';
+}
+
+export function isMicrowordDeclaration(
+  d: Declaration,
+): d is MicrowordDeclaration {
+  return d.kind === 'MicrowordDeclaration';
+}
+
+export function isOperandDeclaration(
+  d: Declaration,
+): d is OperandDeclaration {
+  return d.kind === 'OperandDeclaration';
+}
+
+export function isRoutineDeclaration(
+  d: Declaration,
+): d is RoutineDeclaration {
+  return d.kind === 'RoutineDeclaration';
 }

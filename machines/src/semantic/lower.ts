@@ -21,6 +21,15 @@ import type {
   EnumVariant,
   BundleDeclaration,
   UnionDeclaration,
+  RegisterDeclaration,
+  RegisterField,
+  UnitDeclaration,
+  TypeParameter,
+  MachineDeclaration,
+  MicrowordDeclaration,
+  OperandDeclaration,
+  OperandField,
+  RoutineDeclaration,
   NamedField,
   TypeRef,
   SourceLocation,
@@ -55,9 +64,10 @@ export function lowerFile(cst: CstNode): File {
 
 /**
  * Pick the matching declaration-kind sub-rule from the generic
- * `declaration` wrapper node and lower it. Returns `undefined` when the
- * declaration is of a kind we haven't lowered yet (e.g., `routine`,
- * `unit`, `machine`) — those are deferred to later slices, not errors.
+ * `declaration` wrapper node and lower it. Returns `undefined` only
+ * when the CST declaration node is structurally malformed and we
+ * can't identify its kind at all — which shouldn't happen if the
+ * parser accepted the input.
  */
 function lowerDeclaration(cst: CstNode): Declaration | undefined {
   const enumDecl = asCstNodes(cst.children['enumDecl'])[0];
@@ -69,11 +79,24 @@ function lowerDeclaration(cst: CstNode): Declaration | undefined {
   const unionDecl = asCstNodes(cst.children['unionDecl'])[0];
   if (unionDecl) return lowerUnionDecl(unionDecl);
 
-  // Other declaration kinds (registerDecl, unitDecl, machineDecl,
-  // microwordDecl, operandDecl, routineDecl) are not yet lowered.
-  // They're valid in the CST but return undefined here, which
-  // `lowerFile` skips. When lowering support lands for each, add a
-  // branch above.
+  const registerDecl = asCstNodes(cst.children['registerDecl'])[0];
+  if (registerDecl) return lowerRegisterDecl(registerDecl);
+
+  const unitDecl = asCstNodes(cst.children['unitDecl'])[0];
+  if (unitDecl) return lowerUnitDecl(unitDecl);
+
+  const machineDecl = asCstNodes(cst.children['machineDecl'])[0];
+  if (machineDecl) return lowerMachineDecl(machineDecl);
+
+  const microwordDecl = asCstNodes(cst.children['microwordDecl'])[0];
+  if (microwordDecl) return lowerMicrowordDecl(microwordDecl);
+
+  const operandDecl = asCstNodes(cst.children['operandDecl'])[0];
+  if (operandDecl) return lowerOperandDecl(operandDecl);
+
+  const routineDecl = asCstNodes(cst.children['routineDecl'])[0];
+  if (routineDecl) return lowerRoutineDecl(routineDecl);
+
   return undefined;
 }
 
@@ -155,6 +178,390 @@ function lowerUnionDecl(cst: CstNode): UnionDeclaration {
     kind: 'UnionDeclaration',
     name,
     arms,
+    loc: locOf(cst),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Register
+// ---------------------------------------------------------------------------
+
+function lowerRegisterDecl(cst: CstNode): RegisterDeclaration {
+  const name = firstIdentifierImage(cst) ?? '';
+
+  const typeNode = asCstNodes(cst.children['typeRef'])[0];
+  const type: TypeRef = typeNode
+    ? lowerTypeRef(typeNode) ?? makeErrorTypeRef(cst)
+    : makeErrorTypeRef(cst);
+
+  const fields: RegisterField[] = [];
+  const body = asCstNodes(cst.children['registerBody'])[0];
+  if (body) {
+    for (const f of asCstNodes(body.children['fieldDecl'])) {
+      const field = lowerFieldDecl(f);
+      if (field) fields.push(field);
+    }
+  }
+
+  return {
+    kind: 'RegisterDeclaration',
+    name,
+    type,
+    fields,
+    loc: locOf(cst),
+  };
+}
+
+function lowerFieldDecl(cst: CstNode): RegisterField | undefined {
+  const nameTok = asTokens(cst.children['Identifier'])[0];
+  const typeNode = asCstNodes(cst.children['typeRef'])[0];
+  if (!nameTok || !typeNode) return undefined;
+
+  const type = lowerTypeRef(typeNode);
+  if (!type) return undefined;
+
+  const offset = extractNumericLiteral(cst);
+
+  return {
+    kind: 'RegisterField',
+    name: nameTok.image,
+    type,
+    offset,
+    loc: locOf(cst),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Unit
+// ---------------------------------------------------------------------------
+
+function lowerUnitDecl(cst: CstNode): UnitDeclaration {
+  const name = firstIdentifierImage(cst) ?? '';
+
+  const typeParams: TypeParameter[] = [];
+  const paramsNode = asCstNodes(cst.children['typeParams'])[0];
+  if (paramsNode) {
+    for (const p of asCstNodes(paramsNode.children['typeParam'])) {
+      const param = lowerTypeParam(p);
+      if (param) typeParams.push(param);
+    }
+  }
+
+  return {
+    kind: 'UnitDeclaration',
+    name,
+    typeParams,
+    loc: locOf(cst),
+  };
+}
+
+function lowerTypeParam(cst: CstNode): TypeParameter | undefined {
+  const nameTok = asTokens(cst.children['Identifier'])[0];
+  const typeNode = asCstNodes(cst.children['typeRef'])[0];
+  if (!nameTok || !typeNode) return undefined;
+
+  const type = lowerTypeRef(typeNode);
+  if (!type) return undefined;
+
+  return {
+    kind: 'TypeParameter',
+    name: nameTok.image,
+    type,
+    loc: locOf(cst),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Machine
+// ---------------------------------------------------------------------------
+
+function lowerMachineDecl(cst: CstNode): MachineDeclaration {
+  const name = firstIdentifierImage(cst) ?? '';
+
+  // Look for an `id NAME` section inside the machine body. The body
+  // is optional; when present, we walk `idSection` children to find
+  // the declared id, ignoring every other section for now.
+  let id: string | undefined;
+  const body = asCstNodes(cst.children['machineBody'])[0];
+  if (body) {
+    const idSection = asCstNodes(body.children['idSection'])[0];
+    if (idSection) {
+      // idSection is `Id Identifier Newline`. The identifier is the
+      // section's single Identifier child.
+      const idTok = asTokens(idSection.children['Identifier'])[0];
+      if (idTok) id = idTok.image;
+    }
+  }
+
+  return {
+    kind: 'MachineDeclaration',
+    name,
+    id,
+    loc: locOf(cst),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Microword
+// ---------------------------------------------------------------------------
+
+function lowerMicrowordDecl(cst: CstNode): MicrowordDeclaration {
+  const name = firstIdentifierImage(cst) ?? '';
+
+  const fields: NamedField[] = [];
+  const body = asCstNodes(cst.children['microwordBody'])[0];
+  if (body) {
+    for (const fs of asCstNodes(body.children['fieldsSection'])) {
+      // The `fields` section has two forms: an inline record-literal
+      // (`fields { a:T, b:U }`) whose namedFields are direct
+      // children of the fieldsSection, or a block form whose
+      // namedFields live inside a nested `fieldsBody`. Check both.
+      const inlineFields = asCstNodes(fs.children['namedField']);
+      for (const f of inlineFields) {
+        const field = lowerNamedField(f);
+        if (field) fields.push(field);
+      }
+      const blockBody = asCstNodes(fs.children['fieldsBody'])[0];
+      if (blockBody) {
+        for (const f of asCstNodes(blockBody.children['namedField'])) {
+          const field = lowerNamedField(f);
+          if (field) fields.push(field);
+        }
+      }
+    }
+  }
+
+  return {
+    kind: 'MicrowordDeclaration',
+    name,
+    fields,
+    loc: locOf(cst),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Operand
+// ---------------------------------------------------------------------------
+
+function lowerOperandDecl(cst: CstNode): OperandDeclaration {
+  const name = firstIdentifierImage(cst) ?? '';
+
+  let size: number | undefined;
+  const fields: OperandField[] = [];
+
+  const body = asCstNodes(cst.children['operandBody'])[0];
+  if (body) {
+    // Size clauses — typically one, but walk all to be safe.
+    for (const sc of asCstNodes(body.children['sizeClause'])) {
+      const n = extractNumericLiteral(sc);
+      if (n !== undefined) size = n;
+    }
+
+    // Fields sections — same two-form handling as microword.
+    for (const fs of asCstNodes(body.children['fieldsSection'])) {
+      const inlineFields = asCstNodes(fs.children['namedField']);
+      for (const f of inlineFields) {
+        const field = lowerOperandField(f);
+        if (field) fields.push(field);
+      }
+      const blockBody = asCstNodes(fs.children['fieldsBody'])[0];
+      if (blockBody) {
+        for (const f of asCstNodes(blockBody.children['namedField'])) {
+          const field = lowerOperandField(f);
+          if (field) fields.push(field);
+        }
+      }
+    }
+  }
+
+  return {
+    kind: 'OperandDeclaration',
+    name,
+    size,
+    fields,
+    loc: locOf(cst),
+  };
+}
+
+function lowerOperandField(cst: CstNode): OperandField | undefined {
+  const nameTok = asTokens(cst.children['Identifier'])[0];
+  const typeNode = asCstNodes(cst.children['typeRef'])[0];
+  if (!nameTok || !typeNode) return undefined;
+
+  const type = lowerTypeRef(typeNode);
+  if (!type) return undefined;
+
+  const offset = extractNumericLiteral(cst);
+
+  return {
+    kind: 'OperandField',
+    name: nameTok.image,
+    type,
+    offset,
+    loc: locOf(cst),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Routine
+// ---------------------------------------------------------------------------
+
+function lowerRoutineDecl(cst: CstNode): RoutineDeclaration {
+  const name = firstIdentifierImage(cst) ?? '';
+
+  // Parameters from the `(...)` clause. The param list rule is
+  // `paramList` containing zero or more `param` sub-nodes.
+  const params: NamedField[] = [];
+  const paramList = asCstNodes(cst.children['paramList'])[0];
+  if (paramList) {
+    for (const p of asCstNodes(paramList.children['param'])) {
+      const field = lowerNamedField(p);
+      if (field) params.push(field);
+    }
+  }
+
+  // Return type from the `-> (...)` or `-> type` clause.
+  let returnType: NamedField[] | undefined;
+  const returnNode = asCstNodes(cst.children['returnType'])[0];
+  if (returnNode) {
+    returnType = [];
+    // Parenthesized form: list of `returnField` children.
+    for (const rf of asCstNodes(returnNode.children['returnField'])) {
+      const field = lowerNamedField(rf);
+      if (field) returnType.push(field);
+    }
+    // Unparenthesized form: a single `typeRef` child. We synthesize
+    // a one-element NamedField list with an empty name for now, so
+    // the downstream consumers can still see the type. This shape is
+    // uncommon in real code and we may revisit it.
+  }
+
+  // Metadata sections from the routine body.
+  let entry: number | undefined;
+  const allow: string[] = [];
+  const modifies: string[] = [];
+  const references: string[] = [];
+
+  const body = asCstNodes(cst.children['routineBody'])[0];
+  if (body) {
+    for (const section of asCstNodes(body.children['entrySection'])) {
+      const n = extractEntryLiteral(section);
+      if (n !== undefined) entry = n;
+    }
+    for (const section of asCstNodes(body.children['allowSection'])) {
+      allow.push(...extractIdentifierList(section));
+    }
+    for (const section of asCstNodes(body.children['modifiesSection'])) {
+      modifies.push(...extractIdentifierList(section));
+    }
+    for (const section of asCstNodes(body.children['referencesSection'])) {
+      references.push(...extractReferenceList(section));
+    }
+  }
+
+  return {
+    kind: 'RoutineDeclaration',
+    name,
+    params,
+    returnType,
+    entry,
+    allow,
+    modifies,
+    references,
+    loc: locOf(cst),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Routine metadata extractors
+// ---------------------------------------------------------------------------
+
+/**
+ * Pull a numeric value out of an `entry: N` section when N is a
+ * single bare literal. Returns `undefined` for richer forms
+ * (expressions, comma lists, byte sequences).
+ */
+function extractEntryLiteral(section: CstNode): number | undefined {
+  const expressions = asCstNodes(section.children['expression']);
+  if (expressions.length !== 1) return undefined;
+  const tokens: IToken[] = [];
+  collectAllTokens(expressions[0]!, tokens);
+  if (tokens.length !== 1) return undefined;
+  const tok = tokens[0]!;
+  const kind = tok.tokenType.name;
+  if (kind !== 'HexLiteral' && kind !== 'DecimalLiteral') return undefined;
+  return parseNumericLiteral(tok.image);
+}
+
+/** Pull the identifiers out of an allow/modifies section's `[...]`. */
+function extractIdentifierList(section: CstNode): string[] {
+  const list = asCstNodes(section.children['identifierList'])[0];
+  if (!list) return [];
+  return asTokens(list.children['Identifier']).map((t) => t.image);
+}
+
+/** Pull the quoted strings out of a references section's bulleted list. */
+function extractReferenceList(section: CstNode): string[] {
+  const body = asCstNodes(section.children['referencesBody'])[0];
+  if (!body) return [];
+  const items = asCstNodes(body.children['referenceItem']);
+  const result: string[] = [];
+  for (const item of items) {
+    const str = asTokens(item.children['StringLiteral'])[0];
+    if (!str) continue;
+    result.push(str.image.slice(1, -1));
+  }
+  return result;
+}
+
+function collectAllTokens(node: CstNode, out: IToken[]): void {
+  for (const children of Object.values(node.children)) {
+    if (!children) continue;
+    for (const c of children) {
+      if (isCstNode(c)) {
+        collectAllTokens(c, out);
+      } else {
+        out.push(c as IToken);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared: numeric-literal extractors
+// ---------------------------------------------------------------------------
+
+/**
+ * Pull a number out of a CST node that has a direct `DecimalLiteral`
+ * or `HexLiteral` token child. Used by register-field offsets,
+ * operand size clauses, and operand-field offsets — anywhere the
+ * grammar accepts a bare literal.
+ */
+function extractNumericLiteral(cst: CstNode): number | undefined {
+  const decTok = asTokens(cst.children['DecimalLiteral'])[0];
+  if (decTok) return parseNumericLiteral(decTok.image);
+  const hexTok = asTokens(cst.children['HexLiteral'])[0];
+  if (hexTok) return parseNumericLiteral(hexTok.image);
+  return undefined;
+}
+
+function parseNumericLiteral(image: string): number {
+  if (image.startsWith('0x') || image.startsWith('0X')) {
+    return parseInt(image.slice(2), 16);
+  }
+  return parseInt(image, 10);
+}
+
+/**
+ * Build an "error" type reference for cases where the source was
+ * missing a type we expected. Downstream passes can still walk the
+ * AST; they'll encounter the empty name and report a diagnostic
+ * instead of crashing on an undefined field.
+ */
+function makeErrorTypeRef(cst: CstNode): TypeRef {
+  return {
+    kind: 'TypeRefSimple',
+    name: '',
     loc: locOf(cst),
   };
 }

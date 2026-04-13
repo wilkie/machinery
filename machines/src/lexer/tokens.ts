@@ -137,6 +137,20 @@ export const StringLiteral = createToken({
 
 export const Arrow = createToken({ name: 'Arrow', pattern: /->/ });
 export const BackArrow = createToken({ name: 'BackArrow', pattern: /<-/ });
+
+/**
+ * `::` — the path separator / turbofish delimiter. Used at expression
+ * call sites to disambiguate type arguments from `<` comparison:
+ * `alu::<W>(op, a, b)` is unambiguously a parameterized call, whereas
+ * `alu<W>(op, a, b)` would collide with the sequence `alu < W`, ...
+ *
+ * Only appears in the turbofish prefix of `callOp` today; enum member
+ * access stays as `AluOp.add`, not `AluOp::add`.
+ */
+export const DoubleColon = createToken({
+  name: 'DoubleColon',
+  pattern: /::/,
+});
 export const ColonEqual = createToken({ name: 'ColonEqual', pattern: /:=/ });
 export const EqualEqual = createToken({ name: 'EqualEqual', pattern: /==/ });
 export const NotEqual = createToken({ name: 'NotEqual', pattern: /!=/ });
@@ -254,6 +268,9 @@ export const allTokens: TokenType[] = [
   // Multi-char operators before single-char.
   Arrow,
   BackArrow,
+  // `DoubleColon` must come before `TightColon` / `Colon` so the lexer
+  // matches `::` as one token rather than two single colons.
+  DoubleColon,
   ColonEqual,
   EqualEqual,
   NotEqual,

@@ -21,8 +21,6 @@
 //     `fetch` blocks (inside operands).
 //   * Unit and machine bodies (wires, registers, mux/when/if, etc.).
 //   * Routine bodies (entry, allow, modifies, semantic, micro).
-//   * Ternary `? :` expressions.
-//   * Type-parameterized function calls `f<T>(...)`.
 //
 // See the comment blocks above individual rules for per-rule details.
 
@@ -65,6 +63,7 @@ import {
   // Multi-char operators
   Arrow,
   BackArrow,
+  DoubleColon,
   ColonEqual,
   EqualEqual,
   NotEqual,
@@ -688,9 +687,11 @@ export class MachineParser extends CstParser {
   // inner `:` and the ternary fails to find its separator. Real code
   // always writes `a ? b : c` with spaces, and that parses cleanly.
   //
-  // Deferred to later slices:
-  //   - type-parameterized calls `f<T>(...)` — the `<` ambiguity with
-  //     comparison still needs a design decision.
+  // Type-parameterized calls use a Rust-style turbofish: `alu::<W>(...)`.
+  // The `::` before the `<` disambiguates from `alu < W > (...)` which
+  // would otherwise be a sequence of comparisons. Declarations
+  // (`unit alu<W:Width>`) keep their bare-angle-bracket syntax because
+  // they're in a distinct syntactic position with no ambiguity.
   //
   // `readyClause` is the main parser site that currently uses the
   // expression grammar. Operand and microword bodies with a `fetch` or
@@ -848,8 +849,9 @@ export class MachineParser extends CstParser {
    * separator (which is always loose `Colon`) can't be mistaken for a
    * cast. See the `TightColon` token declaration for the full story.
    *
-   * Type-parameterized calls `f<T>(...)` are still deferred — the `<`
-   * ambiguity with comparison isn't resolved yet.
+   * Function calls support an optional Rust-style turbofish type-arg
+   * prefix: `f::<T>(...)`. The bare form `f<T>(...)` is not accepted —
+   * the `::` disambiguates from a `<` comparison. See `callOp` below.
    */
   public postfixExpr = this.RULE('postfixExpr', () => {
     this.SUBRULE(this.primaryExpr);
@@ -865,6 +867,7 @@ export class MachineParser extends CstParser {
         const la1 = this.LA(1);
         if (tokenMatcher(la1, Dot)) return true;
         if (tokenMatcher(la1, LParen)) return true;
+        if (tokenMatcher(la1, DoubleColon)) return true;
         if (tokenMatcher(la1, LBracket)) return true;
         if (tokenMatcher(la1, TightColon)) {
           return tokenMatcher(this.LA(2), Identifier);
@@ -888,17 +891,32 @@ export class MachineParser extends CstParser {
   });
 
   /**
-   * Function call: `name(arg, arg, ...)`. Zero or more comma-separated
-   * expression arguments. Type-parameterized form `f<T>(...)` is not
-   * yet supported.
+   * Function call: `name(arg, arg, ...)`, with an optional Rust-style
+   * turbofish type-argument prefix: `name::<T>(arg)` or
+   * `name::<T, U>(arg)`. The `::` disambiguates type arguments from
+   * `<` comparison — `name<T>(x)` without the `::` parses as
+   * `(name < T)` followed by `> (x)`, not as a parameterized call.
+   *
+   * Declarations (`unit alu<W:Width>`) don't need the turbofish because
+   * the `<` there is unambiguously part of the declaration syntax.
    */
   public callOp = this.RULE('callOp', () => {
-    this.CONSUME(LParen);
     this.OPTION(() => {
-      this.SUBRULE(this.expression);
+      this.CONSUME(DoubleColon);
+      this.CONSUME(Less);
+      this.SUBRULE(this.typeRef);
       this.MANY(() => {
         this.CONSUME(Comma);
-        this.SUBRULE2(this.expression);
+        this.SUBRULE2(this.typeRef);
+      });
+      this.CONSUME(Greater);
+    });
+    this.CONSUME(LParen);
+    this.OPTION2(() => {
+      this.SUBRULE3(this.expression);
+      this.MANY2(() => {
+        this.CONSUME2(Comma);
+        this.SUBRULE4(this.expression);
       });
     });
     this.CONSUME(RParen);

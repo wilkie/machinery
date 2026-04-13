@@ -109,9 +109,15 @@ function toSexp(node: CstElement): string {
           out = `(. ${out} ${name})`;
         } else if (op.name === 'callOp') {
           const args = asCstNodes(op.children['expression']).map(toSexp);
+          const typeArgs = asCstNodes(op.children['typeRef']).map((t) =>
+            firstToken(t, 'Identifier').image,
+          );
+          const head = typeArgs.length > 0
+            ? `call<${typeArgs.join(',')}>`
+            : 'call';
           out = args.length > 0
-            ? `(call ${out} ${args.join(' ')})`
-            : `(call ${out})`;
+            ? `(${head} ${out} ${args.join(' ')})`
+            : `(${head} ${out})`;
         } else if (op.name === 'indexOp') {
           const args = asCstNodes(op.children['expression']).map(toSexp);
           out = args.length === 1
@@ -570,6 +576,78 @@ describe('expression grammar — cast', () => {
 
   it('keeps bit slices working with loose colons', () => {
     expect(toSexp(parseOrFail('raw[7 : 0]'))).toBe('(slice raw 7 0)');
+  });
+});
+
+describe('expression grammar — turbofish (type-parameterized calls)', () => {
+  it('parses a single type argument', () => {
+    expect(toSexp(parseOrFail('alu::<W>(op, a, b)'))).toBe(
+      '(call<W> alu op a b)',
+    );
+  });
+
+  it('parses multiple type arguments', () => {
+    expect(toSexp(parseOrFail('foo::<T, U>(x)'))).toBe(
+      '(call<T,U> foo x)',
+    );
+  });
+
+  it('parses a turbofish with no call arguments', () => {
+    expect(toSexp(parseOrFail('foo::<T>()'))).toBe('(call<T> foo)');
+  });
+
+  it('parses a turbofish followed by a member access', () => {
+    expect(toSexp(parseOrFail('foo::<T>(x).bar'))).toBe(
+      '(. (call<T> foo x) bar)',
+    );
+  });
+
+  it('parses a turbofish on a member expression', () => {
+    expect(toSexp(parseOrFail('a.b::<T>(x)'))).toBe(
+      '(call<T> (. a b) x)',
+    );
+  });
+
+  it('parses nested turbofish calls', () => {
+    expect(toSexp(parseOrFail('foo::<T>(bar::<U>(x))'))).toBe(
+      '(call<T> foo (call<U> bar x))',
+    );
+  });
+
+  it('parses turbofish inside a binary expression', () => {
+    expect(toSexp(parseOrFail('foo::<T>(x) + 1'))).toBe(
+      '(+ (call<T> foo x) 1)',
+    );
+  });
+
+  it('parses the ALU_NEW.machine aluFlags::<W> call', () => {
+    expect(toSexp(parseOrFail('aluFlags::<W>(op, a, b, raw)'))).toBe(
+      '(call<W> aluFlags op a b raw)',
+    );
+  });
+
+  it('parses the ALU_NEW.machine alu::<width> call', () => {
+    expect(toSexp(parseOrFail('alu::<width>(op, a, b, FLAGS.CF)'))).toBe(
+      '(call<width> alu op a b (. FLAGS CF))',
+    );
+  });
+
+  it('does not parse a bare-angle-bracket call as turbofish', () => {
+    // `foo<T>(x)` without the `::` should parse as a comparison chain:
+    // `(foo < T) > (x)` (or an error, depending on how the binary
+    // rules handle it). Either way it is NOT a call<T>.
+    const cst = parseOrFail('foo<T>(x)');
+    const out = toSexp(cst);
+    expect(out).not.toContain('call<T>');
+  });
+
+  it('still parses plain comparison with angle brackets', () => {
+    // Regression: `a < b > c` is a pair of comparisons, not a turbofish.
+    expect(toSexp(parseOrFail('a < b > c'))).toBe('(> (< a b) c)');
+  });
+
+  it('still parses plain function calls without turbofish', () => {
+    expect(toSexp(parseOrFail('foo(a, b)'))).toBe('(call foo a b)');
   });
 });
 

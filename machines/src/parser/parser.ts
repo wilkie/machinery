@@ -25,6 +25,7 @@ import {
   Fields,
   Ready,
   Effect,
+  Size,
   Mux,
   When,
   If,
@@ -262,14 +263,23 @@ export class MachineParser extends CstParser {
   });
 
   /**
-   * Shared by bundleBody and unionBody: `Identifier ':' typeRef`. The
-   * downstream walker interprets it as a bundle field or union arm based
-   * on which container it sits inside.
+   * Shared by bundleBody, unionBody, microword fieldsSection, and operand
+   * fieldsSection: `Identifier ':' typeRef ('@' offset)?`. The optional
+   * bit offset only has semantic meaning for operand fields (ModRM's
+   * `mod:u2 @ 6`); bundles, unions, and microword fields never use it.
+   * The downstream walker decides whether to extract the offset.
    */
   public namedField = this.RULE('namedField', () => {
     this.CONSUME(Identifier);
     this.CONSUME(Colon);
     this.SUBRULE(this.typeRef);
+    this.OPTION(() => {
+      this.CONSUME(At);
+      this.OR([
+        { ALT: () => this.CONSUME(DecimalLiteral) },
+        { ALT: () => this.CONSUME(HexLiteral) },
+      ]);
+    });
   });
 
   public unitDecl = this.RULE('unitDecl', () => {
@@ -425,7 +435,63 @@ export class MachineParser extends CstParser {
   public operandDecl = this.RULE('operandDecl', () => {
     this.CONSUME(Operand);
     this.CONSUME(Identifier);
-    this.OPTION(() => this.SUBRULE(this.headerTerminator));
+    this.OPTION(() => {
+      this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+      this.OPTION1(() => this.SUBRULE(this.operandBody));
+    });
+  });
+
+  /**
+   * Indented body of an operand declaration. Sections can appear in any
+   * order and any subset; each section is one of:
+   *
+   *   description    — prose (inline or block), opaque
+   *   size: N        — a single numeric literal (byte count)
+   *   fields         — typed fields with optional @ offset (operand slots)
+   *   fetch          — block of microword record literals, opaque
+   *
+   * `description` and `fields` are reused directly from the microword
+   * body grammar — they share the same rule.
+   */
+  public operandBody = this.RULE('operandBody', () => {
+    this.CONSUME(Indent);
+    this.MANY(() => {
+      this.OR([
+        { ALT: () => this.CONSUME(Newline) },
+        { ALT: () => this.SUBRULE(this.descriptionSection) },
+        { ALT: () => this.SUBRULE(this.sizeClause) },
+        { ALT: () => this.SUBRULE(this.fieldsSection) },
+        { ALT: () => this.SUBRULE(this.fetchSection) },
+      ]);
+    });
+    this.CONSUME(Outdent);
+  });
+
+  /**
+   * A `size: N` clause — how many instruction-stream bytes this operand
+   * consumes. N can be decimal or hex (`size: 1`, `size: 0x02`).
+   */
+  public sizeClause = this.RULE('sizeClause', () => {
+    this.CONSUME(Size);
+    this.CONSUME(Colon);
+    this.OR([
+      { ALT: () => this.CONSUME(DecimalLiteral) },
+      { ALT: () => this.CONSUME(HexLiteral) },
+    ]);
+    this.CONSUME(Newline);
+  });
+
+  /**
+   * A `fetch` section — the block of microword record literals that
+   * pull the operand's bytes out of the instruction stream. The inner
+   * block is consumed opaquely via the general `block` skipper; a later
+   * slice will replace this with real statement grammar once expressions
+   * and record literals are in place.
+   */
+  public fetchSection = this.RULE('fetchSection', () => {
+    this.CONSUME(Fetch);
+    this.AT_LEAST_ONE(() => this.CONSUME(Newline));
+    this.OPTION(() => this.SUBRULE(this.block));
   });
 
   public routineDecl = this.RULE('routineDecl', () => {

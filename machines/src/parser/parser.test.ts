@@ -7,6 +7,7 @@ import {
   getUnions,
   getRegisters,
   getMicrowords,
+  getOperands,
 } from './parse.js';
 
 const readSample = (name: string): string =>
@@ -993,6 +994,214 @@ describe('parser — top-level declaration skeleton', () => {
       const { cst, parseErrors } = parse(src);
       expect(parseErrors).toEqual([]);
       expect(getMicrowords(cst!)).toEqual([]);
+    });
+  });
+
+  describe('operand body parsing', () => {
+    it('captures name, size, and bit-offset fields for a structured operand', () => {
+      const src = [
+        'operand ModRM',
+        '  size: 1',
+        '  fields',
+        '    mod:u2 @ 6',
+        '    reg:u3 @ 3',
+        '    rm:u3 @ 0',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getOperands(cst!)).toEqual([
+        {
+          name: 'ModRM',
+          size: 1,
+          fields: [
+            { name: 'mod', type: 'u2', offset: 6 },
+            { name: 'reg', type: 'u3', offset: 3 },
+            { name: 'rm', type: 'u3', offset: 0 },
+          ],
+        },
+      ]);
+    });
+
+    it('captures size with a hex literal', () => {
+      const src = 'operand Foo\n  size: 0x04\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getOperands(cst!)).toEqual([
+        { name: 'Foo', size: 4, fields: [] },
+      ]);
+    });
+
+    it('handles operands with no fields section', () => {
+      const src = [
+        'operand Disp16',
+        '  size: 2',
+        '  fetch',
+        '    IStreamRead { dest: disp }',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getOperands(cst!)).toEqual([
+        { name: 'Disp16', size: 2, fields: [] },
+      ]);
+    });
+
+    it('handles operands with no body', () => {
+      const { cst, parseErrors } = parse('operand Empty\n');
+      expect(parseErrors).toEqual([]);
+      expect(getOperands(cst!)).toEqual([
+        { name: 'Empty', size: undefined, fields: [] },
+      ]);
+    });
+
+    it('handles an inline description in an operand body', () => {
+      const src = [
+        'operand Disp16',
+        '  description: "16-bit little-endian displacement."',
+        '  size: 2',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getOperands(cst!)).toEqual([
+        { name: 'Disp16', size: 2, fields: [] },
+      ]);
+    });
+
+    it('handles a block description in an operand body', () => {
+      const src = [
+        'operand Foo',
+        '  description',
+        '    A multi-line description that goes on',
+        '    for several words and punctuation.',
+        '  size: 1',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getOperands(cst!)).toEqual([
+        { name: 'Foo', size: 1, fields: [] },
+      ]);
+    });
+
+    it('handles fields without bit offsets (falls through as undefined)', () => {
+      const src = [
+        'operand Foo',
+        '  size: 2',
+        '  fields',
+        '    a:u8',
+        '    b:u8',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getOperands(cst!)[0]!.fields).toEqual([
+        { name: 'a', type: 'u8', offset: undefined },
+        { name: 'b', type: 'u8', offset: undefined },
+      ]);
+    });
+
+    it('handles a fetch block full of record literals across multiple lines', () => {
+      const src = [
+        'operand Foo',
+        '  size: 1',
+        '  fetch',
+        '    IStreamRead { dest: tmp }',
+        '    AluMicro { op: passA, width: u8, srcA: tmp, srcB: zero,',
+        '               dest: disp, writeFlags: 0, commit: never }',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getOperands(cst!)).toEqual([
+        { name: 'Foo', size: 1, fields: [] },
+      ]);
+    });
+
+    it('parses every operand shape from operands.machine', () => {
+      const { cst, parseErrors } = parse(readSample('operands.machine'));
+      expect(parseErrors).toEqual([]);
+      const ops = getOperands(cst!);
+      expect(ops.map((o) => o.name)).toEqual(['ModRM', 'Disp8', 'Disp16']);
+
+      expect(ops.find((o) => o.name === 'ModRM')).toEqual({
+        name: 'ModRM',
+        size: 1,
+        fields: [
+          { name: 'mod', type: 'u2', offset: 6 },
+          { name: 'reg', type: 'u3', offset: 3 },
+          { name: 'rm', type: 'u3', offset: 0 },
+        ],
+      });
+      expect(ops.find((o) => o.name === 'Disp8')).toEqual({
+        name: 'Disp8',
+        size: 1,
+        fields: [],
+      });
+      expect(ops.find((o) => o.name === 'Disp16')).toEqual({
+        name: 'Disp16',
+        size: 2,
+        fields: [],
+      });
+    });
+
+    it('does not treat microword or bundle decls as operands', () => {
+      const src = [
+        'bundle Foo',
+        '  a:b',
+        '',
+        'microword Bar',
+        '  fields',
+        '    x:u8',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getOperands(cst!)).toEqual([]);
+    });
+  });
+
+  describe('size soft-keyword', () => {
+    it('still accepts `size` as a bundle field name', () => {
+      // Critical regression test: BusRequest bundle uses `size:BusSize`
+      // as a field name. The Size soft keyword must not break this.
+      const src = [
+        'bundle BusRequest',
+        '  valid:b',
+        '  address:u20',
+        '  op:BusOp',
+        '  size:BusSize',
+        '  data:u16',
+        '',
+      ].join('\n');
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getBundles(cst!)[0]!.fields).toEqual([
+        { name: 'valid', type: 'b' },
+        { name: 'address', type: 'u20' },
+        { name: 'op', type: 'BusOp' },
+        { name: 'size', type: 'BusSize' },
+        { name: 'data', type: 'u16' },
+      ]);
+    });
+
+    it('still accepts `size` as a microword field name', () => {
+      const src = 'microword Foo\n  fields\n    size:u8\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getMicrowords(cst!)[0]!.fields).toEqual([
+        { name: 'size', type: 'u8' },
+      ]);
+    });
+
+    it('still accepts `size` as a union arm name', () => {
+      const src = 'union Foo\n  size:SizeInfo\n';
+      const { cst, parseErrors } = parse(src);
+      expect(parseErrors).toEqual([]);
+      expect(getUnions(cst!)[0]!.arms).toEqual([
+        { name: 'size', type: 'SizeInfo' },
+      ]);
     });
   });
 

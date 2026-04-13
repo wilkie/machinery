@@ -1,0 +1,38 @@
+; Operand declarations mirroring the three in ALU_NEW.machine — a
+; fixed-size operand with a bit-layout (ModRM), a single-byte
+; sign-extended immediate (Disp8), and a two-byte little-endian
+; immediate (Disp16).
+
+operand ModRM
+  description
+    The ModR/M byte common to most x86 memory/register instructions. The
+    mod field selects the addressing mode, reg selects a GPR or acts as
+    an opcode extension, and rm selects a register or base addressing
+    mode for effective-address computation.
+
+  size: 1
+  fields
+    mod:u2 @ 6
+    reg:u3 @ 3
+    rm:u3 @ 0
+  fetch
+    IStreamRead { dest: modrm }
+
+operand Disp8
+  description
+    8-bit sign-extended displacement. Fetched as one byte and widened to
+    u16 via a passA ALU microword so downstream address arithmetic can
+    treat all displacements uniformly.
+
+  size: 1
+  fetch
+    IStreamRead { dest: tmp }
+    AluMicro { op: passA, width: u8, srcA: tmp, srcB: zero,
+               dest: disp, writeFlags: 0, commit: never }
+
+operand Disp16
+  description: "16-bit little-endian displacement."
+  size: 2
+  fetch
+    IStreamRead { dest: disp[7:0] }
+    IStreamRead { dest: disp[15:8] }

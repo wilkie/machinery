@@ -91,6 +91,21 @@ export const Fields = keyword('Fields', 'fields');
 export const Ready = keyword('Ready', 'ready');
 export const Effect = keyword('Effect', 'effect');
 
+/**
+ * `Size` is a soft keyword — it marks the `size:` section inside an operand
+ * body, but it's also used as a plain identifier elsewhere (e.g., the
+ * `size:BusSize` field in `bundle BusRequest`). Chevrotain's category
+ * mechanism lets parser rules that CONSUME(Identifier) also accept Size
+ * tokens, so the field-name usage still parses while operand-body grammar
+ * can still dispatch on Size specifically.
+ */
+export const Size = createToken({
+  name: 'Size',
+  pattern: /size/,
+  longer_alt: Identifier,
+  categories: Identifier,
+});
+
 // Control-flow keywords.
 export const Mux = keyword('Mux', 'mux');
 export const When = keyword('When', 'when');
@@ -199,6 +214,10 @@ export const allTokens: TokenType[] = [
   Description,
   Ready,
   Effect,
+  // `Size` is a soft keyword; must come before Identifier so the lexer
+  // produces Size tokens for bare `size`. Parser rules that consume
+  // Identifier also accept Size via its `categories: Identifier`.
+  Size,
   Mux,
   When,
   If,

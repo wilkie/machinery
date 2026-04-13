@@ -176,6 +176,91 @@ export interface UnionInfo {
   arms: UnionArm[];
 }
 
+export interface OperandField {
+  name: string;
+  type: string;
+  /** Bit offset from `@ N` on a field line, or undefined if omitted. */
+  offset: number | undefined;
+}
+
+export interface OperandInfo {
+  name: string;
+  /** Byte count from the `size: N` clause, or undefined if omitted. */
+  size: number | undefined;
+  fields: OperandField[];
+}
+
+/**
+ * Walk a `file` CST and return every operand declaration as a plain data
+ * object. Captures the operand's name, its `size: N` value (if any), and
+ * its `fields` section contents with bit offsets (if any). The
+ * `description` and `fetch` sections are parsed structurally but their
+ * contents are opaque until expression and statement grammars land.
+ */
+export function getOperands(file: CstNode): OperandInfo[] {
+  const result: OperandInfo[] = [];
+  const declNodes = asCstNodes(file.children['declaration']);
+  for (const decl of declNodes) {
+    const operandDecls = asCstNodes(decl.children['operandDecl']);
+    for (const opDecl of operandDecls) {
+      const nameToken = asTokens(opDecl.children['Identifier'])[0];
+      if (!nameToken) continue;
+      const body = asCstNodes(opDecl.children['operandBody'])[0];
+
+      let size: number | undefined;
+      const fields: OperandField[] = [];
+
+      if (body) {
+        // Size: look at any sizeClause sub-nodes (usually exactly one).
+        const sizeClauses = asCstNodes(body.children['sizeClause']);
+        for (const sc of sizeClauses) {
+          const decTokens = asTokens(sc.children['DecimalLiteral']);
+          const hexTokens = asTokens(sc.children['HexLiteral']);
+          const literal = decTokens[0] ?? hexTokens[0];
+          if (literal) {
+            size = parseNumericLiteral(literal.image);
+          }
+        }
+
+        // Fields: same traversal as microwords, but keep offsets.
+        const fieldsSections = asCstNodes(body.children['fieldsSection']);
+        for (const fs of fieldsSections) {
+          const fieldsBodyNode = asCstNodes(fs.children['fieldsBody'])[0];
+          const container = fieldsBodyNode ?? fs;
+          fields.push(...extractNamedFieldsWithOffsets(container));
+        }
+      }
+
+      result.push({ name: nameToken.image, size, fields });
+    }
+  }
+  return result;
+}
+
+/**
+ * Like `extractNamedFields` but also pulls the optional `@ offset` that
+ * the grammar allows on every namedField. Used by operand walking; the
+ * other container walkers (bundle / union / microword) drop the offset.
+ */
+function extractNamedFieldsWithOffsets(container: CstNode): OperandField[] {
+  const result: OperandField[] = [];
+  const fieldNodes = asCstNodes(container.children['namedField']);
+  for (const f of fieldNodes) {
+    const fieldName = asTokens(f.children['Identifier'])[0]?.image;
+    const typeNode = asCstNodes(f.children['typeRef'])[0];
+    const typeName = typeNode
+      ? asTokens(typeNode.children['Identifier'])[0]?.image
+      : undefined;
+    if (!fieldName || !typeName) continue;
+    const decTokens = asTokens(f.children['DecimalLiteral']);
+    const hexTokens = asTokens(f.children['HexLiteral']);
+    const literal = decTokens[0] ?? hexTokens[0];
+    const offset = literal ? parseNumericLiteral(literal.image) : undefined;
+    result.push({ name: fieldName, type: typeName, offset });
+  }
+  return result;
+}
+
 export interface MicrowordInfo {
   name: string;
   fields: BundleField[];

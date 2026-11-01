@@ -325,6 +325,32 @@ impl Checker<'_> {
                 }
             },
         };
+        let fault = match &d.fault {
+            None => None,
+            Some(p) => match fn_item(self, p) {
+                Some(f) => {
+                    if let Some(sig) = self.fn_sig(f) {
+                        let good = sig.params.len() == 1
+                            && sig.params[0].1 == Ty::UInt(8)
+                            && sig.ret == Ty::Unit;
+                        if !good {
+                            self.error(
+                                module,
+                                "E1046",
+                                p.span,
+                                "`fault` is a `fn (vector: u8)` that delivers the fault",
+                            );
+                            ok = false;
+                        }
+                    }
+                    Some(f)
+                }
+                None => {
+                    ok = false;
+                    None
+                }
+            },
+        };
         let (Some(space), Some(address), Some(next)) = (space, address, next) else {
             return None;
         };
@@ -333,6 +359,7 @@ impl Checker<'_> {
             address,
             next,
             undefined,
+            fault,
         })
     }
 

@@ -1194,6 +1194,29 @@ impl<'a> Gen<'a> {
         if self.isa.faults.is_empty() {
             s.push_str("            _ => rt::FaultClass::Fault,\n");
         }
+        s.push_str("        }\n    }\n    /// The interrupt vector the isa assigns to this fault.\n    pub fn vector(&self) -> Option<u8> {\n        match self {\n");
+        for f in &self.isa.faults {
+            let pat = if f.params.is_empty() {
+                String::new()
+            } else {
+                "(..)".into()
+            };
+            match f.vector {
+                Some(v) => {
+                    let _ = writeln!(
+                        s,
+                        "            Fault::{}{pat} => Some({v}),",
+                        ident(&f.name)
+                    );
+                }
+                None => {
+                    let _ = writeln!(s, "            Fault::{}{pat} => None,", ident(&f.name));
+                }
+            }
+        }
+        if self.isa.faults.is_empty() {
+            s.push_str("            _ => None,\n");
+        }
         s.push_str("        }\n    }\n}\n");
         self.out.push_str(&s);
 
@@ -1227,7 +1250,7 @@ impl<'a> Gen<'a> {
             None => "u8",
         };
         let mut s = format!(
-            "#[derive(Clone, Debug)]\npub struct {isa_name} {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n"
+            "#[derive(Clone, Debug)]\npub struct {isa_name} {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n"
         );
         for sp in &self.isa.spaces {
             let _ = writeln!(s, "    pub {}: rt::Memory,", ident(&sp.name));
@@ -1239,7 +1262,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut s = format!(
-            "impl {isa_name} {{\n    pub fn new() -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n"
+            "impl {isa_name} {{\n    pub fn new() -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n"
         );
         for sp in &self.isa.spaces {
             let _ = writeln!(
@@ -1665,6 +1688,10 @@ impl<'a> Gen<'a> {
         let next = ident(&self.fns[&istream.next].name);
         let address = ident(&self.fns[&istream.address].name);
         let space = ident(&self.spaces[&istream.space].name);
+        let mode_ty = match self.isa.mode {
+            Some(m) => native(self.enums[&m].width, false).1,
+            None => "u8",
+        };
         let undefined = match istream.undefined {
             Some(f) => format!("return Err(Fault::{})", ident(&self.faults[&f].name)),
             None => "panic!(\"undefined opcode\")".into(),
@@ -1768,11 +1795,19 @@ impl<'a> Gen<'a> {
             s.push_str("            _ => Ok(()),\n");
         }
         s.push_str("        }\n    }\n");
-        s.push_str(
-            "    /// Execute one decoded instruction with fault rollback: a `Fault`-class fault restores the registers.\n    pub fn run(&mut self, i: Instr) -> Result<(), Fault> {\n        let saved_r = self.r;\n        let saved_mode = self.mode;\n        let r = self.exec(i);\n        if let Err(f) = &r {\n            if f.class() == rt::FaultClass::Fault { self.r = saved_r; self.mode = saved_mode; }\n        }\n        r\n    }\n",
+        let deliver = match istream.fault {
+            Some(f) => format!("if let Some(v) = f.vector() {{ self.fn_{}(v)?; self.last_fault = Some(f); return Ok(()); }}", ident(&self.fns[&f].name)),
+            None => String::new(),
+        };
+        let _ = write!(
+            s,
+            "    /// After an instruction: a `Fault`-class fault restores the registers (the instruction\n    /// did not happen); any fault with a vector is then delivered through the isa's `fault` fn.\n    fn finish(&mut self, r: Result<(), Fault>, saved_r: Regs, saved_mode: {mode_ty}) -> Result<(), Fault> {{\n        match r {{\n            Ok(()) => Ok(()),\n            Err(f) => {{\n                if f.class() == rt::FaultClass::Fault {{ self.r = saved_r; self.mode = saved_mode; }}\n                {deliver}\n                Err(f)\n            }}\n        }}\n    }}\n"
         );
         s.push_str(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {\n        if self.halted { return Ok(()); }\n        self.reset_latches();\n        let saved_r = self.r;\n        let saved_mode = self.mode;\n        let r = match self.decode() {\n            Ok(i) => { self.last = Some(i); self.exec(i) }\n            Err(f) => Err(f),\n        };\n        if let Err(f) = &r {\n            if f.class() == rt::FaultClass::Fault { self.r = saved_r; self.mode = saved_mode; }\n        }\n        r\n    }\n",
+            "    /// Execute one decoded instruction with fault rollback and delivery.\n    pub fn run(&mut self, i: Instr) -> Result<(), Fault> {\n        self.last_fault = None;\n        let saved_r = self.r;\n        let saved_mode = self.mode;\n        let r = self.exec(i);\n        self.finish(r, saved_r, saved_mode)\n    }\n",
+        );
+        s.push_str(
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {\n        if self.halted { return Ok(()); }\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        let saved_r = self.r;\n        let saved_mode = self.mode;\n        let r = match self.decode() {\n            Ok(i) => { self.last = Some(i); self.exec(i) }\n            Err(f) => Err(f),\n        };\n        self.finish(r, saved_r, saved_mode)\n    }\n",
         );
         let _ = write!(
             s,
@@ -1785,8 +1820,13 @@ impl<'a> Gen<'a> {
     /// Code for a trie leaf: one instruction, or several told apart by
     /// constraints on the operand they all fetch first.
     fn emit_leaf(&self, leaves: &[usize], undefined: &str) -> R<String> {
-        let mut out = String::new();
         let first = &self.isa.instructions[leaves[0]];
+        // A prefix is not an instruction: the opcode that follows decides.
+        let mut out = if first.prefix {
+            String::new()
+        } else {
+            String::from("self.known_opcode = true;\n")
+        };
         let first_fetch = first.encoding.iter().position(|s| !s.is_opcode());
         let constrained = leaves.iter().any(|i| {
             self.isa.instructions[*i]
@@ -2260,17 +2300,22 @@ pub mod vectors {{
             return Outcome::Fail(vec![format!("fault while loading the initial state: {{f:?}}")]);
         }}
         let mut first: Option<Instr> = None;
+        let mut delivered: Option<Fault> = None;
+        let mut trace: Vec<String> = Vec::new();
         for n in 0..32 {{
             if m.halted {{ break; }}
-            match m.step() {{
-                Ok(()) => {{ if first.is_none() {{ first = m.last; }} }}
-                Err(f) => {{
-                    if n == 0 && f == {undefined} {{ return Outcome::Unimplemented; }}
-                    let at = first.map(|i| {isa_name}::instr_name(&i)).unwrap_or("?");
-                    return Outcome::Fail(vec![format!("unexpected fault {{f:?}} (after {{at}})")]);
-                }}
+            let before: Vec<String> = REGS.iter().filter(|r| **r == "cs" || **r == "ip").map(|r| format!("{{r}}={{:04x}}", read(&mut m, r).unwrap_or(0))).collect();
+            let r = m.step();
+            if n == 0 && !m.known_opcode && (r.is_err() || m.last_fault.is_some()) {{ return Outcome::Unimplemented; }}
+            if first.is_none() {{ first = m.last; }}
+            if let Some(f) = &m.last_fault {{ delivered = Some(f.clone()); }}
+            trace.push(format!("step {{n}}: {{}} -> {{}}{{}}", before.join(" "), m.last.map(|i| {isa_name}::instr_name(&i)).unwrap_or("?"), m.last_fault.as_ref().map(|f| format!(", delivered {{f:?}}")).unwrap_or_default()));
+            if let Err(f) = r {{
+                let at = first.map(|i| {isa_name}::instr_name(&i)).unwrap_or("?");
+                return Outcome::Fail(vec![format!("undelivered fault {{f:?}} (after {{at}})")]);
             }}
         }}
+        let _ = {undefined};
         let mut errors = Vec::new();
         if !m.halted {{ errors.push("did not halt".to_string()); }}
         for name in REGS {{
@@ -2296,6 +2341,9 @@ pub mod vectors {{
         }}
         if errors.is_empty() {{ Outcome::Pass }} else {{
             if let Some(i) = first {{ errors.insert(0, format!("decoded as {{}} ({{}})", {isa_name}::instr_name(&i), m.mnemonic(&i))); }}
+            if let Some(f) = delivered {{ errors.insert(1, format!("delivered {{f:?}}; vector expects {{:?}}", t.exception)); }}
+            else if let Some(v) = t.exception {{ errors.insert(1, format!("vector expects exception {{v}}, none was raised")); }}
+            for (k, line) in trace.iter().take(6).enumerate() {{ errors.insert(2 + k, line.clone()); }}
             Outcome::Fail(errors)
         }}
     }}
@@ -2335,7 +2383,7 @@ pub mod vectors {{
             for t in &tests {{
                 r.total += 1;
                 if t.hash.as_ref().is_some_and(|h| revoked.contains(h)) {{ r.revoked += 1; continue; }}
-                if t.exception.is_some() {{ r.exceptions += 1; continue; }}
+                if t.exception.is_some() {{ r.exceptions += 1; }}
                 match run_test(t) {{
                     Outcome::Pass => r.passed += 1,
                     Outcome::Unimplemented => r.unimplemented += 1,
@@ -2353,12 +2401,12 @@ pub mod vectors {{
             files_run += 1;
             let status = if r.failed > 0 {{ "FAIL" }} else if r.passed == 0 {{ "skip" }} else {{ "ok  " }};
             if !quiet || r.failed > 0 {{
-                println!("{{status}} {{fname:<14}} {{:>5}} passed {{:>5}} failed {{:>5}} unimplemented {{:>4}} exception {{:>3}} revoked", r.passed, r.failed, r.unimplemented, r.exceptions, r.revoked);
+                println!("{{status}} {{fname:<14}} {{:>5}} passed {{:>5}} failed {{:>5}} unimplemented {{:>4}} exc {{:>3}} revoked", r.passed, r.failed, r.unimplemented, r.exceptions, r.revoked);
             }}
             all.total += r.total; all.passed += r.passed; all.failed += r.failed;
             all.exceptions += r.exceptions; all.revoked += r.revoked; all.unimplemented += r.unimplemented;
         }}
-        println!("{{files_run}} file(s), {{}} vectors: {{}} passed, {{}} failed, {{}} unimplemented, {{}} exception (skipped), {{}} revoked", all.total, all.passed, all.failed, all.unimplemented, all.exceptions, all.revoked);
+        println!("{{files_run}} file(s), {{}} vectors: {{}} passed, {{}} failed, {{}} unimplemented, {{}} revoked ({{}} with exceptions)", all.total, all.passed, all.failed, all.unimplemented, all.revoked, all.exceptions);
         all.failed == 0
     }}
 

@@ -1332,8 +1332,24 @@ fn i286_target_checks_clean() {
     assert_clean(&c);
     let isa = &c.hir.isas[0];
     assert_eq!(isa.instructions.iter().filter(|i| i.prefix).count(), 2);
-    assert_eq!(isa.instructions.iter().filter(|i| !i.prefix).count(), 31);
-    assert_eq!(isa.latches.len(), 1);
+    assert_eq!(isa.instructions.iter().filter(|i| !i.prefix).count(), 43);
+    assert_eq!(isa.latches.len(), 2);
     assert_eq!(c.hir.vectors.len(), 1);
     assert_eq!(c.hir.vectors[0].regs.len(), 14);
+}
+
+#[test]
+fn istream_fault_delivery_fn() {
+    let good = DEC_PRELUDE.replace(
+        "undefined UD; }",
+        "undefined UD; fault deliver; }\n    fn deliver(v: u8) { IP = v as u16; }",
+    );
+    assert_codes(&format!("{good}\n}}"), &[]);
+    let bad_sig = DEC_PRELUDE.replace(
+        "undefined UD; }",
+        "undefined UD; fault deliver; }\n    fn deliver(v: u16) { IP = v; }",
+    );
+    assert_codes(&format!("{bad_sig}\n}}"), &["E1046"]);
+    let not_fn = DEC_PRELUDE.replace("undefined UD; }", "undefined UD; fault AX; }");
+    assert_codes(&format!("{not_fn}\n}}"), &["E1046"]);
 }

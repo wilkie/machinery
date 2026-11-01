@@ -1044,6 +1044,9 @@ pub struct IstreamDecl {
     pub address: Path,
     pub next: Path,
     pub undefined: Option<Path>,
+    /// `fault deliver;`: the `fn (vector: u8)` that delivers a raised fault
+    /// (after rollback for `Fault`-class faults).
+    pub fault: Option<Path>,
     pub span: Span,
 }
 

@@ -7,10 +7,11 @@
 // Coverage so far: the eight ALU operations in all six register/memory/
 // immediate forms and the 80-83 immediate group, INC/DEC r16, MOV between
 // registers, memory and immediates, the conditional jumps, JMP short/near,
-// the flag instructions, NOP, HLT, segment-override and LOCK prefixes.
-// Not yet: exceptions and interrupt delivery, the stack, string
-// instructions, multiply/divide, shifts, segment-register moves, I/O,
-// protected mode.
+// CALL/RET near, PUSH/POP r16, PUSHF/POPF, INT3/INT n/INTO/IRET, BOUND,
+// the flag instructions, NOP, HLT, segment-override and LOCK prefixes, and
+// real-mode interrupt delivery through the IVT (faults and software
+// interrupts alike). Not yet: string instructions, multiply/divide,
+// shifts, segment-register moves, I/O, protected mode.
 
 use alu::{AluOp, ArithFlags, Alu, AluFlags};
 
@@ -49,28 +50,70 @@ isa I286 {
     /// A segment-override prefix in effect for the current instruction.
     enum SegOv : u3 { ES = 0, CS = 1, SS = 2, DS = 3, None = 4 }
     latch seg_override: SegOv = SegOv::None;
+    /// Bytes of the current instruction fetched so far; the 286 raises #GP
+    /// when an instruction (prefixes included) exceeds 10 bytes.
+    latch fetched: u8 = 0;
 
     fault DE { vector: 0, class: Fault }
+    fault BR { vector: 5, class: Fault }
     fault UD { vector: 6, class: Fault }
     fault GP(error: u16) { vector: 13, class: Fault, pushes_error_code: true }
 
     // -- addressing ------------------------------------------------------------
 
     /// Real mode: base plus offset, 24 bits wide. The 286 does not wrap at
-    /// 1 MB (A20 is a system-board fact).
+    /// 1 MB (A20 is a system-board fact). Every real-mode segment has limit
+    /// 0xFFFF: an access that runs past it is #GP(0).
     fn translate(seg: Segment, off: u16, size: u8, access: Access) -> u24 {
+        if (off as u32) + (size as u32) - 1 > 0xFFFF { raise GP(0); }
         return seg.base + (off as u24);
+    }
+
+    fn load_segment(sel: u16) -> Segment {
+        return Segment { selector: sel, base: (sel as u24) << 4 };
+    }
+
+    fn push16(v: u16) {
+        SP = SP - 2;
+        mem.write_u16(translate(SS, SP, 2, Access::Write), v);
+    }
+
+    fn pop16() -> u16 {
+        let v = mem.read_u16(translate(SS, SP, 2, Access::Read));
+        SP = SP + 2;
+        return v;
+    }
+
+    /// Real mode cannot set IOPL or NT; bits 1, 3 and 5 are fixed.
+    fn load_flags(v: u16) {
+        FLAGS = (v & 0x0FD5) | 0x0002;
+    }
+
+    /// Real-mode interrupt delivery through the IVT. Faults arrive here
+    /// after rollback (IP is the instruction's start); INT n, INT3 and INTO
+    /// call it directly with the next IP.
+    fn deliver(vector: u8) {
+        push16(FLAGS);
+        push16(CS.selector);
+        push16(IP);
+        FLAGS.IF = 0;
+        FLAGS.TF = 0;
+        let entry = (vector as u24) * 4;
+        IP = mem.read_u16(entry);
+        CS = load_segment(mem.read_u16(entry + 2));
     }
 
     fn code_address() -> u24 { return translate(CS, IP, 1, Access::Execute); }
 
     fn next_byte() -> u8 {
+        if fetched == 10 { raise GP(0); }
+        fetched = fetched + 1;
         let b = mem.read_u8(code_address());
         IP = IP + 1;
         return b;
     }
 
-    istream { space mem; address code_address; next next_byte; undefined UD; }
+    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; }
 
     fn segment(s: SegOv) -> Segment {
         return match s { SegOv::ES => ES, SegOv::CS => CS, SegOv::SS => SS, _ => DS };
@@ -137,6 +180,18 @@ isa I286 {
     operand_kind simm8 : u16 from i: Disp8 { read => i.value as u16; }
     operand_kind rel8  : u16 from d: Disp8 { read => d.value as u16; }
     operand_kind rel16 : u16 from d: Imm16 { read => d.value; }
+
+    /// The two signed words of a BOUND limit pair, read as two word accesses
+    /// (the hardware does not fault on a pair straddling the segment end).
+    operand_kind bounds : (lo: i16, hi: i16) from m: ModRM {
+        is_mem => m.mod != 3;
+        read => {
+            let (s, o) = effective_address(m);
+            let lo = mem.read_u16(translate(s, o, 2, Access::Read)) as i16;
+            let hi = mem.read_u16(translate(s, o + 2, 2, Access::Read)) as i16;
+            (lo: lo, hi: hi)
+        };
+    }
 
     operand_kind alu_op : AluOp { value(n: u3) => n as AluOp; }
     operand_kind cond : u4 { value(n: u4) => n; }
@@ -336,7 +391,75 @@ isa I286 {
         semantics { dst = src; }
     }
 
+    // -- stack ------------------------------------------------------------------------------
+
+    /// The 286 pushes the value SP had before the push, even for `push sp`.
+    instruction Push_r16 {
+        mnemonic "push";
+        encoding { opcode "01010rrr" { r: r16 } }
+        operands (src: r16);
+        semantics { push16(src); }
+    }
+    instruction Pop_r16 {
+        mnemonic "pop";
+        encoding { opcode "01011rrr" { r: r16 } }
+        operands (dst: r16);
+        semantics { dst = pop16(); }
+    }
+    instruction Pushf { mnemonic "pushf"; encoding { opcode 0x9C; } semantics { push16(FLAGS); } }
+    instruction Popf {
+        mnemonic "popf";
+        encoding { opcode 0x9D; }
+        flags { modifies: [OF, DF, IF, TF, SF, ZF, AF, PF, CF]; }
+        semantics { load_flags(pop16()); }
+    }
+
     // -- control flow ------------------------------------------------------------------------
+
+    instruction Call_rel16 {
+        mnemonic "call";
+        encoding { opcode 0xE8; Imm16 }
+        operands (rel: rel16);
+        semantics { push16(IP); IP = IP + rel; }
+    }
+    instruction Ret {
+        mnemonic "ret";
+        encoding { opcode 0xC3; }
+        semantics { IP = pop16(); }
+    }
+    instruction Ret_imm16 {
+        mnemonic "ret";
+        encoding { opcode 0xC2; Imm16 }
+        operands (n: imm16);
+        semantics { IP = pop16(); SP = SP + n; }
+    }
+    instruction Iret {
+        mnemonic "iret";
+        encoding { opcode 0xCF; }
+        flags { modifies: [OF, DF, IF, TF, SF, ZF, AF, PF, CF]; }
+        semantics { IP = pop16(); CS = load_segment(pop16()); load_flags(pop16()); }
+    }
+    instruction Int3 { mnemonic "int3"; encoding { opcode 0xCC; } semantics { deliver(3); } }
+    instruction Int_imm8 {
+        mnemonic "int";
+        encoding { opcode 0xCD; Imm8 }
+        operands (n: imm8);
+        semantics { deliver(n); }
+    }
+    instruction Into { mnemonic "into"; encoding { opcode 0xCE; } semantics { if OF == 1 { deliver(4); } } }
+    /// `bound r16, m16&16`: #BR when the index is outside the signed pair;
+    /// the register form is #UD.
+    instruction Bound {
+        mnemonic "bound";
+        encoding { opcode 0x62; ModRM { reg: r16 } }
+        operands (idx: r16, lim: bounds);
+        semantics {
+            if !lim.is_mem { raise UD; }
+            let b = lim;
+            let i = idx as i16;
+            if i < b.lo || i > b.hi { raise BR; }
+        }
+    }
 
     instruction Jcc {
         mnemonic cond_name(c);
@@ -405,6 +528,40 @@ test "inc keeps the carry" on I286 {
     given { AX = 0xFFFF; FLAGS.CF = 1; }
     run instruction Inc_r16 { dst: AX };
     expect { AX == 0x0000; FLAGS.CF == 1; FLAGS.ZF == 1; FLAGS.AF == 1; }
+}
+
+test "int 3 vectors through the ivt" on I286 {
+    given {
+        CS = Segment { selector: 0x1000, base: 0x10000 }; IP = 0x0200;
+        SS = Segment { selector: 0x2000, base: 0x20000 }; SP = 0x0100;
+        FLAGS = 0x0246;
+        mem[0x0C] = 0x34; mem[0x0D] = 0x12; mem[0x0E] = 0x00; mem[0x0F] = 0x30;   // ivt[3] = 3000:1234
+    }
+    run bytes [0xCC];
+    expect {
+        CS.selector == 0x3000; IP == 0x1234; SP == 0x00FA;
+        mem[0x200FE] == 0x46; mem[0x200FF] == 0x02;    // flags
+        mem[0x200FC] == 0x00; mem[0x200FD] == 0x10;    // cs
+        mem[0x200FA] == 0x01; mem[0x200FB] == 0x02;    // ip after int3
+        FLAGS.IF == 0;
+    }
+}
+
+test "a fault delivers with the instruction's start ip" on I286 {
+    given {
+        CS = Segment { selector: 0, base: 0 }; IP = 0x0100;
+        SS = Segment { selector: 0x2000, base: 0x20000 }; SP = 0x0100;
+        DS = Segment { selector: 0, base: 0 }; SI = 0xFFFF;
+        mem[0x34] = 0x00; mem[0x35] = 0x40; mem[0x36] = 0x00; mem[0x37] = 0x50;   // ivt[13] = 5000:4000
+    }
+    run bytes [0x3E, 0x01, 0x04];        // ds: add [si], ax, wrapping the segment: #GP
+    expect { CS.selector == 0x5000; IP == 0x4000; mem[0x200FA] == 0x00; mem[0x200FB] == 0x01; SP == 0x00FA; }
+}
+
+test "push and pop round trip" on I286 {
+    given { SS = Segment { selector: 0x2000, base: 0x20000 }; SP = 0x0010; AX = 0xBEEF; }
+    run instruction Push_r16 { src: AX };
+    expect { SP == 0x000E; mem[0x2000E] == 0xEF; mem[0x2000F] == 0xBE; }
 }
 
 // -- hardware vectors ------------------------------------------------------------------------

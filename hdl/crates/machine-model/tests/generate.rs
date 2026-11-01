@@ -125,7 +125,7 @@ fn i286_target_passes_its_tests_and_hardware_vectors() {
         output.status.success(),
         "i286 tests failed:\n{stdout}\n{stderr}"
     );
-    assert!(stdout.contains("10 passed"), "expected 10 tests:\n{stdout}");
+    assert!(stdout.contains("13 passed"), "expected 13 tests:\n{stdout}");
 
     let vectors = root
         .join("..")
@@ -158,7 +158,7 @@ fn i286_target_passes_its_tests_and_hardware_vectors() {
         .arg(&vectors)
         .args([
             "--filter",
-            "00,05,26,2B,80.4,83.5,74,C6,F4",
+            "00,05,26,2B,80.4,83.5,74,C6,F4,CC,CE,62,CF,9D,50,E8,81.0",
             "--max-failures",
             "5",
         ])

@@ -571,6 +571,9 @@ pub struct Istream {
     pub next: DefId,
     /// The fault raised for an undecodable opcode.
     pub undefined: Option<DefId>,
+    /// `fn (vector: u8)` that delivers a raised fault, or `None` to leave
+    /// faults to the caller of `step`.
+    pub fault: Option<DefId>,
 }
 
 /// A resolved `enum`/`mode`, exported for backends.

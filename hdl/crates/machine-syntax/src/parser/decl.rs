@@ -721,6 +721,7 @@ impl Parser {
                 let mut address = None;
                 let mut next = None;
                 let mut undefined = None;
+                let mut fault = None;
                 while !self.at_punct(Punct::RBrace) {
                     if self.at_eof() {
                         return Err(self.error_expected("`}`"));
@@ -731,11 +732,12 @@ impl Parser {
                         "address" => address = Some(self.parse_path_colons()?),
                         "next" => next = Some(self.parse_path_colons()?),
                         "undefined" => undefined = Some(self.parse_path_colons()?),
+                        "fault" => fault = Some(self.parse_path_colons()?),
                         other => {
                             return Err(self.error(
                                 "E0106",
                                 key.span,
-                                format!("unknown `istream` item `{other}`; expected `space`, `address`, `next` or `undefined`"),
+                                format!("unknown `istream` item `{other}`; expected `space`, `address`, `next`, `undefined` or `fault`"),
                             ))
                         }
                     }
@@ -750,6 +752,7 @@ impl Parser {
                     address,
                     next,
                     undefined,
+                    fault,
                     span: start.to(self.prev_span()),
                 }))
             }

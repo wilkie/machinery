@@ -557,8 +557,16 @@ istream { space mem; address code_address; next next_byte; undefined UD; }
 
 `istream` tells the derived interpreter (and the test harness) where
 instruction bytes come from: the address space, a `fn` giving the address of
-the next byte, a `fn` that consumes one byte, and the fault raised for an
-opcode that decodes to nothing. Multi-byte operands are assembled from
+the next byte, a `fn` that consumes one byte, the fault raised for an
+opcode that decodes to nothing, and (`fault deliver;`) the `fn (vector:
+u8)` that **delivers** a fault. After an instruction raises, a
+`Fault`-class fault first restores the registers (so the pushed IP is the
+instruction's start, prefixes included), then the delivery fn runs with the
+fault's declared `vector`; a `Trap` is delivered without rollback. Software
+interrupts are ordinary instructions that call the same fn. Delivery is
+described once, in the ISA, because it is architecture: on the 286 in real
+mode it pushes FLAGS, CS and IP, clears IF and TF, and loads CS:IP from the
+IVT at `vector * 4`. Multi-byte operands are assembled from
 consecutive bytes least-significant first. Architectural registers reset to
 zero; a `given` block in a test sets what the test needs.
 
@@ -801,9 +809,10 @@ Built into the language and the compiler:
    The generated runner loads the initial state, steps until `halt`,
    compares every mapped register and every RAM byte the vector mentions
    (registers it omits must be unchanged), masks the executed instruction's
-   undefined flags, skips vectors that raise an exception (until exception
-   delivery is described) or are revoked, and reports opcodes that do not
-   decode as unimplemented rather than failed. `machine vectors --isa I286
+   undefined flags, skips revoked vectors, and reports opcodes that do not
+   decode as unimplemented rather than failed. Vectors whose instruction
+   raises an exception run like any other: the ISA's delivery fn must
+   produce the state the hardware did. `machine vectors --isa I286
    files...` runs it.
 5. **Conformance (differential)**: for every component with two levels, the
    compiler generates a harness that runs both from the same initial state

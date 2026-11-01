@@ -5,7 +5,7 @@ reports every vector as passed, failed, unimplemented (opcode not described
 yet), an undefined-flag leak, or revoked. This file lists what is not
 "passed" for a reason other than "not described yet".
 
-## Undefined-flag leaks: faulting DIV / IDIV (11,240 vectors)
+## Undefined-flag leaks: faulting DIV / IDIV / AAM (11,242 vectors)
 
 DIV and IDIV leave all six arithmetic flags undefined, so the register
 comparison masks them. When the divide faults (#DE), the 286 pushes FLAGS in
@@ -15,6 +15,10 @@ initial flags in ~98% of vectors) and no simple rule reproduces it: the flags
 of the overflow comparison match ~13% of cases, and divide-by-zero varies with
 the dividend. Reproducing it means reverse-engineering the 286 divide
 microcode.
+
+`aam 0` (#DE) is the same mechanism with a more regular result: SF, ZF,
+CF, AF and OF are cleared and PF is the parity of AL in 9 of the 11
+captures. The description produces that; the other 2 are leaks.
 
 The runner classifies a vector as a leak only when the expected fault was
 delivered, every register matches, and every differing RAM bit is a flag bit

@@ -10,10 +10,12 @@
 // CALL/RET near, PUSH/POP r16, PUSHF/POPF, INT3/INT n/INTO/IRET, BOUND,
 // the string instructions with REP/REPE/REPNE, shifts and rotates, the
 // F6/F7 group (TEST, NOT, NEG, MUL, IMUL, DIV, IDIV), TEST, XCHG, CBW/CWD,
-// LEA, the flag instructions, HLT, segment-override and LOCK prefixes, and
-// real-mode interrupt delivery through the IVT (faults and software
-// interrupts alike). Not yet: segment-register moves, far transfers, I/O,
-// BCD adjustment, protected mode.
+// LEA, segment-register moves, far transfers, the FE/FF groups, PUSHA/POPA,
+// ENTER/LEAVE, LOOP/JCXZ, XLAT, LAHF/SAHF, the BCD adjusts, I/O, ESC, WAIT,
+// the flag instructions, HLT, segment-override, LOCK and repeat prefixes,
+// and real-mode interrupt delivery through the IVT. That is every real-mode
+// opcode in the SingleStepTests corpus. Not yet: protected mode and the 0F
+// two-byte opcodes.
 
 use alu::{AluOp, ArithFlags, Alu, AluFlags, Parity8};
 
@@ -147,6 +149,10 @@ isa I286 {
     operand Disp16 { size 2; fields { value: i16 @ 0; } }
     operand Imm8   { size 1; fields { value: u8 @ 0; } }
     operand Imm16  { size 2; fields { value: u16 @ 0; } }
+    /// A direct far pointer: offset, then segment.
+    operand FarPtr { size 4; fields { off: u16 @ 0; seg: u16 @ 16; } }
+    /// A direct memory offset (A0-A3).
+    operand Moffs  { size 2; fields { off: u16 @ 0; } }
 
     /// Segment and offset of a ModRM memory form. BP-based forms default to
     /// SS, the others to DS; a segment-override prefix replaces either.
@@ -213,6 +219,28 @@ isa I286 {
         is_mem => m.mod != 3;
         read => effective_address(m).off;
     }
+
+    operand_kind far_ptr : (off: u16, seg: u16) from p: FarPtr { read => (off: p.off, seg: p.seg); }
+    /// A far pointer in memory (`m16:16`): two word reads, offset first.
+    operand_kind far_mem : (off: u16, seg: u16) from m: ModRM {
+        is_mem => m.mod != 3;
+        read => {
+            let (s, o) = effective_address(m);
+            let off = mem.read_u16(translate(s, o, 2, Access::Read));
+            let seg = mem.read_u16(translate(s, o + 2, 2, Access::Read));
+            (off: off, seg: seg)
+        };
+    }
+    operand_kind moffs8 : u8 from m: Moffs {
+        read => mem.read_u8(translate(src_seg(), m.off, 1, Access::Read));
+        write(v: u8) => mem.write_u8(translate(src_seg(), m.off, 1, Access::Write), v);
+    }
+    operand_kind moffs16 : u16 from m: Moffs {
+        read => mem.read_u16(translate(src_seg(), m.off, 2, Access::Read));
+        write(v: u16) => mem.write_u16(translate(src_seg(), m.off, 2, Access::Write), v);
+    }
+    /// The segment register number in ModRM `reg` (8C/8E); 4-7 are #UD.
+    operand_kind sreg_n : u3 { value(n: u3) => n; }
 
     operand_kind alu_op : AluOp { value(n: u3) => n as AluOp; }
 
@@ -867,6 +895,488 @@ isa I286 {
         semantics { if !src.is_mem { raise UD; } dst = src; }
     }
 
+    // -- segment registers --------------------------------------------------------------------
+
+    fn read_sreg(n: u3) -> u16 {
+        return match n { 0 => ES.selector, 1 => CS.selector, 2 => SS.selector, 3 => DS.selector, _ => { raise UD; } };
+    }
+
+    /// Loading CS this way is #UD; so are the nonexistent registers 4-7.
+    fn write_sreg(n: u3, v: u16) {
+        match n {
+            0 => { ES = load_segment(v); }
+            2 => { SS = load_segment(v); }
+            3 => { DS = load_segment(v); }
+            _ => { raise UD; }
+        }
+    }
+
+    instruction Mov_rm16_sreg {
+        mnemonic "mov";
+        encoding { opcode 0x8C; ModRM { reg: sreg_n } }
+        operands (n: sreg_n, dst: rm16);
+        semantics { let v = read_sreg(n); dst = v; }
+    }
+    instruction Mov_sreg_rm16 {
+        mnemonic "mov";
+        encoding { opcode 0x8E; ModRM { reg: sreg_n } }
+        operands (n: sreg_n, src: rm16);
+        semantics { if n == 1 || n > 3 { raise UD; } write_sreg(n, src); }
+    }
+    instruction Push_sreg {
+        mnemonic "push";
+        encoding { opcode "000ss110" { s: seg_ov } }
+        operands (s: seg_ov);
+        semantics { push16(segment(s).selector); }
+    }
+    /// 0F is not POP CS on the 286 (it escapes to two-byte opcodes).
+    instruction Pop_sreg {
+        mnemonic "pop";
+        encoding { opcode "000ss111" { s: seg_ov } }
+        operands (s: seg_ov);
+        semantics {
+            if s == SegOv::CS { raise UD; }
+            let v = mem.read_u16(translate(SS, SP, 2, Access::Read));
+            write_sreg((s as u3), v);
+            SP = SP + 2;
+        }
+    }
+
+    // -- far transfers ------------------------------------------------------------------------
+
+    instruction Call_far {
+        mnemonic "call";
+        encoding { opcode 0x9A; FarPtr }
+        operands (target: far_ptr);
+        semantics { let t = target; push16(CS.selector); push16(IP); CS = load_segment(t.seg); IP = t.off; }
+    }
+    instruction Jmp_far {
+        mnemonic "jmp";
+        encoding { opcode 0xEA; FarPtr }
+        operands (target: far_ptr);
+        semantics { let t = target; CS = load_segment(t.seg); IP = t.off; }
+    }
+    /// Reads both words before releasing the stack.
+    instruction Retf {
+        mnemonic "retf";
+        encoding { opcode 0xCB; }
+        semantics {
+            let ip = mem.read_u16(translate(SS, SP, 2, Access::Read));
+            let cs = mem.read_u16(translate(SS, SP + 2, 2, Access::Read));
+            SP = SP + 4; IP = ip; CS = load_segment(cs);
+        }
+    }
+    instruction Retf_imm16 {
+        mnemonic "retf";
+        encoding { opcode 0xCA; Imm16 }
+        operands (n: imm16);
+        semantics {
+            let ip = mem.read_u16(translate(SS, SP, 2, Access::Read));
+            let cs = mem.read_u16(translate(SS, SP + 2, 2, Access::Read));
+            SP = SP + 4 + n; IP = ip; CS = load_segment(cs);
+        }
+    }
+
+    // -- FE/FF groups, 8F -----------------------------------------------------------------------
+
+    instruction Inc_rm8 {
+        mnemonic "inc";
+        encoding { opcode 0xFE; ModRM { reg: 0 } }
+        operands (dst: rm8);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        semantics { let c = CF; dst = alu8(AluOp::Add, dst, 1); FLAGS.CF = c; }
+    }
+    instruction Dec_rm8 {
+        mnemonic "dec";
+        encoding { opcode 0xFE; ModRM { reg: 1 } }
+        operands (dst: rm8);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        semantics { let c = CF; dst = alu8(AluOp::Sub, dst, 1); FLAGS.CF = c; }
+    }
+    instruction Inc_rm16 {
+        mnemonic "inc";
+        encoding { opcode 0xFF; ModRM { reg: 0 } }
+        operands (dst: rm16);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        semantics { let c = CF; dst = alu16(AluOp::Add, dst, 1); FLAGS.CF = c; }
+    }
+    instruction Dec_rm16 {
+        mnemonic "dec";
+        encoding { opcode 0xFF; ModRM { reg: 1 } }
+        operands (dst: rm16);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        semantics { let c = CF; dst = alu16(AluOp::Sub, dst, 1); FLAGS.CF = c; }
+    }
+    instruction Call_rm16 {
+        mnemonic "call";
+        encoding { opcode 0xFF; ModRM { reg: 2 } }
+        operands (target: rm16);
+        semantics { let t = target; push16(IP); IP = t; }
+    }
+    instruction Call_far_mem {
+        mnemonic "call";
+        encoding { opcode 0xFF; ModRM { reg: 3 } }
+        operands (target: far_mem);
+        semantics {
+            if !target.is_mem { raise UD; }
+            let t = target;
+            push16(CS.selector); push16(IP); CS = load_segment(t.seg); IP = t.off;
+        }
+    }
+    instruction Jmp_rm16 {
+        mnemonic "jmp";
+        encoding { opcode 0xFF; ModRM { reg: 4 } }
+        operands (target: rm16);
+        semantics { IP = target; }
+    }
+    instruction Jmp_far_mem {
+        mnemonic "jmp";
+        encoding { opcode 0xFF; ModRM { reg: 5 } }
+        operands (target: far_mem);
+        semantics { if !target.is_mem { raise UD; } let t = target; CS = load_segment(t.seg); IP = t.off; }
+    }
+    instruction Push_rm16 {
+        mnemonic "push";
+        encoding { opcode 0xFF; ModRM { reg: 6 } }
+        operands (src: rm16);
+        semantics { let v = src; push16(v); }
+    }
+    instruction Pop_rm16 {
+        mnemonic "pop";
+        encoding { opcode 0x8F; ModRM { reg: 0 } }
+        operands (dst: rm16);
+        semantics { let v = mem.read_u16(translate(SS, SP, 2, Access::Read)); SP = SP + 2; dst = v; }
+    }
+
+    // -- more stack -------------------------------------------------------------------------------
+
+    instruction Push_imm16 { mnemonic "push"; encoding { opcode 0x68; Imm16 } operands (v: imm16); semantics { push16(v); } }
+    instruction Push_simm8 { mnemonic "push"; encoding { opcode 0x6A; Disp8 } operands (v: simm8); semantics { push16(v); } }
+    /// Pushes the SP value from before the first push. The 286 works on an
+    /// internal copy of SP: a fault leaves what was stored but not SP.
+    instruction Pusha {
+        mnemonic "pusha";
+        encoding { opcode 0x60; }
+        semantics {
+            let sp = SP;
+            mem.write_u16(translate(SS, sp - 2, 2, Access::Write), AX);
+            mem.write_u16(translate(SS, sp - 4, 2, Access::Write), CX);
+            mem.write_u16(translate(SS, sp - 6, 2, Access::Write), DX);
+            mem.write_u16(translate(SS, sp - 8, 2, Access::Write), BX);
+            mem.write_u16(translate(SS, sp - 10, 2, Access::Write), sp);
+            mem.write_u16(translate(SS, sp - 12, 2, Access::Write), BP);
+            mem.write_u16(translate(SS, sp - 14, 2, Access::Write), SI);
+            mem.write_u16(translate(SS, sp - 16, 2, Access::Write), DI);
+            SP = sp - 16;
+        }
+    }
+    /// Reads all eight words before changing any register; the saved SP is
+    /// skipped.
+    instruction Popa {
+        mnemonic "popa";
+        encoding { opcode 0x61; }
+        semantics {
+            let di = mem.read_u16(translate(SS, SP, 2, Access::Read));
+            let si = mem.read_u16(translate(SS, SP + 2, 2, Access::Read));
+            let bp = mem.read_u16(translate(SS, SP + 4, 2, Access::Read));
+            let bx = mem.read_u16(translate(SS, SP + 8, 2, Access::Read));
+            let dx = mem.read_u16(translate(SS, SP + 10, 2, Access::Read));
+            let cx = mem.read_u16(translate(SS, SP + 12, 2, Access::Read));
+            let ax = mem.read_u16(translate(SS, SP + 14, 2, Access::Read));
+            DI = di; SI = si; BP = bp; BX = bx; DX = dx; CX = cx; AX = ax;
+            SP = SP + 16;
+        }
+    }
+    /// The nesting level is masked to 5 bits; level - 1 frame pointers are
+    /// copied from the enclosing frame. The 286 works on internal copies of
+    /// SP and BP and commits them at the end: a fault leaves the words
+    /// already stored but neither pointer changed.
+    instruction Enter {
+        mnemonic "enter";
+        encoding { opcode 0xC8; Imm16; Imm8 }
+        operands (size: imm16, level: imm8);
+        semantics {
+            let lvl = level & 0x1F;
+            let frame = SP - 2;
+            mem.write_u16(translate(SS, frame, 2, Access::Write), BP);
+            for i in 1..32 {
+                if (i as u8) < lvl {
+                    let off = 2 * (i as u16);
+                    let v = mem.read_u16(translate(SS, BP - off, 2, Access::Read));
+                    mem.write_u16(translate(SS, frame - off, 2, Access::Write), v);
+                }
+            }
+            let depth = if lvl == 0 { 0_u16 } else { 2 * (lvl as u16) };
+            if lvl > 0 { mem.write_u16(translate(SS, frame - depth, 2, Access::Write), frame); }
+            BP = frame;
+            SP = frame - depth - size;
+        }
+    }
+    /// Reads the saved BP before releasing the frame.
+    instruction Leave {
+        mnemonic "leave";
+        encoding { opcode 0xC9; }
+        semantics { let v = mem.read_u16(translate(SS, BP, 2, Access::Read)); SP = BP + 2; BP = v; }
+    }
+
+    // -- miscellany -------------------------------------------------------------------------------
+
+    instruction Imul_r16_rm16_imm16 {
+        mnemonic "imul";
+        encoding { opcode 0x69; ModRM { reg: r16 } Imm16 }
+        operands (dst: r16, src: rm16, k: imm16);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics {
+            let p = ((src as i16) as i32) * ((k as i16) as i32);
+            dst = p as u16;
+            let wide = p != ((p as i16) as i32);
+            FLAGS.CF = wide as u1;
+            FLAGS.OF = wide as u1;
+        }
+    }
+    instruction Imul_r16_rm16_simm8 {
+        mnemonic "imul";
+        encoding { opcode 0x6B; ModRM { reg: r16 } Disp8 }
+        operands (dst: r16, src: rm16, k: simm8);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics {
+            let p = ((src as i16) as i32) * ((k as i16) as i32);
+            dst = p as u16;
+            let wide = p != ((p as i16) as i32);
+            FLAGS.CF = wide as u1;
+            FLAGS.OF = wide as u1;
+        }
+    }
+    instruction Les {
+        mnemonic "les";
+        encoding { opcode 0xC4; ModRM { reg: r16 } }
+        operands (dst: r16, src: far_mem);
+        semantics { if !src.is_mem { raise UD; } let p = src; dst = p.off; ES = load_segment(p.seg); }
+    }
+    instruction Lds {
+        mnemonic "lds";
+        encoding { opcode 0xC5; ModRM { reg: r16 } }
+        operands (dst: r16, src: far_mem);
+        semantics { if !src.is_mem { raise UD; } let p = src; dst = p.off; DS = load_segment(p.seg); }
+    }
+    instruction Mov_al_moffs { mnemonic "mov"; encoding { opcode 0xA0; Moffs } operands (src: moffs8); semantics { AL = src; } }
+    instruction Mov_ax_moffs { mnemonic "mov"; encoding { opcode 0xA1; Moffs } operands (src: moffs16); semantics { AX = src; } }
+    instruction Mov_moffs_al { mnemonic "mov"; encoding { opcode 0xA2; Moffs } operands (dst: moffs8); semantics { dst = AL; } }
+    instruction Mov_moffs_ax { mnemonic "mov"; encoding { opcode 0xA3; Moffs } operands (dst: moffs16); semantics { dst = AX; } }
+
+    instruction Loopne {
+        mnemonic "loopne";
+        encoding { opcode 0xE0; Disp8 }
+        operands (rel: rel8);
+        semantics { CX = CX - 1; if CX != 0 && ZF == 0 { IP = IP + rel; } }
+    }
+    instruction Loope {
+        mnemonic "loope";
+        encoding { opcode 0xE1; Disp8 }
+        operands (rel: rel8);
+        semantics { CX = CX - 1; if CX != 0 && ZF == 1 { IP = IP + rel; } }
+    }
+    instruction Loop {
+        mnemonic "loop";
+        encoding { opcode 0xE2; Disp8 }
+        operands (rel: rel8);
+        semantics { CX = CX - 1; if CX != 0 { IP = IP + rel; } }
+    }
+    instruction Jcxz {
+        mnemonic "jcxz";
+        encoding { opcode 0xE3; Disp8 }
+        operands (rel: rel8);
+        semantics { if CX == 0 { IP = IP + rel; } }
+    }
+
+    instruction Xlat {
+        mnemonic "xlat";
+        encoding { opcode 0xD7; }
+        semantics { AL = mem.read_u8(translate(src_seg(), BX + (AL as u16), 1, Access::Read)); }
+    }
+    instruction Lahf { mnemonic "lahf"; encoding { opcode 0x9F; } semantics { AH = FLAGS as u8; } }
+    instruction Sahf {
+        mnemonic "sahf";
+        encoding { opcode 0x9E; }
+        flags { modifies: [SF, ZF, AF, PF, CF]; }
+        semantics { FLAGS = (FLAGS & 0xFF00) | ((AH as u16) & 0x00D5) | 0x0002; }
+    }
+    /// Undocumented: AL = CF ? FF : 00.
+    instruction Salc { mnemonic "salc"; encoding { opcode 0xD6; } semantics { AL = if CF == 1 { 0xFF } else { 0x00 }; } }
+
+    // -- BCD adjustment ------------------------------------------------------------------------------
+
+    instruction Daa {
+        mnemonic "daa";
+        encoding { opcode 0x27; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF]; }
+        semantics {
+            let old_al = AL;
+            let old_cf = CF;
+            let lo = (AL & 0x0F) > 9 || AF == 1;
+            let a1 = if lo { AL + 6 } else { AL };
+            let hi = old_al > 0x99 || old_cf == 1;
+            let a2 = if hi { a1 + 0x60 } else { a1 };
+            AL = a2;
+            FLAGS.AF = lo as u1;
+            FLAGS.CF = hi as u1;
+            FLAGS.SF = AL[7];
+            FLAGS.ZF = (AL == 0) as u1;
+            FLAGS.PF = Parity8(AL);
+        }
+    }
+    instruction Das {
+        mnemonic "das";
+        encoding { opcode 0x2F; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF]; }
+        semantics {
+            let old_al = AL;
+            let old_cf = CF;
+            let lo = (AL & 0x0F) > 9 || AF == 1;
+            let a1 = if lo { AL - 6 } else { AL };
+            let hi = old_al > 0x99 || old_cf == 1;
+            let a2 = if hi { a1 - 0x60 } else { a1 };
+            AL = a2;
+            FLAGS.AF = lo as u1;
+            // The low adjustment's borrow sets CF too.
+            FLAGS.CF = (hi || (lo && old_al < 6)) as u1;
+            FLAGS.SF = AL[7];
+            FLAGS.ZF = (AL == 0) as u1;
+            FLAGS.PF = Parity8(AL);
+        }
+    }
+    /// On the 286 the adjustment adds 0x106 to AX, so the carry out of AL
+    /// reaches AH.
+    instruction Aaa {
+        mnemonic "aaa";
+        encoding { opcode 0x37; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF, SF, ZF, PF]; }
+        semantics {
+            let adj = (AL & 0x0F) > 9 || AF == 1;
+            if adj { AX = AX + 0x0106; }
+            AL = AL & 0x0F;
+            FLAGS.AF = adj as u1;
+            FLAGS.CF = adj as u1;
+        }
+    }
+    instruction Aas {
+        mnemonic "aas";
+        encoding { opcode 0x3F; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF, SF, ZF, PF]; }
+        semantics {
+            let adj = (AL & 0x0F) > 9 || AF == 1;
+            if adj { AX = AX - 0x0106; }
+            AL = AL & 0x0F;
+            FLAGS.AF = adj as u1;
+            FLAGS.CF = adj as u1;
+        }
+    }
+    instruction Aam {
+        mnemonic "aam";
+        encoding { opcode 0xD4; Imm8 }
+        operands (base: imm8);
+        flags {
+            modifies: [OF, SF, ZF, AF, PF, CF];
+            undefined: [OF, AF, CF, SF if base == 0, ZF if base == 0, PF if base == 0];
+        }
+        semantics {
+            if base == 0 {
+                // The divider's leftover flags: SF and ZF clear, PF from AL in
+                // most captures (the rest are reported as undefined-flag leaks).
+                FLAGS.SF = 0; FLAGS.ZF = 0; FLAGS.CF = 0; FLAGS.AF = 0; FLAGS.OF = 0;
+                FLAGS.PF = Parity8(AL);
+                raise DE;
+            }
+            let a = AL;
+            AH = a / base;
+            AL = a % base;
+            FLAGS.SF = AL[7];
+            FLAGS.ZF = (AL == 0) as u1;
+            FLAGS.PF = Parity8(AL);
+        }
+    }
+    instruction Aad {
+        mnemonic "aad";
+        encoding { opcode 0xD5; Imm8 }
+        operands (base: imm8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF, AF, CF]; }
+        semantics {
+            AL = AL + AH * base;
+            AH = 0;
+            FLAGS.SF = AL[7];
+            FLAGS.ZF = (AL == 0) as u1;
+            FLAGS.PF = Parity8(AL);
+        }
+    }
+
+    // -- I/O ------------------------------------------------------------------------------------------
+
+    instruction In_al_imm8  { mnemonic "in";  encoding { opcode 0xE4; Imm8 } operands (p: imm8); semantics { AL = io.read_u8(p as u16); } }
+    instruction In_ax_imm8  { mnemonic "in";  encoding { opcode 0xE5; Imm8 } operands (p: imm8); semantics { AX = io.read_u16(p as u16); } }
+    instruction Out_imm8_al { mnemonic "out"; encoding { opcode 0xE6; Imm8 } operands (p: imm8); semantics { io.write_u8(p as u16, AL); } }
+    instruction Out_imm8_ax { mnemonic "out"; encoding { opcode 0xE7; Imm8 } operands (p: imm8); semantics { io.write_u16(p as u16, AX); } }
+    instruction In_al_dx  { mnemonic "in";  encoding { opcode 0xEC; } semantics { AL = io.read_u8(DX); } }
+    instruction In_ax_dx  { mnemonic "in";  encoding { opcode 0xED; } semantics { AX = io.read_u16(DX); } }
+    instruction Out_dx_al { mnemonic "out"; encoding { opcode 0xEE; } semantics { io.write_u8(DX, AL); } }
+    instruction Out_dx_ax { mnemonic "out"; encoding { opcode 0xEF; } semantics { io.write_u16(DX, AX); } }
+    instruction Insb {
+        mnemonic "insb";
+        encoding { opcode 0x6C; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let v = io.read_u8(DX);
+            let d = DI; DI = DI + delta(1);
+            if repeating() { CX = CX - 2; }
+            mem.write_u8(translate(ES, d, 1, Access::Write), v);
+            if repeating() { CX = CX + 1; if CX != 0 { IP = start_ip; } }
+        }
+    }
+    instruction Insw {
+        mnemonic "insw";
+        encoding { opcode 0x6D; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let v = io.read_u16(DX);
+            let d = DI; DI = DI + delta(2);
+            if repeating() { CX = CX - 2; }
+            mem.write_u16(translate(ES, d, 2, Access::Write), v);
+            if repeating() { CX = CX + 1; if CX != 0 { IP = start_ip; } }
+        }
+    }
+    instruction Outsb {
+        mnemonic "outsb";
+        encoding { opcode 0x6E; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let s = SI; SI = SI + delta(1);
+            if repeating() { CX = CX - 1; }
+            io.write_u8(DX, mem.read_u8(translate(src_seg(), s, 1, Access::Read)));
+            if repeating() && CX != 0 { IP = start_ip; }
+        }
+    }
+    instruction Outsw {
+        mnemonic "outsw";
+        encoding { opcode 0x6F; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let s = SI; SI = SI + delta(2);
+            if repeating() { CX = CX - 1; }
+            io.write_u16(DX, mem.read_u16(translate(src_seg(), s, 2, Access::Read)));
+            if repeating() && CX != 0 { IP = start_ip; }
+        }
+    }
+
+    /// Coprocessor escape: with no coprocessor and MSW clear, the 286
+    /// consumes the ModRM (and displacement) and, for a memory form, reads
+    /// the operand word (so it can fault) and discards it.
+    instruction Esc {
+        mnemonic "esc";
+        encoding { opcode "11011---"; ModRM }
+        operands (m: rm16);
+        semantics { if m.is_mem { let _ = m; } }
+    }
+    instruction Wait { mnemonic "wait"; encoding { opcode 0x9B; } }
+
     // -- strings -------------------------------------------------------------------------------
     //
     // One element per execution. Under a repeat prefix an iteration that is
@@ -1115,6 +1625,8 @@ test "push and pop round trip" on I286 {
 vectors "../../../simulators/test/i286/SingleStepTests/v1_real_mode/*.MOO.gz" on I286 {
     format moo;
     memory mem;
+    /// The capture rig has nothing on the I/O bus: reads float high.
+    open io = 0xFF;
     reg ax = AX;
     reg bx = BX;
     reg cx = CX;

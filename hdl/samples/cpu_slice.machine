@@ -1,0 +1,385 @@
+// Sample 3: a processor slice.
+//
+// Exercises: an `isa` with address spaces, registers, operand kinds, faults
+// and two instructions; a processor component whose rtl has a prefetch queue,
+// a bus interface, routines with `fetch`/`call`/`cycle`/`wait`, a sequencer,
+// commit policies, and the architectural mapping; a conformance declaration
+// against the derived interpreter and the existing single-step vectors.
+//
+// This is the exemplar's ADD r/m8, r8 path, rewritten in the braces syntax
+// and split into levels. Only real mode is modelled; protected mode would add
+// descriptor caches to `Segment` and checks to `translate`, not new syntax.
+
+use alu::{AluOp, ArithFlags, Alu, AluFlags};
+
+// ---------------------------------------------------------------------------
+// Architectural level
+// ---------------------------------------------------------------------------
+
+bundle Segment { selector: u16, base: u24 }
+
+isa I286Isa {
+    space mem: addr u24 -> u8, little_endian;
+    space io:  addr u16 -> u8, little_endian;
+
+    register AX: u16 { AL: u8 @ 0; AH: u8 @ 8; }
+    register BX: u16 { BL: u8 @ 0; BH: u8 @ 8; }
+    register CX: u16 { CL: u8 @ 0; CH: u8 @ 8; }
+    register DX: u16 { DL: u8 @ 0; DH: u8 @ 8; }
+    register SI: u16;
+    register DI: u16;
+    register BP: u16;
+    register SP: u16;
+    register IP: u16;
+    register CS: Segment;
+    register DS: Segment;
+    register ES: Segment;
+    register SS: Segment;
+    register FLAGS: u16 {
+        CF: u1 @ 0; PF: u1 @ 2; AF: u1 @ 4; ZF: u1 @ 6; SF: u1 @ 7;
+        TF: u1 @ 8; IF: u1 @ 9; DF: u1 @ 10; OF: u1 @ 11;
+        /// View of the six arithmetic flags as the bundle the ALU units produce.
+        view arith: ArithFlags { cf: CF, pf: PF, af: AF, zf: ZF, sf: SF, of: OF }
+    }
+
+    fault UD { vector: 6, class: Fault }
+    fault GP(error: u16) { vector: 13, class: Fault, pushes_error_code: true }
+
+    /// Real-mode segment translation. No limit checks; the 20-bit wrap is a
+    /// system-level fact (A20) and is not applied here.
+    fn translate(seg: Segment, off: u16, size: u8, access: Access) -> u24 {
+        return seg.base + (off as u24);
+    }
+
+    // Operand kinds ---------------------------------------------------------
+
+    /// ModRM byte. `tail` says which further bytes the addressing form pulls
+    /// in; the rtl `fetch ModRM` and the decoder both follow it.
+    operand ModRM {
+        size 1;
+        fields { mod: u2 @ 6; reg: u3 @ 3; rm: u3 @ 0; }
+        tail {
+            if mod == 1 { Disp8 }
+            else if mod == 2 || (mod == 0 && rm == 6) { Disp16 }
+        }
+    }
+    operand Disp8  { size 1; fields { value: i8  @ 0; } }
+    operand Disp16 { size 2; fields { value: i16 @ 0; } }
+
+    /// Effective address and default segment for a 16-bit ModRM memory form.
+    fn effective_address(m: ModRM) -> (seg: Segment, off: u16) {
+        let disp: u16 = match m.mod { 0 => if m.rm == 6 { m.tail.Disp16.value as u16 } else { 0 },
+                                      1 => m.tail.Disp8.value as u16,
+                                      2 => m.tail.Disp16.value as u16,
+                                      _ => unreachable("register form") };
+        let (base, seg) = match m.rm {
+            0 => (BX + SI, DS), 1 => (BX + DI, DS), 2 => (BP + SI, SS), 3 => (BP + DI, SS),
+            4 => (SI, DS),      5 => (DI, DS),      6 => if m.mod == 0 { (0, DS) } else { (BP, SS) },
+            7 => (BX, DS),
+        };
+        return (seg, base + disp);
+    }
+
+    /// 8-bit register by 3-bit selector.
+    operand_kind r8 : u8 {
+        select(n: u3) => match n { 0 => AL, 1 => CL, 2 => DL, 3 => BL, 4 => AH, 5 => CH, 6 => DH, 7 => BH };
+    }
+
+    /// 8-bit register or memory through ModRM.
+    operand_kind rm8 : u8 from ModRM {
+        is_mem => m.mod != 3;
+        read  => if m.mod == 3 { r8.select(m.rm) } else { let (s, o) = effective_address(m); mem.read_u8(translate(s, o, 1, Access::Read)) };
+        write(v: u8) => if m.mod == 3 { r8.select(m.rm) = v; } else { let (s, o) = effective_address(m); mem.write_u8(translate(s, o, 1, Access::Write), v); };
+    }
+
+    // Instructions ------------------------------------------------------------
+
+    /// `ADD` performs an integer addition on the two operands. The result goes
+    /// to the first operand.
+    instruction Add_rm8_r8 {
+        mnemonic "add";
+        encoding { opcode 0x00; modrm { reg: r8, rm: rm8 } }
+        operands (dst: rm8, src: r8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            let a = dst;
+            let b = src;
+            let (result, raw) = Alu<8>(AluOp::Add, a, b, 0);
+            dst = result;
+            FLAGS.arith = AluFlags<8>(AluOp::Add, a, b, raw);
+        }
+        implements add_rm_reg8;
+        references ["Intel 80286 Programmer's Reference Manual (1987), ADD, p. B-3"];
+    }
+
+    /// `CMP` subtracts the second operand from the first and sets the flags
+    /// without storing the result.
+    instruction Cmp_rm8_r8 {
+        mnemonic "cmp";
+        encoding { opcode 0x38; modrm { reg: r8, rm: rm8 } }
+        operands (dst: rm8, src: r8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            let (_, raw) = Alu<8>(AluOp::Cmp, dst, src, 0);
+            FLAGS.arith = AluFlags<8>(AluOp::Cmp, dst, src, raw);
+        }
+        implements cmp_rm_reg8;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Local bus between CPU and memory/bridges (not the ISA bus)
+// ---------------------------------------------------------------------------
+
+enum BusSize : u1 { B8, B16 }
+
+bus I286LocalBus {
+    clock clk;
+    wires {
+        addr:  u24  driven_by Master;
+        data:  u16  shared;
+        rd:    bool driven_by Master;
+        wr:    bool driven_by Master;
+        bhe:   bool driven_by Master;           // byte-high enable
+        ready: bool wired_and;
+    }
+    roles { Master; Slave; }
+    transaction read(addr: u24, size: BusSize) -> (data: u16) {
+        Master {
+            cycle { addr = addr; bhe = size == BusSize::B16; rd = true; }
+            wait until ready;
+            cycle { let v = data; rd = false; return v; }
+        }
+        Slave { begins when rd && selected(addr); responds with (data, wait) { hold ready = false for wait cycles; drive data = data on the sample cycle; } }
+    }
+    transaction write(addr: u24, size: BusSize, data: u16) {
+        Master {
+            cycle { addr = addr; bhe = size == BusSize::B16; data = data; wr = true; }
+            wait until ready;
+            cycle { wr = false; }
+        }
+        Slave { begins when wr && selected(addr); responds with (wait) { hold ready = false for wait cycles; sample data on the first cycle; } }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Processor component
+// ---------------------------------------------------------------------------
+
+bundle PrefetchOut { valid: u1, byte: u8, count: u3 }
+
+component I286 {
+    isa I286Isa;
+
+    ports {
+        bus local: I286LocalBus::Master;
+        in intr: bool;
+        in nmi: bool;
+    }
+
+    rtl {
+        // Architectural registers as rtl state. Names are lower-case; the
+        // `architectural` block maps them to ISA names.
+        reg ax: u16 = 0;  reg bx: u16 = 0;  reg cx: u16 = 0;  reg dx: u16 = 0;
+        reg si: u16 = 0;  reg di: u16 = 0;  reg bp: u16 = 0;  reg sp: u16 = 0;
+        reg cs: Segment = Segment { selector: 0xF000, base: 0xF0000 };
+        reg ds: Segment = Segment { selector: 0, base: 0 };
+        reg es: Segment = Segment { selector: 0, base: 0 };
+        reg ss: Segment = Segment { selector: 0, base: 0 };
+        reg flags: u16 = 0x0002;
+
+        /// IP of the instruction currently executing; `fetch_ip` runs ahead.
+        reg ip: u16 = 0xFFF0;
+        reg fetch_ip: u16 = 0xFFF0;
+
+        // Scratch used by routines.
+        reg tmp8: u8 = 0;
+        reg ea: u24 = 0;
+
+        // -------------------------------------------------------------------
+        // Prefetch queue: six bytes, fills by words when there is room.
+        // -------------------------------------------------------------------
+        mem queue: [u8; 6] { ports: 2, read: async, write: sync };
+        reg q_read: u3 = 0;
+        reg q_count: u3 = 0;
+        reg q_outstanding: u1 = 0;
+        wire prefetch: PrefetchOut;
+        wire pop: bool;                          // driven by the sequencer
+        wire flush: bool;
+
+        default { pop = false; flush = false; }
+
+        prefetch = PrefetchOut { valid: (q_count != 0) as u1, byte: queue.read(q_read), count: q_count };
+
+        /// The bus interface unit owns the bus. Execute requests win over
+        /// prefetch requests; a stalled prefetch is cheaper than a stalled
+        /// execute. Written as a routine so the wait on `ready` is explicit.
+        routine prefetch_fill() @ clk {
+            loop {
+                wait until q_count <= 4 && q_outstanding == 0 && !exec_wants_bus;
+                cycle { q_outstanding <- 1; }
+                let w = call local.read(cs.base + (fetch_ip as u24), BusSize::B16);
+                cycle {
+                    let wr = (q_read + q_count) % 6;
+                    queue.write(wr, w as u8);
+                    queue.write((wr + 1) % 6, (w >> 8) as u8);
+                    q_count <- q_count + 2;
+                    fetch_ip <- fetch_ip + 2;
+                    q_outstanding <- 0;
+                }
+            }
+        }
+
+        wire exec_wants_bus: bool;
+        default { exec_wants_bus = false; }
+
+        if flush {
+            q_read <- 0; q_count <- 0; fetch_ip <- ip;
+        } else if pop {
+            q_read <- (q_read + 1) % 6;
+            q_count <- q_count - 1;
+        }
+
+        // -------------------------------------------------------------------
+        // Instruction stream and operand fetch
+        // -------------------------------------------------------------------
+
+        /// One byte from the instruction stream. `fetch <Operand>` expands to
+        /// `size` calls of this, assembled into the operand's fields.
+        istream routine next_byte() -> (b: u8) @ clk {
+            wait until prefetch.valid == 1;
+            cycle { pop = true; ip <- ip + 1; return prefetch.byte; }
+        }
+
+        routine mem_read8(addr: u24) -> (v: u8) @ clk {
+            cycle { exec_wants_bus = true; }
+            let w = call local.read(addr, BusSize::B8);
+            return w as u8;
+        }
+
+        routine mem_write8(addr: u24, v: u8) @ clk {
+            cycle { exec_wants_bus = true; }
+            call local.write(addr, BusSize::B8, v as u16);
+        }
+
+        /// Effective-address calculation, with the 286's documented EA timing:
+        /// base+index forms cost an extra cycle over plain displacement.
+        routine ea_calc(m: ModRM) -> (addr: u24) @ clk {
+            let (seg, off) = I286Isa::effective_address.rtl(m);   // the ISA fn, used combinationally
+            if m.rm <= 3 { cycle { } }                              // base + index: one more cycle
+            cycle { ea <- seg.base + (off as u24); }
+            return ea;
+        }
+
+        unit reg8_read(n: u3) -> u8 {
+            return match n { 0 => ax[7:0], 1 => cx[7:0], 2 => dx[7:0], 3 => bx[7:0],
+                             4 => ax[15:8], 5 => cx[15:8], 6 => dx[15:8], 7 => bx[15:8] };
+        }
+
+        /// Register write-back by selector. In a routine `cycle`, `reg8_write`
+        /// schedules the matching register.
+        macro reg8_write(n: u3, v: u8) {
+            match n {
+                0 => { ax <- concat(ax[15:8], v); }  1 => { cx <- concat(cx[15:8], v); }
+                2 => { dx <- concat(dx[15:8], v); }  3 => { bx <- concat(bx[15:8], v); }
+                4 => { ax <- concat(v, ax[7:0]); }   5 => { cx <- concat(v, cx[7:0]); }
+                6 => { dx <- concat(v, dx[7:0]); }   7 => { bx <- concat(v, bx[7:0]); }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Instruction routines
+        // -------------------------------------------------------------------
+
+        /// ADD r/m8, r8 (0x00). 2 cycles register form; 7 cycles memory form
+        /// (plus EA and bus time), as derived by the compiler from this body.
+        routine add_rm_reg8() @ clk {
+            let m = fetch ModRM;
+            let b = reg8_read(m.reg);
+            if m.mod == 3 {
+                cycle {
+                    let (r, raw) = Alu<8>(AluOp::Add, reg8_read(m.rm), b, 0);
+                    reg8_write(m.rm, r);
+                    flags.arith <- AluFlags<8>(AluOp::Add, reg8_read(m.rm), b, raw);
+                }
+            } else {
+                let addr = call ea_calc(m);
+                let a = call mem_read8(addr);
+                cycle {
+                    let (r, raw) = Alu<8>(AluOp::Add, a, b, 0);
+                    tmp8 <- r;
+                    flags.arith <- AluFlags<8>(AluOp::Add, a, b, raw) @commit(on_retire);
+                }
+                call mem_write8(addr, tmp8);
+            }
+            retire;
+        }
+
+        /// CMP r/m8, r8 (0x38).
+        routine cmp_rm_reg8() @ clk {
+            let m = fetch ModRM;
+            let b = reg8_read(m.reg);
+            let a = if m.mod == 3 { reg8_read(m.rm) } else { call mem_read8(call ea_calc(m)) };
+            cycle {
+                let (_, raw) = Alu<8>(AluOp::Cmp, a, b, 0);
+                flags.arith <- AluFlags<8>(AluOp::Cmp, a, b, raw);
+            }
+            retire;
+        }
+
+        routine undefined_opcode() @ clk {
+            fault I286Isa::UD;
+        }
+
+        /// The execute unit: fetch an opcode byte, dispatch to its routine,
+        /// repeat. `dispatch` uses the decode table the compiler derives from
+        /// `isa.encoding` + `implements`; unmatched opcodes go to `otherwise`.
+        sequencer execute @ clk {
+            start prefetch_fill();
+            loop {
+                let opcode = call next_byte();
+                dispatch opcode via I286Isa { otherwise => undefined_opcode(); }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Architectural projection: valid at each `retire`.
+        // -------------------------------------------------------------------
+        architectural {
+            AX = ax; BX = bx; CX = cx; DX = dx; SI = si; DI = di; BP = bp; SP = sp;
+            CS = cs; DS = ds; ES = es; SS = ss;
+            FLAGS = flags;
+            IP = ip;                             // ip tracks consumed bytes, so at retire it is the next instruction
+            at retire;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Verification
+// ---------------------------------------------------------------------------
+
+test "ADD AL, BL" on I286Isa {
+    given { AL = 0x7F; BL = 0x01; }
+    run instruction Add_rm8_r8 { dst: AL, src: BL };
+    expect { AL == 0x80; FLAGS.OF == 1; FLAGS.SF == 1; FLAGS.CF == 0; FLAGS.AF == 1; }
+}
+
+test "ADD [BX+SI], CL through memory" on I286Isa {
+    given { DS.base = 0x10000; BX = 0x0100; SI = 0x0002; CL = 0x10; mem[0x10102] = 0xF5; }
+    run bytes [0x00, 0b00_001_000];              // ADD [BX+SI], CL
+    expect { mem[0x10102] == 0x05; FLAGS.CF == 1; IP == 2; }
+}
+
+/// Existing single-step corpus, reused as-is.
+vectors "simulators/test/i286/simple/*.json" on I286Isa;
+
+/// Derived interpreter vs. rtl: same instruction stream, compare the
+/// architectural projection after every retire. The timing report compares
+/// measured rtl cycles with any `timing` overrides (none here).
+conformance I286 {
+    stimulus vectors "simulators/test/i286/simple/*.json";
+    stimulus random_instructions(seed: 7, count: 100_000, from: [Add_rm8_r8, Cmp_rm8_r8]);
+    compare architectural at retire;
+    report timing;
+}

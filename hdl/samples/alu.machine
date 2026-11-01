@@ -1,0 +1,101 @@
+// Sample 1: units only.
+//
+// Exercises: enums, bundles, const width parameters, unit calls, match
+// expressions, bit indexing, explicit casts, in-language tests.
+//
+// These units are shared between levels: the ISA semantics for ADD/SUB/...
+// call them from the derived interpreter, and the execute unit's rtl calls
+// them from the cycle-accurate simulator. One definition, one generated Rust
+// function each.
+
+/// ALU operation selector. Encoding matches the i286 group-1 /digit field so
+/// the decoder can pass bits 5..3 of the opcode straight through.
+enum AluOp : u3 { Add, Or, Adc, Sbb, And, Sub, Xor, Cmp }
+
+/// Operand width. Used as a const parameter, so the enum exists for the rtl
+/// control path; the width itself is a compile-time number.
+enum Width : u1 { W8, W16 }
+
+/// The arithmetic flags, in the order they appear in the 286 FLAGS register.
+/// Bit positions here are a bundle layout, not FLAGS positions; the ISA maps
+/// them (see cpu_slice.machine).
+bundle ArithFlags { cf: u1, pf: u1, af: u1, zf: u1, sf: u1, of: u1 }
+
+/// Parity over the low byte of a value. The 286 parity-checks only bits 0..7
+/// even for 16-bit results. PF is set for even parity.
+unit Parity8(v: u8) -> u1 {
+    return ~parity(v);
+}
+
+/// Datapath only. Computes `raw`, one bit wider than the operands, so the
+/// caller can see the carry-out at bit W. `Cmp` behaves as `Sub`; the caller
+/// decides not to write the result back.
+unit Alu<const W: width>(op: AluOp, a: u<W>, b: u<W>, cin: u1) -> (result: u<W>, raw: u<W + 1>) {
+    let aw = a as u<W + 1>;
+    let bw = b as u<W + 1>;
+    let cw = cin as u<W + 1>;
+    let r: u<W + 1> = match op {
+        AluOp::Add => aw + bw,
+        AluOp::Adc => aw + bw + cw,
+        AluOp::Sub | AluOp::Cmp => aw + ~bw + 1,
+        AluOp::Sbb => aw + ~bw + 1 - cw,
+        AluOp::And => aw & bw,
+        AluOp::Or  => aw | bw,
+        AluOp::Xor => aw ^ bw,
+    };
+    return (result: r as u<W>, raw: r);
+}
+
+/// Post-operation flags for an ALU op at width W.
+///
+/// `raw[W]` is the adder carry-out; for subtraction the datapath computes
+/// a + ~b + 1, whose carry-out is the inverse of the x86 borrow, hence the
+/// `~` on the Sub/Sbb/Cmp arm.
+unit AluFlags<const W: width>(op: AluOp, a: u<W>, b: u<W>, raw: u<W + 1>) -> ArithFlags {
+    let r: u<W> = raw as u<W>;
+    let msb = W - 1;
+    let (cf, af, of) = match op {
+        AluOp::Add | AluOp::Adc =>
+            (raw[W],
+             raw[4] ^ a[4] ^ b[4],
+             ~(a[msb] ^ b[msb]) & (a[msb] ^ r[msb])),
+        AluOp::Sub | AluOp::Sbb | AluOp::Cmp =>
+            (~raw[W],
+             raw[4] ^ a[4] ^ b[4],
+             (a[msb] ^ b[msb]) & (a[msb] ^ r[msb])),
+        AluOp::And | AluOp::Or | AluOp::Xor =>
+            (0, 0, 0),
+    };
+    return ArithFlags {
+        cf,
+        pf: Parity8(r as u8),
+        af,
+        zf: (r == 0) as u1,
+        sf: r[msb],
+        of,
+    };
+}
+
+test "8-bit add with carry out" {
+    let (result, raw) = Alu<8>(AluOp::Add, 0xFF, 0x01, 0);
+    let f = AluFlags<8>(AluOp::Add, 0xFF, 0x01, raw);
+    expect { result == 0x00; f.cf == 1; f.zf == 1; f.af == 1; f.of == 0; f.pf == 1; }
+}
+
+test "signed overflow on 16-bit add" {
+    let (result, raw) = Alu<16>(AluOp::Add, 0x7FFF, 0x0001, 0);
+    let f = AluFlags<16>(AluOp::Add, 0x7FFF, 0x0001, raw);
+    expect { result == 0x8000; f.of == 1; f.sf == 1; f.cf == 0; }
+}
+
+test "sub borrow is the inverted adder carry" {
+    let (result, raw) = Alu<8>(AluOp::Sub, 0x00, 0x01, 0);
+    let f = AluFlags<8>(AluOp::Sub, 0x00, 0x01, raw);
+    expect { result == 0xFF; f.cf == 1; f.sf == 1; f.zf == 0; }
+}
+
+test "logical ops clear CF and OF" {
+    let (_, raw) = Alu<8>(AluOp::And, 0xF0, 0x0F, 0);
+    let f = AluFlags<8>(AluOp::And, 0xF0, 0x0F, raw);
+    expect { f.cf == 0; f.of == 0; f.zf == 1; f.pf == 1; }
+}

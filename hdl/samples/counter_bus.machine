@@ -1,0 +1,252 @@
+// Sample 2: a device with both an rtl and a model body, on a small bus, in a
+// system with two profiles.
+//
+// Exercises: bus protocol with master and slave roles, a component with two
+// levels, memories, multi-clock components, system composition, address
+// assignment, profiles, conformance between the two levels.
+//
+// The device is deliberately simple: a programmable counter/timer with two
+// registers and an interrupt, in the spirit of one channel of an 8253. The
+// point is the shape, not the device.
+
+// ---------------------------------------------------------------------------
+// Bus
+// ---------------------------------------------------------------------------
+
+/// A tiny 8-bit peripheral bus: separate address and data, one command line
+/// per direction, a ready line slaves pull low to insert wait states.
+bus PeriphBus {
+    clock clk;
+
+    wires {
+        addr:  u8   driven_by Master;
+        data:  u8   shared;                     // tristate; exactly one driver per cycle
+        rd:    bool driven_by Master;
+        wr:    bool driven_by Master;
+        ready: bool wired_and;                  // open-collector, idles high
+        irq:   [bool; 4] driven_by Slave;       // each line assigned to one slave in the system
+    }
+
+    roles { Master; Slave; }
+
+    /// Read: address and RD asserted together; data sampled on the first
+    /// cycle in which ready is high after at least one full cycle of RD.
+    transaction read(addr: u8) -> (data: u8) {
+        Master {
+            cycle { addr = addr; rd = true; }
+            wait until ready;
+            cycle { let v = data; rd = false; return v; }
+        }
+        Slave {
+            begins when rd && selected(addr);
+            responds with (data, wait) {
+                hold ready = false for wait cycles;
+                drive data = data on the sample cycle;
+            }
+        }
+    }
+
+    transaction write(addr: u8, data: u8) {
+        Master {
+            cycle { addr = addr; data = data; wr = true; }
+            wait until ready;
+            cycle { wr = false; }
+        }
+        Slave {
+            begins when wr && selected(addr);
+            responds with (wait) {
+                hold ready = false for wait cycles;
+                sample data on the first cycle;
+            }
+        }
+    }
+
+    /// Level-triggered interrupt line. Not a timed transaction: a signal.
+    signal interrupt(line: u2) = irq[line];
+}
+
+// ---------------------------------------------------------------------------
+// Device
+// ---------------------------------------------------------------------------
+
+bundle TimerControl { enable: u1, repeat: u1, irq_enable: u1 }
+
+/// Down-counter on its own clock. Register map (relative to the assigned base):
+///   0  reload value (R/W)
+///   1  current count (R)
+///   2  control: bit0 enable, bit1 repeat, bit2 irq enable (R/W); writing
+///      clears a pending interrupt.
+///
+/// The counter decrements once per `tick` cycle while enabled. Reaching zero
+/// raises the interrupt (if enabled) and either reloads (repeat) or stops.
+component Timer {
+    ports {
+        clock bus_clk;                           // bus side
+        clock tick;                              // counting side; independent frequency
+        bus io: PeriphBus::Slave;
+    }
+
+    // -----------------------------------------------------------------------
+    // Wire level: two clock domains, one synchroniser between them.
+    // -----------------------------------------------------------------------
+    rtl {
+        reg reload:  u8 @ bus_clk = 0;
+        reg control: TimerControl @ bus_clk = TimerControl { enable: 0, repeat: 0, irq_enable: 0 };
+        reg count:   u8 @ tick = 0;
+        reg pending: u1 @ tick = 0;
+        reg load_req: u1 @ bus_clk = 0;          // set on reload write, consumed by the tick domain
+
+        // Bus-side registers are read in the tick domain through `sync`, which
+        // costs one tick cycle, exactly as a real two-flop synchroniser would.
+        on tick {
+            let ctl = sync(control);
+            let do_load = sync(load_req) == 1;
+            if do_load {
+                count <- sync(reload);
+            } else if ctl.enable == 1 {
+                if count == 0 {
+                    if ctl.repeat == 1 { count <- sync(reload); }
+                    pending <- ctl.irq_enable;
+                } else {
+                    count <- count - 1;
+                }
+            }
+        }
+
+        on bus_clk {
+            // The slave role of PeriphBus gives this body `io.read`/`io.write`
+            // events and `io.respond(...)`, derived from the protocol. Reads
+            // of `count` cross a domain and are synchronised.
+            default { io.irq[0] = sync(pending) as bool; }
+
+            if io.read.active {
+                let v: u8 = match io.read.addr[1:0] {
+                    0 => reload,
+                    1 => sync(count),
+                    2 => concat(0_u5, control.irq_enable, control.repeat, control.enable),
+                    _ => 0xFF,
+                };
+                io.respond(data: v, wait: 0);
+            }
+            if io.write.active {
+                match io.write.addr[1:0] {
+                    0 => { reload <- io.write.data; load_req <- 1; }
+                    2 => { control <- TimerControl { enable: io.write.data[0], repeat: io.write.data[1], irq_enable: io.write.data[2] }; }
+                    _ => { }
+                }
+                io.respond(wait: 1);              // this device needs one wait state on writes
+            } else {
+                load_req <- 0;
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Transaction level: the same device as an emulator would write it.
+    // -----------------------------------------------------------------------
+    model {
+        state reload: u8 = 0;
+        state count: u8 = 0;
+        state control: TimerControl = TimerControl { enable: 0, repeat: 0, irq_enable: 0 };
+        state pending: bool = false;
+
+        on io.read(addr: u8) -> (data: u8, wait: u8) {
+            let v: u8 = match addr[1:0] {
+                0 => reload,
+                1 => count,
+                2 => concat(0_u5, control.irq_enable, control.repeat, control.enable),
+                _ => 0xFF,
+            };
+            return (data: v, wait: 0);
+        }
+
+        on io.write(addr: u8, data: u8) -> (wait: u8) {
+            match addr[1:0] {
+                0 => { reload = data; count = data; }
+                2 => { control = TimerControl { enable: data[0], repeat: data[1], irq_enable: data[2] }; pending = false; }
+                _ => { }
+            }
+            return (wait: 1);
+        }
+
+        /// Called by the emulator with the number of `tick` cycles elapsed.
+        /// Catches up in one step instead of iterating; this is the kind of
+        /// shortcut a model may take and the rtl may not.
+        on tick @ tick (n: u32) {
+            if control.enable == 0 { return; }
+            if count as u32 >= n {
+                count = count - (n as u8);
+                return;
+            }
+            // Crossed zero at least once.
+            pending = pending || control.irq_enable == 1;
+            if control.repeat == 1 {
+                let period = reload as u32 + 1;
+                let remaining = (n - count as u32 - 1) % period;
+                count = (reload as u32 - remaining) as u8;
+            } else {
+                count = 0;
+            }
+            emit io.interrupt(0) = pending;
+        }
+    }
+}
+
+/// A master that generates traffic so the sample has something to run. In a
+/// real system this is the processor; here it is a fixed script.
+component ScriptedMaster {
+    ports { bus io: PeriphBus::Master; }
+    rtl {
+        reg step: u4 = 0;
+        routine script() @ clk {
+            call io.write(0x00, 0x05);          // reload = 5
+            call io.write(0x02, 0b111);         // enable, repeat, irq
+            loop {
+                let c = call io.read(0x01);
+                cycle { last_count <- c; }
+            }
+        }
+        reg last_count: u8 = 0;
+        sequencer main @ clk { start script(); }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// System
+// ---------------------------------------------------------------------------
+
+system TimerBoard {
+    clock bus_clk: 8 MHz;
+    clock tick = bus_clk / 4;                   // 2 MHz counting clock
+
+    component master: ScriptedMaster @ bus_clk;
+    component timer: Timer @ (bus_clk: bus_clk, tick: tick);
+
+    bus io: PeriphBus @ bus_clk {
+        master master.io;
+        slave timer.io @ 0x40..=0x43;           // generates the address decoder for `selected`
+        irq 0 = timer.io.irq[0];
+    }
+
+    profile accurate { default: rtl; }
+    profile fast     { default: model; }
+}
+
+// ---------------------------------------------------------------------------
+// Verification
+// ---------------------------------------------------------------------------
+
+test "timer counts down and reloads" on Timer.rtl {
+    clocks { bus_clk = 8 MHz; tick = 2 MHz; }
+    run { io.write(0x00, 0x03); io.write(0x02, 0b011); }
+    run 4 * 4 cycles of bus_clk;                // four ticks
+    expect { io.read(0x01) == 0x03; }           // 3,2,1,0 -> reload to 3 on the fourth tick
+}
+
+/// The compiler generates this comparison for every component with two levels;
+/// the declaration here only names the stimulus and the tolerance.
+conformance Timer {
+    stimulus random_transactions(seed: 1, count: 10_000, addr: 0x00..=0x03);
+    compare transactions;                       // read data and wait states must match exactly
+    compare signals { irq[0] } within 2 cycles of tick;   // the model raises at the catch-up point
+}

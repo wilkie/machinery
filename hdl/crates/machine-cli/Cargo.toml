@@ -1,0 +1,17 @@
+[package]
+name = "machine-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line driver for the Machine hardware description language."
+
+[[bin]]
+name = "machine"
+path = "src/main.rs"
+
+[dependencies]
+machine-syntax = { path = "../machine-syntax" }
+
+[lints]
+workspace = true

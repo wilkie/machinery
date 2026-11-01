@@ -1,0 +1,12 @@
+[package]
+name = "machine-syntax"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lexer, parser, AST and diagnostics for the Machine hardware description language."
+
+[dependencies]
+
+[lints]
+workspace = true

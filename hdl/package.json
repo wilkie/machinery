@@ -1,0 +1,13 @@
+{
+  "name": "@machinery/hdl",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Machine hardware description language: compiler and toolchain (Rust).",
+  "scripts": {
+    "build": "cargo build --release",
+    "test": "cargo test",
+    "lint": "cargo clippy --all-targets -- -D warnings",
+    "typecheck": "cargo check",
+    "clean": "cargo clean"
+  }
+}

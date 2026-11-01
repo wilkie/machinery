@@ -1,0 +1,431 @@
+// The Intel 80286 instruction set architecture, real mode.
+//
+// This file is the architectural level of the 286: what instructions mean.
+// It is checked against the SingleStepTests 80286 hardware vectors (see
+// `vectors` at the end): `machine vectors --isa I286 targets/i286/*.machine`.
+//
+// Coverage so far: the eight ALU operations in all six register/memory/
+// immediate forms and the 80-83 immediate group, INC/DEC r16, MOV between
+// registers, memory and immediates, the conditional jumps, JMP short/near,
+// the flag instructions, NOP, HLT, segment-override and LOCK prefixes.
+// Not yet: exceptions and interrupt delivery, the stack, string
+// instructions, multiply/divide, shifts, segment-register moves, I/O,
+// protected mode.
+
+use alu::{AluOp, ArithFlags, Alu, AluFlags};
+
+/// A segment register: the selector and, in real mode, `selector << 4` as
+/// the base (the 286's descriptor cache).
+bundle Segment { selector: u16, base: u24 }
+
+isa I286 {
+    space mem: addr u24 -> u8, little_endian;
+    space io:  addr u16 -> u8, little_endian;
+
+    register AX: u16 { AL: u8 @ 0; AH: u8 @ 8; }
+    register BX: u16 { BL: u8 @ 0; BH: u8 @ 8; }
+    register CX: u16 { CL: u8 @ 0; CH: u8 @ 8; }
+    register DX: u16 { DL: u8 @ 0; DH: u8 @ 8; }
+    register SI: u16;
+    register DI: u16;
+    register BP: u16;
+    register SP: u16;
+    register IP: u16;
+    register CS: Segment;
+    register DS: Segment;
+    register ES: Segment;
+    register SS: Segment;
+    register FLAGS: u16 {
+        CF: u1 @ 0; PF: u1 @ 2; AF: u1 @ 4; ZF: u1 @ 6; SF: u1 @ 7;
+        TF: u1 @ 8; IF: u1 @ 9; DF: u1 @ 10; OF: u1 @ 11;
+        view arith: ArithFlags { cf: CF, pf: PF, af: AF, zf: ZF, sf: SF, of: OF }
+    }
+
+    mode Mode : u1 { Real, Protected }
+
+    /// Why memory is touched; protected mode checks rights by it.
+    enum Access : u2 { Read, Write, Execute }
+
+    /// A segment-override prefix in effect for the current instruction.
+    enum SegOv : u3 { ES = 0, CS = 1, SS = 2, DS = 3, None = 4 }
+    latch seg_override: SegOv = SegOv::None;
+
+    fault DE { vector: 0, class: Fault }
+    fault UD { vector: 6, class: Fault }
+    fault GP(error: u16) { vector: 13, class: Fault, pushes_error_code: true }
+
+    // -- addressing ------------------------------------------------------------
+
+    /// Real mode: base plus offset, 24 bits wide. The 286 does not wrap at
+    /// 1 MB (A20 is a system-board fact).
+    fn translate(seg: Segment, off: u16, size: u8, access: Access) -> u24 {
+        return seg.base + (off as u24);
+    }
+
+    fn code_address() -> u24 { return translate(CS, IP, 1, Access::Execute); }
+
+    fn next_byte() -> u8 {
+        let b = mem.read_u8(code_address());
+        IP = IP + 1;
+        return b;
+    }
+
+    istream { space mem; address code_address; next next_byte; undefined UD; }
+
+    fn segment(s: SegOv) -> Segment {
+        return match s { SegOv::ES => ES, SegOv::CS => CS, SegOv::SS => SS, _ => DS };
+    }
+
+    /// ModRM byte; `tail` is the displacement its addressing form carries.
+    operand ModRM {
+        size 1;
+        fields { mod: u2 @ 6; reg: u3 @ 3; rm: u3 @ 0; }
+        tail {
+            if mod == 1 { Disp8 }
+            else if mod == 2 || (mod == 0 && rm == 6) { Disp16 }
+        }
+    }
+    operand Disp8  { size 1; fields { value: i8 @ 0; } }
+    operand Disp16 { size 2; fields { value: i16 @ 0; } }
+    operand Imm8   { size 1; fields { value: u8 @ 0; } }
+    operand Imm16  { size 2; fields { value: u16 @ 0; } }
+
+    /// Segment and offset of a ModRM memory form. BP-based forms default to
+    /// SS, the others to DS; a segment-override prefix replaces either.
+    fn effective_address(m: ModRM) -> (seg: Segment, off: u16) {
+        let disp: u16 = match m.mod {
+            0 => if m.rm == 6 { m.tail.Disp16.value as u16 } else { 0 },
+            1 => m.tail.Disp8.value as u16,
+            2 => m.tail.Disp16.value as u16,
+            _ => unreachable("register form"),
+        };
+        let (base, seg) = match m.rm {
+            0 => (BX + SI, DS), 1 => (BX + DI, DS), 2 => (BP + SI, SS), 3 => (BP + DI, SS),
+            4 => (SI, DS),      5 => (DI, DS),      6 => if m.mod == 0 { (0, DS) } else { (BP, SS) },
+            7 => (BX, DS),
+        };
+        let s = if seg_override == SegOv::None { seg } else { segment(seg_override) };
+        return (s, base + disp);
+    }
+
+    fn ea(m: ModRM, size: u8, access: Access) -> u24 {
+        let (s, o) = effective_address(m);
+        return translate(s, o, size, access);
+    }
+
+    // -- operand kinds ------------------------------------------------------------
+
+    operand_kind r8 : u8 {
+        select(n: u3) => match n { 0 => AL, 1 => CL, 2 => DL, 3 => BL, 4 => AH, 5 => CH, 6 => DH, 7 => BH };
+    }
+    operand_kind r16 : u16 {
+        select(n: u3) => match n { 0 => AX, 1 => CX, 2 => DX, 3 => BX, 4 => SP, 5 => BP, 6 => SI, 7 => DI };
+    }
+    operand_kind rm8 : u8 from m: ModRM {
+        is_mem => m.mod != 3;
+        read => if m.mod == 3 { r8.select(m.rm) } else { mem.read_u8(ea(m, 1, Access::Read)) };
+        write(v: u8) => if m.mod == 3 { r8.select(m.rm) = v; } else { mem.write_u8(ea(m, 1, Access::Write), v); };
+    }
+    operand_kind rm16 : u16 from m: ModRM {
+        is_mem => m.mod != 3;
+        read => if m.mod == 3 { r16.select(m.rm) } else { mem.read_u16(ea(m, 2, Access::Read)) };
+        write(v: u16) => if m.mod == 3 { r16.select(m.rm) = v; } else { mem.write_u16(ea(m, 2, Access::Write), v); };
+    }
+    operand_kind imm8  : u8  from i: Imm8  { read => i.value; }
+    operand_kind imm16 : u16 from i: Imm16 { read => i.value; }
+    /// An 8-bit immediate sign-extended to 16 bits (83 /x).
+    operand_kind simm8 : u16 from i: Disp8 { read => i.value as u16; }
+    operand_kind rel8  : u16 from d: Disp8 { read => d.value as u16; }
+    operand_kind rel16 : u16 from d: Imm16 { read => d.value; }
+
+    operand_kind alu_op : AluOp { value(n: u3) => n as AluOp; }
+    operand_kind cond : u4 { value(n: u4) => n; }
+    operand_kind seg_ov : SegOv { value(n: u2) => (n as u3) as SegOv; }
+
+    // -- shared semantics ----------------------------------------------------------
+
+    fn alu_name(op: AluOp) -> str {
+        return match op {
+            AluOp::Add => "add", AluOp::Or => "or", AluOp::Adc => "adc", AluOp::Sbb => "sbb",
+            AluOp::And => "and", AluOp::Sub => "sub", AluOp::Xor => "xor", AluOp::Cmp => "cmp",
+        };
+    }
+
+    /// AF is undefined after the logical operations.
+    fn is_logic(op: AluOp) -> bool {
+        return op == AluOp::Or || op == AluOp::And || op == AluOp::Xor;
+    }
+
+    fn alu8(op: AluOp, a: u8, b: u8) -> u8 {
+        let (r, raw) = Alu<8>(op, a, b, CF);
+        FLAGS.arith = AluFlags<8>(op, a, b, raw);
+        return r;
+    }
+
+    fn alu16(op: AluOp, a: u16, b: u16) -> u16 {
+        let (r, raw) = Alu<16>(op, a, b, CF);
+        FLAGS.arith = AluFlags<16>(op, a, b, raw);
+        return r;
+    }
+
+    /// Jcc condition `c` (opcode bits 3..0): bit 0 negates.
+    fn condition(c: u4) -> bool {
+        let r = match c >> 1 {
+            0 => OF == 1,
+            1 => CF == 1,
+            2 => ZF == 1,
+            3 => CF == 1 || ZF == 1,
+            4 => SF == 1,
+            5 => PF == 1,
+            6 => SF != OF,
+            _ => SF != OF || ZF == 1,
+        };
+        return if c[0] == 1 { !r } else { r };
+    }
+
+    fn cond_name(c: u4) -> str {
+        return match c {
+            0 => "jo", 1 => "jno", 2 => "jb", 3 => "jae", 4 => "je", 5 => "jne", 6 => "jbe", 7 => "ja",
+            8 => "js", 9 => "jns", 10 => "jp", 11 => "jnp", 12 => "jl", 13 => "jge", 14 => "jle", _ => "jg",
+        };
+    }
+
+    // -- prefixes ---------------------------------------------------------------------
+
+    prefix SegOverride {
+        encoding { opcode "001ss110" { s: seg_ov } }
+        operands (s: seg_ov);
+        semantics { seg_override = s; }
+    }
+
+    /// LOCK has no architectural effect on a single processor.
+    prefix Lock { encoding { opcode 0xF0; } }
+
+    // -- ALU ----------------------------------------------------------------------------
+
+    instruction Alu_rm8_r8 {
+        mnemonic alu_name(op);
+        encoding { opcode "00ooo000" { o: alu_op }; ModRM { reg: r8 } }
+        operands (op: alu_op, dst: rm8, src: r8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_logic(op)]; }
+        semantics { let r = alu8(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_rm16_r16 {
+        mnemonic alu_name(op);
+        encoding { opcode "00ooo001" { o: alu_op }; ModRM { reg: r16 } }
+        operands (op: alu_op, dst: rm16, src: r16);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_logic(op)]; }
+        semantics { let r = alu16(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_r8_rm8 {
+        mnemonic alu_name(op);
+        encoding { opcode "00ooo010" { o: alu_op }; ModRM { reg: r8 } }
+        operands (op: alu_op, dst: r8, src: rm8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_logic(op)]; }
+        semantics { let r = alu8(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_r16_rm16 {
+        mnemonic alu_name(op);
+        encoding { opcode "00ooo011" { o: alu_op }; ModRM { reg: r16 } }
+        operands (op: alu_op, dst: r16, src: rm16);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_logic(op)]; }
+        semantics { let r = alu16(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_al_imm8 {
+        mnemonic alu_name(op);
+        encoding { opcode "00ooo100" { o: alu_op }; Imm8 }
+        operands (op: alu_op, src: imm8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_logic(op)]; }
+        semantics { let r = alu8(op, AL, src); if op != AluOp::Cmp { AL = r; } }
+    }
+    instruction Alu_ax_imm16 {
+        mnemonic alu_name(op);
+        encoding { opcode "00ooo101" { o: alu_op }; Imm16 }
+        operands (op: alu_op, src: imm16);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_logic(op)]; }
+        semantics { let r = alu16(op, AX, src); if op != AluOp::Cmp { AX = r; } }
+    }
+
+    /// 80 and 82 are the same instruction on the 286.
+    instruction Alu_rm8_imm8 {
+        mnemonic alu_name(op);
+        encoding { opcode "100000-0"; ModRM { reg: alu_op } Imm8 }
+        operands (op: alu_op, dst: rm8, src: imm8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_logic(op)]; }
+        semantics { let r = alu8(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_rm16_imm16 {
+        mnemonic alu_name(op);
+        encoding { opcode 0x81; ModRM { reg: alu_op } Imm16 }
+        operands (op: alu_op, dst: rm16, src: imm16);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_logic(op)]; }
+        semantics { let r = alu16(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_rm16_simm8 {
+        mnemonic alu_name(op);
+        encoding { opcode 0x83; ModRM { reg: alu_op } Disp8 }
+        operands (op: alu_op, dst: rm16, src: simm8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_logic(op)]; }
+        semantics { let r = alu16(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+
+    /// INC and DEC leave CF alone.
+    instruction Inc_r16 {
+        mnemonic "inc";
+        encoding { opcode "01000rrr" { r: r16 } }
+        operands (dst: r16);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        semantics { let c = CF; dst = alu16(AluOp::Add, dst, 1); FLAGS.CF = c; }
+    }
+    instruction Dec_r16 {
+        mnemonic "dec";
+        encoding { opcode "01001rrr" { r: r16 } }
+        operands (dst: r16);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        semantics { let c = CF; dst = alu16(AluOp::Sub, dst, 1); FLAGS.CF = c; }
+    }
+
+    // -- MOV -------------------------------------------------------------------------------
+
+    instruction Mov_rm8_r8 {
+        mnemonic "mov";
+        encoding { opcode 0x88; ModRM { reg: r8 } }
+        operands (dst: rm8, src: r8);
+        semantics { dst = src; }
+    }
+    instruction Mov_rm16_r16 {
+        mnemonic "mov";
+        encoding { opcode 0x89; ModRM { reg: r16 } }
+        operands (dst: rm16, src: r16);
+        semantics { dst = src; }
+    }
+    instruction Mov_r8_rm8 {
+        mnemonic "mov";
+        encoding { opcode 0x8A; ModRM { reg: r8 } }
+        operands (dst: r8, src: rm8);
+        semantics { dst = src; }
+    }
+    instruction Mov_r16_rm16 {
+        mnemonic "mov";
+        encoding { opcode 0x8B; ModRM { reg: r16 } }
+        operands (dst: r16, src: rm16);
+        semantics { dst = src; }
+    }
+    instruction Mov_r8_imm8 {
+        mnemonic "mov";
+        encoding { opcode "10110rrr" { r: r8 }; Imm8 }
+        operands (dst: r8, src: imm8);
+        semantics { dst = src; }
+    }
+    instruction Mov_r16_imm16 {
+        mnemonic "mov";
+        encoding { opcode "10111rrr" { r: r16 }; Imm16 }
+        operands (dst: r16, src: imm16);
+        semantics { dst = src; }
+    }
+    instruction Mov_rm8_imm8 {
+        mnemonic "mov";
+        encoding { opcode 0xC6; ModRM { reg: 0 } Imm8 }
+        operands (dst: rm8, src: imm8);
+        semantics { dst = src; }
+    }
+    instruction Mov_rm16_imm16 {
+        mnemonic "mov";
+        encoding { opcode 0xC7; ModRM { reg: 0 } Imm16 }
+        operands (dst: rm16, src: imm16);
+        semantics { dst = src; }
+    }
+
+    // -- control flow ------------------------------------------------------------------------
+
+    instruction Jcc {
+        mnemonic cond_name(c);
+        encoding { opcode "0111cccc" { c: cond }; Disp8 }
+        operands (c: cond, rel: rel8);
+        semantics { if condition(c) { IP = IP + rel; } }
+    }
+    instruction Jmp_rel8 {
+        mnemonic "jmp";
+        encoding { opcode 0xEB; Disp8 }
+        operands (rel: rel8);
+        semantics { IP = IP + rel; }
+    }
+    instruction Jmp_rel16 {
+        mnemonic "jmp";
+        encoding { opcode 0xE9; Imm16 }
+        operands (rel: rel16);
+        semantics { IP = IP + rel; }
+    }
+
+    // -- flags and miscellany ---------------------------------------------------------------------
+
+    instruction Nop { mnemonic "nop"; encoding { opcode 0x90; } }
+    instruction Hlt { mnemonic "hlt"; encoding { opcode 0xF4; } semantics { halt; } }
+    instruction Cmc { mnemonic "cmc"; encoding { opcode 0xF5; } flags { modifies: [CF]; } semantics { FLAGS.CF = ~CF; } }
+    instruction Clc { mnemonic "clc"; encoding { opcode 0xF8; } flags { modifies: [CF]; } semantics { FLAGS.CF = 0; } }
+    instruction Stc { mnemonic "stc"; encoding { opcode 0xF9; } flags { modifies: [CF]; } semantics { FLAGS.CF = 1; } }
+    instruction Cli { mnemonic "cli"; encoding { opcode 0xFA; } flags { modifies: [IF]; } semantics { FLAGS.IF = 0; } }
+    instruction Sti { mnemonic "sti"; encoding { opcode 0xFB; } flags { modifies: [IF]; } semantics { FLAGS.IF = 1; } }
+    instruction Cld { mnemonic "cld"; encoding { opcode 0xFC; } flags { modifies: [DF]; } semantics { FLAGS.DF = 0; } }
+    instruction Std { mnemonic "std"; encoding { opcode 0xFD; } flags { modifies: [DF]; } semantics { FLAGS.DF = 1; } }
+}
+
+// -- tests ---------------------------------------------------------------------------------
+
+test "add al, bl" on I286 {
+    given { AL = 0x7F; BL = 0x01; }
+    run instruction Alu_rm8_r8 { op: AluOp::Add, dst: AL, src: BL };
+    expect { AL == 0x80; FLAGS.OF == 1; FLAGS.SF == 1; FLAGS.CF == 0; FLAGS.AF == 1; }
+}
+
+test "cmp does not write back" on I286 {
+    given { AX = 0x0005; }
+    run instruction Alu_ax_imm16 { op: AluOp::Cmp, src: 0x0007 };
+    expect { AX == 0x0005; FLAGS.CF == 1; FLAGS.SF == 1; FLAGS.ZF == 0; }
+}
+
+test "segment override and memory destination" on I286 {
+    given {
+        ES = Segment { selector: 0x2000, base: 0x20000 };
+        DS = Segment { selector: 0x1000, base: 0x10000 };
+        BX = 0x0010; CL = 0x01; mem[0x20010] = 0xFF;
+        CS = Segment { selector: 0, base: 0 }; IP = 0x0100;
+    }
+    run bytes [0x26, 0x00, 0x0F];            // ES: add [bx], cl
+    expect { mem[0x20010] == 0x00; mem[0x10010] == 0x00; FLAGS.CF == 1; FLAGS.ZF == 1; IP == 0x0103; }
+}
+
+test "jcc taken and not taken" on I286 {
+    given { FLAGS.ZF = 1; CS = Segment { selector: 0, base: 0 }; IP = 0x0100; }
+    run bytes [0x74, 0x10];                  // je +0x10
+    expect { IP == 0x0112; }
+}
+
+test "inc keeps the carry" on I286 {
+    given { AX = 0xFFFF; FLAGS.CF = 1; }
+    run instruction Inc_r16 { dst: AX };
+    expect { AX == 0x0000; FLAGS.CF == 1; FLAGS.ZF == 1; FLAGS.AF == 1; }
+}
+
+// -- hardware vectors ------------------------------------------------------------------------
+
+/// SingleStepTests 80286, real mode: captured from a Harris 80C286, one
+/// instruction plus HLT per vector.
+vectors "../../../simulators/test/i286/SingleStepTests/v1_real_mode/*.MOO.gz" on I286 {
+    format moo;
+    memory mem;
+    reg ax = AX;
+    reg bx = BX;
+    reg cx = CX;
+    reg dx = DX;
+    reg sp = SP;
+    reg bp = BP;
+    reg si = SI;
+    reg di = DI;
+    reg ip = IP;
+    reg flags = FLAGS;
+    reg cs { load => CS = Segment { selector: value, base: (value as u24) << 4 }; read => CS.selector; }
+    reg ds { load => DS = Segment { selector: value, base: (value as u24) << 4 }; read => DS.selector; }
+    reg es { load => ES = Segment { selector: value, base: (value as u24) << 4 }; read => ES.selector; }
+    reg ss { load => SS = Segment { selector: value, base: (value as u24) << 4 }; read => SS.selector; }
+}

@@ -330,16 +330,12 @@ impl Checker<'_> {
             Some(p) => match fn_item(self, p) {
                 Some(f) => {
                     if let Some(sig) = self.fn_sig(f) {
-                        let good = sig.params.len() == 1
+                        let good = sig.params.len() == 2
                             && sig.params[0].1 == Ty::UInt(8)
+                            && sig.params[1].1 == Ty::Bool
                             && sig.ret == Ty::Unit;
                         if !good {
-                            self.error(
-                                module,
-                                "E1046",
-                                p.span,
-                                "`fault` is a `fn (vector: u8)` that delivers the fault",
-                            );
+                            self.error(module, "E1046", p.span, "`fault` is a `fn (vector: u8, restart: bool)` that delivers the fault");
                             ok = false;
                         }
                     }
@@ -1180,12 +1176,15 @@ impl Checker<'_> {
         if init.ty.is_error() {
             return None;
         }
-        if !cx.locals.is_empty() || !is_constant_init(&init) {
+        // A latch initialiser is evaluated at every instruction boundary; it
+        // may read architectural state (`latch start_ip: u16 = IP;`) but
+        // must not fault.
+        if contains_call(&init) {
             self.error(
                 scope.module,
                 "E1047",
                 decl.init.span,
-                "a latch resets to a constant",
+                "a latch initialiser cannot call functions; it runs at every instruction boundary",
             );
             return None;
         }
@@ -2351,14 +2350,25 @@ fn pattern_text(b: &[hir::OpcodeByte]) -> String {
     format!("[{}]", parts.join(", "))
 }
 
-/// Is a latch initialiser a compile-time value?
-fn is_constant_init(e: &hir::Expr) -> bool {
+/// Does an expression call an isa `fn` or touch memory (which may fault)?
+fn contains_call(e: &hir::Expr) -> bool {
     match &e.kind {
-        H::Int(_) | H::Bool(_) | H::Variant(..) => true,
-        H::BundleLit(_, fields) | H::Tuple(fields) | H::Array(fields) => {
-            fields.iter().all(is_constant_init)
-        }
-        H::ArrayRepeat(v, _) => is_constant_init(v),
+        H::FnCall(..) | H::SpaceRead(..) | H::SpaceCell(..) | H::SpaceWrite(..) => true,
+        H::Unary(_, a)
+        | H::Cast(a)
+        | H::Field(a, _)
+        | H::TupleField(a, _)
+        | H::Slice(a, ..)
+        | H::ArrayRepeat(a, _) => contains_call(a),
+        H::Binary(_, a, b) | H::Index(a, b) => contains_call(a) || contains_call(b),
+        H::Ternary(a, b, c) => contains_call(a) || contains_call(b) || contains_call(c),
+        H::Call(_, args)
+        | H::Builtin(_, args)
+        | H::BundleLit(_, args)
+        | H::Tuple(args)
+        | H::Array(args)
+        | H::KindSelect(_, args) => args.iter().any(contains_call),
+        H::Match(..) | H::If(..) | H::Block(_) => true,
         _ => false,
     }
 }

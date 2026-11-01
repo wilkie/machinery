@@ -8,10 +8,10 @@
 // immediate forms and the 80-83 immediate group, INC/DEC r16, MOV between
 // registers, memory and immediates, the conditional jumps, JMP short/near,
 // CALL/RET near, PUSH/POP r16, PUSHF/POPF, INT3/INT n/INTO/IRET, BOUND,
-// the flag instructions, NOP, HLT, segment-override and LOCK prefixes, and
-// real-mode interrupt delivery through the IVT (faults and software
-// interrupts alike). Not yet: string instructions, multiply/divide,
-// shifts, segment-register moves, I/O, protected mode.
+// the string instructions with REP/REPE/REPNE, the flag instructions, NOP,
+// HLT, segment-override and LOCK prefixes, and real-mode interrupt delivery
+// through the IVT (faults and software interrupts alike). Not yet:
+// multiply/divide, shifts, segment-register moves, I/O, protected mode.
 
 use alu::{AluOp, ArithFlags, Alu, AluFlags};
 
@@ -53,6 +53,14 @@ isa I286 {
     /// Bytes of the current instruction fetched so far; the 286 raises #GP
     /// when an instruction (prefixes included) exceeds 10 bytes.
     latch fetched: u8 = 0;
+    /// Where the current instruction (its first prefix) starts: a faulting
+    /// instruction restarts here, and an unfinished REP iteration repeats
+    /// from here.
+    latch start_ip: u16 = IP;
+
+    /// A repeat prefix: F2 (REPNE) or F3 (REP/REPE).
+    enum Rep : u2 { None = 0, Ne = 1, E = 2 }
+    latch rep: Rep = Rep::None;
 
     fault DE { vector: 0, class: Fault }
     fault BR { vector: 5, class: Fault }
@@ -89,10 +97,12 @@ isa I286 {
         FLAGS = (v & 0x0FD5) | 0x0002;
     }
 
-    /// Real-mode interrupt delivery through the IVT. Faults arrive here
-    /// after rollback (IP is the instruction's start); INT n, INT3 and INTO
-    /// call it directly with the next IP.
-    fn deliver(vector: u8) {
+    /// Real-mode interrupt delivery through the IVT. A restarting fault
+    /// pushes the instruction's start; INT n, INT3 and INTO call this with
+    /// `restart = false` and push the next IP. Nothing else is undone: the
+    /// 286 keeps registers an instruction changed before it faulted.
+    fn deliver(vector: u8, restart: bool) {
+        if restart { IP = start_ip; }
         push16(FLAGS);
         push16(CS.selector);
         push16(IP);
@@ -194,6 +204,8 @@ isa I286 {
     }
 
     operand_kind alu_op : AluOp { value(n: u3) => n as AluOp; }
+    /// F2 is REPNE (z = 0), F3 is REP/REPE (z = 1).
+    operand_kind rep_kind : Rep { value(n: u1) => ((n as u2) + 1) as Rep; }
     operand_kind cond : u4 { value(n: u4) => n; }
     operand_kind seg_ov : SegOv { value(n: u2) => (n as u3) as SegOv; }
 
@@ -255,6 +267,12 @@ isa I286 {
 
     /// LOCK has no architectural effect on a single processor.
     prefix Lock { encoding { opcode 0xF0; } }
+
+    prefix Repeat {
+        encoding { opcode "1111001z" { z: rep_kind } }
+        operands (z: rep_kind);
+        semantics { rep = z; }
+    }
 
     // -- ALU ----------------------------------------------------------------------------
 
@@ -439,14 +457,14 @@ isa I286 {
         flags { modifies: [OF, DF, IF, TF, SF, ZF, AF, PF, CF]; }
         semantics { IP = pop16(); CS = load_segment(pop16()); load_flags(pop16()); }
     }
-    instruction Int3 { mnemonic "int3"; encoding { opcode 0xCC; } semantics { deliver(3); } }
+    instruction Int3 { mnemonic "int3"; encoding { opcode 0xCC; } semantics { deliver(3, false); } }
     instruction Int_imm8 {
         mnemonic "int";
         encoding { opcode 0xCD; Imm8 }
         operands (n: imm8);
-        semantics { deliver(n); }
+        semantics { deliver(n, false); }
     }
-    instruction Into { mnemonic "into"; encoding { opcode 0xCE; } semantics { if OF == 1 { deliver(4); } } }
+    instruction Into { mnemonic "into"; encoding { opcode 0xCE; } semantics { if OF == 1 { deliver(4, false); } } }
     /// `bound r16, m16&16`: #BR when the index is outside the signed pair;
     /// the register form is #UD.
     instruction Bound {
@@ -478,6 +496,152 @@ isa I286 {
         encoding { opcode 0xE9; Imm16 }
         operands (rel: rel16);
         semantics { IP = IP + rel; }
+    }
+
+    // -- strings -------------------------------------------------------------------------------
+    //
+    // One element per execution. Under a repeat prefix an iteration that is
+    // not the last sets IP back to the prefix, so REP is interruptible and a
+    // fault mid-REP pushes the prefix's address. The order of pointer
+    // updates, CX decrements and accesses is the hardware's, as observed in
+    // faulting vectors: an index register advances as its access is issued
+    // (before the access can fault); CMPS reads ES:DI before DS:SI; CX is
+    // counted with the source access, and when a store faults the 286 has
+    // counted the store as well.
+
+    fn delta(size: u16) -> u16 { return if DF == 1 { 0 - size } else { size }; }
+    fn src_seg() -> Segment { return if seg_override == SegOv::None { DS } else { segment(seg_override) }; }
+    fn repeating() -> bool { return rep != Rep::None; }
+    /// Whether REPE/REPNE continue after a comparison.
+    fn rep_continues() -> bool { return if rep == Rep::E { ZF == 1 } else { ZF == 0 }; }
+
+    instruction Movsb {
+        mnemonic "movsb";
+        encoding { opcode 0xA4; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let s = SI; SI = SI + delta(1);
+            if repeating() { CX = CX - 1; }
+            let v = mem.read_u8(translate(src_seg(), s, 1, Access::Read));
+            let d = DI; DI = DI + delta(1);
+            if repeating() { CX = CX - 1; }
+            mem.write_u8(translate(ES, d, 1, Access::Write), v);
+            if repeating() { CX = CX + 1; if CX != 0 { IP = start_ip; } }
+        }
+    }
+    instruction Movsw {
+        mnemonic "movsw";
+        encoding { opcode 0xA5; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let s = SI; SI = SI + delta(2);
+            if repeating() { CX = CX - 1; }
+            let v = mem.read_u16(translate(src_seg(), s, 2, Access::Read));
+            let d = DI; DI = DI + delta(2);
+            if repeating() { CX = CX - 1; }
+            mem.write_u16(translate(ES, d, 2, Access::Write), v);
+            if repeating() { CX = CX + 1; if CX != 0 { IP = start_ip; } }
+        }
+    }
+    instruction Cmpsb {
+        mnemonic "cmpsb";
+        encoding { opcode 0xA6; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let d = DI; DI = DI + delta(1);
+            let b = mem.read_u8(translate(ES, d, 1, Access::Read));
+            let s = SI; SI = SI + delta(1);
+            if repeating() { CX = CX - 1; }
+            let a = mem.read_u8(translate(src_seg(), s, 1, Access::Read));
+            let _ = alu8(AluOp::Cmp, a, b);
+            if repeating() && CX != 0 && rep_continues() { IP = start_ip; }
+        }
+    }
+    instruction Cmpsw {
+        mnemonic "cmpsw";
+        encoding { opcode 0xA7; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let d = DI; DI = DI + delta(2);
+            let b = mem.read_u16(translate(ES, d, 2, Access::Read));
+            let s = SI; SI = SI + delta(2);
+            if repeating() { CX = CX - 1; }
+            let a = mem.read_u16(translate(src_seg(), s, 2, Access::Read));
+            let _ = alu16(AluOp::Cmp, a, b);
+            if repeating() && CX != 0 && rep_continues() { IP = start_ip; }
+        }
+    }
+    instruction Stosb {
+        mnemonic "stosb";
+        encoding { opcode 0xAA; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let d = DI; DI = DI + delta(1);
+            if repeating() { CX = CX - 2; }
+            mem.write_u8(translate(ES, d, 1, Access::Write), AL);
+            if repeating() { CX = CX + 1; if CX != 0 { IP = start_ip; } }
+        }
+    }
+    instruction Stosw {
+        mnemonic "stosw";
+        encoding { opcode 0xAB; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let d = DI; DI = DI + delta(2);
+            if repeating() { CX = CX - 2; }
+            mem.write_u16(translate(ES, d, 2, Access::Write), AX);
+            if repeating() { CX = CX + 1; if CX != 0 { IP = start_ip; } }
+        }
+    }
+    instruction Lodsb {
+        mnemonic "lodsb";
+        encoding { opcode 0xAC; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let s = SI; SI = SI + delta(1);
+            if repeating() { CX = CX - 1; }
+            AL = mem.read_u8(translate(src_seg(), s, 1, Access::Read));
+            if repeating() && CX != 0 { IP = start_ip; }
+        }
+    }
+    instruction Lodsw {
+        mnemonic "lodsw";
+        encoding { opcode 0xAD; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let s = SI; SI = SI + delta(2);
+            if repeating() { CX = CX - 1; }
+            AX = mem.read_u16(translate(src_seg(), s, 2, Access::Read));
+            if repeating() && CX != 0 { IP = start_ip; }
+        }
+    }
+    instruction Scasb {
+        mnemonic "scasb";
+        encoding { opcode 0xAE; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let d = DI; DI = DI + delta(1);
+            if repeating() { CX = CX - 1; }
+            let b = mem.read_u8(translate(ES, d, 1, Access::Read));
+            let _ = alu8(AluOp::Cmp, AL, b);
+            if repeating() && CX != 0 && rep_continues() { IP = start_ip; }
+        }
+    }
+    instruction Scasw {
+        mnemonic "scasw";
+        encoding { opcode 0xAF; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            if repeating() && CX == 0 { return; }
+            let d = DI; DI = DI + delta(2);
+            if repeating() { CX = CX - 1; }
+            let b = mem.read_u16(translate(ES, d, 2, Access::Read));
+            let _ = alu16(AluOp::Cmp, AX, b);
+            if repeating() && CX != 0 && rep_continues() { IP = start_ip; }
+        }
     }
 
     // -- flags and miscellany ---------------------------------------------------------------------
@@ -556,6 +720,18 @@ test "a fault delivers with the instruction's start ip" on I286 {
     }
     run bytes [0x3E, 0x01, 0x04];        // ds: add [si], ax, wrapping the segment: #GP
     expect { CS.selector == 0x5000; IP == 0x4000; mem[0x200FA] == 0x00; mem[0x200FB] == 0x01; SP == 0x00FA; }
+}
+
+test "rep movsb copies cx bytes, one step per element" on I286 {
+    given {
+        CS = Segment { selector: 0, base: 0 }; IP = 0x0100;
+        DS = Segment { selector: 0x1000, base: 0x10000 }; ES = Segment { selector: 0x2000, base: 0x20000 };
+        SI = 0x0000; DI = 0x0010; CX = 3;
+        mem[0x10000] = 0x11; mem[0x10001] = 0x22; mem[0x10002] = 0x33;
+        mem[0x0100] = 0xF3; mem[0x0101] = 0xA4;
+    }
+    run bytes [0xF3, 0xA4];
+    expect { CX == 2; IP == 0x0100; mem[0x20010] == 0x11; mem[0x20011] == 0x00; }
 }
 
 test "push and pop round trip" on I286 {

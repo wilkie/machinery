@@ -559,10 +559,13 @@ istream { space mem; address code_address; next next_byte; undefined UD; }
 instruction bytes come from: the address space, a `fn` giving the address of
 the next byte, a `fn` that consumes one byte, the fault raised for an
 opcode that decodes to nothing, and (`fault deliver;`) the `fn (vector:
-u8)` that **delivers** a fault. After an instruction raises, a
-`Fault`-class fault first restores the registers (so the pushed IP is the
-instruction's start, prefixes included), then the delivery fn runs with the
-fault's declared `vector`; a `Trap` is delivered without rollback. Software
+u8, restart: bool)` that **delivers** a fault. After an instruction raises,
+the delivery fn runs with the fault's declared `vector`; `restart` is true
+for `Fault`-class faults. State is never rolled back implicitly: the ISA
+says what restarting means. On the 286 only IP restarts, from a latch
+(`latch start_ip: u16 = IP;` snapshots the instruction start, prefixes
+included); registers the instruction already changed stay changed, as the
+hardware does (a faulting `movsw` keeps SI advanced). Software
 interrupts are ordinary instructions that call the same fn. Delivery is
 described once, in the ISA, because it is architecture: on the 286 in real
 mode it pushes FLAGS, CS and IP, clears IF and TF, and loads CS:IP from the
@@ -648,8 +651,12 @@ prefix SegOverride {
 }
 ```
 
-A `latch` is per-instruction state: it resets to its (constant) initial
-value at every instruction boundary. A `prefix` is declared like an
+A `latch` is per-instruction state: its initialiser is evaluated at every
+instruction boundary. It may read architectural state (`latch start_ip: u16
+= IP;`) but not call functions or touch memory. An instruction that needs
+to repeat (a REP string iteration that is not the last) sets `IP =
+start_ip`; the next step re-executes it, which is also what makes it
+interruptible between iterations. A `prefix` is declared like an
 instruction but has only opcode bytes; the decoder runs its semantics and
 continues decoding, so any number of prefixes may precede an instruction.
 Prefixes communicate with instructions only through latches.

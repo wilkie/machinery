@@ -1335,7 +1335,7 @@ fn i286_target_checks_clean() {
     assert_clean(&c);
     let isa = &c.hir.isas[0];
     assert_eq!(isa.instructions.iter().filter(|i| i.prefix).count(), 3);
-    assert_eq!(isa.instructions.iter().filter(|i| !i.prefix).count(), 53);
+    assert_eq!(isa.instructions.iter().filter(|i| !i.prefix).count(), 84);
     assert_eq!(isa.latches.len(), 4);
     assert_eq!(c.hir.vectors.len(), 1);
     assert_eq!(c.hir.vectors[0].regs.len(), 14);

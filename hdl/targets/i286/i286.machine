@@ -8,12 +8,14 @@
 // immediate forms and the 80-83 immediate group, INC/DEC r16, MOV between
 // registers, memory and immediates, the conditional jumps, JMP short/near,
 // CALL/RET near, PUSH/POP r16, PUSHF/POPF, INT3/INT n/INTO/IRET, BOUND,
-// the string instructions with REP/REPE/REPNE, the flag instructions, NOP,
-// HLT, segment-override and LOCK prefixes, and real-mode interrupt delivery
-// through the IVT (faults and software interrupts alike). Not yet:
-// multiply/divide, shifts, segment-register moves, I/O, protected mode.
+// the string instructions with REP/REPE/REPNE, shifts and rotates, the
+// F6/F7 group (TEST, NOT, NEG, MUL, IMUL, DIV, IDIV), TEST, XCHG, CBW/CWD,
+// LEA, the flag instructions, HLT, segment-override and LOCK prefixes, and
+// real-mode interrupt delivery through the IVT (faults and software
+// interrupts alike). Not yet: segment-register moves, far transfers, I/O,
+// BCD adjustment, protected mode.
 
-use alu::{AluOp, ArithFlags, Alu, AluFlags};
+use alu::{AluOp, ArithFlags, Alu, AluFlags, Parity8};
 
 /// A segment register: the selector and, in real mode, `selector << 4` as
 /// the base (the 286's descriptor cache).
@@ -64,6 +66,9 @@ isa I286 {
 
     fault DE { vector: 0, class: Fault }
     fault BR { vector: 5, class: Fault }
+    /// The divider faults with the flags its last internal step left, so a
+    /// faulting DIV/IDIV pushes data-dependent flags the description does not
+    /// model (the vector runner reports those as undefined-flag leaks).
     fault UD { vector: 6, class: Fault }
     fault GP(error: u16) { vector: 13, class: Fault, pushes_error_code: true }
 
@@ -203,7 +208,18 @@ isa I286 {
         };
     }
 
+    /// The effective offset of a ModRM memory form (LEA).
+    operand_kind mem_offset : u16 from m: ModRM {
+        is_mem => m.mod != 3;
+        read => effective_address(m).off;
+    }
+
     operand_kind alu_op : AluOp { value(n: u3) => n as AluOp; }
+
+    /// Shift and rotate operation, the ModRM `reg` field of C0/C1/D0-D3.
+    /// 6 is undocumented and behaves as SHL.
+    enum ShiftOp : u3 { Rol, Ror, Rcl, Rcr, Shl, Shr, Sal, Sar }
+    operand_kind shift_op : ShiftOp { value(n: u3) => n as ShiftOp; }
     /// F2 is REPNE (z = 0), F3 is REP/REPE (z = 1).
     operand_kind rep_kind : Rep { value(n: u1) => ((n as u2) + 1) as Rep; }
     operand_kind cond : u4 { value(n: u4) => n; }
@@ -498,6 +514,359 @@ isa I286 {
         semantics { IP = IP + rel; }
     }
 
+    // -- shifts and rotates ---------------------------------------------------------------------
+    //
+    // The 286 masks the count to 5 bits; a zero count changes nothing. One
+    // routine serves both widths, on a 32-bit working value.
+
+    fn shift_name(op: ShiftOp) -> str {
+        return match op {
+            ShiftOp::Rol => "rol", ShiftOp::Ror => "ror", ShiftOp::Rcl => "rcl", ShiftOp::Rcr => "rcr",
+            ShiftOp::Shl => "shl", ShiftOp::Shr => "shr", ShiftOp::Sal => "sal", ShiftOp::Sar => "sar",
+        };
+    }
+
+    fn is_shift(op: ShiftOp) -> bool {
+        return op == ShiftOp::Shl || op == ShiftOp::Sal || op == ShiftOp::Shr || op == ShiftOp::Sar;
+    }
+
+    /// `v` (the low `w` bits) shifted or rotated by `count`; sets the flags.
+    fn shift(op: ShiftOp, v: u16, w: u8, count: u8) -> u16 {
+        let n = (count & 0x1F) as u32;
+        if n == 0 { return v; }
+        let wd = w as u32;
+        let mask = (1_u32 << wd) - 1;
+        let x = (v as u32) & mask;
+        let msb = wd - 1;
+        let c = CF as u32;
+        let sx = (((x << (32 - wd)) as i32) >> (32 - wd));
+        let (r, cf): (u32, u32) = match op {
+            ShiftOp::Rol => {
+                let k = n % wd;
+                let r = ((x << k) | (x >> (wd - k))) & mask;
+                (r, r & 1)
+            },
+            ShiftOp::Ror => {
+                let k = n % wd;
+                let r = ((x >> k) | (x << (wd - k))) & mask;
+                (r, (r >> msb) & 1)
+            },
+            ShiftOp::Rcl => {
+                let k = n % (wd + 1);
+                let y = x | (c << wd);
+                let wide = (mask << 1) | 1;
+                let r = ((y << k) | (y >> (wd + 1 - k))) & wide;
+                (r & mask, (r >> wd) & 1)
+            },
+            ShiftOp::Rcr => {
+                let k = n % (wd + 1);
+                let y = x | (c << wd);
+                let wide = (mask << 1) | 1;
+                let r = ((y >> k) | (y << (wd + 1 - k))) & wide;
+                (r & mask, (r >> wd) & 1)
+            },
+            ShiftOp::Shl | ShiftOp::Sal => {
+                let t = (x as u64) << n;
+                ((t as u32) & mask, ((t >> wd) & 1) as u32)
+            },
+            ShiftOp::Shr => ((x >> n) & mask, (x >> (n - 1)) & 1),
+            ShiftOp::Sar => (((sx >> n) as u32) & mask, ((sx >> (n - 1)) as u32) & 1),
+        };
+        FLAGS.CF = cf as u1;
+        let top = (r >> msb) & 1;
+        let next = (r >> (msb - 1)) & 1;
+        let of: u32 = match op {
+            ShiftOp::Rol | ShiftOp::Rcl | ShiftOp::Shl | ShiftOp::Sal => top ^ cf,
+            ShiftOp::Ror | ShiftOp::Rcr => top ^ next,
+            ShiftOp::Shr => (x >> msb) & 1,
+            ShiftOp::Sar => 0,
+        };
+        FLAGS.OF = of as u1;
+        if is_shift(op) {
+            FLAGS.SF = top as u1;
+            FLAGS.ZF = (r == 0) as u1;
+            FLAGS.PF = Parity8(r as u8);
+        }
+        return r as u16;
+    }
+
+    instruction Shift_rm8_1 {
+        mnemonic shift_name(op);
+        encoding { opcode 0xD0; ModRM { reg: shift_op } }
+        operands (op: shift_op, dst: rm8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_shift(op)]; }
+        semantics { dst = shift(op, dst as u16, 8, 1) as u8; }
+    }
+    instruction Shift_rm16_1 {
+        mnemonic shift_name(op);
+        encoding { opcode 0xD1; ModRM { reg: shift_op } }
+        operands (op: shift_op, dst: rm16);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_shift(op)]; }
+        semantics { dst = shift(op, dst, 16, 1); }
+    }
+    instruction Shift_rm8_cl {
+        mnemonic shift_name(op);
+        encoding { opcode 0xD2; ModRM { reg: shift_op } }
+        operands (op: shift_op, dst: rm8);
+        flags {
+            modifies: [OF, SF, ZF, AF, PF, CF];
+            undefined: [OF if (CL & 0x1F) != 1, AF if is_shift(op) && (CL & 0x1F) != 0, CF if is_shift(op) && (CL & 0x1F) > 8];
+        }
+        semantics { dst = shift(op, dst as u16, 8, CL) as u8; }
+    }
+    instruction Shift_rm16_cl {
+        mnemonic shift_name(op);
+        encoding { opcode 0xD3; ModRM { reg: shift_op } }
+        operands (op: shift_op, dst: rm16);
+        flags {
+            modifies: [OF, SF, ZF, AF, PF, CF];
+            undefined: [OF if (CL & 0x1F) != 1, AF if is_shift(op) && (CL & 0x1F) != 0, CF if is_shift(op) && (CL & 0x1F) > 16];
+        }
+        semantics { dst = shift(op, dst, 16, CL); }
+    }
+    instruction Shift_rm8_imm8 {
+        mnemonic shift_name(op);
+        encoding { opcode 0xC0; ModRM { reg: shift_op } Imm8 }
+        operands (op: shift_op, dst: rm8, n: imm8);
+        flags {
+            modifies: [OF, SF, ZF, AF, PF, CF];
+            undefined: [OF if (n & 0x1F) != 1, AF if is_shift(op) && (n & 0x1F) != 0, CF if is_shift(op) && (n & 0x1F) > 8];
+        }
+        semantics { dst = shift(op, dst as u16, 8, n) as u8; }
+    }
+    instruction Shift_rm16_imm8 {
+        mnemonic shift_name(op);
+        encoding { opcode 0xC1; ModRM { reg: shift_op } Imm8 }
+        operands (op: shift_op, dst: rm16, n: imm8);
+        flags {
+            modifies: [OF, SF, ZF, AF, PF, CF];
+            undefined: [OF if (n & 0x1F) != 1, AF if is_shift(op) && (n & 0x1F) != 0, CF if is_shift(op) && (n & 0x1F) > 16];
+        }
+        semantics { dst = shift(op, dst, 16, n); }
+    }
+
+    // -- TEST, NOT, NEG, MUL, DIV ---------------------------------------------------------------
+
+    instruction Test_rm8_r8 {
+        mnemonic "test";
+        encoding { opcode 0x84; ModRM { reg: r8 } }
+        operands (a: rm8, b: r8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu8(AluOp::And, a, b); }
+    }
+    instruction Test_rm16_r16 {
+        mnemonic "test";
+        encoding { opcode 0x85; ModRM { reg: r16 } }
+        operands (a: rm16, b: r16);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu16(AluOp::And, a, b); }
+    }
+    instruction Test_al_imm8 {
+        mnemonic "test";
+        encoding { opcode 0xA8; Imm8 }
+        operands (b: imm8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu8(AluOp::And, AL, b); }
+    }
+    instruction Test_ax_imm16 {
+        mnemonic "test";
+        encoding { opcode 0xA9; Imm16 }
+        operands (b: imm16);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu16(AluOp::And, AX, b); }
+    }
+    instruction Test_rm8_imm8 {
+        mnemonic "test";
+        encoding { opcode 0xF6; ModRM { reg: 0 } Imm8 }
+        operands (a: rm8, b: imm8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu8(AluOp::And, a, b); }
+    }
+    /// F6 /1 is an undocumented alias of F6 /0.
+    instruction Test_rm8_imm8_alias {
+        mnemonic "test";
+        encoding { opcode 0xF6; ModRM { reg: 1 } Imm8 }
+        operands (a: rm8, b: imm8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu8(AluOp::And, a, b); }
+    }
+    instruction Not_rm8 { mnemonic "not"; encoding { opcode 0xF6; ModRM { reg: 2 } } operands (dst: rm8); semantics { dst = ~dst; } }
+    instruction Neg_rm8 {
+        mnemonic "neg";
+        encoding { opcode 0xF6; ModRM { reg: 3 } }
+        operands (dst: rm8);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics { dst = alu8(AluOp::Sub, 0, dst); }
+    }
+    instruction Mul_rm8 {
+        mnemonic "mul";
+        encoding { opcode 0xF6; ModRM { reg: 4 } }
+        operands (src: rm8);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics {
+            AX = (AL as u16) * (src as u16);
+            FLAGS.CF = (AH != 0) as u1;
+            FLAGS.OF = (AH != 0) as u1;
+        }
+    }
+    instruction Imul_rm8 {
+        mnemonic "imul";
+        encoding { opcode 0xF6; ModRM { reg: 5 } }
+        operands (src: rm8);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics {
+            let p = ((AL as i8) as i16) * ((src as i8) as i16);
+            AX = p as u16;
+            let wide = p != ((p as i8) as i16);
+            FLAGS.CF = wide as u1;
+            FLAGS.OF = wide as u1;
+        }
+    }
+    instruction Div_rm8 {
+        mnemonic "div";
+        encoding { opcode 0xF6; ModRM { reg: 6 } }
+        operands (src: rm8);
+        flags { undefined: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            let d = src as u16;
+            if d == 0 { raise DE; }
+            let q = AX / d;
+            if q > 0xFF { raise DE; }
+            let r = AX % d;
+            AL = q as u8;
+            AH = r as u8;
+        }
+    }
+    instruction Idiv_rm8 {
+        mnemonic "idiv";
+        encoding { opcode 0xF6; ModRM { reg: 7 } }
+        operands (src: rm8);
+        flags { undefined: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            let a = (AX as i16) as i32;
+            let d = ((src as i8) as i16) as i32;
+            if d == 0 { raise DE; }
+            let q = a / d;
+            if q > 127 || q < -128 { raise DE; }
+            let r = a % d;
+            AL = q as u8;
+            AH = r as u8;
+        }
+    }
+    instruction Test_rm16_imm16 {
+        mnemonic "test";
+        encoding { opcode 0xF7; ModRM { reg: 0 } Imm16 }
+        operands (a: rm16, b: imm16);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu16(AluOp::And, a, b); }
+    }
+    /// F7 /1 is an undocumented alias of F7 /0.
+    instruction Test_rm16_imm16_alias {
+        mnemonic "test";
+        encoding { opcode 0xF7; ModRM { reg: 1 } Imm16 }
+        operands (a: rm16, b: imm16);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu16(AluOp::And, a, b); }
+    }
+    instruction Not_rm16 { mnemonic "not"; encoding { opcode 0xF7; ModRM { reg: 2 } } operands (dst: rm16); semantics { dst = ~dst; } }
+    instruction Neg_rm16 {
+        mnemonic "neg";
+        encoding { opcode 0xF7; ModRM { reg: 3 } }
+        operands (dst: rm16);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics { dst = alu16(AluOp::Sub, 0, dst); }
+    }
+    instruction Mul_rm16 {
+        mnemonic "mul";
+        encoding { opcode 0xF7; ModRM { reg: 4 } }
+        operands (src: rm16);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics {
+            let p = (AX as u32) * (src as u32);
+            AX = p as u16;
+            DX = (p >> 16) as u16;
+            FLAGS.CF = (DX != 0) as u1;
+            FLAGS.OF = (DX != 0) as u1;
+        }
+    }
+    instruction Imul_rm16 {
+        mnemonic "imul";
+        encoding { opcode 0xF7; ModRM { reg: 5 } }
+        operands (src: rm16);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics {
+            let p = ((AX as i16) as i32) * ((src as i16) as i32);
+            AX = p as u16;
+            DX = (p >> 16) as u16;
+            let wide = p != ((p as i16) as i32);
+            FLAGS.CF = wide as u1;
+            FLAGS.OF = wide as u1;
+        }
+    }
+    instruction Div_rm16 {
+        mnemonic "div";
+        encoding { opcode 0xF7; ModRM { reg: 6 } }
+        operands (src: rm16);
+        flags { undefined: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            let d = src as u32;
+            if d == 0 { raise DE; }
+            let n = ((DX as u32) << 16) | (AX as u32);
+            let q = n / d;
+            if q > 0xFFFF { raise DE; }
+            let r = n % d;
+            AX = q as u16;
+            DX = r as u16;
+        }
+    }
+    instruction Idiv_rm16 {
+        mnemonic "idiv";
+        encoding { opcode 0xF7; ModRM { reg: 7 } }
+        operands (src: rm16);
+        flags { undefined: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            let n = ((((DX as u32) << 16) | (AX as u32)) as i32) as i64;
+            let d = ((src as i16) as i32) as i64;
+            if d == 0 { raise DE; }
+            let q = n / d;
+            if q > 32767 || q < -32768 { raise DE; }
+            let r = n % d;
+            AX = q as u16;
+            DX = r as u16;
+        }
+    }
+
+    // -- XCHG, sign extension, LEA ----------------------------------------------------------------
+
+    instruction Xchg_rm8_r8 {
+        mnemonic "xchg";
+        encoding { opcode 0x86; ModRM { reg: r8 } }
+        operands (a: rm8, b: r8);
+        semantics { let x = a; let y = b; a = y; b = x; }
+    }
+    instruction Xchg_rm16_r16 {
+        mnemonic "xchg";
+        encoding { opcode 0x87; ModRM { reg: r16 } }
+        operands (a: rm16, b: r16);
+        semantics { let x = a; let y = b; a = y; b = x; }
+    }
+    /// 90 is `xchg ax, ax`, which is NOP.
+    instruction Xchg_ax_r16 {
+        mnemonic "xchg";
+        encoding { opcode "10010rrr" { r: r16 } }
+        operands (b: r16);
+        semantics { let x = AX; let y = b; AX = y; b = x; }
+    }
+    instruction Cbw { mnemonic "cbw"; encoding { opcode 0x98; } semantics { AX = (AL as i8) as u16; } }
+    instruction Cwd { mnemonic "cwd"; encoding { opcode 0x99; } semantics { DX = if AX[15] == 1 { 0xFFFF } else { 0 }; } }
+    /// The register form is #UD.
+    instruction Lea {
+        mnemonic "lea";
+        encoding { opcode 0x8D; ModRM { reg: r16 } }
+        operands (dst: r16, src: mem_offset);
+        semantics { if !src.is_mem { raise UD; } dst = src; }
+    }
+
     // -- strings -------------------------------------------------------------------------------
     //
     // One element per execution. Under a repeat prefix an iteration that is
@@ -646,7 +1015,6 @@ isa I286 {
 
     // -- flags and miscellany ---------------------------------------------------------------------
 
-    instruction Nop { mnemonic "nop"; encoding { opcode 0x90; } }
     instruction Hlt { mnemonic "hlt"; encoding { opcode 0xF4; } semantics { halt; } }
     instruction Cmc { mnemonic "cmc"; encoding { opcode 0xF5; } flags { modifies: [CF]; } semantics { FLAGS.CF = ~CF; } }
     instruction Clc { mnemonic "clc"; encoding { opcode 0xF8; } flags { modifies: [CF]; } semantics { FLAGS.CF = 0; } }

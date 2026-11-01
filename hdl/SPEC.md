@@ -626,7 +626,9 @@ instruction Add_rm8_r8 {
 - `semantics` is imperative, over architectural state, operands and units.
   It may call `fn` helpers and `raise`. It has no notion of cycles.
 - `flags { modifies, undefined, reads }` lists register fields; an entry
-  may be conditional on the operands (`undefined: [AF if is_logic(op)]`).
+  may be conditional (`undefined: [AF if is_logic(op)]`, `[OF if (CL &
+  0x1F) != 1]`). Conditions are evaluated in the state *before* the
+  instruction executes.
   Hardware vectors are compared with exactly the flags the executed
   instruction leaves undefined masked out. (Checking `modifies` against
   the semantics is planned.)

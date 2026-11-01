@@ -2288,6 +2288,10 @@ pub mod vectors {{
         Fail(Vec<String>),
         /// The first instruction does not decode: not described yet.
         Unimplemented,
+        /// Everything matches except stored copies of flags the instruction
+        /// leaves undefined (a fault frame pushed after a DIV, say): the
+        /// hardware's values come from state the description does not model.
+        UndefinedLeak(Vec<String>),
     }}
 
     pub fn run_test(t: &MooTest) -> Outcome {{
@@ -2314,17 +2318,32 @@ pub mod vectors {{
         let _ = {undefined};
         let mut errors = Vec::new();
         if !m.halted {{ errors.push("did not halt".to_string()); }}
+        // Flag conditions describe the state before the instruction
+        // (`undefined: [OF if CL != 1]` must not see `shl cl, cl`'s result).
+        let mut pre = {isa_name}::new();
+        let _ = load(&mut pre, &t.initial);
+        pre.reset_latches();
         for name in REGS {{
             let Some(expected) = t.final_.reg(name).or_else(|| t.initial.reg(name)) else {{ continue }};
             let actual = match read(&mut m, name) {{ Ok(v) => v, Err(f) => {{ errors.push(format!("{{name}}: fault while reading: {{f:?}}")); continue; }} }};
             let mask = match (masked_reg(name), &first) {{
-                (Some(r), Some(i)) => m.undefined_mask(i, r) as u16,
+                (Some(r), Some(i)) => pre.undefined_mask(i, r) as u16,
                 _ => 0,
             }};
             if actual & !mask != expected & !mask {{
                 errors.push(format!("{{name}}: expected {{expected:#06x}}, got {{actual:#06x}} (undefined bits {{mask:#06x}})"));
             }}
         }}
+        let regs_ok = errors.is_empty();
+        // Flag bits the executed instruction leaves undefined, for recognising
+        // a stored copy of them (a fault frame) in memory.
+        let mut leak_mask: u16 = 0;
+        if let Some(i) = &first {{
+            for name in REGS {{
+                if let Some(r) = masked_reg(name) {{ leak_mask |= pre.undefined_mask(i, r) as u16; }}
+            }}
+        }}
+        let mut leaks = 0usize;
         let mut addrs: Vec<u32> = t.initial.ram.iter().chain(t.final_.ram.iter()).map(|(a, _)| *a).collect();
         addrs.sort_unstable();
         addrs.dedup();
@@ -2332,8 +2351,13 @@ pub mod vectors {{
             let expected = t.final_.ram.iter().chain(t.initial.ram.iter()).find(|(x, _)| *x == a).map(|(_, v)| *v).unwrap_or(0);
             let actual = m.{mem}.read_cell(a as u64) as u8;
             if actual != expected {{
+                let diff = actual ^ expected;
+                if delivered.is_some() && t.exception.is_some() && (diff & !(leak_mask as u8) == 0 || diff & !((leak_mask >> 8) as u8) == 0) {{ leaks += 1; }}
                 errors.push(format!("ram[{{a:#07x}}]: expected {{expected:#04x}}, got {{actual:#04x}}"));
             }}
+        }}
+        if regs_ok && !errors.is_empty() && leaks == errors.len() {{
+            return Outcome::UndefinedLeak(errors);
         }}
         if errors.is_empty() {{ Outcome::Pass }} else {{
             if let Some(i) = first {{ errors.insert(0, format!("decoded as {{}} ({{}})", {isa_name}::instr_name(&i), m.mnemonic(&i))); }}
@@ -2352,6 +2376,7 @@ pub mod vectors {{
         pub exceptions: usize,
         pub revoked: usize,
         pub unimplemented: usize,
+        pub leaks: usize,
     }}
 
     /// Run every vector file matching `GLOB` (or `dir`) whose name starts with
@@ -2383,6 +2408,7 @@ pub mod vectors {{
                 match run_test(t) {{
                     Outcome::Pass => r.passed += 1,
                     Outcome::Unimplemented => r.unimplemented += 1,
+                    Outcome::UndefinedLeak(_) => r.leaks += 1,
                     Outcome::Fail(errors) => {{
                         r.failed += 1;
                         if shown < max_failures {{
@@ -2397,12 +2423,12 @@ pub mod vectors {{
             files_run += 1;
             let status = if r.failed > 0 {{ "FAIL" }} else if r.passed == 0 {{ "skip" }} else {{ "ok  " }};
             if !quiet || r.failed > 0 {{
-                println!("{{status}} {{fname:<14}} {{:>5}} passed {{:>5}} failed {{:>5}} unimplemented {{:>4}} exc {{:>3}} revoked", r.passed, r.failed, r.unimplemented, r.exceptions, r.revoked);
+                println!("{{status}} {{fname:<14}} {{:>5}} passed {{:>5}} failed {{:>5}} unimplemented {{:>4}} leak {{:>4}} exc {{:>3}} revoked", r.passed, r.failed, r.unimplemented, r.leaks, r.exceptions, r.revoked);
             }}
             all.total += r.total; all.passed += r.passed; all.failed += r.failed;
-            all.exceptions += r.exceptions; all.revoked += r.revoked; all.unimplemented += r.unimplemented;
+            all.exceptions += r.exceptions; all.revoked += r.revoked; all.unimplemented += r.unimplemented; all.leaks += r.leaks;
         }}
-        println!("{{files_run}} file(s), {{}} vectors: {{}} passed, {{}} failed, {{}} unimplemented, {{}} revoked ({{}} with exceptions)", all.total, all.passed, all.failed, all.unimplemented, all.revoked, all.exceptions);
+        println!("{{files_run}} file(s), {{}} vectors: {{}} passed, {{}} failed, {{}} unimplemented, {{}} undefined-flag leaks, {{}} revoked ({{}} with exceptions)", all.total, all.passed, all.failed, all.unimplemented, all.leaks, all.revoked, all.exceptions);
         all.failed == 0
     }}
 

@@ -158,7 +158,7 @@ fn i286_target_passes_its_tests_and_hardware_vectors() {
         .arg(&vectors)
         .args([
             "--filter",
-            "00,05,26,2B,80.4,83.5,74,C6,F4,CC,CE,62,CF,9D,50,E8,81.0,A4,A5,A7,AB,AD,AE",
+            "00,05,26,2B,80.4,83.5,74,C6,F4,CC,CE,62,CF,9D,50,E8,81.0,A4,A5,A7,AB,AD,AE,D3.5,C0.2,F7.4,F6.6,87,8D",
             "--max-failures",
             "5",
         ])

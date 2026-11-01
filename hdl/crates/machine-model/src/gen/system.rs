@@ -277,6 +277,7 @@ impl<'a> Gen<'a> {
                 HandlerKind::SpaceWrite { space, bits } => {
                     format!("{}_write_u{bits}", ident(&self.spaces[space].name))
                 }
+                HandlerKind::Extern { def } => format!("ext_{}", ident(&self.prog.item_name(*def))),
             };
             let mut ps = String::new();
             for p in &h.params {
@@ -389,6 +390,15 @@ impl<'a> Gen<'a> {
         }
         let cpu = &insts[proc_idx];
         let cpu_name = ident(&cpu.name);
+        let cpu_clock = match cpu.sys.clocks.first() {
+            Some((_, c)) => *c,
+            None => {
+                return Err(GenError::new(format!(
+                    "the processor `{}` needs a clock (`component {}: {} @ <clock>;`): a halted processor waits in cycles of it",
+                    cpu.name, cpu.name, cpu.comp.name
+                )))
+            }
+        };
         let isa_name = ident(&self.isa.name);
 
         // Component models, once per component.
@@ -645,7 +655,11 @@ impl<'a> Gen<'a> {
                         let dev = &insts[*si as usize];
                         let dn = ident(&dev.name);
                         let handler = dev.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Transaction { port, transaction } if port == *sp && transaction == tr.def));
-                        let cond = if ranges.is_empty() {
+                        if addr.is_none() && !handler {
+                            // Not decoded: only a slave that handles it answers.
+                            continue;
+                        }
+                        let cond = if ranges.is_empty() || addr.is_none() {
                             "true".to_string()
                         } else {
                             let a = addr
@@ -782,6 +796,29 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+        for f in self.isa.fns.iter().filter(|f| f.external) {
+            let cx = Cx {
+                locals: &f.locals,
+                fallible: false,
+                recv: "self",
+                ops: None,
+                comp: None,
+            };
+            let mut ps = String::new();
+            let mut args = String::new();
+            for p in &f.params {
+                let n = self.local_name(&cx, *p);
+                let _ = write!(ps, ", {n}: {}", self.rty(&f.locals[*p as usize].ty)?);
+                let _ = write!(args, ", {n}");
+            }
+            let _ = write!(
+                bus_impl,
+                "    fn ext_{0}(&mut self{ps}) -> {1} {{\n        let mut ctx = {2};\n        self.{cpu_name}.ext_{0}(&mut ctx{args})\n    }}\n",
+                ident(&f.name),
+                self.rty(&f.ret)?,
+                ctx_cpu("self")
+            );
+        }
         let _ = write!(
             o,
             "    /// Every component model, the time and the signal levels: the processor's bus.\n    #[derive(Clone, Debug)]\n    pub struct Board {{\n{fields}    }}\n    impl Board {{\n        pub fn new() -> Board {{\n            Board {{\n{init}            }}\n        }}\n    }}\n    impl Bus for Board {{\n{bus_impl}    }}\n"
@@ -890,17 +927,28 @@ impl<'a> Gen<'a> {
 {reset}            self.{cpu_name}.reset();
             self.deliver();
         }}
-        /// One instruction, then every device caught up to the present.
+        /// One instruction (or an interrupt taken at the boundary), then
+        /// every device caught up to the present. A halted processor
+        /// spends one cycle of its clock waiting.
         pub fn step(&mut self) -> Result<(), Fault> {{
+            let was_halted = self.{cpu_name}.halted;
             let r = self.{cpu_name}.step();
+            if was_halted && self.{cpu_name}.halted {{
+                self.{cpu_name}.bus.sig.now += clock::C{cpu_clock};
+            }}
             self.sync();
             r
         }}
-        /// Run until the processor halts or `max` instructions have run;
-        /// returns how many ran.
+        /// Run until the processor halts or `max` steps have run; returns
+        /// how many ran.
         pub fn run(&mut self, max: u64) -> Result<u64, Fault> {{
+            self.run_until(max, |s| s.{cpu_name}.halted)
+        }}
+        /// Run until `stop` holds (checked before each step) or `max` steps
+        /// have run; returns how many ran.
+        pub fn run_until(&mut self, max: u64, mut stop: impl FnMut(&mut System) -> bool) -> Result<u64, Fault> {{
             for n in 0..max {{
-                if self.{cpu_name}.halted {{
+                if stop(self) {{
                     return Ok(n);
                 }}
                 self.step()?;

@@ -36,6 +36,10 @@ isa I286 {
     register BP: u16;
     register SP: u16;
     register IP: u16;
+    /// Internal, not visible to software: set by an instruction after
+    /// which the 286 does not take a maskable interrupt (STI from IF clear,
+    /// MOV SS, POP SS), cleared at the next boundary.
+    register INHIBIT: u1;
     register CS: Segment;
     register DS: Segment;
     register ES: Segment;
@@ -140,7 +144,31 @@ isa I286 {
         return b;
     }
 
-    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; }
+    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; }
+
+    /// The INTR pin, and the two interrupt-acknowledge bus cycles that
+    /// fetch the vector from the interrupt controller: the processor model
+    /// supplies both.
+    extern fn intr() -> bool;
+    extern fn acknowledge() -> u8;
+
+    /// At each instruction boundary: a maskable interrupt is taken when
+    /// INTR is high and IF is set, except right after an instruction that
+    /// inhibits it. Between iterations of a repeated string instruction IP
+    /// is back at the prefix, so the interrupt returns there. Taking one
+    /// ends HLT.
+    fn take_interrupt() -> bool {
+        if INHIBIT == 1 {
+            INHIBIT = 0;
+            return false;
+        }
+        if FLAGS.IF == 1 && intr() {
+            let v = acknowledge();
+            deliver(v, false);
+            return true;
+        }
+        return false;
+    }
 
     fn segment(s: SegOv) -> Segment {
         return match s { SegOv::ES => ES, SegOv::CS => CS, SegOv::SS => SS, _ => DS };
@@ -915,7 +943,7 @@ isa I286 {
     fn write_sreg(n: u3, v: u16) {
         match n {
             0 => { ES = load_segment(v); }
-            2 => { SS = load_segment(v); }
+            2 => { SS = load_segment(v); INHIBIT = 1; }
             3 => { DS = load_segment(v); }
             _ => { raise UD; }
         }
@@ -1540,12 +1568,24 @@ isa I286 {
     instruction Clc { mnemonic "clc"; encoding { opcode 0xF8; } flags { modifies: [CF]; } semantics { FLAGS.CF = 0; } }
     instruction Stc { mnemonic "stc"; encoding { opcode 0xF9; } flags { modifies: [CF]; } semantics { FLAGS.CF = 1; } }
     instruction Cli { mnemonic "cli"; encoding { opcode 0xFA; } flags { modifies: [IF]; } semantics { FLAGS.IF = 0; } }
-    instruction Sti { mnemonic "sti"; encoding { opcode 0xFB; } flags { modifies: [IF]; } semantics { FLAGS.IF = 1; } }
+    instruction Sti { mnemonic "sti"; encoding { opcode 0xFB; } flags { modifies: [IF]; } semantics { if FLAGS.IF == 0 { INHIBIT = 1; } FLAGS.IF = 1; } }
     instruction Cld { mnemonic "cld"; encoding { opcode 0xFC; } flags { modifies: [DF]; } semantics { FLAGS.DF = 0; } }
     instruction Std { mnemonic "std"; encoding { opcode 0xFD; } flags { modifies: [DF]; } semantics { FLAGS.DF = 1; } }
 }
 
 // -- tests ---------------------------------------------------------------------------------
+
+test "sti from IF clear inhibits interrupts for one instruction" on I286 {
+    given { FLAGS = 0x0002; }
+    run bytes [0xFB];
+    expect { FLAGS.IF == 1; INHIBIT == 1; }
+}
+
+test "mov ss inhibits interrupts for one instruction" on I286 {
+    given { AX = 0x2000; }
+    run bytes [0x8E, 0xD0];
+    expect { SS.selector == 0x2000; INHIBIT == 1; }
+}
 
 test "add al, bl" on I286 {
     given { AL = 0x7F; BL = 0x01; }

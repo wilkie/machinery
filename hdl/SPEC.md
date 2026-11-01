@@ -400,6 +400,16 @@ access of a width without a handler is composed from cells in the space's
 byte order. This is where bus sizing and alignment live, and with them
 the bus time an access costs.
 
+The model also supplies every `extern fn` of the isa with a handler of the
+same name and signature (E1041), typically from signals and transactions:
+
+```
+state intr_level: bool = false;
+on local.intr(value: bool) { intr_level = value; }
+on intr() -> bool { return intr_level; }
+on acknowledge() -> u8 { return local.inta().vector; }
+```
+
 ## 9. Routines: multi-cycle control inside `rtl`
 
 Microcode, bus sequencers and video timing generators are all "do this, then
@@ -542,7 +552,12 @@ build.
 Address decoding reads the transaction parameter named `addr` and, when a
 range names a space (`io 0x40..=0x43`), the parameter named `space`, whose
 enum variant is matched ignoring case. A slave without ranges answers what
-no ranged slave does. A read nobody answers returns all ones and a write
+no ranged slave does. A transaction without an `addr` parameter is not
+decoded: the attached responder that handles it answers (an interrupt
+acknowledge goes to the interrupt controller). A bus may declare more than
+two roles; every role after the first responds, and a role observes the
+signals other roles drive, so an interrupt controller in its own role
+watches the devices' `irq` lines and drives `intr`. A read nobody answers returns all ones and a write
 nobody answers is dropped; both still take the base cycles. This is how a 386 instruction's
 duration in the emulator includes correct ISA wait states without the
 emulator simulating the bus wires.
@@ -618,6 +633,31 @@ zero, then the isa's `fn reset()` runs if it declares one (it takes no
 parameters and returns nothing, E1046): on the 286 it loads CS:IP with
 F000:FFF0 and the CS base with FF0000. A `given` block in a test sets what
 the test needs and does not run `fn reset()`.
+
+**External interrupts.** What the isa needs from outside the processor it
+declares as `extern fn`, without a body; the processor model supplies it
+(section 8.4), and the plain-memory interpreter used for tests and
+vectors returns the type's zero. `boundary` names a `fn () -> bool` that
+runs at every instruction boundary, before the next fetch, and returns
+true when it took an interrupt in place of the instruction; taking one
+ends `halt`. Whether an interrupt is accepted and how it is delivered are
+architecture, so they are written in the isa; the pin and the bus cycles
+are not:
+
+```
+istream { ...; fault deliver; boundary take_interrupt; }
+extern fn intr() -> bool;          // the INTR pin
+extern fn acknowledge() -> u8;     // the interrupt-acknowledge cycles: the vector
+
+fn take_interrupt() -> bool {
+    if INHIBIT == 1 { INHIBIT = 0; return false; }   // after STI, MOV SS, POP SS
+    if FLAGS.IF == 1 && intr() {
+        deliver(acknowledge(), false);
+        return true;
+    }
+    return false;
+}
+```
 
 ### 11.2 Instructions
 
@@ -838,14 +878,16 @@ drives), and `system::System`:
   take shortcuts).
 - `emit` sets a signal level at once; the edges are delivered to the
   observing ports' `on port.signal(...)` handlers after each instruction.
-- `step()` runs one instruction and catches the devices up; `run(n)` runs
-  until the processor halts.
+- `step()` runs one instruction, or an interrupt the isa's `boundary` fn
+  took, and catches the devices up; a halted processor waits one cycle
+  of its clock per step. `run(n)` runs until the processor halts and
+  `run_until(n, stop)` until a condition holds.
 
 Not generated yet, and reported when a system needs them: more than one
 processor, a bus mastered by anything but the processor, `bridge`,
 `wire`, an rtl level in the profile, and processor time between bus
 transfers (an instruction costs only its bus time until timing is derived,
-section 14). A processor model does not yet take external interrupts.
+section 14).
 
 ## 13. Verification
 

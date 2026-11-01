@@ -900,7 +900,11 @@ pub struct FnDecl {
     pub name: Ident,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
+    /// Empty for an `extern fn`.
     pub body: Block,
+    /// `extern fn name(params) -> T;` in an isa: supplied by the processor
+    /// model (a bus cycle, an input pin), not by the isa.
+    pub external: bool,
     pub span: Span,
 }
 
@@ -1047,6 +1051,9 @@ pub struct IstreamDecl {
     /// `fault deliver;`: the `fn (vector: u8)` that delivers a raised fault
     /// (after rollback for `Fault`-class faults).
     pub fault: Option<Path>,
+    /// `boundary take_interrupt;`: a `fn () -> bool` run at every
+    /// instruction boundary; `true` means it took an interrupt instead.
+    pub boundary: Option<Path>,
     pub span: Span,
 }
 

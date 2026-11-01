@@ -698,14 +698,15 @@ impl Checker<'_> {
                         }
                         rs.push(new);
                     }
+                    // A transaction without `addr` is not decoded: it goes to
+                    // the slave that handles it (an interrupt acknowledge).
                     if !rs.is_empty() {
                         for t in &info.transactions {
-                            if !t
-                                .params
-                                .iter()
-                                .any(|(n, ty)| n == "addr" && matches!(ty, Ty::UInt(_)))
-                            {
-                                let msg = format!("address ranges decode the transactions' `addr` parameter, but `{}.{}` has none", info.name, t.name);
+                            let Some((_, aty)) = t.params.iter().find(|(n, _)| n == "addr") else {
+                                continue;
+                            };
+                            if !matches!(aty, Ty::UInt(_)) {
+                                let msg = format!("address ranges decode `addr` as an unsigned number, but `{}.{}` declares it otherwise", info.name, t.name);
                                 self.error(module, "E1049", p.span, msg);
                                 ok = false;
                             }

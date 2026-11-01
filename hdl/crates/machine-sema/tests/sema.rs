@@ -1542,8 +1542,65 @@ fn i286_board_system_checks_clean() {
     let c = check_files(files);
     assert_clean(&c);
     let sys = &c.hir.systems[0];
-    assert_eq!(sys.components.len(), 5);
-    assert_eq!(sys.buses[0].slaves.len(), 4);
+    assert_eq!(sys.components.len(), 6);
+    assert_eq!(sys.buses[0].slaves.len(), 5);
     // The ROM answers at the top of both the 1 MB and the 16 MB space.
     assert_eq!(sys.buses[0].slaves[1].1.len(), 2);
+}
+
+#[test]
+fn extern_fns_and_the_boundary_hook() {
+    let src = DEC_PRELUDE.replace(
+        "undefined UD; }",
+        "undefined UD; boundary take; }\n    extern fn line() -> bool;\n    extern fn ack(n: u8) -> u8;\n    fn take() -> bool { if line() { IP = ack(1) as u16; return true; } return false; }",
+    );
+    let c = check_src(&format!("{src}\n}}"));
+    assert_clean(&c);
+    let isa = &c.hir.isas[0];
+    assert_eq!(isa.fns.iter().filter(|f| f.external).count(), 2);
+    assert!(isa.istream.as_ref().unwrap().boundary.is_some());
+    // The boundary fn returns whether it took an interrupt.
+    let bad = DEC_PRELUDE.replace(
+        "undefined UD; }",
+        "undefined UD; boundary take; }\n    fn take() { }",
+    );
+    assert_codes(&format!("{bad}\n}}"), &["E1046"]);
+    // An extern fn has no body.
+    let bad = DEC_PRELUDE.replace(
+        "undefined UD; }",
+        "undefined UD; }\n    extern fn line() -> bool { return true; }",
+    );
+    assert_eq!(codes(&check_src(&format!("{bad}\n}}"))), ["E0100"]);
+}
+
+#[test]
+fn processor_models_supply_extern_fns() {
+    let cpu = |model: &str| {
+        format!(
+            "{}\n{SYS_PRELUDE}\ncomponent Cpu {{ isa T; ports {{ bus io: B::M; }} model {{
+                on mem.read_u8(addr: u16) -> u8 {{ return 0; }}
+                on mem.write_u8(addr: u16, data: u8) {{ }}
+                {model} }} }}",
+            isa("extern fn line() -> bool;")
+        )
+    };
+    assert_codes(&cpu("on line() -> bool { return true; }"), &[]);
+    // Missing.
+    assert_codes(&cpu(""), &["E1041"]);
+    // The wrong return type.
+    assert_codes(&cpu("on line() -> u8 { return 1; }"), &["E1041", "E1041"]);
+}
+
+/// A transaction without `addr` (an interrupt acknowledge) is not decoded,
+/// so ranged slaves do not need it to have one.
+#[test]
+fn transactions_without_addr_are_not_decoded() {
+    let src = SYS_PRELUDE.replace(
+        "    signal interrupt",
+        "    transaction ack() -> (vector: u8) { M { cycle { } } }\n    signal interrupt",
+    );
+    let c = check_src(&format!(
+        "{src}\nsystem S {{ clock a: 1 MHz; component d: Dev @ a; bus x: B @ a {{ slave d.io @ mem 0..=7; }} }}"
+    ));
+    assert_clean(&c);
 }

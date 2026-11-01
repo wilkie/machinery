@@ -650,8 +650,15 @@ impl Parser {
                     span: start.to(self.prev_span()),
                 }))
             }
-            "fn" => {
+            "fn" | "extern" => {
+                let external = word == "extern";
                 self.advance();
+                if external {
+                    let kw = self.expect_ident()?;
+                    if kw.name != "fn" {
+                        return Err(self.error("E0106", kw.span, "expected `fn` after `extern`"));
+                    }
+                }
                 let name = self.expect_ident()?;
                 let params = self.parse_params()?;
                 let ret = if self.eat_punct(Punct::RArrow) {
@@ -659,13 +666,23 @@ impl Parser {
                 } else {
                     None
                 };
-                let body = self.parse_block()?;
+                let body = if external {
+                    let at = self.cur_span();
+                    self.expect_semi()?;
+                    Block {
+                        stmts: Vec::new(),
+                        span: at,
+                    }
+                } else {
+                    self.parse_block()?
+                };
                 Ok(IsaItem::Fn(FnDecl {
                     docs,
                     name,
                     params,
                     ret,
                     body,
+                    external,
                     span: start.to(self.prev_span()),
                 }))
             }
@@ -722,6 +739,7 @@ impl Parser {
                 let mut next = None;
                 let mut undefined = None;
                 let mut fault = None;
+                let mut boundary = None;
                 while !self.at_punct(Punct::RBrace) {
                     if self.at_eof() {
                         return Err(self.error_expected("`}`"));
@@ -733,11 +751,12 @@ impl Parser {
                         "next" => next = Some(self.parse_path_colons()?),
                         "undefined" => undefined = Some(self.parse_path_colons()?),
                         "fault" => fault = Some(self.parse_path_colons()?),
+                        "boundary" => boundary = Some(self.parse_path_colons()?),
                         other => {
                             return Err(self.error(
                                 "E0106",
                                 key.span,
-                                format!("unknown `istream` item `{other}`; expected `space`, `address`, `next`, `undefined` or `fault`"),
+                                format!("unknown `istream` item `{other}`; expected `space`, `address`, `next`, `undefined`, `fault` or `boundary`"),
                             ))
                         }
                     }
@@ -753,6 +772,7 @@ impl Parser {
                     next,
                     undefined,
                     fault,
+                    boundary,
                     span: start.to(self.prev_span()),
                 }))
             }

@@ -335,6 +335,8 @@ pub struct FnBody {
     pub params: Vec<LocalId>,
     pub ret: Ty,
     pub body: Block,
+    /// An `extern fn`: no body; the processor model supplies it.
+    pub external: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -577,6 +579,9 @@ pub struct Istream {
     /// `fn (vector: u8)` that delivers a raised fault, or `None` to leave
     /// faults to the caller of `step`.
     pub fault: Option<DefId>,
+    /// `fn () -> bool` run at each instruction boundary; `true` means it
+    /// took an interrupt in place of the next instruction.
+    pub boundary: Option<DefId>,
 }
 
 /// A resolved `enum`/`mode`, exported for backends.
@@ -723,6 +728,10 @@ pub enum HandlerKind {
     SpaceWrite {
         space: DefId,
         bits: u32,
+    },
+    /// A processor's implementation of an isa `extern fn`.
+    Extern {
+        def: DefId,
     },
 }
 

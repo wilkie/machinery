@@ -537,6 +537,24 @@ impl<'a> Gen<'a> {
                     .get(d)
                     .ok_or_else(|| GenError::new("call of a fn from another isa"))?;
                 let a: R<Vec<String>> = args.iter().map(|x| self.expr(cx, x)).collect();
+                if f.external {
+                    // Supplied by the bus side: a processor model handler,
+                    // or a default in `Flat`.
+                    let a = a?;
+                    let mut s = String::from("{ ");
+                    for (i, arg) in a.iter().enumerate() {
+                        let _ = write!(s, "let a{i} = {arg}; ");
+                    }
+                    let names: Vec<String> = (0..a.len()).map(|i| format!("a{i}")).collect();
+                    let _ = write!(
+                        s,
+                        "{}.bus.ext_{}({}) }}",
+                        cx.recv,
+                        ident(&f.name),
+                        names.join(", ")
+                    );
+                    return Ok(s);
+                }
                 if !cx.fallible {
                     return Err(GenError::new(format!(
                         "fn `{}` called from a context that cannot fault",
@@ -1362,6 +1380,32 @@ impl<'a> Gen<'a> {
             let n = ident(&sp.name);
             let _ = writeln!(s, "    fn {n}_read(&mut self, addr: u64, bits: u32) -> u128;\n    fn {n}_write(&mut self, addr: u64, bits: u32, value: u128);");
         }
+        let mut ext_flat = String::new();
+        for f in self.isa.fns.iter().filter(|f| f.external) {
+            let cx = Cx {
+                locals: &f.locals,
+                fallible: false,
+                recv: "self",
+                ops: None,
+                comp: None,
+            };
+            let mut ps = String::new();
+            for p in &f.params {
+                let _ = write!(
+                    ps,
+                    ", {}: {}",
+                    self.local_name(&cx, *p),
+                    self.rty(&f.locals[*p as usize].ty)?
+                );
+            }
+            let ret = self.rty(&f.ret)?;
+            let _ = writeln!(s, "    /// `extern fn {}`: supplied by the processor model.\n    fn ext_{}(&mut self{ps}) -> {ret};", f.name, ident(&f.name));
+            let _ = writeln!(
+                ext_flat,
+                "    fn ext_{}(&mut self{ps}) -> {ret} {{ Default::default() }}",
+                ident(&f.name)
+            );
+        }
         s.push_str("}\n/// Every space as plain memory: the standalone interpreter, tests and vectors.\n#[derive(Clone, Debug)]\npub struct Flat {\n");
         for sp in &self.isa.spaces {
             let _ = writeln!(s, "    pub {}: rt::Memory,", ident(&sp.name));
@@ -1381,6 +1425,7 @@ impl<'a> Gen<'a> {
             let n = ident(&sp.name);
             let _ = writeln!(s, "    fn {n}_read(&mut self, addr: u64, bits: u32) -> u128 {{ self.{n}.read(addr, bits) }}\n    fn {n}_write(&mut self, addr: u64, bits: u32, value: u128) {{ self.{n}.write(addr, bits, value) }}");
         }
+        s.push_str(&ext_flat);
         s.push_str("}\n");
         self.out.push_str(&s);
 
@@ -1560,6 +1605,9 @@ impl<'a> Gen<'a> {
     }
 
     fn emit_fn(&mut self, f: &hir::FnBody) -> R<()> {
+        if f.external {
+            return Ok(());
+        }
         let cx = Cx {
             locals: &f.locals,
             fallible: true,
@@ -1944,9 +1992,16 @@ impl<'a> Gen<'a> {
         s.push_str(
             "    /// Execute one decoded instruction (an instruction boundary: latches reset) with fault delivery.\n    pub fn run(&mut self, i: Instr) -> Result<(), Fault> {\n        self.reset_latches();\n        self.last_fault = None;\n        let r = self.exec(i);\n        self.finish(r)\n    }\n",
         );
-        s.push_str(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {\n        if self.halted { return Ok(()); }\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        let r = match self.decode() {\n            Ok(i) => { self.last = Some(i); self.exec(i) }\n            Err(f) => Err(f),\n        };\n        self.finish(r)\n    }\n",
-        );
+        let boundary = match istream.boundary {
+            Some(b) => format!(
+                "        // The isa's boundary fn may take an interrupt in place of the\n        // next instruction (and wakes a halted processor when it does).\n        match self.fn_{}() {{\n            Ok(true) => {{ self.halted = false; return Ok(()); }}\n            Ok(false) => {{}}\n            Err(f) => return self.finish(Err(f)),\n        }}\n",
+                ident(&self.fns[&b].name)
+            ),
+            None => String::new(),
+        };
+        s.push_str(&format!(
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n{boundary}        if self.halted {{ return Ok(()); }}\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); self.exec(i) }}\n            Err(f) => Err(f),\n        }};\n        self.finish(r)\n    }}\n"
+        ));
         let _ = write!(
             s,
             "    /// Place `bytes` at the instruction stream address and execute one instruction.\n    pub fn run_bytes(&mut self, bytes: &[u8]) -> Result<(), Fault> {{\n        let a = self.fn_{address}()? as u64;\n        for (i, b) in bytes.iter().enumerate() {{ self.bus.{space}_write(a + i as u64, {cell}, *b as u128); }}\n        self.step()\n    }}\n"

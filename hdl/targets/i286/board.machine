@@ -1,6 +1,6 @@
 // A small 80286 board for the model backend: the i286 isa as a processor
-// on a 16-bit local bus, with RAM, a boot ROM, a one-shot timer and a
-// debugging console port.
+// on a 16-bit local bus, with RAM, a boot ROM, an 8259 interrupt
+// controller, an 8254 timer and a debugging console port.
 //
 // `machine build --system Board286 --out <dir> targets/i286/*.machine`
 // generates the emulator crate: the interpreter, one struct per component
@@ -28,8 +28,11 @@ bus LocalBus {
         bhe:   bool driven_by Master;
         ready: bool wired_and;
         irq:   [bool; 8] driven_by Slave;
+        intr:  bool driven_by Controller;
     }
-    roles { Master; Slave; }
+    /// The interrupt controller is a responder of its own kind: it watches
+    /// the devices' interrupt lines and drives the processor's INTR.
+    roles { Master; Slave; Controller; }
 
     /// Two bus cycles (Ts, Tc) without wait states.
     transaction read(space: Space, addr: u24, size: BusSize) -> (data: u16) {
@@ -47,7 +50,18 @@ bus LocalBus {
         }
     }
 
+    /// The two interrupt-acknowledge cycles. Not address-decoded: the
+    /// interrupt controller answers with the vector.
+    transaction inta() -> (vector: u8) {
+        Master {
+            cycle { } cycle { }
+            wait until ready;
+            cycle { } cycle { }
+        }
+    }
+
     signal interrupt(line: u3) = irq[line];
+    signal intr() = intr;
 }
 
 /// The processor: the i286 isa, with its two address spaces bound to the
@@ -57,6 +71,12 @@ component Cpu286 {
     isa I286;
     ports { bus local: LocalBus::Master; }
     model {
+        state intr_level: bool = false;
+
+        on local.intr(value: bool) { intr_level = value; }
+        on intr() -> bool { return intr_level; }
+        on acknowledge() -> u8 { return local.inta().vector; }
+
         on mem.read_u8(addr: u24) -> u8 {
             return local.read(space: Space::Mem, addr: addr, size: BusSize::Byte).data as u8;
         }
@@ -127,51 +147,229 @@ component Rom {
     }
 }
 
-/// A one-shot down-counter on its own clock, raising interrupt line 0 when
-/// it reaches zero. Registers (relative to the base port):
-///   0  reload (W): loads the count
-///   1  count (R)
-///   2  control (R/W): bit 0 enable, bit 1 interrupt enable; a write
-///      clears a pending interrupt
-component Timer {
-    ports { bus port: LocalBus::Slave; }
+/// The 8259 programmable interrupt controller, as a single (unchained)
+/// controller in fixed-priority, edge-triggered mode: a rising edge on an
+/// IR line sets its request bit, and INTR is high while an unmasked
+/// request outranks every line in service. Port 0 takes ICW1, OCW2 (EOI)
+/// and OCW3 (which register a read returns); port 1 takes ICW2-4 during
+/// initialisation and the mask (OCW1) after.
+component Pic8259 {
+    ports { bus port: LocalBus::Controller; }
     model {
-        state count: u8 = 0;
-        state control: u8 = 0;
-        state pending: bool = false;
+        state irr: u8 = 0;
+        state isr: u8 = 0;
+        state imr: u8 = 0xFF;
+        state base: u8 = 0;
+        /// The ICW expected next on port 1: 2, 3, 4, or 0 when initialised.
+        state icw: u8 = 0;
+        state icw4_needed: bool = false;
+        state single: bool = true;
+        state auto_eoi: bool = false;
+        state read_isr: bool = false;
+        state lines: u8 = 0;
 
         on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
-            let v: u8 = match addr[1:0] {
-                1 => count,
-                2 => control,
-                _ => 0xFF,
-            };
+            let v: u8 = if addr[0] == 1 { imr } else if read_isr { isr } else { irr };
             return (data: v as u16, wait: 1);
         }
         on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
-            match addr[1:0] {
-                0 => { count = data as u8; }
-                2 => {
-                    control = data as u8;
-                    pending = false;
-                    emit port.interrupt(0) = false;
+            let d = data as u8;
+            if addr[0] == 0 {
+                if d[4] == 1 {
+                    // ICW1: start initialisation; the mask clears.
+                    icw = 2;
+                    icw4_needed = d[0] == 1;
+                    single = d[1] == 1;
+                    imr = 0;
+                    isr = 0;
+                    read_isr = false;
+                    auto_eoi = false;
+                } else if d[3] == 0 {
+                    // OCW2: non-specific EOI ends the highest-priority
+                    // line in service, specific EOI the line named.
+                    let cmd = d[7:5];
+                    if cmd == 1 {
+                        isr = isr & ~(isr & (~isr + 1));
+                    } else if cmd == 3 {
+                        isr = isr & ~((1 as u8) << d[2:0]);
+                    }
+                } else if d[1] == 1 {
+                    // OCW3: select the register port 0 reads.
+                    read_isr = d[0] == 1;
                 }
-                _ => { }
+            } else if icw == 2 {
+                base = d & 0xF8;
+                icw = if !single { 3 } else if icw4_needed { 4 } else { 0 };
+            } else if icw == 3 {
+                icw = if icw4_needed { 4 } else { 0 };
+            } else if icw == 4 {
+                auto_eoi = d[1] == 1;
+                icw = 0;
+            } else {
+                imr = d;
+            }
+            emit port.intr() = PicGrant(irr, imr, isr) != 0;
+            return (wait: 1);
+        }
+        on port.interrupt(line: u3, value: bool) {
+            let bit = (1 as u8) << line;
+            if value && (lines & bit) == 0 {
+                irr = irr | bit;
+            }
+            lines = if value { lines | bit } else { lines & ~bit };
+            emit port.intr() = PicGrant(irr, imr, isr) != 0;
+        }
+        /// The vector of the highest-priority request, which moves from
+        /// requested to in service; with no request left, IR7 (spurious).
+        on port.inta() -> (vector: u8, wait: u8) {
+            let g = PicGrant(irr, imr, isr);
+            if g == 0 {
+                return (vector: base | 7, wait: 0);
+            }
+            let line = (g - 1) as u3;
+            let bit = (1 as u8) << line;
+            irr = irr & ~bit;
+            if !auto_eoi {
+                isr = isr | bit;
+            }
+            emit port.intr() = PicGrant(irr, imr, isr) != 0;
+            return (vector: base | line as u8, wait: 0);
+        }
+    }
+}
+
+/// The request the 8259 grants under fixed priority (IR0 highest): its
+/// line plus one, or 0 when no unmasked request outranks the lines in
+/// service.
+unit PicGrant(irr: u8, imr: u8, isr: u8) -> u4 {
+    for i in 0..8 {
+        if isr[i] == 1 {
+            return 0;
+        }
+        if irr[i] == 1 && imr[i] == 0 {
+            return (i + 1) as u4;
+        }
+    }
+    return 0;
+}
+
+/// The 8254 programmable interval timer: three 16-bit down-counters on one
+/// clock. Port 3 takes control words (channel, access mode, counting mode,
+/// or a counter latch command); ports 0-2 read and write the counters in
+/// the programmed access mode (low byte, high byte, or low then high).
+/// Modes 0 (interrupt on terminal count), 2 (rate generator) and 3 (square
+/// wave, counted like mode 2) count; the gated modes 1 and 5 wait. Channel
+/// 0's output drives interrupt line 0. The model catches up in one step
+/// per `tick`, raising one edge however many periods passed.
+component Pit8254 {
+    ports { bus port: LocalBus::Slave; }
+    model {
+        mem count: [u16; 3];
+        mem reload: [u16; 3];
+        mem mode: [u3; 3];
+        mem access: [u2; 3];
+        mem counting: [bool; 3];
+        mem low_written: [bool; 3];
+        mem low_byte: [u8; 3];
+        mem read_high: [bool; 3];
+        mem latched: [bool; 3];
+        mem latch: [u16; 3];
+        mem out: [bool; 3];
+
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            let c = addr[1:0];
+            if c == 3 {
+                return (data: 0xFF, wait: 1);
+            }
+            let v = if latched[c] { latch[c] } else { count[c] };
+            let high = access[c] == 2 || (access[c] == 3 && read_high[c]);
+            if access[c] == 3 {
+                read_high[c] = !read_high[c];
+            }
+            if access[c] != 3 || !read_high[c] {
+                latched[c] = false;
+            }
+            let b: u8 = if high { (v >> 8) as u8 } else { v as u8 };
+            return (data: b as u16, wait: 1);
+        }
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            let d = data as u8;
+            let c = addr[1:0];
+            if c == 3 {
+                let ch = d[7:6];
+                if ch == 3 {
+                    return (wait: 1);
+                }
+                if d[5:4] == 0 {
+                    latch[ch] = count[ch];
+                    latched[ch] = true;
+                    return (wait: 1);
+                }
+                access[ch] = d[5:4];
+                mode[ch] = if d[3:2] == 3 { d[3:1] & 3 } else { d[3:1] };
+                counting[ch] = false;
+                low_written[ch] = false;
+                read_high[ch] = false;
+                latched[ch] = false;
+                // OUT starts low in mode 0, high in the others.
+                out[ch] = mode[ch] != 0;
+                if ch == 0 {
+                    emit port.interrupt(0) = out[0];
+                }
+                return (wait: 1);
+            }
+            // A count is complete after one byte, or the second of two.
+            let full = access[c] != 3 || low_written[c];
+            if access[c] == 1 {
+                reload[c] = d as u16;
+            } else if access[c] == 2 {
+                reload[c] = (d as u16) << 8;
+            } else if !low_written[c] {
+                low_byte[c] = d;
+                low_written[c] = true;
+                if mode[c] == 0 {
+                    counting[c] = false;
+                }
+            } else {
+                reload[c] = concat(d, low_byte[c]);
+                low_written[c] = false;
+            }
+            if full {
+                count[c] = reload[c];
+                counting[c] = mode[c] == 0 || mode[c] == 2 || mode[c] == 3;
+                if mode[c] == 0 {
+                    out[c] = false;
+                    if c == 0 {
+                        emit port.interrupt(0) = false;
+                    }
+                }
             }
             return (wait: 1);
         }
-        /// Catches up `n` cycles in one step.
         on tick(n: u32) {
-            if control[0] == 0 { return; }
-            if count as u32 > n {
-                count = count - n as u8;
-                return;
-            }
-            count = 0;
-            control = control & 0xFE;
-            if control[1] == 1 {
-                pending = true;
-                emit port.interrupt(0) = true;
+            for c in 0..3 {
+                if counting[c] {
+                    let period: u32 = if reload[c] == 0 { 0x10000 } else { reload[c] as u32 };
+                    let left: u32 = if count[c] == 0 { 0x10000 } else { count[c] as u32 };
+                    if n < left {
+                        count[c] = (left - n) as u16;
+                    } else if mode[c] == 0 {
+                        count[c] = ((left + 0x10000 - n % 0x10000) % 0x10000) as u16;
+                        if !out[c] {
+                            out[c] = true;
+                            if c == 0 {
+                                emit port.interrupt(0) = true;
+                            }
+                        }
+                    } else {
+                        count[c] = (period - (n - left) % period) as u16;
+                        // OUT pulses low as the count reloads: one edge.
+                        if c == 0 {
+                            emit port.interrupt(0) = false;
+                            emit port.interrupt(0) = true;
+                        }
+                    }
+                }
             }
         }
     }
@@ -192,20 +390,23 @@ component Console {
 }
 
 system Board286 {
+    clock osc: 14.31818 MHz;                 // the PC crystal
     clock cpu_clk: 8 MHz;                    // the processor clock (CLK / 2)
-    clock timer_clk = cpu_clk / 8;           // 1 MHz
+    clock pit_clk = osc / 12;                // 1.193182 MHz
 
     component cpu: Cpu286 @ cpu_clk;
     component ram: Ram;
     component rom: Rom;
-    component timer: Timer @ timer_clk;
+    component pic: Pic8259;
+    component pit: Pit8254 @ pit_clk;
     component console: Console;
 
     bus local: LocalBus @ cpu_clk {
         master cpu.local;
         slave ram.port @ mem 0x00000..=0x9FFFF;
         slave rom.port @ mem 0xF0000..=0xFFFFF, mem 0xFF0000..=0xFFFFFF;
-        slave timer.port @ io 0x40..=0x43;
+        slave pic.port @ io 0x20..=0x21;
+        slave pit.port @ io 0x40..=0x43;
         slave console.port @ io 0xE9..=0xE9;
     }
 

@@ -406,6 +406,24 @@ impl Checker<'_> {
                         Ty::Unit,
                     )
                 }
+                [single] if self.isa_extern(cs.isa, &single.name).is_some() => {
+                    let f = self.isa_extern(cs.isa, &single.name).unwrap();
+                    if clock.is_some() {
+                        self.error(
+                            module,
+                            "E1041",
+                            span,
+                            "an `extern fn` handler takes no `@ clock`",
+                        );
+                        return None;
+                    }
+                    let sig = self.fn_sig(f)?;
+                    (
+                        HandlerKind::Extern { def: f },
+                        Some(sig.params.clone()),
+                        sig.ret.clone(),
+                    )
+                }
                 [port, event]
                     if !cs.names.contains_key(&port.name)
                         && self.isa_space(cs.isa, &port.name).is_some() =>
@@ -617,6 +635,14 @@ impl Checker<'_> {
         })
     }
 
+    /// An `extern fn` of the component's isa, by name.
+    fn isa_extern(&self, isa: Option<DefId>, name: &str) -> Option<DefId> {
+        let isa = isa?;
+        self.prog
+            .isa_items_of(isa, ItemKind::Fn)
+            .find(|f| self.prog.item_name(*f) == name && self.prog.fn_decl(*f).external)
+    }
+
     /// A space of the component's isa, by name.
     fn isa_space(&self, isa: Option<DefId>, name: &str) -> Option<hir::Space> {
         let isa = isa?;
@@ -643,6 +669,20 @@ impl Checker<'_> {
             return true;
         };
         let mut ok = true;
+        for f in &info.fns {
+            if f.external
+                && !handlers
+                    .iter()
+                    .any(|h| h.kind == HandlerKind::Extern { def: f.def })
+            {
+                let msg = format!(
+                    "the model does not supply the isa's `extern fn {}`: add `on {}(...) {{ ... }}`",
+                    f.name, f.name
+                );
+                self.error(module, "E1041", span, msg);
+                ok = false;
+            }
+        }
         for sp in &info.spaces {
             for write in [false, true] {
                 let found = handlers.iter().any(|h| match h.kind {

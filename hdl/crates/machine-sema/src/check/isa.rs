@@ -356,6 +356,24 @@ impl Checker<'_> {
                 }
             },
         };
+        let boundary = match &d.boundary {
+            None => None,
+            Some(p) => match fn_item(self, p) {
+                Some(f) => {
+                    if let Some(sig) = self.fn_sig(f) {
+                        if !sig.params.is_empty() || sig.ret != Ty::Bool {
+                            self.error(module, "E1046", p.span, "`boundary` is a `fn () -> bool`: run at each instruction boundary, `true` when it took an interrupt");
+                            ok = false;
+                        }
+                    }
+                    Some(f)
+                }
+                None => {
+                    ok = false;
+                    None
+                }
+            },
+        };
         let (Some(space), Some(address), Some(next)) = (space, address, next) else {
             return None;
         };
@@ -365,6 +383,7 @@ impl Checker<'_> {
             next,
             undefined,
             fault,
+            boundary,
         })
     }
 
@@ -1224,6 +1243,20 @@ impl Checker<'_> {
             }
             params.push(cx.declare(name, ty.clone(), p.name.span));
         }
+        if decl.external {
+            return Some(hir::FnBody {
+                def: id,
+                name: decl.name.name.clone(),
+                locals: cx.locals,
+                params,
+                ret: sig.ret.clone(),
+                body: hir::Block {
+                    stmts: Vec::new(),
+                    span: decl.body.span,
+                },
+                external: true,
+            });
+        }
         let body = self.check_block(&mut cx, &decl.body);
         if !matches!(sig.ret, Ty::Unit | Ty::Error) && !super::stmt::block_diverges(&body) {
             let msg = format!(
@@ -1243,6 +1276,7 @@ impl Checker<'_> {
             params,
             ret: sig.ret.clone(),
             body,
+            external: false,
         })
     }
 

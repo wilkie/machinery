@@ -125,7 +125,7 @@ fn i286_target_passes_its_tests_and_hardware_vectors() {
         output.status.success(),
         "i286 tests failed:\n{stdout}\n{stderr}"
     );
-    assert!(stdout.contains("14 passed"), "expected 14 tests:\n{stdout}");
+    assert!(stdout.contains("16 passed"), "expected 16 tests:\n{stdout}");
 
     let vectors = root
         .join("..")
@@ -211,7 +211,7 @@ fn i286_board_system_boots() {
         output.status.success(),
         "board tests failed:\n{stdout}\n{stderr}"
     );
-    assert!(stdout.contains("2 passed"), "expected 2 tests:\n{stdout}");
+    assert!(stdout.contains("5 passed"), "expected 5 tests:\n{stdout}");
 }
 
 /// The sample timer board has no processor (its master is an rtl script),

@@ -43,6 +43,8 @@ impl Checker<'_> {
     fn where_(&self, cx: &FnCtx) -> &'static str {
         if cx.in_test {
             "a test body"
+        } else if cx.component.is_some() {
+            "a model body"
         } else if cx.scope.isa.is_some() {
             "isa code"
         } else {
@@ -68,7 +70,7 @@ impl Checker<'_> {
                 H::Let(target, value)
             }
             A::Assign { target, value } => {
-                if cx.scope.isa.is_none() {
+                if cx.scope.isa.is_none() && cx.component.is_none() {
                     let where_ = self.where_(cx);
                     self.error_with(
                         cx.module,
@@ -233,15 +235,52 @@ impl Checker<'_> {
                 cx.pop_scope();
                 H::For(id, lo_v, hi_excl, body)
             }
+            A::While { cond, body } if cx.component.is_some() => {
+                let c = self.check_expr(cx, cond, Some(&Ty::Bool));
+                cx.loop_depth += 1;
+                let b = self.check_block(cx, body);
+                cx.loop_depth -= 1;
+                H::While(c, b)
+            }
+            A::Loop(body) if cx.component.is_some() => {
+                cx.loop_depth += 1;
+                let b = self.check_block(cx, body);
+                cx.loop_depth -= 1;
+                H::Loop(b)
+            }
+            A::Break | A::Continue if cx.component.is_some() => {
+                if cx.loop_depth == 0 {
+                    let what = if matches!(s.kind, A::Break) {
+                        "break"
+                    } else {
+                        "continue"
+                    };
+                    self.error(
+                        cx.module,
+                        "E1020",
+                        span,
+                        format!("`{what}` outside of a loop"),
+                    );
+                    H::Error
+                } else if matches!(s.kind, A::Break) {
+                    H::Break
+                } else {
+                    H::Continue
+                }
+            }
             A::Loop(_) | A::While { .. } | A::Break | A::Continue => {
                 let where_ = self.where_(cx);
                 self.error_with(
                     cx.module,
                     Diagnostic::error("E1020", span, format!("loops are not allowed in {where_}"))
-                        .with_note("use `for i in 0..N` with constant bounds; it is unrolled"),
+                        .with_note("use `for i in 0..N` with constant bounds; it is unrolled (models may loop freely)"),
                 );
                 H::Error
             }
+            A::Emit { target, value } => match self.check_emit(cx, target, value.as_ref(), span) {
+                Some(k) => k,
+                None => H::Error,
+            },
             A::Return(value) => match cx.ret.clone() {
                 None => {
                     self.error(
@@ -527,6 +566,8 @@ pub fn stmt_diverges(s: &Stmt) -> bool {
     match &s.kind {
         H::Return(_) | H::Unreachable(_) | H::Raise(..) => true,
         H::Expr(e) => matches!(e.ty, Ty::Never),
+        // A `loop` with no `break` never ends.
+        H::Loop(b) => !block_has_break(b),
         H::If(_, then_b, Some(else_s)) => block_diverges(then_b) && stmt_diverges(else_s),
         H::Match(_, arms) => {
             !arms.is_empty()
@@ -541,4 +582,26 @@ pub fn stmt_diverges(s: &Stmt) -> bool {
 
 pub fn block_diverges(b: &Block) -> bool {
     b.stmts.iter().any(stmt_diverges)
+}
+
+/// Does the block contain a `break` for the enclosing loop (nested loops
+/// have their own)?
+fn block_has_break(b: &Block) -> bool {
+    b.stmts.iter().any(stmt_has_break)
+}
+
+fn stmt_has_break(s: &Stmt) -> bool {
+    match &s.kind {
+        H::Break => true,
+        H::If(_, t, e) => block_has_break(t) || e.as_ref().is_some_and(|s| stmt_has_break(s)),
+        H::Match(_, arms) => arms.iter().any(|a| match &a.body {
+            hir::ArmBody::Block(b) => block_has_break(b),
+            hir::ArmBody::Expr(_) => false,
+        }),
+        H::Expr(hir::Expr {
+            kind: hir::ExprKind::Block(b),
+            ..
+        }) => block_has_break(b),
+        _ => false,
+    }
 }

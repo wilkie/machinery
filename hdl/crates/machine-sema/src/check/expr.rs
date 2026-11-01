@@ -31,6 +31,8 @@ enum Namespace {
     Space(DefId),
     Kind(DefId),
     Operand(u32),
+    /// A bus port of the enclosing component.
+    BusPort(u32),
 }
 
 impl Checker<'_> {
@@ -161,6 +163,15 @@ impl Checker<'_> {
         if let Some(idx) = cx.lookup_operand(name) {
             return Some(Namespace::Operand(idx));
         }
+        if let Some(comp) = cx.component {
+            if let Some(cs) = self.comps.get(&comp) {
+                if let Some(super::CompEntry::Port(i)) = cs.names.get(name) {
+                    if matches!(cs.ports[*i as usize].kind, hir::PortKind::Bus { .. }) {
+                        return Some(Namespace::BusPort(*i));
+                    }
+                }
+            }
+        }
         match self.lookup(cx.scope, name) {
             Some(ScopeEntry::Item(def)) => match self.prog.item(def).kind {
                 ItemKind::Space => Some(Namespace::Space(def)),
@@ -245,6 +256,14 @@ impl Checker<'_> {
                             "E1037",
                             span,
                             "an operand kind is used as `kind.select(field)`",
+                        );
+                        return err(span);
+                    }
+                    Some(Namespace::BusPort(_)) => {
+                        self.error_with(
+                            cx.module,
+                            Diagnostic::error("E1041", span, "a bus port has no fields")
+                                .with_note("initiate a transaction with `port.read(addr)`; respond with `on port.read(...)`"),
                         );
                         return err(span);
                     }
@@ -417,6 +436,43 @@ impl Checker<'_> {
                 if let Some(v) = cx.generics.get(name) {
                     return const_int(*v, span);
                 }
+                if let Some(comp) = cx.component {
+                    if let Some(cs) = self.comps.get(&comp).cloned() {
+                        if let Some(entry) = cs.names.get(name).copied() {
+                            return match entry {
+                                super::CompEntry::Port(i) => {
+                                    match &cs.ports[i as usize].kind {
+                                        hir::PortKind::In(t) | hir::PortKind::AsyncIn(t) => {
+                                            mk(H::Port(comp, i, false), t.clone(), span)
+                                        }
+                                        hir::PortKind::Out(t) => {
+                                            mk(H::Port(comp, i, true), t.clone(), span)
+                                        }
+                                        hir::PortKind::Bus { .. } => {
+                                            self.error(cx.module, "E1041", span, format!("`{name}` is a bus port; call a transaction on it or handle one"));
+                                            err(span)
+                                        }
+                                        hir::PortKind::Clock => {
+                                            self.error(cx.module, "E1041", span, format!("`{name}` is a clock; it has no value in a model"));
+                                            err(span)
+                                        }
+                                    }
+                                }
+                                super::CompEntry::State(i) => {
+                                    mk(H::State(comp, i), cs.states[i as usize].1.clone(), span)
+                                }
+                                super::CompEntry::Mem(i) => {
+                                    let (_, elem, len) = &cs.mems[i as usize];
+                                    mk(
+                                        H::ModelMem(comp, i),
+                                        Ty::Array(Box::new(elem.clone()), *len),
+                                        span,
+                                    )
+                                }
+                            };
+                        }
+                    }
+                }
                 if let Some(idx) = cx.lookup_operand(name) {
                     let kind = cx.operands[idx as usize].1;
                     let ty = self
@@ -475,7 +531,7 @@ impl Checker<'_> {
                             }
                         }
                     }
-                    ItemKind::Isa => match self.prog.lookup_in_isa(def, &second.name) {
+                    ItemKind::Isa => match self.prog.lookup_in_ns(def, &second.name) {
                         Some(entry) => self.entry_value(cx, entry, &second.name, span),
                         None => {
                             self.error(
@@ -1221,6 +1277,7 @@ impl Checker<'_> {
             return match self.namespace_of(cx, base) {
                 Some(Namespace::Space(def)) => self.space_method(cx, def, method, args, span),
                 Some(Namespace::Kind(def)) => self.kind_select(cx, def, method, args, span),
+                Some(Namespace::BusPort(port)) => self.bus_call(cx, port, method, args, span),
                 Some(Namespace::Operand(_)) => {
                     self.error(
                         cx.module,
@@ -1358,7 +1415,7 @@ impl Checker<'_> {
     }
 
     /// Match call arguments to parameters: all positional or all named.
-    fn order_args<'a>(
+    pub(super) fn order_args<'a>(
         &mut self,
         cx: &FnCtx,
         what: &str,

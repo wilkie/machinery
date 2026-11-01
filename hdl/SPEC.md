@@ -329,6 +329,14 @@ The transaction level. Contents:
 - Ordinary statements plus `while`/`for` with dynamic bounds (models are
   software; they may loop).
 
+A model's observable behaviour is its **transaction trace** (the
+transactions it initiates and the data and `wait` it returns) and the levels
+of the signals it emits, both taken at transaction boundaries. The emulator
+chooses how often `on tick` runs and a model may catch up in one step, so a
+model is never compared with the rtl cycle by cycle: conformance (section
+13) compares the two at transaction boundaries and signals at those
+boundaries, optionally within a tolerance of cycles.
+
 The model's return of `wait` cycles is how the emulator accounts time on the
 bus. A component with a `model` body but no `rtl` body can still take part in
 the accurate simulator: the compiler generates an rtl **adapter** that
@@ -477,6 +485,14 @@ the compiler must be able to generate the rtl that drives `data` and
 role, (a) which wire pattern begins a transaction, (b) at which cycle the
 response is sampled, and (c) how a slave stretches the transaction. The
 draft's `respond(...)` is the placeholder for that information.
+
+The **first role in `roles` initiates** transactions: a model attached in
+that role calls `port.read(addr)`; a model in any other role responds with
+`on port.read(addr) -> (data, wait)`. A signal is a `bool` wire (or one
+element of a `bool` array) named for the transaction level; the role that
+drives the wire sets it with `emit port.signal(args) = level;`, the other
+roles observe it with `on port.signal(args, value: bool)`. Transaction
+returns are named tuples so that the handler's return fields have names.
 
 Address decoding (`selected`) is a system-level fact: the `system` assigns
 address ranges to slave ports, and the compiler generates the decoder for
@@ -712,9 +728,11 @@ Built into the language and the compiler:
    first-class test input: `vectors "tests/i286/*.json" on I286Isa;`.
 5. **Conformance (differential)**: for every component with two levels, the
    compiler generates a harness that runs both from the same initial state
-   and stimulus and compares the architectural projection (processors) or
-   the transaction trace (devices) at every instruction/transaction
-   boundary. For a processor this is: feed the same instruction stream to
+   and stimulus and compares the architectural projection (processors) at
+   every instruction boundary, or the transaction trace (devices) at every
+   transaction boundary; signals are compared at those boundaries, within
+   the tolerance a `compare signals { ... } within N cycles of clk` gives.
+   Models are never compared cycle by cycle (section 8.3). For a processor this is: feed the same instruction stream to
    the derived interpreter and to the rtl, compare `architectural` after
    each retire. Mismatches are reported with the instruction, the state
    diff and the cycle.

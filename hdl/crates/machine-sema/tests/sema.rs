@@ -103,8 +103,10 @@ fn other_samples_resolve_and_skip_unimplemented_bodies() {
     ]);
     assert_clean(&c);
     let kinds: Vec<&str> = c.skipped.iter().map(|s| s.kind).collect();
-    assert!(kinds.contains(&"component"));
-    assert!(kinds.contains(&"bus"));
+    assert!(!kinds.contains(&"component"), "components are checked now");
+    assert!(!kinds.contains(&"bus"), "bus signatures are checked now");
+    assert!(kinds.contains(&"rtl"));
+    assert!(kinds.contains(&"bus protocol"));
     assert!(!kinds.contains(&"isa"), "isas are checked now");
     assert!(kinds.contains(&"system"));
     assert!(kinds.contains(&"conformance"));
@@ -886,4 +888,259 @@ fn imports() {
     let a2 = SourceFile::new("a.machine", "enum E : u1 { X }");
     let c = check_files(vec![a2, b2]);
     assert_eq!(codes(&c), vec!["E1002", "E1002"]);
+}
+
+// ---------------------------------------------------------------------------
+// Buses and component models
+// ---------------------------------------------------------------------------
+
+#[test]
+fn counter_bus_sample_model_is_checked() {
+    use machine_sema::hir::{HandlerKind, WireDriver};
+    let c = check_files(vec![sample("counter_bus.machine")]);
+    assert_clean(&c);
+    assert_eq!(c.hir.buses.len(), 1);
+    let bus = &c.hir.buses[0];
+    assert_eq!(bus.roles, vec!["Master".to_string(), "Slave".to_string()]);
+    assert_eq!(bus.wires.len(), 6);
+    assert_eq!(bus.transactions.len(), 2);
+    assert_eq!(bus.signals.len(), 1);
+    assert_eq!(bus.signals[0].driver, WireDriver::Role(1));
+    assert_eq!(c.hir.components.len(), 2);
+    let timer = c.hir.components.iter().find(|c| c.name == "Timer").unwrap();
+    assert!(timer.has_rtl);
+    let model = timer.model.as_ref().unwrap();
+    assert_eq!(model.states.len(), 4);
+    assert_eq!(model.handlers.len(), 3);
+    assert!(matches!(
+        model.handlers[0].kind,
+        HandlerKind::Transaction { port: 2, .. }
+    ));
+    assert!(matches!(
+        model.handlers[2].kind,
+        HandlerKind::Tick { clock: Some(1) }
+    ));
+    let kinds: Vec<&str> = c.skipped.iter().map(|s| s.kind).collect();
+    assert_eq!(kinds.iter().filter(|k| **k == "rtl").count(), 2);
+}
+
+const BUS_PRELUDE: &str = r#"
+bus B {
+    clock clk;
+    wires {
+        addr: u8 driven_by M;
+        data: u8 shared;
+        rd: bool driven_by M;
+        ready: bool wired_and;
+        irq: [bool; 4] driven_by S;
+    }
+    roles { M; S; }
+    transaction read(addr: u8) -> (data: u8) { }
+    transaction write(addr: u8, data: u8) { }
+    signal interrupt(line: u2) = irq[line];
+}
+"#;
+
+/// A slave device with a model body.
+fn dev(model: &str) -> String {
+    format!("{BUS_PRELUDE}\ncomponent D {{ ports {{ clock clk; bus io: B::S; in en: bool; out led: bool; }} model {{ {model} }} }}")
+}
+
+/// A master device with a model body.
+fn master(model: &str) -> String {
+    format!("{BUS_PRELUDE}\ncomponent M1 {{ ports {{ clock clk; bus io: B::M; }} model {{ state x: u8 = 0; {model} }} }}")
+}
+
+#[test]
+fn model_bodies_check() {
+    assert_codes(&dev(""), &[]);
+    assert_codes(
+        &dev(r#"
+            state x: u8 = 0;
+            mem buf: [u8; 16];
+            on io.read(addr: u8) -> (data: u8, wait: u8) { return (data: x + buf[addr[3:0]], wait: 0); }
+            on io.write(addr: u8, data: u8) -> (wait: u8) { x = data; buf[0] = data; led = en; emit io.interrupt(0) = true; return (wait: 1); }
+            on tick(n: u32) { while x != 0 { x = x - 1; if x == 3 { break; } } }
+            on reset { x = 0; }
+        "#),
+        &[],
+    );
+    assert_codes(&dev("state x: u8 = true;"), &["E1005"]);
+    assert_codes(&dev("state x: u8 = 0; x = 1;"), &["E1043"]);
+    assert_codes(&dev("state x: u8 = 0; state x: u8 = 1;"), &["E1001"]);
+    assert_codes(&dev("state en: u8 = 0;"), &["E1001"]);
+    assert_codes(&dev("on reset { en = true; }"), &["E1030"]);
+    assert_codes(&dev("on reset { led = en; }"), &[]);
+    assert_codes(&dev("on reset { let c = clk; }"), &["E1041"]);
+    assert_codes(&dev("on reset { break; }"), &["E1020"]);
+    assert_codes(&dev("on reset { loop { } }"), &[]);
+    assert_codes(&dev("on reset { let v = io.read(1); }"), &["E1041"]);
+    assert_codes(
+        &format!("{BUS_PRELUDE}\ncomponent E {{ ports {{ }} }}"),
+        &["W1004"],
+    );
+}
+
+#[test]
+fn model_handler_signatures_follow_the_protocol() {
+    assert_codes(
+        &dev("on io.read(a: u8) -> (data: u8, wait: u8) { return (data: 0, wait: 0); }"),
+        &["E1041"],
+    );
+    assert_codes(
+        &dev("on io.read(addr: u16) -> (data: u8, wait: u8) { return (data: 0, wait: 0); }"),
+        &["E1041"],
+    );
+    assert_codes(
+        &dev("on io.read(addr: u8) -> (data: u8) { return (data: 0); }"),
+        &["E1041"],
+    );
+    assert_codes(&dev("on io.read(addr: u8) { }"), &["E1041"]);
+    assert_codes(&dev("on io.read(addr: u8) -> (data: u8, wait: u8) { if addr == 0 { return (data: 0, wait: 0); } }"), &["E1015"]);
+    assert_codes(&dev("on io.nope(addr: u8) { }"), &["E1041"]);
+    assert_codes(&dev("on led.read(addr: u8) { }"), &["E1041"]);
+    assert_codes(
+        &dev("on io.interrupt(line: u2, value: bool) { }"),
+        &["E1041"],
+    );
+    assert_codes(&dev("on tick(n: u32) -> u8 { return 1; }"), &["E1041"]);
+    assert_codes(&dev("on tick(n: u8) { }"), &["E1041"]);
+    assert_codes(&dev("on tick @ nope (n: u32) { }"), &["E1041"]);
+    assert_codes(&dev("on tick @ clk (n: u32) { }"), &[]);
+    assert_codes(&dev("on frob { }"), &["E1041"]);
+    assert_codes(&dev("on reset(n: u32) { }"), &["E1041"]);
+    // Two clocks: `@` is required.
+    assert_codes(
+        &format!("{BUS_PRELUDE}\ncomponent T {{ ports {{ clock a; clock b; }} model {{ on tick(n: u32) {{ }} }} }}"),
+        &["E1041"],
+    );
+    assert_codes(
+        &format!("{BUS_PRELUDE}\ncomponent T {{ ports {{ clock a; clock b; }} model {{ on tick @ b (n: u32) {{ }} }} }}"),
+        &[],
+    );
+    // No clock port: implicit clock.
+    assert_codes(
+        &format!("{BUS_PRELUDE}\ncomponent T {{ ports {{ }} model {{ on tick(n: u32) {{ }} }} }}"),
+        &[],
+    );
+}
+
+#[test]
+fn model_masters_initiate_and_slaves_respond() {
+    assert_codes(
+        &master("on tick(n: u32) { let v = io.read(1); x = v.data; io.write(1, x); }"),
+        &[],
+    );
+    assert_codes(
+        &master("on tick(n: u32) { let v = io.read(1, 2); }"),
+        &["E1007"],
+    );
+    assert_codes(&master("on tick(n: u32) { x = io.read(1); }"), &["E1005"]);
+    assert_codes(
+        &master("on io.read(addr: u8) -> (data: u8, wait: u8) { return (data: 0, wait: 0); }"),
+        &["E1041"],
+    );
+    assert_codes(
+        &master("on io.interrupt(line: u2, value: bool) { x = line as u8; }"),
+        &[],
+    );
+    assert_codes(
+        &master("on tick(n: u32) { emit io.interrupt(0) = true; }"),
+        &["E1044"],
+    );
+    assert_codes(&master("on tick(n: u32) { io.interrupt(0); }"), &["E1044"]);
+    assert_codes(
+        &master("on tick(n: u32) { let f = io.fields; }"),
+        &["E1041"],
+    );
+}
+
+#[test]
+fn emit_sets_signals_the_role_drives() {
+    assert_codes(&dev("on reset { emit io.interrupt(1) = false; }"), &[]);
+    assert_codes(&dev("on reset { emit io.interrupt(1); }"), &["E1044"]);
+    assert_codes(&dev("on reset { emit io.interrupt(1) = 1; }"), &["E1005"]);
+    assert_codes(
+        &dev("on reset { emit io.interrupt(4) = true; }"),
+        &["E1006"],
+    );
+    assert_codes(&dev("on reset { emit io.nope(1) = true; }"), &["E1044"]);
+    assert_codes(&dev("on reset { emit led(1) = true; }"), &["E1044"]);
+    assert_codes("unit F() -> u8 { emit x(1) = true; }", &["E1020", "E1015"]);
+}
+
+#[test]
+fn bus_declarations() {
+    assert_codes("bus B { wires { a: u8 driven_by M; } }", &["E1040"]);
+    assert_codes(
+        "bus B { roles { M; } wires { a: u8 driven_by Z; } }",
+        &["E1040"],
+    );
+    assert_codes("bus B { roles { M; } wires { a: u8; } }", &["E1040"]);
+    assert_codes(
+        "bus B { roles { M; } wires { a: u8 shared driven_by M; } }",
+        &["E1040"],
+    );
+    assert_codes(
+        "bus B { roles { M; } wires { a: u8 frobnicated; } }",
+        &["E1040"],
+    );
+    assert_codes(
+        "bus B { roles { M; } wires { a: [u8; 2] driven_by M; } }",
+        &[],
+    );
+    assert_codes(
+        "bus B { roles { M; S; } transaction r(a: u8) -> u8 { } }",
+        &["E1040"],
+    );
+    assert_codes(
+        "bus B { roles { M; S; } transaction r(a: u8) -> (v: u8) { Q { } } }",
+        &["E1040"],
+    );
+    assert_codes(
+        "bus B { roles { M; S; } transaction r(a: u8) -> (v: u8) { } transaction r(b: u8) { } }",
+        &["E1001"],
+    );
+    assert_codes(
+        "bus B { roles { M; S; } wires { x: bool driven_by S; } signal s() = true; }",
+        &["E1040"],
+    );
+    assert_codes(
+        "bus B { roles { M; S; } wires { x: u8 driven_by S; } signal s() = x; }",
+        &["E1005"],
+    );
+    assert_codes(
+        "bus B { roles { M; S; } wires { x: bool driven_by S; } signal s() = x; }",
+        &[],
+    );
+    assert_codes("bus B { roles { M; S; } enum Sp : u1 { Mem, Io } transaction r(a: u8, s: Sp) -> (v: u8) { } }", &[]);
+    assert_codes("bus B { roles { M; M; } }", &["E1001"]);
+}
+
+#[test]
+fn component_ports() {
+    assert_codes(
+        &format!("{BUS_PRELUDE}\ncomponent C {{ ports {{ bus io: B::Nope; }} }}"),
+        &["E1042"],
+    );
+    assert_codes(
+        &format!("{BUS_PRELUDE}\ncomponent C {{ ports {{ bus io: u8; }} }}"),
+        &["E1042"],
+    );
+    assert_codes(
+        &format!("{BUS_PRELUDE}\ncomponent C {{ ports {{ bus io: Nope::M; }} }}"),
+        &["E1000"],
+    );
+    assert_codes(
+        &format!("{BUS_PRELUDE}\ncomponent C {{ ports {{ in a: u8; in a: u8; }} }}"),
+        &["E1001"],
+    );
+    assert_codes(
+        &format!("{BUS_PRELUDE}\ncomponent C {{ isa Nope; ports {{ }} }}"),
+        &["E1000"],
+    );
+    assert_codes(
+        &format!("{BUS_PRELUDE}\ncomponent C<const W: width> {{ ports {{ }} }}"),
+        &["E1042"],
+    );
 }

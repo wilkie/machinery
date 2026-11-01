@@ -2,16 +2,14 @@
 //!
 //! A module is one source file, named by its file stem. Every top-level
 //! declaration becomes an item with a [`DefId`]; module scopes map names to
-//! items, and `use` declarations add imports. An `isa` is also a namespace:
-//! its nested declarations (spaces, registers, faults, functions, operands,
-//! operand kinds, instructions, and nested enums/bundles/consts) are items
-//! too, visible by bare name inside the isa and as `Isa::Name` outside. No
-//! bodies are examined here.
+//! items, and `use` declarations add imports. An `isa` and a `bus` are also
+//! namespaces: their nested declarations are items too, visible by bare name
+//! inside and as `Ns::Name` outside. No bodies are examined here.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use machine_syntax::ast::{self, Decl, IsaItem};
+use machine_syntax::ast::{self, BusItem, Decl, IsaItem};
 use machine_syntax::diagnostics::{Diagnostic, Diagnostics};
 use machine_syntax::span::Span;
 use machine_syntax::{parse, SourceFile};
@@ -46,6 +44,9 @@ pub enum ItemKind {
     Operand,
     OperandKind,
     Instruction,
+    // Nested in a `bus`:
+    Transaction,
+    Signal,
 }
 
 impl ItemKind {
@@ -71,6 +72,8 @@ impl ItemKind {
             ItemKind::Operand => "operand",
             ItemKind::OperandKind => "operand kind",
             ItemKind::Instruction => "instruction",
+            ItemKind::Transaction => "transaction",
+            ItemKind::Signal => "signal",
         }
     }
 
@@ -99,6 +102,8 @@ pub enum ItemDecl {
     Top(usize),
     /// Index into the `items` of the enclosing `isa` declaration.
     Isa { isa: DefId, index: usize },
+    /// Index into the `items` of the enclosing `bus` declaration.
+    Bus { bus: DefId, index: usize },
 }
 
 #[derive(Clone, Debug)]
@@ -110,7 +115,7 @@ pub struct Item {
     pub span: Span,
 }
 
-/// What a name inside an `isa` scope denotes.
+/// What a name inside a namespace (isa or bus) scope denotes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScopeEntry {
     Item(DefId),
@@ -141,20 +146,12 @@ pub struct Module {
 pub struct Program {
     pub modules: Vec<Module>,
     pub items: Vec<Item>,
-    /// Scope of each `isa` item.
-    pub isa_scopes: HashMap<DefId, HashMap<String, ScopeEntry>>,
+    /// Scope of each namespace item (`isa` or `bus`).
+    pub ns_scopes: HashMap<DefId, HashMap<String, ScopeEntry>>,
 }
 
-/// A nested isa declaration before it has an id.
-struct Pending {
-    name: String,
-    kind: ItemKind,
-    span: Span,
-    index: usize,
-}
-
-fn isa_item_pending(item: &IsaItem, index: usize) -> Pending {
-    let (name, kind, span) = match item {
+fn isa_item_meta(item: &IsaItem) -> (String, ItemKind, Span) {
+    match item {
         IsaItem::Space(d) => (d.name.name.clone(), ItemKind::Space, d.name.span),
         IsaItem::Register(d) => (d.name.name.clone(), ItemKind::Register, d.name.span),
         IsaItem::Mode(d) => (d.name.name.clone(), ItemKind::Mode, d.name.span),
@@ -166,12 +163,42 @@ fn isa_item_pending(item: &IsaItem, index: usize) -> Pending {
         IsaItem::Enum(d) => (d.name.name.clone(), ItemKind::Enum, d.name.span),
         IsaItem::Bundle(d) => (d.name.name.clone(), ItemKind::Bundle, d.name.span),
         IsaItem::Const(d) => (d.name.name.clone(), ItemKind::Const, d.name.span),
-    };
-    Pending {
-        name,
-        kind,
-        span,
-        index,
+    }
+}
+
+/// Bus items that become named items (wires, roles, clock and params are
+/// structural and live in the bus's own info).
+fn bus_item_meta(item: &BusItem) -> Option<(String, ItemKind, Span)> {
+    match item {
+        BusItem::Enum(d) => Some((d.name.name.clone(), ItemKind::Enum, d.name.span)),
+        BusItem::Transaction(d) => Some((d.name.name.clone(), ItemKind::Transaction, d.name.span)),
+        BusItem::Signal(d) => Some((d.name.name.clone(), ItemKind::Signal, d.name.span)),
+        _ => None,
+    }
+}
+
+/// Insert a name into a namespace scope, reporting duplicates.
+#[allow(clippy::too_many_arguments)]
+fn define(
+    scope: &mut HashMap<String, ScopeEntry>,
+    ns_kind: &str,
+    ns_name: &str,
+    name: &str,
+    entry: ScopeEntry,
+    span: Span,
+    items: &[Item],
+    diags: &mut Diagnostics,
+) {
+    if let Some(prev) = scope.insert(name.to_string(), entry) {
+        let mut d = Diagnostic::error(
+            "E1001",
+            span,
+            format!("`{name}` is defined more than once in {ns_kind} `{ns_name}`"),
+        );
+        if let ScopeEntry::Item(p) = prev {
+            d = d.with_label(items[p.0 as usize].span, "first definition here");
+        }
+        diags.push(d);
     }
 }
 
@@ -183,7 +210,7 @@ impl Program {
         let mut modules = Vec::new();
         let mut diagnostics = Vec::new();
         let mut items: Vec<Item> = Vec::new();
-        let mut isa_scopes: HashMap<DefId, HashMap<String, ScopeEntry>> = HashMap::new();
+        let mut ns_scopes: HashMap<DefId, HashMap<String, ScopeEntry>> = HashMap::new();
 
         for file in files {
             let parsed = parse(&file.text);
@@ -258,71 +285,55 @@ impl Program {
                 // Nested isa items.
                 if let Decl::Isa(isa) = decl {
                     let mut scope: HashMap<String, ScopeEntry> = HashMap::new();
-                    let mut define =
-                        |name: &str,
-                         entry: ScopeEntry,
-                         span: Span,
-                         items: &Vec<Item>,
-                         diags: &mut Diagnostics| {
-                            if let Some(prev) = scope.insert(name.to_string(), entry) {
-                                let mut d = Diagnostic::error(
-                                    "E1001",
-                                    span,
-                                    format!(
-                                        "`{name}` is defined more than once in isa `{}`",
-                                        isa.name.name
-                                    ),
-                                );
-                                if let ScopeEntry::Item(p) = prev {
-                                    d = d.with_label(
-                                        items[p.0 as usize].span,
-                                        "first definition here",
-                                    );
-                                }
-                                diags.push(d);
-                            }
-                        };
                     for (j, item) in isa.items.iter().enumerate() {
-                        let p = isa_item_pending(item, j);
+                        let (iname, ikind, ispan) = isa_item_meta(item);
                         let nested_id = DefId(items.len() as u32);
                         items.push(Item {
                             module: m,
-                            decl: ItemDecl::Isa {
-                                isa: id,
-                                index: p.index,
-                            },
-                            name: p.name.clone(),
-                            kind: p.kind,
-                            span: p.span,
+                            decl: ItemDecl::Isa { isa: id, index: j },
+                            name: iname.clone(),
+                            kind: ikind,
+                            span: ispan,
                         });
                         define(
-                            &p.name,
+                            &mut scope,
+                            "isa",
+                            &isa.name.name,
+                            &iname,
                             ScopeEntry::Item(nested_id),
-                            p.span,
+                            ispan,
                             &items,
                             &mut diagnostics[m],
                         );
                         match item {
                             IsaItem::Register(r) => {
                                 for (fi, f) in r.fields.iter().enumerate() {
+                                    let e = ScopeEntry::RegField {
+                                        reg: nested_id,
+                                        index: fi as u32,
+                                    };
                                     define(
+                                        &mut scope,
+                                        "isa",
+                                        &isa.name.name,
                                         &f.name.name,
-                                        ScopeEntry::RegField {
-                                            reg: nested_id,
-                                            index: fi as u32,
-                                        },
+                                        e,
                                         f.name.span,
                                         &items,
                                         &mut diagnostics[m],
                                     );
                                 }
                                 for (vi, v) in r.views.iter().enumerate() {
+                                    let e = ScopeEntry::RegView {
+                                        reg: nested_id,
+                                        index: vi as u32,
+                                    };
                                     define(
+                                        &mut scope,
+                                        "isa",
+                                        &isa.name.name,
                                         &v.name.name,
-                                        ScopeEntry::RegView {
-                                            reg: nested_id,
-                                            index: vi as u32,
-                                        },
+                                        e,
                                         v.name.span,
                                         &items,
                                         &mut diagnostics[m],
@@ -331,6 +342,9 @@ impl Program {
                             }
                             IsaItem::Mode(md) => {
                                 define(
+                                    &mut scope,
+                                    "isa",
+                                    &isa.name.name,
                                     "mode",
                                     ScopeEntry::Mode(id),
                                     md.name.span,
@@ -341,7 +355,36 @@ impl Program {
                             _ => {}
                         }
                     }
-                    isa_scopes.insert(id, scope);
+                    ns_scopes.insert(id, scope);
+                }
+
+                // Nested bus items.
+                if let Decl::Bus(bus) = decl {
+                    let mut scope: HashMap<String, ScopeEntry> = HashMap::new();
+                    for (j, item) in bus.items.iter().enumerate() {
+                        let Some((iname, ikind, ispan)) = bus_item_meta(item) else {
+                            continue;
+                        };
+                        let nested_id = DefId(items.len() as u32);
+                        items.push(Item {
+                            module: m,
+                            decl: ItemDecl::Bus { bus: id, index: j },
+                            name: iname.clone(),
+                            kind: ikind,
+                            span: ispan,
+                        });
+                        define(
+                            &mut scope,
+                            "bus",
+                            &bus.name.name,
+                            &iname,
+                            ScopeEntry::Item(nested_id),
+                            ispan,
+                            &items,
+                            &mut diagnostics[m],
+                        );
+                    }
+                    ns_scopes.insert(id, scope);
                 }
             }
             modules[m].scope = module_scope;
@@ -432,7 +475,7 @@ impl Program {
             Program {
                 modules,
                 items,
-                isa_scopes,
+                ns_scopes,
             },
             diagnostics,
         )
@@ -445,18 +488,26 @@ impl Program {
     /// The enclosing `isa` of a nested item.
     pub fn parent_isa(&self, id: DefId) -> Option<DefId> {
         match self.item(id).decl {
-            ItemDecl::Top(_) => None,
             ItemDecl::Isa { isa, .. } => Some(isa),
+            _ => None,
         }
     }
 
-    /// The top-level declaration of an item. Panics for nested isa items;
-    /// use the typed accessors for those.
+    /// The enclosing `bus` of a nested item.
+    pub fn parent_bus(&self, id: DefId) -> Option<DefId> {
+        match self.item(id).decl {
+            ItemDecl::Bus { bus, .. } => Some(bus),
+            _ => None,
+        }
+    }
+
+    /// The top-level declaration of an item. Panics for nested items; use
+    /// the typed accessors for those.
     pub fn decl(&self, id: DefId) -> &Decl {
         let item = self.item(id);
         match item.decl {
             ItemDecl::Top(i) => &self.modules[item.module].ast.decls[i],
-            ItemDecl::Isa { .. } => panic!("item `{}` is nested in an isa", item.name),
+            _ => panic!("item `{}` is nested in a namespace", item.name),
         }
     }
 
@@ -467,11 +518,33 @@ impl Program {
         }
     }
 
+    pub fn bus_decl(&self, id: DefId) -> &ast::BusDecl {
+        match self.decl(id) {
+            Decl::Bus(d) => d,
+            _ => panic!("not a bus"),
+        }
+    }
+
+    pub fn component_decl(&self, id: DefId) -> &ast::ComponentDecl {
+        match self.decl(id) {
+            Decl::Component(d) => d,
+            _ => panic!("not a component"),
+        }
+    }
+
     /// The syntax of a nested isa item.
     pub fn isa_item(&self, id: DefId) -> Option<&IsaItem> {
         match self.item(id).decl {
-            ItemDecl::Top(_) => None,
             ItemDecl::Isa { isa, index } => Some(&self.isa_decl(isa).items[index]),
+            _ => None,
+        }
+    }
+
+    /// The syntax of a nested bus item.
+    pub fn bus_item(&self, id: DefId) -> Option<&BusItem> {
+        match self.item(id).decl {
+            ItemDecl::Bus { bus, index } => Some(&self.bus_decl(bus).items[index]),
+            _ => None,
         }
     }
 
@@ -483,6 +556,10 @@ impl Program {
             },
             ItemDecl::Isa { .. } => match self.isa_item(id).unwrap() {
                 IsaItem::Enum(d) | IsaItem::Mode(d) => d,
+                _ => panic!("not an enum"),
+            },
+            ItemDecl::Bus { .. } => match self.bus_item(id).unwrap() {
+                BusItem::Enum(d) => d,
                 _ => panic!("not an enum"),
             },
         }
@@ -498,6 +575,7 @@ impl Program {
                 IsaItem::Bundle(d) => d,
                 _ => panic!("not a bundle"),
             },
+            ItemDecl::Bus { .. } => panic!("buses have no nested bundles"),
         }
     }
 
@@ -511,6 +589,7 @@ impl Program {
                 IsaItem::Const(d) => d,
                 _ => panic!("not a const"),
             },
+            ItemDecl::Bus { .. } => panic!("buses have no nested consts"),
         }
     }
 
@@ -563,6 +642,20 @@ impl Program {
         }
     }
 
+    pub fn transaction_decl(&self, id: DefId) -> &ast::TransactionDecl {
+        match self.bus_item(id) {
+            Some(BusItem::Transaction(d)) => d,
+            _ => panic!("not a transaction"),
+        }
+    }
+
+    pub fn signal_decl(&self, id: DefId) -> &ast::SignalDecl {
+        match self.bus_item(id) {
+            Some(BusItem::Signal(d)) => d,
+            _ => panic!("not a signal"),
+        }
+    }
+
     pub fn module_of(&self, id: DefId) -> &Module {
         &self.modules[self.item(id).module]
     }
@@ -573,9 +666,9 @@ impl Program {
         m.scope.get(name).or_else(|| m.imports.get(name)).copied()
     }
 
-    /// Look a name up inside an isa's scope.
-    pub fn lookup_in_isa(&self, isa: DefId, name: &str) -> Option<ScopeEntry> {
-        self.isa_scopes.get(&isa).and_then(|s| s.get(name)).copied()
+    /// Look a name up inside a namespace (isa or bus) scope.
+    pub fn lookup_in_ns(&self, ns: DefId, name: &str) -> Option<ScopeEntry> {
+        self.ns_scopes.get(&ns).and_then(|s| s.get(name)).copied()
     }
 
     /// Display name of an item.
@@ -599,6 +692,17 @@ impl Program {
             .enumerate()
             .filter(move |(_, it)| {
                 it.kind == kind && matches!(it.decl, ItemDecl::Isa { isa: p, .. } if p == isa)
+            })
+            .map(|(i, _)| DefId(i as u32))
+    }
+
+    /// Nested items of a bus, of one kind, in definition order.
+    pub fn bus_items_of(&self, bus: DefId, kind: ItemKind) -> impl Iterator<Item = DefId> + '_ {
+        self.items
+            .iter()
+            .enumerate()
+            .filter(move |(_, it)| {
+                it.kind == kind && matches!(it.decl, ItemDecl::Bus { bus: p, .. } if p == bus)
             })
             .map(|(i, _)| DefId(i as u32))
     }

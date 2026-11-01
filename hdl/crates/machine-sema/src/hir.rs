@@ -96,6 +96,17 @@ pub enum ExprKind {
     KindSelect(DefId, Vec<Expr>),
     /// Call of an isa `fn`.
     FnCall(DefId, Vec<Expr>),
+
+    // --- component model ---
+    /// A wire port of the enclosing component; the flag says whether it is
+    /// an output (assignable).
+    Port(DefId, u32, bool),
+    /// A `state` of the enclosing component's model (place).
+    State(DefId, u32),
+    /// A `mem` of the enclosing component's model; its elements are places.
+    ModelMem(DefId, u32),
+    /// `port.transaction(args)` initiated by a model.
+    BusCall(u32, DefId, Vec<Expr>),
     Error,
 }
 
@@ -108,6 +119,9 @@ pub fn is_place(e: &Expr) -> bool {
         | ExprKind::Mode(_)
         | ExprKind::SpaceCell(..)
         | ExprKind::KindSelect(..) => true,
+        ExprKind::Port(_, _, out) => *out,
+        ExprKind::State(..) => true,
+        ExprKind::Index(b, _) => matches!(b.kind, ExprKind::ModelMem(..)),
         ExprKind::Field(b, _) => is_place(b),
         ExprKind::Match(_, arms) => arms.iter().all(|a| match &a.body {
             ArmBody::Expr(e) => is_place(e) || matches!(e.ty, Ty::Never),
@@ -207,6 +221,19 @@ pub enum StmtKind {
     RunInstruction(DefId, Vec<Expr>),
     /// `run bytes [...];`
     RunBytes(Vec<u8>),
+
+    // --- component model ---
+    /// `emit port.signal(args) = value;`
+    Emit {
+        port: u32,
+        signal: DefId,
+        args: Vec<Expr>,
+        value: Expr,
+    },
+    While(Expr, Block),
+    Loop(Block),
+    Break,
+    Continue,
     Error,
 }
 
@@ -439,9 +466,151 @@ pub struct IsaInfo {
     pub instructions: Vec<Instruction>,
 }
 
+// ---------------------------------------------------------------------------
+// Buses and components
+// ---------------------------------------------------------------------------
+
+/// Who may drive a bus wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WireDriver {
+    /// Exactly one role drives it (by index into the bus's roles).
+    Role(u32),
+    /// Tristate: one driver at a time, chosen by the protocol.
+    Shared,
+    /// Open-collector, idles high; any role may pull it low.
+    WiredAnd,
+    /// Open-emitter, idles low; any role may pull it high.
+    WiredOr,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BusWire {
+    pub name: String,
+    pub ty: Ty,
+    pub driver: WireDriver,
+    pub active_low: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransactionSig {
+    pub def: DefId,
+    pub name: String,
+    pub params: Vec<(String, Ty)>,
+    /// A named tuple, or `None` for a transaction that returns nothing.
+    pub ret: Option<Ty>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SignalInfo {
+    pub def: DefId,
+    pub name: String,
+    pub params: Vec<(String, Ty)>,
+    /// Wires first (one local per bus wire, in order), then the parameters.
+    pub locals: Vec<Local>,
+    pub param_ids: Vec<LocalId>,
+    /// The wire (or wire-array element) the signal is, as a `bool`.
+    pub expr: Expr,
+    /// The driver of the underlying wire.
+    pub driver: WireDriver,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BusInfo {
+    pub def: DefId,
+    pub name: String,
+    pub clock: Option<String>,
+    /// The first role initiates transactions; the others respond.
+    pub roles: Vec<String>,
+    pub wires: Vec<BusWire>,
+    pub transactions: Vec<TransactionSig>,
+    pub signals: Vec<SignalInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PortKind {
+    In(Ty),
+    Out(Ty),
+    AsyncIn(Ty),
+    Bus { bus: DefId, role: u32 },
+    Clock,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Port {
+    pub name: String,
+    pub kind: PortKind,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelState {
+    pub name: String,
+    pub ty: Ty,
+    pub init: Option<Expr>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelMem {
+    pub name: String,
+    pub elem: Ty,
+    pub len: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HandlerKind {
+    Reset,
+    /// `on tick`; `clock` is the clock port, or `None` for a component's
+    /// implicit single clock.
+    Tick {
+        clock: Option<u32>,
+    },
+    /// A responding role's handler for a transaction on a bus port.
+    Transaction {
+        port: u32,
+        transaction: DefId,
+    },
+    /// An observing role's handler for a signal change on a bus port.
+    Signal {
+        port: u32,
+        signal: DefId,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Handler {
+    pub kind: HandlerKind,
+    pub locals: Vec<Local>,
+    pub params: Vec<LocalId>,
+    pub ret: Ty,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelBody {
+    /// Locals used by state initialisers.
+    pub init_locals: Vec<Local>,
+    pub states: Vec<ModelState>,
+    pub mems: Vec<ModelMem>,
+    pub handlers: Vec<Handler>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ComponentInfo {
+    pub def: DefId,
+    pub name: String,
+    pub isa: Option<DefId>,
+    pub ports: Vec<Port>,
+    pub model: Option<ModelBody>,
+    /// The rtl body exists but is not checked yet.
+    pub has_rtl: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Hir {
     pub units: Vec<UnitInst>,
     pub tests: Vec<TestBody>,
     pub isas: Vec<IsaInfo>,
+    pub buses: Vec<BusInfo>,
+    pub components: Vec<ComponentInfo>,
 }

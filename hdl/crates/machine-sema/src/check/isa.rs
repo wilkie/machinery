@@ -26,6 +26,7 @@ impl Checker<'_> {
         let scope = Scope {
             module,
             isa: Some(isa),
+            bus: None,
         };
         let name = self.prog.item_name(isa);
 
@@ -1590,7 +1591,7 @@ impl Checker<'_> {
                 if self.prog.item(isa).kind != ItemKind::Isa {
                     return None;
                 }
-                match self.prog.lookup_in_isa(isa, &p.segments[1].name) {
+                match self.prog.lookup_in_ns(isa, &p.segments[1].name) {
                     Some(ScopeEntry::Item(d)) => Some(d),
                     _ => None,
                 }

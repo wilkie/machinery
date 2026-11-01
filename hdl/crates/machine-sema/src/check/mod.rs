@@ -1,10 +1,14 @@
 //! The checker: resolves types, evaluates constants, instantiates units,
 //! checks isas, and type-checks bodies into HIR.
 
+mod bus;
+mod component;
 mod expr;
 mod isa;
 mod pattern;
 mod stmt;
+
+pub use component::{CompEntry, CompScope};
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -85,10 +89,7 @@ pub struct KindSig {
 }
 
 impl KindSig {
-    pub fn rule(
-        &self,
-        kind: hir::RuleKind,
-    ) -> Option<(usize, &RuleSig)> {
+    pub fn rule(&self, kind: hir::RuleKind) -> Option<(usize, &RuleSig)> {
         self.rules.iter().enumerate().find(|(_, r)| r.1 == kind)
     }
 }
@@ -104,6 +105,7 @@ pub struct InstrSig {
 pub struct Scope {
     pub module: ModuleId,
     pub isa: Option<DefId>,
+    pub bus: Option<DefId>,
 }
 
 /// Per-body checking state.
@@ -118,6 +120,10 @@ pub struct FnCtx {
     pub in_test: bool,
     /// Instruction operands in scope: `(name, kind)`.
     pub operands: Vec<(String, DefId)>,
+    /// The component whose model body this is.
+    pub component: Option<DefId>,
+    /// Nesting depth of `while`/`loop`, for `break`/`continue`.
+    pub loop_depth: u32,
 }
 
 impl FnCtx {
@@ -131,6 +137,8 @@ impl FnCtx {
             ret,
             in_test: false,
             operands: Vec::new(),
+            component: None,
+            loop_depth: 0,
         }
     }
 
@@ -201,6 +209,11 @@ pub struct Checker<'p> {
     /// The mode enum of each isa.
     pub(crate) isa_modes: HashMap<DefId, DefId>,
     isas: Vec<hir::IsaInfo>,
+    // --- buses and components ---
+    pub(crate) buses: HashMap<DefId, Rc<hir::BusInfo>>,
+    pub(crate) comps: HashMap<DefId, Rc<CompScope>>,
+    bus_infos: Vec<hir::BusInfo>,
+    components: Vec<hir::ComponentInfo>,
 }
 
 /// Check every item of a program.
@@ -227,6 +240,10 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
         instr_sigs: HashMap::new(),
         isa_modes: HashMap::new(),
         isas: Vec::new(),
+        buses: HashMap::new(),
+        comps: HashMap::new(),
+        bus_infos: Vec::new(),
+        components: Vec::new(),
     };
 
     for id in prog
@@ -244,8 +261,20 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
     for id in prog.items_of(ItemKind::Union) {
         ck.union_info(id);
     }
+    for id in prog.items_of(ItemKind::Bus) {
+        if let Some(info) = ck.check_bus(id) {
+            let rc = Rc::new(info);
+            ck.buses.insert(id, rc.clone());
+            ck.bus_infos.push((*rc).clone());
+        }
+    }
     for id in prog.items_of(ItemKind::Isa) {
         ck.check_isa(id);
+    }
+    for id in prog.items_of(ItemKind::Component) {
+        if let Some(info) = ck.check_component(id) {
+            ck.components.push(info);
+        }
     }
     for id in prog.items_of(ItemKind::Unit) {
         let Decl::Unit(u) = prog.decl(id) else {
@@ -277,8 +306,6 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
     }
     for item in &prog.items {
         let kind = match item.kind {
-            ItemKind::Component => "component",
-            ItemKind::Bus => "bus",
             ItemKind::System => "system",
             ItemKind::Vectors => "vectors",
             ItemKind::Conformance => "conformance",
@@ -301,6 +328,8 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
             units,
             tests: ck.tests,
             isas: ck.isas,
+            buses: ck.bus_infos,
+            components: ck.components,
         },
         ck.skipped,
     )
@@ -368,6 +397,7 @@ impl<'p> Checker<'p> {
         Scope {
             module: self.prog.item(id).module,
             isa: self.prog.parent_isa(id),
+            bus: self.prog.parent_bus(id),
         }
     }
 
@@ -375,7 +405,12 @@ impl<'p> Checker<'p> {
     /// module.
     pub fn lookup(&self, scope: Scope, name: &str) -> Option<ScopeEntry> {
         if let Some(isa) = scope.isa {
-            if let Some(e) = self.prog.lookup_in_isa(isa, name) {
+            if let Some(e) = self.prog.lookup_in_ns(isa, name) {
+                return Some(e);
+            }
+        }
+        if let Some(bus) = scope.bus {
+            if let Some(e) = self.prog.lookup_in_ns(bus, name) {
                 return Some(e);
             }
         }
@@ -863,7 +898,7 @@ impl<'p> Checker<'p> {
                         let (first, second) = (&path.segments[0], &path.segments[1]);
                         match self.lookup_item(scope, &first.name) {
                             Some(isa) if self.prog.item(isa).kind == ItemKind::Isa => {
-                                match self.prog.lookup_in_isa(isa, &second.name) {
+                                match self.prog.lookup_in_ns(isa, &second.name) {
                                     Some(ScopeEntry::Item(d)) => d,
                                     _ => {
                                         self.error(
@@ -1199,7 +1234,11 @@ impl<'p> Checker<'p> {
                 }
             }
         }
-        let scope = Scope { module, isa };
+        let scope = Scope {
+            module,
+            isa,
+            bus: None,
+        };
         let mut cx = FnCtx::new(scope, HashMap::new(), None);
         cx.in_test = true;
         let body = self.check_block(&mut cx, &t.body);

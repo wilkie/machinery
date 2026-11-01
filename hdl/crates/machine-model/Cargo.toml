@@ -1,0 +1,14 @@
+[package]
+name = "machine-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The fast-emulator backend of the Machine HDL: derives a Rust interpreter from an isa's typed HIR."
+
+[dependencies]
+machine-syntax = { path = "../machine-syntax" }
+machine-sema = { path = "../machine-sema" }
+
+[lints]
+workspace = true

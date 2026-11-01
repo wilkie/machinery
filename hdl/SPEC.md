@@ -547,6 +547,21 @@ writes; the rtl implements it with `@commit(on_retire)`). `class: Trap`
 commits. This encodes the trap/fault distinction the current `processors`
 package carries as separate grammar.
 
+### 11.1a The instruction stream
+
+```
+fn code_address() -> u24 { return translate(CS, IP, 1, Access::Execute); }
+fn next_byte() -> u8 { let b = mem.read_u8(code_address()); IP = IP + 1; return b; }
+istream { space mem; address code_address; next next_byte; undefined UD; }
+```
+
+`istream` tells the derived interpreter (and the test harness) where
+instruction bytes come from: the address space, a `fn` giving the address of
+the next byte, a `fn` that consumes one byte, and the fault raised for an
+opcode that decodes to nothing. Multi-byte operands are assembled from
+consecutive bytes least-significant first. Architectural registers reset to
+zero; a `given` block in a test sets what the test needs.
+
 ### 11.2 Instructions
 
 ```
@@ -718,6 +733,12 @@ Built into the language and the compiler:
        run instruction Add_rm8_r8 { dst: AL, src: BL };
        expect { AL == 0x00; FLAGS.CF == 1; FLAGS.ZF == 1; }
    }
+   ```
+   `run instruction` names operands by place or value; the harness picks an
+   encoding of each operand kind that denotes that place (so `dst: AL` finds
+   the register form of `rm8`). `run bytes [...]` places the bytes at the
+   `istream` address and executes one instruction.
+   ```
    test "prefetcher fills to six bytes" on Prefetcher.rtl {
        drive { control.pop = false; mem.wait = 0; }
        run 20 cycles of clk;

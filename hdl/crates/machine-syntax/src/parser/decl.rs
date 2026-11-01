@@ -707,6 +707,45 @@ impl Parser {
                     span: start.to(self.prev_span()),
                 }))
             }
+            "istream" => {
+                self.advance();
+                self.expect_punct(Punct::LBrace)?;
+                let mut space = None;
+                let mut address = None;
+                let mut next = None;
+                let mut undefined = None;
+                while !self.at_punct(Punct::RBrace) {
+                    if self.at_eof() {
+                        return Err(self.error_expected("`}`"));
+                    }
+                    let key = self.expect_ident()?;
+                    match key.name.as_str() {
+                        "space" => space = Some(self.expect_ident()?),
+                        "address" => address = Some(self.parse_path_colons()?),
+                        "next" => next = Some(self.parse_path_colons()?),
+                        "undefined" => undefined = Some(self.parse_path_colons()?),
+                        other => {
+                            return Err(self.error(
+                                "E0106",
+                                key.span,
+                                format!("unknown `istream` item `{other}`; expected `space`, `address`, `next` or `undefined`"),
+                            ))
+                        }
+                    }
+                    self.expect_semi()?;
+                }
+                self.expect_punct(Punct::RBrace)?;
+                let (Some(space), Some(address), Some(next)) = (space, address, next) else {
+                    return Err(self.error("E0106", start, "`istream` needs `space`, `address` and `next`"));
+                };
+                Ok(IsaItem::Istream(IstreamDecl {
+                    space,
+                    address,
+                    next,
+                    undefined,
+                    span: start.to(self.prev_span()),
+                }))
+            }
             "operand_kind" => {
                 self.advance();
                 let name = self.expect_ident()?;
@@ -769,7 +808,7 @@ impl Parser {
                 }))
             }
             _ => Err(self.error_expected(
-                "`space`, `register`, `mode`, `fault`, `fn`, `operand`, `operand_kind`, `instruction`, `enum`, `bundle` or `const`",
+                "`space`, `register`, `mode`, `fault`, `fn`, `operand`, `operand_kind`, `instruction`, `istream`, `enum`, `bundle` or `const`",
             )),
         }
     }

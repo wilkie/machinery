@@ -150,8 +150,8 @@ pub struct Program {
     pub ns_scopes: HashMap<DefId, HashMap<String, ScopeEntry>>,
 }
 
-fn isa_item_meta(item: &IsaItem) -> (String, ItemKind, Span) {
-    match item {
+fn isa_item_meta(item: &IsaItem) -> Option<(String, ItemKind, Span)> {
+    Some(match item {
         IsaItem::Space(d) => (d.name.name.clone(), ItemKind::Space, d.name.span),
         IsaItem::Register(d) => (d.name.name.clone(), ItemKind::Register, d.name.span),
         IsaItem::Mode(d) => (d.name.name.clone(), ItemKind::Mode, d.name.span),
@@ -163,7 +163,8 @@ fn isa_item_meta(item: &IsaItem) -> (String, ItemKind, Span) {
         IsaItem::Enum(d) => (d.name.name.clone(), ItemKind::Enum, d.name.span),
         IsaItem::Bundle(d) => (d.name.name.clone(), ItemKind::Bundle, d.name.span),
         IsaItem::Const(d) => (d.name.name.clone(), ItemKind::Const, d.name.span),
-    }
+        IsaItem::Istream(_) => return None,
+    })
 }
 
 /// Bus items that become named items (wires, roles, clock and params are
@@ -286,7 +287,9 @@ impl Program {
                 if let Decl::Isa(isa) = decl {
                     let mut scope: HashMap<String, ScopeEntry> = HashMap::new();
                     for (j, item) in isa.items.iter().enumerate() {
-                        let (iname, ikind, ispan) = isa_item_meta(item);
+                        let Some((iname, ikind, ispan)) = isa_item_meta(item) else {
+                            continue;
+                        };
                         let nested_id = DefId(items.len() as u32);
                         items.push(Item {
                             module: m,

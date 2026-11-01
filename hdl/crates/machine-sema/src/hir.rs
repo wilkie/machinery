@@ -464,6 +464,43 @@ pub struct IsaInfo {
     pub operands: Vec<Operand>,
     pub kinds: Vec<OperandKind>,
     pub instructions: Vec<Instruction>,
+    pub istream: Option<Istream>,
+}
+
+/// Where instruction bytes come from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Istream {
+    pub space: DefId,
+    /// `fn () -> <space address type>`
+    pub address: DefId,
+    /// `fn () -> <space cell type>`
+    pub next: DefId,
+    /// The fault raised for an undecodable opcode.
+    pub undefined: Option<DefId>,
+}
+
+/// A resolved `enum`/`mode`, exported for backends.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnumDef {
+    pub def: DefId,
+    pub name: String,
+    pub width: u32,
+    pub variants: Vec<(String, i128)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BundleFieldDef {
+    pub name: String,
+    pub ty: Ty,
+    pub offset: Option<u32>,
+}
+
+/// A resolved `bundle`, exported for backends.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BundleDef {
+    pub def: DefId,
+    pub name: String,
+    pub fields: Vec<BundleFieldDef>,
 }
 
 // ---------------------------------------------------------------------------
@@ -613,4 +650,7 @@ pub struct Hir {
     pub isas: Vec<IsaInfo>,
     pub buses: Vec<BusInfo>,
     pub components: Vec<ComponentInfo>,
+    /// Every resolved enum and bundle, by definition order.
+    pub enums: Vec<EnumDef>,
+    pub bundles: Vec<BundleDef>,
 }

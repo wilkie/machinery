@@ -998,6 +998,20 @@ pub enum IsaItem {
     Enum(EnumDecl),
     Bundle(BundleDecl),
     Const(ConstDecl),
+    /// `istream { space mem; address code_address; next next_byte; undefined UD; }`
+    Istream(IstreamDecl),
+}
+
+/// Where instruction bytes come from: the space they live in, the function
+/// giving the address of the next byte, the function that consumes one, and
+/// the fault raised for an undecodable opcode.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IstreamDecl {
+    pub space: Ident,
+    pub address: Path,
+    pub next: Path,
+    pub undefined: Option<Path>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -13,12 +13,17 @@ use machine_syntax::{parse, Severity, SourceFile};
 const USAGE: &str = "\
 Usage:
   machine check [--message-format=text|json] [--syntax-only] <file.machine>...
+  machine build --isa <Name> --out <dir> <file.machine>...
+  machine test --isa <Name> <file.machine>...
   machine dump-ast <file.machine>
 
 Commands:
   check      Parse and check the given files as one program; report diagnostics.
              Files refer to each other with `use <stem>::{...}`, so pass every
              file of the program.
+  build      Check, then generate the Rust interpreter crate for an isa into <dir>.
+  test       Check, generate the interpreter into target/machine/<isa>, and run
+             its tests (the `test ... on <Isa>` blocks) with cargo.
   dump-ast   Parse one file and print its syntax tree (debug form).
 
 Options:
@@ -40,6 +45,8 @@ fn main() -> ExitCode {
     };
     match command.as_str() {
         "check" => check(&args[1..]),
+        "build" => build(&args[1..], false),
+        "test" => build(&args[1..], true),
         "dump-ast" => dump_ast(&args[1..]),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -201,5 +208,109 @@ fn dump_ast(args: &[String]) -> ExitCode {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+/// `machine build` / `machine test`.
+fn build(args: &[String], run_tests: bool) -> ExitCode {
+    let mut isa = None;
+    let mut out_dir = None;
+    let mut paths = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if a == "--isa" {
+            isa = args.get(i + 1).cloned();
+            i += 2;
+            continue;
+        }
+        if let Some(v) = a.strip_prefix("--isa=") {
+            isa = Some(v.to_string());
+        } else if a == "--out" {
+            out_dir = args.get(i + 1).cloned();
+            i += 2;
+            continue;
+        } else if let Some(v) = a.strip_prefix("--out=") {
+            out_dir = Some(v.to_string());
+        } else if a.starts_with('-') {
+            eprintln!("error: unknown option `{a}`");
+            return ExitCode::from(2);
+        } else {
+            paths.push(a.clone());
+        }
+        i += 1;
+    }
+    let Some(isa) = isa else {
+        eprintln!("error: `--isa <Name>` is required");
+        return ExitCode::from(2);
+    };
+    if paths.is_empty() {
+        eprintln!("error: no input files");
+        return ExitCode::from(2);
+    }
+    let mut files = Vec::new();
+    for p in &paths {
+        match load(p) {
+            Some(f) => files.push(f),
+            None => return ExitCode::FAILURE,
+        }
+    }
+    let checked = check_files(files);
+    for (m, diags) in checked.diagnostics.iter().enumerate() {
+        let file = &checked.program.modules[m].file;
+        for d in diags.iter() {
+            eprintln!("{}", d.render_text(file));
+        }
+    }
+    if checked.has_errors() {
+        eprintln!("not generating: the program has errors");
+        return ExitCode::FAILURE;
+    }
+    let src = match machine_model::generate_isa(&checked, &isa) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // The runtime crate lives next to this binary's source tree.
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("machine-runtime");
+    let runtime = runtime.canonicalize().unwrap_or(runtime);
+    let name = machine_model::crate_name(&isa);
+    let crate_ = machine_model::package(&name, src, &runtime);
+    let dir = match out_dir {
+        Some(d) => std::path::PathBuf::from(d),
+        None => std::path::PathBuf::from("target")
+            .join("machine")
+            .join(&name),
+    };
+    if let Err(e) = machine_model::write_crate(&dir, &crate_) {
+        eprintln!("error: cannot write `{}`: {e}", dir.display());
+        return ExitCode::FAILURE;
+    }
+    eprintln!(
+        "generated {} ({} lines) into {}",
+        name,
+        crate_.lib_rs.lines().count(),
+        dir.display()
+    );
+    if !run_tests {
+        return ExitCode::SUCCESS;
+    }
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let status = std::process::Command::new(cargo)
+        .arg("test")
+        .arg("--manifest-path")
+        .arg(dir.join("Cargo.toml"))
+        .status();
+    match status {
+        Ok(s) if s.success() => ExitCode::SUCCESS,
+        Ok(_) => ExitCode::FAILURE,
+        Err(e) => {
+            eprintln!("error: cannot run cargo: {e}");
+            ExitCode::FAILURE
+        }
     }
 }

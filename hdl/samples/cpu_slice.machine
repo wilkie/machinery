@@ -54,6 +54,18 @@ isa I286Isa {
         return seg.base + (off as u24);
     }
 
+    /// The next instruction byte lives at CS:IP.
+    fn code_address() -> u24 { return translate(CS, IP, 1, Access::Execute); }
+
+    /// Consume one instruction byte.
+    fn next_byte() -> u8 {
+        let b = mem.read_u8(code_address());
+        IP = IP + 1;
+        return b;
+    }
+
+    istream { space mem; address code_address; next next_byte; undefined UD; }
+
     // Operand kinds ---------------------------------------------------------
 
     /// ModRM byte. `tail` says which further bytes the addressing form pulls

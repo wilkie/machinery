@@ -323,6 +323,41 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
         .into_iter()
         .map(|u| u.expect("every unit instance is finished after checking"))
         .collect();
+    let mut enums: Vec<hir::EnumDef> = ck
+        .enums
+        .iter()
+        .filter_map(|(id, l)| match l {
+            Lazy::Done(info) => Some(hir::EnumDef {
+                def: *id,
+                name: prog.item_name(*id),
+                width: info.width,
+                variants: info.variants.clone(),
+            }),
+            _ => None,
+        })
+        .collect();
+    enums.sort_by_key(|e| e.def);
+    let mut bundles: Vec<hir::BundleDef> = ck
+        .bundles
+        .iter()
+        .filter_map(|(id, l)| match l {
+            Lazy::Done(info) => Some(hir::BundleDef {
+                def: *id,
+                name: prog.item_name(*id),
+                fields: info
+                    .fields
+                    .iter()
+                    .map(|f| hir::BundleFieldDef {
+                        name: f.name.clone(),
+                        ty: f.ty.clone(),
+                        offset: f.offset,
+                    })
+                    .collect(),
+            }),
+            _ => None,
+        })
+        .collect();
+    bundles.sort_by_key(|b| b.def);
     (
         hir::Hir {
             units,
@@ -330,6 +365,8 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
             isas: ck.isas,
             buses: ck.bus_infos,
             components: ck.components,
+            enums,
+            bundles,
         },
         ck.skipped,
     )

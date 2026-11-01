@@ -133,7 +133,7 @@ fn cpu_slice_isa_is_fully_checked() {
     assert_eq!(isa.spaces.len(), 2);
     assert_eq!(isa.registers.len(), 14);
     assert_eq!(isa.faults.len(), 2);
-    assert_eq!(isa.fns.len(), 2);
+    assert_eq!(isa.fns.len(), 4);
     assert_eq!(isa.operands.len(), 3);
     assert_eq!(isa.kinds.len(), 2);
     assert_eq!(isa.instructions.len(), 2);

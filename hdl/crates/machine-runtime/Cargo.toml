@@ -1,0 +1,12 @@
+[package]
+name = "machine-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Support library linked by code generated from Machine hardware descriptions."
+
+[dependencies]
+
+[lints]
+workspace = true

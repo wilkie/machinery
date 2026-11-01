@@ -55,6 +55,10 @@ impl Checker<'_> {
                 ..e
             };
         }
+        // Compound expressions take the target type branch by branch.
+        if e.ty != *target && matches!(e.kind, H::Block(_) | H::If(..) | H::Match(..)) {
+            return self.coerce_compound(cx, e, target);
+        }
         match (&e.ty, target) {
             (Ty::Never, _) => e,
             (Ty::Const(v), Ty::UInt(_) | Ty::SInt(_)) => {
@@ -93,6 +97,59 @@ impl Checker<'_> {
             (found, expected) => {
                 self.mismatch(cx.module, e.span, expected, found);
                 err(e.span)
+            }
+        }
+    }
+
+    /// Coerce a block/if/match expression by coercing its tails and
+    /// branches, so compile-time constants inside them take the width.
+    fn coerce_compound(&mut self, cx: &FnCtx, e: Expr, target: &Ty) -> Expr {
+        let span = e.span;
+        match e.kind {
+            H::Block(mut b) => {
+                self.coerce_block_tail(cx, &mut b, target);
+                mk(H::Block(b), target.clone(), span)
+            }
+            H::If(c, mut t, Some(el)) => {
+                self.coerce_block_tail(cx, &mut t, target);
+                let el = self.coerce(cx, *el, target);
+                mk(H::If(c, t, Some(Box::new(el))), target.clone(), span)
+            }
+            H::Match(s, arms) => {
+                let arms = arms
+                    .into_iter()
+                    .map(|arm| hir::Arm {
+                        patterns: arm.patterns,
+                        span: arm.span,
+                        body: match arm.body {
+                            hir::ArmBody::Expr(x) => hir::ArmBody::Expr(self.coerce(cx, x, target)),
+                            hir::ArmBody::Block(mut b) => {
+                                self.coerce_block_tail(cx, &mut b, target);
+                                hir::ArmBody::Block(b)
+                            }
+                        },
+                    })
+                    .collect();
+                mk(H::Match(s, arms), target.clone(), span)
+            }
+            kind => {
+                let e = Expr { kind, ..e };
+                self.mismatch(cx.module, e.span, target, &e.ty);
+                err(span)
+            }
+        }
+    }
+
+    /// Coerce the tail expression of a block in value position.
+    pub fn coerce_block_tail(&mut self, cx: &FnCtx, b: &mut hir::Block, target: &Ty) {
+        if let Some(last) = b.stmts.last_mut() {
+            if let hir::StmtKind::Expr(_) = &last.kind {
+                let taken = std::mem::replace(&mut last.kind, hir::StmtKind::Error);
+                let hir::StmtKind::Expr(e) = taken else {
+                    unreachable!()
+                };
+                let e = self.coerce(cx, e, target);
+                last.kind = hir::StmtKind::Expr(e);
             }
         }
     }
@@ -368,8 +425,10 @@ impl Checker<'_> {
                 let else_e = self.check_expr(cx, else_e, hint.as_ref());
                 let ty = self.join(cx, &then_b.1, &else_e.ty, span);
                 let else_e = self.coerce(cx, else_e, &ty);
+                let mut then_block = then_b.0;
+                self.coerce_block_tail(cx, &mut then_block, &ty);
                 mk(
-                    H::If(Box::new(cond), then_b.0, Some(Box::new(else_e))),
+                    H::If(Box::new(cond), then_block, Some(Box::new(else_e))),
                     ty,
                     span,
                 )
@@ -2181,11 +2240,14 @@ impl Checker<'_> {
         if had_error || ty.is_error() {
             return err(span);
         }
-        // Coerce expression arms to the joined type.
+        // Coerce every arm to the joined type.
         for arm in &mut harms {
-            if let hir::ArmBody::Expr(e) = &mut arm.body {
-                let taken = std::mem::replace(e, err(span));
-                *e = self.coerce(cx, taken, &ty);
+            match &mut arm.body {
+                hir::ArmBody::Expr(e) => {
+                    let taken = std::mem::replace(e, err(span));
+                    *e = self.coerce(cx, taken, &ty);
+                }
+                hir::ArmBody::Block(b) => self.coerce_block_tail(cx, b, &ty),
             }
         }
         self.check_exhaustive(cx, &scrut.ty, &harms, span);

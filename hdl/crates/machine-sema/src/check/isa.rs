@@ -128,6 +128,9 @@ impl Checker<'_> {
                 instructions.push(i);
             }
         }
+        self.check_opcode_conflicts(scope, &instructions);
+
+        let istream = self.check_istream(scope, isa);
 
         self.isas.push(hir::IsaInfo {
             def: isa,
@@ -140,7 +143,157 @@ impl Checker<'_> {
             operands,
             kinds,
             instructions,
+            istream,
         });
+    }
+
+    /// Two instructions may not share leading opcode bytes (equal or one a
+    /// prefix of the other) up to their first operand fetch.
+    fn check_opcode_conflicts(&mut self, scope: Scope, instructions: &[hir::Instruction]) {
+        let lead = |i: &hir::Instruction| -> Vec<u8> {
+            let mut bytes = Vec::new();
+            for step in &i.encoding {
+                match step {
+                    hir::EncodingStep::Opcode(b) => bytes.extend_from_slice(b),
+                    hir::EncodingStep::Fetch { .. } => break,
+                }
+            }
+            bytes
+        };
+        for (a, ia) in instructions.iter().enumerate() {
+            let la = lead(ia);
+            for ib in &instructions[..a] {
+                let lb = lead(ib);
+                if la.starts_with(&lb) || lb.starts_with(&la) {
+                    let span = self.prog.item(ia.def).span;
+                    let msg = format!(
+                        "opcode {} of `{}` conflicts with {} of `{}`",
+                        hex_bytes(&la),
+                        ia.name,
+                        hex_bytes(&lb),
+                        ib.name
+                    );
+                    self.error_with(
+                        scope.module,
+                        Diagnostic::error("E1045", span, msg)
+                            .with_label(self.prog.item(ib.def).span, "the other instruction"),
+                    );
+                }
+            }
+        }
+    }
+
+    /// `istream { space; address; next; undefined; }`
+    fn check_istream(&mut self, scope: Scope, isa: DefId) -> Option<hir::Istream> {
+        let decl = self.prog.isa_decl(isa);
+        let module = scope.module;
+        let decls: Vec<&ast::IstreamDecl> = decl
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                ast::IsaItem::Istream(d) => Some(d),
+                _ => None,
+            })
+            .collect();
+        if decls.len() > 1 {
+            self.error(module, "E1046", decls[1].span, "an isa has one `istream`");
+        }
+        let d = *decls.first()?;
+        let mut ok = true;
+        let space = match self.lookup_item(scope, &d.space.name) {
+            Some(s) if self.prog.item(s).kind == ItemKind::Space => Some(s),
+            _ => {
+                self.error(
+                    module,
+                    "E1046",
+                    d.space.span,
+                    format!("`{}` is not an address space", d.space.name),
+                );
+                None
+            }
+        };
+        let space_info = space.and_then(|s| self.spaces.get(&s).cloned());
+        let fn_item = |ck: &mut Self, p: &ast::Path| -> Option<DefId> {
+            match ck.lookup_item(scope, &p.last().name) {
+                Some(f) if ck.prog.item(f).kind == ItemKind::Fn => Some(f),
+                _ => {
+                    ck.error(
+                        module,
+                        "E1046",
+                        p.span,
+                        format!("`{}` is not an isa `fn`", p.dotted()),
+                    );
+                    None
+                }
+            }
+        };
+        let address = fn_item(self, &d.address);
+        let next = fn_item(self, &d.next);
+        if let (Some(f), Some(sp)) = (address, &space_info) {
+            if let Some(sig) = self.fn_sig(f) {
+                if !sig.params.is_empty() || sig.ret != sp.addr {
+                    let msg = format!(
+                        "`address` is a `fn () -> {}` (the space's address type)",
+                        self.display(&sp.addr)
+                    );
+                    self.error(module, "E1046", d.address.span, msg);
+                    ok = false;
+                }
+            }
+        }
+        if let (Some(f), Some(sp)) = (next, &space_info) {
+            if let Some(sig) = self.fn_sig(f) {
+                if !sig.params.is_empty() || sig.ret != Ty::UInt(sp.cell_bits) {
+                    let msg = format!(
+                        "`next` is a `fn () -> u{}` (one cell of the space)",
+                        sp.cell_bits
+                    );
+                    self.error(module, "E1046", d.next.span, msg);
+                    ok = false;
+                }
+            }
+        }
+        let undefined = match &d.undefined {
+            None => None,
+            Some(p) => match self.lookup_item(scope, &p.last().name) {
+                Some(f) if self.prog.item(f).kind == ItemKind::Fault => {
+                    if self
+                        .faults
+                        .get(&f)
+                        .map(|i| !i.params.is_empty())
+                        .unwrap_or(false)
+                    {
+                        self.error(
+                            module,
+                            "E1046",
+                            p.span,
+                            "the `undefined` fault takes no arguments",
+                        );
+                        ok = false;
+                    }
+                    Some(f)
+                }
+                _ => {
+                    self.error(
+                        module,
+                        "E1046",
+                        p.span,
+                        format!("`{}` is not a fault", p.dotted()),
+                    );
+                    ok = false;
+                    None
+                }
+            },
+        };
+        let (Some(space), Some(address), Some(next)) = (space, address, next) else {
+            return None;
+        };
+        ok.then_some(hir::Istream {
+            space,
+            address,
+            next,
+            undefined,
+        })
     }
 
     // -- spaces ------------------------------------------------------------------
@@ -1738,4 +1891,9 @@ impl Checker<'_> {
             values.into_iter().map(|v| v.unwrap()).collect(),
         ))
     }
+}
+
+fn hex_bytes(b: &[u8]) -> String {
+    let parts: Vec<String> = b.iter().map(|x| format!("{x:#04x}")).collect();
+    format!("[{}]", parts.join(", "))
 }

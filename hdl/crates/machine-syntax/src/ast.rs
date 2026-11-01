@@ -1193,6 +1193,13 @@ pub enum VectorsItem {
     Format(Ident),
     /// `memory mem;`: the address space vector RAM addresses refer to.
     Memory(Ident),
+    /// `open io = 0xFF;`: in the test environment nothing answers on this
+    /// space; reads return the value and writes are discarded.
+    Open {
+        space: Ident,
+        value: Expr,
+        span: Span,
+    },
     /// `reg ax = AX;`: load assigns the place, compare reads it.
     Reg {
         name: Ident,

@@ -2093,6 +2093,7 @@ impl Checker<'_> {
         let mut format = None;
         let mut memory = None;
         let mut regs: Vec<hir::VectorReg> = Vec::new();
+        let mut open: Vec<(DefId, i128)> = Vec::new();
         const MOO_REGS: &[&str] = &[
             "ax", "bx", "cx", "dx", "cs", "ss", "ds", "es", "sp", "bp", "si", "di", "ip", "flags",
         ];
@@ -2109,6 +2110,39 @@ impl Checker<'_> {
                         ok = false;
                     }
                     format = Some(f.name.clone());
+                }
+                ast::VectorsItem::Open { space, value, span } => {
+                    let Some(sp) = self
+                        .lookup_item(scope, &space.name)
+                        .filter(|d| self.prog.item(*d).kind == ItemKind::Space)
+                    else {
+                        self.error(
+                            module,
+                            "E1049",
+                            space.span,
+                            format!(
+                                "`{}` is not an address space of `{}`",
+                                space.name,
+                                d.target.dotted()
+                            ),
+                        );
+                        ok = false;
+                        continue;
+                    };
+                    let cell = self.spaces.get(&sp).map(|i| i.cell_bits).unwrap_or(8);
+                    match self.eval_const(scope, &HashMap::new(), value) {
+                        Some(ConstVal::Int(v)) if Ty::UInt(cell).fits(v) => open.push((sp, v)),
+                        Some(_) => {
+                            self.error(
+                                module,
+                                "E1049",
+                                *span,
+                                format!("an open-bus value is one u{cell} cell"),
+                            );
+                            ok = false;
+                        }
+                        None => ok = false,
+                    }
                 }
                 ast::VectorsItem::Memory(m) => match self.lookup_item(scope, &m.name) {
                     Some(sp) if self.prog.item(sp).kind == ItemKind::Space => memory = Some(sp),
@@ -2234,6 +2268,7 @@ impl Checker<'_> {
             glob,
             format,
             memory,
+            open,
             regs,
         })
     }

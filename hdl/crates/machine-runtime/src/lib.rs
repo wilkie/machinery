@@ -43,6 +43,8 @@ pub struct Memory {
     cell_bytes: usize,
     little_endian: bool,
     pages: HashMap<u64, Box<[u8]>>,
+    /// Nothing attached: every read returns this, writes are discarded.
+    open_bus: Option<u128>,
 }
 
 impl Memory {
@@ -53,7 +55,14 @@ impl Memory {
             cell_bytes: cell_bits.div_ceil(8) as usize,
             little_endian,
             pages: HashMap::new(),
+            open_bus: None,
         }
+    }
+
+    /// Detach the space: reads return `value` (masked to a cell), writes are
+    /// discarded. Models an empty bus, as in a test rig.
+    pub fn set_open_bus(&mut self, value: u128) {
+        self.open_bus = Some(value & self.cell_mask());
     }
 
     pub fn cell_bits(&self) -> u32 {
@@ -86,6 +95,9 @@ impl Memory {
 
     /// One cell.
     pub fn read_cell(&self, addr: u64) -> u128 {
+        if let Some(v) = self.open_bus {
+            return v;
+        }
         let base = addr.wrapping_mul(self.cell_bytes as u64);
         let mut v: u128 = 0;
         for i in 0..self.cell_bytes {
@@ -95,6 +107,9 @@ impl Memory {
     }
 
     pub fn write_cell(&mut self, addr: u64, v: u128) {
+        if self.open_bus.is_some() {
+            return;
+        }
         let base = addr.wrapping_mul(self.cell_bytes as u64);
         let v = v & self.cell_mask();
         for i in 0..self.cell_bytes {
@@ -145,6 +160,14 @@ mod tests {
         m.write(0, 16, 0x1234);
         assert_eq!(m.read_cell(0), 0x12);
         assert_eq!(m.read(0, 16), 0x1234);
+    }
+
+    #[test]
+    fn open_bus_reads_its_value() {
+        let mut m = Memory::new(8, true);
+        m.set_open_bus(0xFF);
+        m.write(0x10, 16, 0x1234);
+        assert_eq!(m.read(0x10, 16), 0xFFFF);
     }
 
     #[test]

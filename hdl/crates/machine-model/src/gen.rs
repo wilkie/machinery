@@ -479,7 +479,16 @@ impl<'a> Gen<'a> {
                     ident(&sp.name)
                 )
             }
-            H::SpaceWrite(..) => return Err(GenError::new("space write in expression position")),
+            H::SpaceWrite(d, bits, addr, v) => {
+                let sp = self.spaces[d];
+                format!(
+                    "{{ let a = ({}) as u64; let v = ({}) as u128; {}.{}.write(a, {bits}, v); }}",
+                    self.expr(cx, addr)?,
+                    self.expr(cx, v)?,
+                    cx.recv,
+                    ident(&sp.name)
+                )
+            }
             H::KindSelect(k, args) => {
                 let kind = self.kinds[k];
                 let a: R<Vec<String>> = args.iter().map(|x| self.expr(cx, x)).collect();
@@ -2215,6 +2224,14 @@ impl<'a> Gen<'a> {
                 }
             });
 
+        let mut open = String::new();
+        for (sp, v) in &v.open {
+            let _ = writeln!(
+                open,
+                "        m.{}.set_open_bus({v});",
+                ident(&self.spaces[sp].name)
+            );
+        }
         let mut load = String::new();
         let mut read = String::new();
         let mut masked = String::new();
@@ -2262,7 +2279,7 @@ pub mod vectors {{
     pub const REGS: &[&str] = &[{names}];
 
     fn load(m: &mut {isa_name}, st: &CpuState) -> Result<(), Fault> {{
-        for (name, v) in &st.regs {{
+{open}        for (name, v) in &st.regs {{
             match *name {{
 {load}            _ => {{}}
             }}

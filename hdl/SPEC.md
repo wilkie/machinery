@@ -815,6 +815,9 @@ Built into the language and the compiler:
                 read => CS.selector; }
    }
    ```
+   `open io = 0xFF;` declares a space on which nothing answers in the test
+   environment (reads return the value, writes are discarded); it describes
+   the rig, not the processor.
    The generated runner loads the initial state, steps until `halt`,
    compares every mapped register and every RAM byte the vector mentions
    (registers it omits must be unchanged), masks the executed instruction's

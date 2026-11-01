@@ -558,6 +558,9 @@ pub struct VectorsInfo {
     pub glob: String,
     pub format: String,
     pub memory: DefId,
+    /// Spaces with nothing attached in the test environment: `(space,
+    /// value every read returns)`.
+    pub open: Vec<(DefId, i128)>,
     pub regs: Vec<VectorReg>,
 }
 

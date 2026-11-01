@@ -1154,6 +1154,17 @@ impl Parser {
                 self.expect_semi()?;
                 Ok(VectorsItem::Memory(m))
             }
+            "open" => {
+                let space = self.expect_ident()?;
+                self.expect_punct(Punct::Eq)?;
+                let value = self.parse_expr()?;
+                self.expect_semi()?;
+                Ok(VectorsItem::Open {
+                    space,
+                    value,
+                    span: start.to(self.prev_span()),
+                })
+            }
             "reg" => {
                 let name = self.expect_ident()?;
                 if self.eat_punct(Punct::Eq) {
@@ -1184,7 +1195,7 @@ impl Parser {
             other => Err(self.error(
                 "E0107",
                 key.span,
-                format!("unknown `vectors` item `{other}`; expected `format`, `memory` or `reg`"),
+                format!("unknown `vectors` item `{other}`; expected `format`, `memory`, `open` or `reg`"),
             )),
         }
     }

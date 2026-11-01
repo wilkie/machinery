@@ -2,12 +2,16 @@
 //!
 //! A module is one source file, named by its file stem. Every top-level
 //! declaration becomes an item with a [`DefId`]; module scopes map names to
-//! items, and `use` declarations add imports. No bodies are examined here.
+//! items, and `use` declarations add imports. An `isa` is also a namespace:
+//! its nested declarations (spaces, registers, faults, functions, operands,
+//! operand kinds, instructions, and nested enums/bundles/consts) are items
+//! too, visible by bare name inside the isa and as `Isa::Name` outside. No
+//! bodies are examined here.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use machine_syntax::ast::{self, Decl};
+use machine_syntax::ast::{self, Decl, IsaItem};
 use machine_syntax::diagnostics::{Diagnostic, Diagnostics};
 use machine_syntax::span::Span;
 use machine_syntax::{parse, SourceFile};
@@ -31,6 +35,17 @@ pub enum ItemKind {
     Test,
     Vectors,
     Conformance,
+    // Nested in an `isa`:
+    /// `mode Name : u1 { ... }`: an enum that is also the isa's `mode`
+    /// register.
+    Mode,
+    Space,
+    Register,
+    Fault,
+    Fn,
+    Operand,
+    OperandKind,
+    Instruction,
 }
 
 impl ItemKind {
@@ -48,22 +63,69 @@ impl ItemKind {
             ItemKind::Test => "test",
             ItemKind::Vectors => "vectors",
             ItemKind::Conformance => "conformance",
+            ItemKind::Mode => "mode",
+            ItemKind::Space => "address space",
+            ItemKind::Register => "register",
+            ItemKind::Fault => "fault",
+            ItemKind::Fn => "function",
+            ItemKind::Operand => "operand",
+            ItemKind::OperandKind => "operand kind",
+            ItemKind::Instruction => "instruction",
         }
     }
 
+    /// Items usable as types.
     pub fn is_type(self) -> bool {
-        matches!(self, ItemKind::Enum | ItemKind::Bundle | ItemKind::Union)
+        matches!(
+            self,
+            ItemKind::Enum
+                | ItemKind::Bundle
+                | ItemKind::Union
+                | ItemKind::Mode
+                | ItemKind::Operand
+        )
     }
+
+    /// Enum-like items (`enum` and `mode`).
+    pub fn is_enum(self) -> bool {
+        matches!(self, ItemKind::Enum | ItemKind::Mode)
+    }
+}
+
+/// Where an item's syntax lives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ItemDecl {
+    /// Index into the module's `ast.decls`.
+    Top(usize),
+    /// Index into the `items` of the enclosing `isa` declaration.
+    Isa { isa: DefId, index: usize },
 }
 
 #[derive(Clone, Debug)]
 pub struct Item {
     pub module: ModuleId,
-    /// Index into the module's `ast.decls`.
-    pub decl: usize,
+    pub decl: ItemDecl,
     pub name: String,
     pub kind: ItemKind,
     pub span: Span,
+}
+
+/// What a name inside an `isa` scope denotes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScopeEntry {
+    Item(DefId),
+    /// A register field, visible by bare name (`AL`) and as `AX.AL`.
+    RegField {
+        reg: DefId,
+        index: u32,
+    },
+    /// A register view, visible as `FLAGS.arith` (and by bare name).
+    RegView {
+        reg: DefId,
+        index: u32,
+    },
+    /// The isa's `mode` register.
+    Mode(DefId),
 }
 
 pub struct Module {
@@ -79,6 +141,38 @@ pub struct Module {
 pub struct Program {
     pub modules: Vec<Module>,
     pub items: Vec<Item>,
+    /// Scope of each `isa` item.
+    pub isa_scopes: HashMap<DefId, HashMap<String, ScopeEntry>>,
+}
+
+/// A nested isa declaration before it has an id.
+struct Pending {
+    name: String,
+    kind: ItemKind,
+    span: Span,
+    index: usize,
+}
+
+fn isa_item_pending(item: &IsaItem, index: usize) -> Pending {
+    let (name, kind, span) = match item {
+        IsaItem::Space(d) => (d.name.name.clone(), ItemKind::Space, d.name.span),
+        IsaItem::Register(d) => (d.name.name.clone(), ItemKind::Register, d.name.span),
+        IsaItem::Mode(d) => (d.name.name.clone(), ItemKind::Mode, d.name.span),
+        IsaItem::Fault(d) => (d.name.name.clone(), ItemKind::Fault, d.name.span),
+        IsaItem::Fn(d) => (d.name.name.clone(), ItemKind::Fn, d.name.span),
+        IsaItem::Operand(d) => (d.name.name.clone(), ItemKind::Operand, d.name.span),
+        IsaItem::OperandKind(d) => (d.name.name.clone(), ItemKind::OperandKind, d.name.span),
+        IsaItem::Instruction(d) => (d.name.name.clone(), ItemKind::Instruction, d.name.span),
+        IsaItem::Enum(d) => (d.name.name.clone(), ItemKind::Enum, d.name.span),
+        IsaItem::Bundle(d) => (d.name.name.clone(), ItemKind::Bundle, d.name.span),
+        IsaItem::Const(d) => (d.name.name.clone(), ItemKind::Const, d.name.span),
+    };
+    Pending {
+        name,
+        kind,
+        span,
+        index,
+    }
 }
 
 impl Program {
@@ -88,7 +182,8 @@ impl Program {
     pub fn collect(files: Vec<SourceFile>) -> (Program, Vec<Diagnostics>) {
         let mut modules = Vec::new();
         let mut diagnostics = Vec::new();
-        let mut items = Vec::new();
+        let mut items: Vec<Item> = Vec::new();
+        let mut isa_scopes: HashMap<DefId, HashMap<String, ScopeEntry>> = HashMap::new();
 
         for file in files {
             let parsed = parse(&file.text);
@@ -103,9 +198,11 @@ impl Program {
             });
         }
 
-        // Pass 1: items and module scopes.
-        for (m, module) in modules.iter_mut().enumerate() {
-            for (i, decl) in module.ast.decls.iter().enumerate() {
+        // Pass 1: items and scopes.
+        for m in 0..modules.len() {
+            let mut module_scope: HashMap<String, DefId> = HashMap::new();
+            let decls = &modules[m].ast.decls;
+            for (i, decl) in decls.iter().enumerate() {
                 let (name, kind, span) = match decl {
                     Decl::Enum(d) => (d.name.name.clone(), ItemKind::Enum, d.name.span),
                     Decl::Bundle(d) => (d.name.name.clone(), ItemKind::Bundle, d.name.span),
@@ -134,31 +231,120 @@ impl Program {
                 let id = DefId(items.len() as u32);
                 items.push(Item {
                     module: m,
-                    decl: i,
+                    decl: ItemDecl::Top(i),
                     name: name.clone(),
                     kind,
                     span,
                 });
                 // Tests, vectors and conformance blocks are anonymous; they
                 // are items but not names.
-                if matches!(
+                if !matches!(
                     kind,
                     ItemKind::Test | ItemKind::Vectors | ItemKind::Conformance
                 ) {
-                    continue;
+                    if let Some(prev) = module_scope.insert(name.clone(), id) {
+                        let prev_span = items[prev.0 as usize].span;
+                        diagnostics[m].push(
+                            Diagnostic::error(
+                                "E1001",
+                                span,
+                                format!("`{name}` is defined more than once in this module"),
+                            )
+                            .with_label(prev_span, "first definition here"),
+                        );
+                    }
                 }
-                if let Some(prev) = module.scope.insert(name.clone(), id) {
-                    let prev_span = items[prev.0 as usize].span;
-                    diagnostics[m].push(
-                        Diagnostic::error(
-                            "E1001",
-                            span,
-                            format!("`{name}` is defined more than once in this module"),
-                        )
-                        .with_label(prev_span, "first definition here"),
-                    );
+
+                // Nested isa items.
+                if let Decl::Isa(isa) = decl {
+                    let mut scope: HashMap<String, ScopeEntry> = HashMap::new();
+                    let mut define =
+                        |name: &str,
+                         entry: ScopeEntry,
+                         span: Span,
+                         items: &Vec<Item>,
+                         diags: &mut Diagnostics| {
+                            if let Some(prev) = scope.insert(name.to_string(), entry) {
+                                let mut d = Diagnostic::error(
+                                    "E1001",
+                                    span,
+                                    format!(
+                                        "`{name}` is defined more than once in isa `{}`",
+                                        isa.name.name
+                                    ),
+                                );
+                                if let ScopeEntry::Item(p) = prev {
+                                    d = d.with_label(
+                                        items[p.0 as usize].span,
+                                        "first definition here",
+                                    );
+                                }
+                                diags.push(d);
+                            }
+                        };
+                    for (j, item) in isa.items.iter().enumerate() {
+                        let p = isa_item_pending(item, j);
+                        let nested_id = DefId(items.len() as u32);
+                        items.push(Item {
+                            module: m,
+                            decl: ItemDecl::Isa {
+                                isa: id,
+                                index: p.index,
+                            },
+                            name: p.name.clone(),
+                            kind: p.kind,
+                            span: p.span,
+                        });
+                        define(
+                            &p.name,
+                            ScopeEntry::Item(nested_id),
+                            p.span,
+                            &items,
+                            &mut diagnostics[m],
+                        );
+                        match item {
+                            IsaItem::Register(r) => {
+                                for (fi, f) in r.fields.iter().enumerate() {
+                                    define(
+                                        &f.name.name,
+                                        ScopeEntry::RegField {
+                                            reg: nested_id,
+                                            index: fi as u32,
+                                        },
+                                        f.name.span,
+                                        &items,
+                                        &mut diagnostics[m],
+                                    );
+                                }
+                                for (vi, v) in r.views.iter().enumerate() {
+                                    define(
+                                        &v.name.name,
+                                        ScopeEntry::RegView {
+                                            reg: nested_id,
+                                            index: vi as u32,
+                                        },
+                                        v.name.span,
+                                        &items,
+                                        &mut diagnostics[m],
+                                    );
+                                }
+                            }
+                            IsaItem::Mode(md) => {
+                                define(
+                                    "mode",
+                                    ScopeEntry::Mode(id),
+                                    md.name.span,
+                                    &items,
+                                    &mut diagnostics[m],
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                    isa_scopes.insert(id, scope);
                 }
             }
+            modules[m].scope = module_scope;
         }
 
         // Pass 2: imports.
@@ -242,16 +428,139 @@ impl Program {
             }
         }
 
-        (Program { modules, items }, diagnostics)
+        (
+            Program {
+                modules,
+                items,
+                isa_scopes,
+            },
+            diagnostics,
+        )
     }
 
     pub fn item(&self, id: DefId) -> &Item {
         &self.items[id.0 as usize]
     }
 
+    /// The enclosing `isa` of a nested item.
+    pub fn parent_isa(&self, id: DefId) -> Option<DefId> {
+        match self.item(id).decl {
+            ItemDecl::Top(_) => None,
+            ItemDecl::Isa { isa, .. } => Some(isa),
+        }
+    }
+
+    /// The top-level declaration of an item. Panics for nested isa items;
+    /// use the typed accessors for those.
     pub fn decl(&self, id: DefId) -> &Decl {
         let item = self.item(id);
-        &self.modules[item.module].ast.decls[item.decl]
+        match item.decl {
+            ItemDecl::Top(i) => &self.modules[item.module].ast.decls[i],
+            ItemDecl::Isa { .. } => panic!("item `{}` is nested in an isa", item.name),
+        }
+    }
+
+    pub fn isa_decl(&self, id: DefId) -> &ast::IsaDecl {
+        match self.decl(id) {
+            Decl::Isa(d) => d,
+            _ => panic!("not an isa"),
+        }
+    }
+
+    /// The syntax of a nested isa item.
+    pub fn isa_item(&self, id: DefId) -> Option<&IsaItem> {
+        match self.item(id).decl {
+            ItemDecl::Top(_) => None,
+            ItemDecl::Isa { isa, index } => Some(&self.isa_decl(isa).items[index]),
+        }
+    }
+
+    pub fn enum_decl(&self, id: DefId) -> &ast::EnumDecl {
+        match self.item(id).decl {
+            ItemDecl::Top(_) => match self.decl(id) {
+                Decl::Enum(d) => d,
+                _ => panic!("not an enum"),
+            },
+            ItemDecl::Isa { .. } => match self.isa_item(id).unwrap() {
+                IsaItem::Enum(d) | IsaItem::Mode(d) => d,
+                _ => panic!("not an enum"),
+            },
+        }
+    }
+
+    pub fn bundle_decl(&self, id: DefId) -> &ast::BundleDecl {
+        match self.item(id).decl {
+            ItemDecl::Top(_) => match self.decl(id) {
+                Decl::Bundle(d) => d,
+                _ => panic!("not a bundle"),
+            },
+            ItemDecl::Isa { .. } => match self.isa_item(id).unwrap() {
+                IsaItem::Bundle(d) => d,
+                _ => panic!("not a bundle"),
+            },
+        }
+    }
+
+    pub fn const_decl(&self, id: DefId) -> &ast::ConstDecl {
+        match self.item(id).decl {
+            ItemDecl::Top(_) => match self.decl(id) {
+                Decl::Const(d) => d,
+                _ => panic!("not a const"),
+            },
+            ItemDecl::Isa { .. } => match self.isa_item(id).unwrap() {
+                IsaItem::Const(d) => d,
+                _ => panic!("not a const"),
+            },
+        }
+    }
+
+    pub fn space_decl(&self, id: DefId) -> &ast::SpaceDecl {
+        match self.isa_item(id) {
+            Some(IsaItem::Space(d)) => d,
+            _ => panic!("not a space"),
+        }
+    }
+
+    pub fn register_decl(&self, id: DefId) -> &ast::RegisterDecl {
+        match self.isa_item(id) {
+            Some(IsaItem::Register(d)) => d,
+            _ => panic!("not a register"),
+        }
+    }
+
+    pub fn fault_decl(&self, id: DefId) -> &ast::FaultDecl {
+        match self.isa_item(id) {
+            Some(IsaItem::Fault(d)) => d,
+            _ => panic!("not a fault"),
+        }
+    }
+
+    pub fn fn_decl(&self, id: DefId) -> &ast::FnDecl {
+        match self.isa_item(id) {
+            Some(IsaItem::Fn(d)) => d,
+            _ => panic!("not a fn"),
+        }
+    }
+
+    pub fn operand_decl(&self, id: DefId) -> &ast::OperandDecl {
+        match self.isa_item(id) {
+            Some(IsaItem::Operand(d)) => d,
+            _ => panic!("not an operand"),
+        }
+    }
+
+    pub fn operand_kind_decl(&self, id: DefId) -> &ast::OperandKindDecl {
+        match self.isa_item(id) {
+            Some(IsaItem::OperandKind(d)) => d,
+            _ => panic!("not an operand kind"),
+        }
+    }
+
+    pub fn instruction_decl(&self, id: DefId) -> &ast::InstructionDecl {
+        match self.isa_item(id) {
+            Some(IsaItem::Instruction(d)) => d,
+            _ => panic!("not an instruction"),
+        }
     }
 
     pub fn module_of(&self, id: DefId) -> &Module {
@@ -264,7 +573,12 @@ impl Program {
         m.scope.get(name).or_else(|| m.imports.get(name)).copied()
     }
 
-    /// `Enum` or `module::Enum`-free display name of an item.
+    /// Look a name up inside an isa's scope.
+    pub fn lookup_in_isa(&self, isa: DefId, name: &str) -> Option<ScopeEntry> {
+        self.isa_scopes.get(&isa).and_then(|s| s.get(name)).copied()
+    }
+
+    /// Display name of an item.
     pub fn item_name(&self, id: DefId) -> String {
         self.item(id).name.clone()
     }
@@ -275,6 +589,17 @@ impl Program {
             .iter()
             .enumerate()
             .filter(move |(_, it)| it.kind == kind)
+            .map(|(i, _)| DefId(i as u32))
+    }
+
+    /// Nested items of an isa, of one kind, in definition order.
+    pub fn isa_items_of(&self, isa: DefId, kind: ItemKind) -> impl Iterator<Item = DefId> + '_ {
+        self.items
+            .iter()
+            .enumerate()
+            .filter(move |(_, it)| {
+                it.kind == kind && matches!(it.decl, ItemDecl::Isa { isa: p, .. } if p == isa)
+            })
             .map(|(i, _)| DefId(i as u32))
     }
 }

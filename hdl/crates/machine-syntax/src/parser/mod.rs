@@ -184,6 +184,20 @@ impl Parser {
         self.peek().span
     }
 
+    /// Was the previously consumed token a `}`?
+    pub(crate) fn prev_is_rbrace(&self) -> bool {
+        let mut i = self.pos;
+        while i > 0 {
+            i -= 1;
+            match &self.tokens[i].kind {
+                TokenKind::DocComment(_) => continue,
+                TokenKind::Punct(Punct::RBrace) => return true,
+                _ => return false,
+            }
+        }
+        false
+    }
+
     // -- predicates ---------------------------------------------------------
 
     pub(crate) fn at_punct(&self, p: Punct) -> bool {
@@ -546,6 +560,10 @@ impl Parser {
                     ate_sep = true;
                     break;
                 }
+            }
+            if !ate_sep && self.prev_is_rbrace() {
+                // A `}`-terminated item needs no separator, as in Rust.
+                continue;
             }
             if !ate_sep {
                 let names: Vec<String> = seps.iter().map(|s| format!("`{}`", s.as_str())).collect();

@@ -9,8 +9,8 @@ use machine_syntax::span::Span;
 use super::{Checker, FnCtx};
 use crate::builtins::{bits_for, Builtin};
 use crate::consteval::{truncate, ConstVal};
-use crate::hir::{self, Expr, ExprKind as H};
-use crate::program::ItemKind;
+use crate::hir::{self, Expr, ExprKind as H, RuleKind};
+use crate::program::{DefId, ItemKind, ScopeEntry};
 use crate::ty::Ty;
 
 fn mk(kind: H, ty: Ty, span: Span) -> Expr {
@@ -25,6 +25,14 @@ fn const_int(v: i128, span: Span) -> Expr {
     mk(H::Int(v), Ty::Const(v), span)
 }
 
+/// What a bare name used as the base of `.method(...)`, `.field` or `[i]`
+/// denotes when it is not a value.
+enum Namespace {
+    Space(DefId),
+    Kind(DefId),
+    Operand(u32),
+}
+
 impl Checker<'_> {
     /// Check `e`, then coerce to `expected` if given.
     pub fn check_expr(&mut self, cx: &mut FnCtx, e: &ast::Expr, expected: Option<&Ty>) -> Expr {
@@ -36,7 +44,8 @@ impl Checker<'_> {
     }
 
     /// Make `e` have type `target`: compile-time constants take the target
-    /// width (if they fit), `!` becomes anything, everything else must match.
+    /// width (if they fit), `!` becomes anything, tuple literals coerce
+    /// element-wise, everything else must match.
     pub fn coerce(&mut self, cx: &FnCtx, e: Expr, target: &Ty) -> Expr {
         if e.ty.is_error() || target.is_error() {
             return Expr {
@@ -52,6 +61,29 @@ impl Checker<'_> {
                 } else {
                     let msg = format!("constant {v} does not fit in `{}`", self.display(target));
                     self.error(cx.module, "E1006", e.span, msg);
+                    err(e.span)
+                }
+            }
+            (Ty::Tuple(have), Ty::Tuple(want)) if have.len() == want.len() => {
+                if let H::Tuple(items) = e.kind {
+                    let mut out = Vec::new();
+                    let mut bad = false;
+                    for (item, (_, t)) in items.into_iter().zip(want) {
+                        let c = self.coerce(cx, item, t);
+                        bad |= c.ty.is_error();
+                        out.push(c);
+                    }
+                    if bad {
+                        return err(e.span);
+                    }
+                    mk(H::Tuple(out), target.clone(), e.span)
+                } else if have.iter().zip(want).all(|((_, a), (_, b))| a == b) {
+                    Expr {
+                        ty: target.clone(),
+                        ..e
+                    }
+                } else {
+                    self.mismatch(cx.module, e.span, target, &e.ty);
                     err(e.span)
                 }
             }
@@ -91,6 +123,17 @@ impl Checker<'_> {
                     Ty::Error
                 }
             }
+            (Ty::Tuple(xs), Ty::Tuple(ys)) if xs.len() == ys.len() => {
+                let mut out = Vec::new();
+                for ((nx, x), (ny, y)) in xs.iter().zip(ys) {
+                    let t = self.join(cx, x, y, span);
+                    if t.is_error() {
+                        return Ty::Error;
+                    }
+                    out.push((nx.clone().or_else(|| ny.clone()), t));
+                }
+                Ty::Tuple(out)
+            }
             (a, b) if a == b => a.clone(),
             (a, b) => {
                 let msg = format!(
@@ -101,6 +144,30 @@ impl Checker<'_> {
                 self.error(cx.module, "E1005", span, msg);
                 Ty::Error
             }
+        }
+    }
+
+    /// If `e` is a bare name that denotes a namespace rather than a value
+    /// (an address space, an operand kind, an instruction operand), say which.
+    fn namespace_of(&self, cx: &FnCtx, e: &ast::Expr) -> Option<Namespace> {
+        let A::Path(p) = &e.kind else { return None };
+        if p.segments.len() != 1 {
+            return None;
+        }
+        let name = &p.segments[0].name;
+        if cx.lookup_local(name).is_some() || cx.generics.contains_key(name) {
+            return None;
+        }
+        if let Some(idx) = cx.lookup_operand(name) {
+            return Some(Namespace::Operand(idx));
+        }
+        match self.lookup(cx.scope, name) {
+            Some(ScopeEntry::Item(def)) => match self.prog.item(def).kind {
+                ItemKind::Space => Some(Namespace::Space(def)),
+                ItemKind::OperandKind => Some(Namespace::Kind(def)),
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -159,10 +226,47 @@ impl Checker<'_> {
             }
             A::Cast(inner, ty) => self.check_cast(cx, inner, ty, span),
             A::Field(base, field) => {
+                // `operand.rule` queries do not read the operand.
+                if let Some(Namespace::Operand(idx)) = self.namespace_of(cx, base) {
+                    return self.operand_rule(cx, idx, field, span);
+                }
+                match self.namespace_of(cx, base) {
+                    Some(Namespace::Space(_)) => {
+                        self.error_with(
+                            cx.module,
+                            Diagnostic::error("E1031", span, "an address space has no fields")
+                                .with_note("read with `space.read_u8(addr)` or `space[addr]`"),
+                        );
+                        return err(span);
+                    }
+                    Some(Namespace::Kind(_)) => {
+                        self.error(
+                            cx.module,
+                            "E1037",
+                            span,
+                            "an operand kind is used as `kind.select(field)`",
+                        );
+                        return err(span);
+                    }
+                    _ => {}
+                }
                 let base = self.check_expr(cx, base, None);
                 self.check_field(cx, base, field, span)
             }
-            A::Index(base, index) => self.check_index(cx, base, index, span),
+            A::Index(base, index) => {
+                if let Some(Namespace::Space(def)) = self.namespace_of(cx, base) {
+                    let Some(info) = self.spaces.get(&def).cloned() else {
+                        return err(span);
+                    };
+                    let addr = self.check_expr(cx, index, Some(&info.addr));
+                    return mk(
+                        H::SpaceCell(def, Box::new(addr)),
+                        Ty::UInt(info.cell_bits),
+                        span,
+                    );
+                }
+                self.check_index(cx, base, index, span)
+            }
             A::Slice(base, hi, lo) => self.check_slice(cx, base, hi, lo, span),
             A::Call {
                 callee,
@@ -177,7 +281,7 @@ impl Checker<'_> {
             A::Tuple(items) => self.check_tuple(cx, items, expected, span),
             A::ArrayLit(items) => self.check_array_lit(cx, items, expected, span),
             A::ArrayRepeat(item, count) => {
-                let n = match self.eval_const(cx.module, &cx.generics.clone(), count) {
+                let n = match self.eval_const(cx.scope, &cx.generics.clone(), count) {
                     Some(ConstVal::Int(n)) if n >= 0 => n as u64,
                     Some(_) => {
                         self.error(
@@ -296,6 +400,8 @@ impl Checker<'_> {
         (block, ty)
     }
 
+    // -- names ------------------------------------------------------------------
+
     fn check_path(&mut self, cx: &mut FnCtx, p: &ast::Path, span: Span) -> Expr {
         match p.segments.len() {
             1 => {
@@ -311,43 +417,17 @@ impl Checker<'_> {
                 if let Some(v) = cx.generics.get(name) {
                     return const_int(*v, span);
                 }
-                match self.prog.lookup(cx.module, name) {
-                    Some(def) => match self.prog.item(def).kind {
-                        ItemKind::Const => match self.const_info(def) {
-                            Some(info) => match info.value {
-                                ConstVal::Int(v) => mk(H::Int(v), info.ty.clone(), span),
-                                ConstVal::Bool(b) => mk(H::Bool(b), Ty::Bool, span),
-                            },
-                            None => err(span),
-                        },
-                        ItemKind::Unit => {
-                            self.error(
-                                cx.module,
-                                "E1000",
-                                span,
-                                format!("`{name}` is a unit; call it with `{name}(...)`"),
-                            );
-                            err(span)
-                        }
-                        kind if kind.is_type() => {
-                            self.error(
-                                cx.module,
-                                "E1000",
-                                span,
-                                format!("`{name}` is a type, not a value"),
-                            );
-                            err(span)
-                        }
-                        kind => {
-                            self.error(
-                                cx.module,
-                                "E1000",
-                                span,
-                                format!("`{name}` is a {}, not a value", kind.describe()),
-                            );
-                            err(span)
-                        }
-                    },
+                if let Some(idx) = cx.lookup_operand(name) {
+                    let kind = cx.operands[idx as usize].1;
+                    let ty = self
+                        .kinds
+                        .get(&kind)
+                        .map(|k| k.ty.clone())
+                        .unwrap_or(Ty::Error);
+                    return mk(H::OperandRead(idx), ty, span);
+                }
+                match self.lookup(cx.scope, name) {
+                    Some(entry) => self.entry_value(cx, entry, name, span),
                     None => {
                         if Builtin::from_name(name).is_some() {
                             self.error(
@@ -364,36 +444,59 @@ impl Checker<'_> {
                 }
             }
             2 => {
-                let (type_name, variant) = (&p.segments[0].name, &p.segments[1].name);
-                let Some(def) = self.prog.lookup(cx.module, type_name) else {
+                let (first, second) = (&p.segments[0], &p.segments[1]);
+                let Some(def) = self.lookup_item(cx.scope, &first.name) else {
                     self.error(
                         cx.module,
                         "E1000",
-                        p.segments[0].span,
-                        format!("unknown name `{type_name}`"),
+                        first.span,
+                        format!("unknown name `{}`", first.name),
                     );
                     return err(span);
                 };
-                if self.prog.item(def).kind != ItemKind::Enum {
-                    self.error(
-                        cx.module,
-                        "E1000",
-                        span,
-                        format!("`{type_name}` is not an enum"),
-                    );
-                    return err(span);
-                }
-                let Some(info) = self.enum_info(def) else {
-                    return err(span);
-                };
-                match info.variants.iter().position(|(n, _)| n == variant) {
-                    Some(idx) => mk(H::Variant(def, idx as u32), Ty::Enum(def), span),
-                    None => {
+                match self.prog.item(def).kind {
+                    k if k.is_enum() => {
+                        let Some(info) = self.enum_info(def) else {
+                            return err(span);
+                        };
+                        match info.variants.iter().position(|(n, _)| *n == second.name) {
+                            Some(idx) => mk(H::Variant(def, idx as u32), Ty::Enum(def), span),
+                            None => {
+                                self.error(
+                                    cx.module,
+                                    "E1000",
+                                    second.span,
+                                    format!(
+                                        "enum `{}` has no variant `{}`",
+                                        first.name, second.name
+                                    ),
+                                );
+                                err(span)
+                            }
+                        }
+                    }
+                    ItemKind::Isa => match self.prog.lookup_in_isa(def, &second.name) {
+                        Some(entry) => self.entry_value(cx, entry, &second.name, span),
+                        None => {
+                            self.error(
+                                cx.module,
+                                "E1000",
+                                second.span,
+                                format!("isa `{}` has no item `{}`", first.name, second.name),
+                            );
+                            err(span)
+                        }
+                    },
+                    k => {
                         self.error(
                             cx.module,
                             "E1000",
-                            p.segments[1].span,
-                            format!("enum `{type_name}` has no variant `{variant}`"),
+                            span,
+                            format!(
+                                "`{}` is a {}; `::` applies to enums and isas",
+                                first.name,
+                                k.describe()
+                            ),
                         );
                         err(span)
                     }
@@ -410,6 +513,124 @@ impl Checker<'_> {
             }
         }
     }
+
+    /// The value of a resolved scope entry used as an expression.
+    fn entry_value(&mut self, cx: &FnCtx, entry: ScopeEntry, name: &str, span: Span) -> Expr {
+        match entry {
+            ScopeEntry::RegField { reg, index } => match self.registers.get(&reg) {
+                Some(r) => {
+                    let ty = r.fields[index as usize].ty.clone();
+                    mk(H::RegField(reg, index), ty, span)
+                }
+                None => err(span),
+            },
+            ScopeEntry::RegView { reg, index } => match self.registers.get(&reg) {
+                Some(r) => {
+                    let ty = r.views[index as usize].ty.clone();
+                    mk(H::RegView(reg, index), ty, span)
+                }
+                None => err(span),
+            },
+            ScopeEntry::Mode(isa) => match self.isa_modes.get(&isa) {
+                Some(&m) => mk(H::Mode(isa), Ty::Enum(m), span),
+                None => err(span),
+            },
+            ScopeEntry::Item(def) => match self.prog.item(def).kind {
+                ItemKind::Const => match self.const_info(def) {
+                    Some(info) => match info.value {
+                        ConstVal::Int(v) => mk(H::Int(v), info.ty.clone(), span),
+                        ConstVal::Bool(b) => mk(H::Bool(b), Ty::Bool, span),
+                    },
+                    None => err(span),
+                },
+                ItemKind::Register => match self.registers.get(&def) {
+                    Some(r) => {
+                        let ty = r.ty.clone();
+                        mk(H::Register(def), ty, span)
+                    }
+                    None => err(span),
+                },
+                ItemKind::Unit | ItemKind::Fn => {
+                    self.error(
+                        cx.module,
+                        "E1000",
+                        span,
+                        format!("`{name}` is a function; call it with `{name}(...)`"),
+                    );
+                    err(span)
+                }
+                ItemKind::Fault => {
+                    self.error(
+                        cx.module,
+                        "E1000",
+                        span,
+                        format!("`{name}` is a fault; use `raise {name}(...)`"),
+                    );
+                    err(span)
+                }
+                ItemKind::Space => {
+                    self.error(cx.module, "E1000", span, format!("`{name}` is an address space; use `{name}.read_u8(addr)` or `{name}[addr]`"));
+                    err(span)
+                }
+                ItemKind::OperandKind => {
+                    self.error(
+                        cx.module,
+                        "E1000",
+                        span,
+                        format!("`{name}` is an operand kind; use `{name}.select(field)`"),
+                    );
+                    err(span)
+                }
+                kind if kind.is_type() => {
+                    self.error(
+                        cx.module,
+                        "E1000",
+                        span,
+                        format!("`{name}` is a type, not a value"),
+                    );
+                    err(span)
+                }
+                kind => {
+                    self.error(
+                        cx.module,
+                        "E1000",
+                        span,
+                        format!("`{name}` is a {}, not a value", kind.describe()),
+                    );
+                    err(span)
+                }
+            },
+        }
+    }
+
+    /// `operand.rule` where `rule` is a query such as `is_mem`.
+    fn operand_rule(&mut self, cx: &mut FnCtx, idx: u32, rule: &ast::Ident, span: Span) -> Expr {
+        let (oname, kind) = cx.operands[idx as usize].clone();
+        let Some(ksig) = self.kinds.get(&kind).cloned() else {
+            return err(span);
+        };
+        match ksig
+            .rules
+            .iter()
+            .position(|(n, k, _)| *n == rule.name && *k == RuleKind::IsMem)
+        {
+            Some(ri) => mk(H::OperandRule(idx, ri as u32), Ty::Bool, span),
+            None => {
+                let msg = format!(
+                    "operand `{oname}` of kind `{}` has no query `{}`",
+                    self.prog.item_name(kind),
+                    rule.name
+                );
+                self.error_with(
+                    cx.module,
+                    Diagnostic::error("E1037", rule.span, msg).with_note("queries are `is_mem`"),
+                );
+                err(span)
+            }
+        }
+    }
+
+    // -- operators ---------------------------------------------------------------
 
     fn check_unary(
         &mut self,
@@ -657,13 +878,12 @@ impl Checker<'_> {
 
     fn fold(&mut self, cx: &FnCtx, op: BinaryOp, x: i128, y: i128, span: Span) -> Expr {
         use BinaryOp::*;
-        let int = |v: Option<i128>| v;
         let r = match op {
-            Add => int(x.checked_add(y)),
-            Sub => int(x.checked_sub(y)),
-            Mul => int(x.checked_mul(y)),
-            Div => int(x.checked_div(y)),
-            Rem => int(x.checked_rem(y)),
+            Add => x.checked_add(y),
+            Sub => x.checked_sub(y),
+            Mul => x.checked_mul(y),
+            Div => x.checked_div(y),
+            Rem => x.checked_rem(y),
             BitAnd => Some(x & y),
             BitOr => Some(x | y),
             BitXor => Some(x ^ y),
@@ -698,7 +918,7 @@ impl Checker<'_> {
     ) -> Expr {
         let inner = self.check_expr(cx, inner, None);
         let generics = cx.generics.clone();
-        let target = self.resolve_type(cx.module, &generics, ty);
+        let target = self.resolve_type(cx.scope, &generics, ty);
         if inner.ty.is_error() || target.is_error() {
             return err(span);
         }
@@ -765,7 +985,28 @@ impl Checker<'_> {
         mk(H::Cast(Box::new(inner)), target, span)
     }
 
+    // -- members --------------------------------------------------------------------
+
     fn check_field(&mut self, cx: &mut FnCtx, base: Expr, field: &ast::Ident, span: Span) -> Expr {
+        // Register fields and views: `AX.AL`, `FLAGS.arith`.
+        if let H::Register(def) = &base.kind {
+            if let Some(r) = self.registers.get(def).cloned() {
+                if let Some(i) = r.fields.iter().position(|f| f.name == field.name) {
+                    return mk(H::RegField(*def, i as u32), r.fields[i].ty.clone(), span);
+                }
+                if let Some(i) = r.views.iter().position(|v| v.name == field.name) {
+                    return mk(H::RegView(*def, i as u32), r.views[i].ty.clone(), span);
+                }
+                if !matches!(base.ty, Ty::Bundle(_)) {
+                    let msg = format!(
+                        "register `{}` has no field or view `{}`",
+                        r.name, field.name
+                    );
+                    self.error(cx.module, "E1008", field.span, msg);
+                    return err(span);
+                }
+            }
+        }
         match &base.ty {
             Ty::Bundle(def) => {
                 let Some(info) = self.bundle_info(*def) else {
@@ -805,6 +1046,59 @@ impl Checker<'_> {
                     err(span)
                 }
             },
+            Ty::Operand(def) => {
+                let Some(info) = self.operands.get(def).cloned() else {
+                    return err(span);
+                };
+                if field.name == "tail" {
+                    if info.tail.is_none() {
+                        let msg = format!("operand `{}` has no `tail`", info.name);
+                        self.error(cx.module, "E1036", field.span, msg);
+                        return err(span);
+                    }
+                    let d = *def;
+                    return mk(H::OperandTail(Box::new(base)), Ty::OperandTail(d), span);
+                }
+                match info.fields.iter().position(|f| f.name == field.name) {
+                    Some(i) => {
+                        let ty = info.fields[i].ty.clone();
+                        mk(H::OperandField(Box::new(base), i as u32), ty, span)
+                    }
+                    None => {
+                        let msg = format!("operand `{}` has no field `{}`", info.name, field.name);
+                        self.error(cx.module, "E1008", field.span, msg);
+                        err(span)
+                    }
+                }
+            }
+            Ty::OperandTail(def) => {
+                let Some(info) = self.operands.get(def).cloned() else {
+                    return err(span);
+                };
+                let target = info
+                    .tail_set
+                    .iter()
+                    .copied()
+                    .find(|d| self.prog.item_name(*d) == field.name);
+                match target {
+                    Some(t) => mk(H::TailOperand(Box::new(base), t), Ty::Operand(t), span),
+                    None => {
+                        let names: Vec<String> = info
+                            .tail_set
+                            .iter()
+                            .map(|d| self.prog.item_name(*d))
+                            .collect();
+                        let msg = format!(
+                            "`{}` cannot follow `{}`; its tail is one of: {}",
+                            field.name,
+                            info.name,
+                            names.join(", ")
+                        );
+                        self.error(cx.module, "E1036", field.span, msg);
+                        err(span)
+                    }
+                }
+            }
             Ty::Error => err(span),
             t => {
                 let msg = format!("`{}` has no fields", self.display(t));
@@ -869,10 +1163,10 @@ impl Checker<'_> {
         let base = self.check_expr(cx, base, None);
         let generics = cx.generics.clone();
         let hi_v = self
-            .eval_const(cx.module, &generics, hi)
+            .eval_const(cx.scope, &generics, hi)
             .and_then(|v| v.as_int());
         let lo_v = self
-            .eval_const(cx.module, &generics, lo)
+            .eval_const(cx.scope, &generics, lo)
             .and_then(|v| v.as_int());
         let (Some(hi_v), Some(lo_v)) = (hi_v, lo_v) else {
             return err(span);
@@ -902,6 +1196,8 @@ impl Checker<'_> {
         )
     }
 
+    // -- calls ------------------------------------------------------------------------
+
     fn check_call(
         &mut self,
         cx: &mut FnCtx,
@@ -911,72 +1207,236 @@ impl Checker<'_> {
         expected: Option<&Ty>,
         span: Span,
     ) -> Expr {
+        // Method-style calls on namespaces: `mem.read_u8(a)`, `r8.select(n)`.
+        if let A::Field(base, method) = &callee.kind {
+            if !generics.is_empty() {
+                self.error(
+                    cx.module,
+                    "E1016",
+                    span,
+                    "methods take no generic arguments",
+                );
+                return err(span);
+            }
+            return match self.namespace_of(cx, base) {
+                Some(Namespace::Space(def)) => self.space_method(cx, def, method, args, span),
+                Some(Namespace::Kind(def)) => self.kind_select(cx, def, method, args, span),
+                Some(Namespace::Operand(_)) => {
+                    self.error(
+                        cx.module,
+                        "E1037",
+                        span,
+                        "operand queries are written without parentheses: `dst.is_mem`",
+                    );
+                    err(span)
+                }
+                None => {
+                    self.error_with(
+                        cx.module,
+                        Diagnostic::error(
+                            "E1020",
+                            callee.span,
+                            "only units, isa functions and built-in functions can be called here",
+                        )
+                        .with_note(
+                            "method-style calls (`port.read(...)`) belong to rtl and model bodies",
+                        ),
+                    );
+                    err(span)
+                }
+            };
+        }
         let A::Path(path) = &callee.kind else {
-            self.error_with(
+            self.error(
                 cx.module,
-                Diagnostic::error("E1020", callee.span, "only units and built-in functions can be called here")
-                    .with_note("method-style calls (`port.read(...)`, `mem.write(...)`) belong to rtl and model bodies"),
+                "E1020",
+                callee.span,
+                "this expression is not callable",
             );
             return err(span);
         };
-        if path.segments.len() != 1 {
-            self.error(
-                cx.module,
-                "E1000",
-                path.span,
-                format!("unknown function `{}`", path.dotted()),
-            );
-            return err(span);
-        }
-        let name = &path.segments[0].name;
 
-        if cx.lookup_local(name).is_some() {
-            self.error(
-                cx.module,
-                "E1012",
-                callee.span,
-                format!("`{name}` is a local value and cannot be called"),
-            );
-            return err(span);
-        }
-        let def = self.prog.lookup(cx.module, name);
-        if def.is_none() {
-            if let Some(b) = Builtin::from_name(name) {
+        let def = match path.segments.len() {
+            1 => {
+                let name = &path.segments[0].name;
+                if cx.shadows(name) {
+                    self.error(
+                        cx.module,
+                        "E1012",
+                        callee.span,
+                        format!("`{name}` is a local value and cannot be called"),
+                    );
+                    return err(span);
+                }
+                match self.lookup_item(cx.scope, name) {
+                    Some(d) => d,
+                    None => {
+                        if self.lookup(cx.scope, name).is_some() {
+                            self.error(
+                                cx.module,
+                                "E1012",
+                                callee.span,
+                                format!("`{name}` is a register field and cannot be called"),
+                            );
+                            return err(span);
+                        }
+                        if let Some(b) = Builtin::from_name(name) {
+                            if !generics.is_empty() {
+                                self.error(
+                                    cx.module,
+                                    "E1016",
+                                    span,
+                                    "built-in functions take no generic arguments",
+                                );
+                                return err(span);
+                            }
+                            return self.check_builtin(cx, b, args, expected, span);
+                        }
+                        self.error(
+                            cx.module,
+                            "E1000",
+                            callee.span,
+                            format!("unknown function `{name}`"),
+                        );
+                        return err(span);
+                    }
+                }
+            }
+            2 => match self.resolve_isa_path(cx, path) {
+                Some(d) => d,
+                None => {
+                    self.error(
+                        cx.module,
+                        "E1000",
+                        path.span,
+                        format!("unknown function `{}`", path.dotted()),
+                    );
+                    return err(span);
+                }
+            },
+            _ => {
+                self.error(
+                    cx.module,
+                    "E1000",
+                    path.span,
+                    format!("unknown function `{}`", path.dotted()),
+                );
+                return err(span);
+            }
+        };
+        let name = path.last().name.clone();
+
+        match self.prog.item(def).kind {
+            ItemKind::Unit => self.unit_call(cx, def, &name, generics, args, span),
+            ItemKind::Fn => {
                 if !generics.is_empty() {
                     self.error(
                         cx.module,
                         "E1016",
                         span,
-                        "built-in functions take no generic arguments",
+                        "isa functions take no generic arguments",
                     );
                     return err(span);
                 }
-                return self.check_builtin(cx, b, args, expected, span);
+                self.fn_call(cx, def, &name, args, span)
             }
+            ItemKind::Fault => {
+                self.error(
+                    cx.module,
+                    "E1038",
+                    callee.span,
+                    format!("`{name}` is a fault; use `raise {name}(...)`"),
+                );
+                err(span)
+            }
+            kind => {
+                let msg = format!("`{name}` is a {}, not a function", kind.describe());
+                self.error(cx.module, "E1012", callee.span, msg);
+                err(span)
+            }
+        }
+    }
+
+    /// Match call arguments to parameters: all positional or all named.
+    fn order_args<'a>(
+        &mut self,
+        cx: &FnCtx,
+        what: &str,
+        params: &[(String, Ty)],
+        args: &'a [ast::Arg],
+        span: Span,
+    ) -> Option<Vec<&'a ast::Arg>> {
+        let named = args.iter().filter(|a| a.name.is_some()).count();
+        if named != 0 && named != args.len() {
             self.error(
                 cx.module,
-                "E1000",
-                callee.span,
-                format!("unknown function `{name}`"),
+                "E1007",
+                span,
+                "arguments are either all positional or all named",
             );
-            return err(span);
+            return None;
         }
-        let def = def.unwrap();
-        if self.prog.item(def).kind != ItemKind::Unit {
+        if args.len() != params.len() {
             let msg = format!(
-                "`{name}` is a {}, not a unit",
-                self.prog.item(def).kind.describe()
+                "{what} takes {} argument(s), {} given",
+                params.len(),
+                args.len()
             );
-            self.error(cx.module, "E1012", callee.span, msg);
-            return err(span);
+            self.error(cx.module, "E1007", span, msg);
+            return None;
         }
+        let mut ordered: Vec<Option<&ast::Arg>> = vec![None; params.len()];
+        for (i, a) in args.iter().enumerate() {
+            match &a.name {
+                None => ordered[i] = Some(a),
+                Some(n) => match params.iter().position(|(p, _)| p == &n.name) {
+                    Some(idx) => {
+                        if ordered[idx].is_some() {
+                            self.error(
+                                cx.module,
+                                "E1007",
+                                n.span,
+                                format!("argument `{}` given twice", n.name),
+                            );
+                            return None;
+                        }
+                        ordered[idx] = Some(a);
+                    }
+                    None => {
+                        self.error(
+                            cx.module,
+                            "E1007",
+                            n.span,
+                            format!("{what} has no parameter `{}`", n.name),
+                        );
+                        return None;
+                    }
+                },
+            }
+        }
+        Some(
+            ordered
+                .into_iter()
+                .map(|a| a.expect("every slot filled"))
+                .collect(),
+        )
+    }
 
+    fn unit_call(
+        &mut self,
+        cx: &mut FnCtx,
+        def: DefId,
+        name: &str,
+        generics: &[ast::GenericArg],
+        args: &[ast::Arg],
+        span: Span,
+    ) -> Expr {
         // Generic arguments: compile-time integers.
         let mut gen_vals = Vec::new();
         let generics_env = cx.generics.clone();
         for g in generics {
             match g {
-                ast::GenericArg::Expr(e) => match self.eval_const(cx.module, &generics_env, e) {
+                ast::GenericArg::Expr(e) => match self.eval_const(cx.scope, &generics_env, e) {
                     Some(ConstVal::Int(v)) => gen_vals.push(v),
                     Some(ConstVal::Bool(_)) => {
                         self.error(cx.module, "E1013", e.span, "generic arguments are integers");
@@ -998,62 +1458,163 @@ impl Checker<'_> {
         let Some((inst, sig)) = self.instantiate_unit(def, gen_vals, span, cx.module) else {
             return err(span);
         };
+        let Some(ordered) = self.order_args(cx, &format!("unit `{name}`"), &sig.params, args, span)
+        else {
+            return err(span);
+        };
+        let mut hargs = Vec::new();
+        for (a, (_, pty)) in ordered.iter().zip(&sig.params) {
+            hargs.push(self.check_expr(cx, &a.value, Some(pty)));
+        }
+        mk(H::Call(inst, hargs), sig.ret, span)
+    }
 
-        // Arguments: positional or all named.
-        let named = args.iter().filter(|a| a.name.is_some()).count();
-        if named != 0 && named != args.len() {
+    fn fn_call(
+        &mut self,
+        cx: &mut FnCtx,
+        def: DefId,
+        name: &str,
+        args: &[ast::Arg],
+        span: Span,
+    ) -> Expr {
+        let Some(sig) = self.fn_sig(def) else {
+            return err(span);
+        };
+        let Some(ordered) = self.order_args(cx, &format!("fn `{name}`"), &sig.params, args, span)
+        else {
+            return err(span);
+        };
+        let mut hargs = Vec::new();
+        for (a, (_, pty)) in ordered.iter().zip(&sig.params) {
+            hargs.push(self.check_expr(cx, &a.value, Some(pty)));
+        }
+        mk(H::FnCall(def, hargs), sig.ret.clone(), span)
+    }
+
+    /// `space.read_uN(addr)` / `space.write_uN(addr, value)`.
+    fn space_method(
+        &mut self,
+        cx: &mut FnCtx,
+        def: DefId,
+        method: &ast::Ident,
+        args: &[ast::Arg],
+        span: Span,
+    ) -> Expr {
+        let Some(info) = self.spaces.get(&def).cloned() else {
+            return err(span);
+        };
+        let (is_write, bits) = match method
+            .name
+            .strip_prefix("read_u")
+            .map(|w| (false, w))
+            .or_else(|| method.name.strip_prefix("write_u").map(|w| (true, w)))
+        {
+            Some((w, digits)) => match digits.parse::<u32>() {
+                Ok(bits) if bits >= 1 => (w, bits),
+                _ => {
+                    self.error(
+                        cx.module,
+                        "E1031",
+                        method.span,
+                        format!("unknown address space method `{}`", method.name),
+                    );
+                    return err(span);
+                }
+            },
+            None => {
+                self.error_with(
+                    cx.module,
+                    Diagnostic::error("E1031", method.span, format!("unknown address space method `{}`", method.name))
+                        .with_note(format!("use `{0}.read_u8(addr)`, `{0}.read_u16(addr)`, `{0}.write_u8(addr, v)` ...", info.name)),
+                );
+                return err(span);
+            }
+        };
+        if bits % info.cell_bits != 0 || bits > 128 {
+            let msg = format!(
+                "`{}` accesses {bits} bits, which is not a multiple of the {}-bit cell (max 128)",
+                method.name, info.cell_bits
+            );
+            self.error(cx.module, "E1031", method.span, msg);
+            return err(span);
+        }
+        if args.iter().any(|a| a.name.is_some()) {
             self.error(
                 cx.module,
                 "E1007",
                 span,
-                "arguments are either all positional or all named",
+                "address space methods take positional arguments",
             );
             return err(span);
         }
-        if args.len() != sig.params.len() {
+        let want = if is_write { 2 } else { 1 };
+        if args.len() != want {
             let msg = format!(
-                "unit `{name}` takes {} argument(s), {} given",
-                sig.params.len(),
+                "`{}` takes {want} argument(s), {} given",
+                method.name,
                 args.len()
             );
             self.error(cx.module, "E1007", span, msg);
             return err(span);
         }
-        let mut ordered: Vec<Option<&ast::Arg>> = vec![None; sig.params.len()];
-        for (i, a) in args.iter().enumerate() {
-            match &a.name {
-                None => ordered[i] = Some(a),
-                Some(n) => match sig.params.iter().position(|(p, _)| p == &n.name) {
-                    Some(idx) => {
-                        if ordered[idx].is_some() {
-                            self.error(
-                                cx.module,
-                                "E1007",
-                                n.span,
-                                format!("argument `{}` given twice", n.name),
-                            );
-                            return err(span);
-                        }
-                        ordered[idx] = Some(a);
-                    }
-                    None => {
-                        self.error(
-                            cx.module,
-                            "E1007",
-                            n.span,
-                            format!("unit `{name}` has no parameter `{}`", n.name),
-                        );
-                        return err(span);
-                    }
-                },
-            }
+        let addr = self.check_expr(cx, &args[0].value, Some(&info.addr));
+        if is_write {
+            let value = self.check_expr(cx, &args[1].value, Some(&Ty::UInt(bits)));
+            mk(
+                H::SpaceWrite(def, bits, Box::new(addr), Box::new(value)),
+                Ty::Unit,
+                span,
+            )
+        } else {
+            mk(
+                H::SpaceRead(def, bits, Box::new(addr)),
+                Ty::UInt(bits),
+                span,
+            )
         }
+    }
+
+    /// `kind.select(args)`: a place chosen by the kind's `select` rule.
+    fn kind_select(
+        &mut self,
+        cx: &mut FnCtx,
+        def: DefId,
+        method: &ast::Ident,
+        args: &[ast::Arg],
+        span: Span,
+    ) -> Expr {
+        let Some(sig) = self.kinds.get(&def).cloned() else {
+            return err(span);
+        };
+        if method.name != "select" {
+            self.error(
+                cx.module,
+                "E1037",
+                method.span,
+                format!(
+                    "operand kinds have one method, `select`; `{}` is not it",
+                    method.name
+                ),
+            );
+            return err(span);
+        }
+        let Some((_, (_, _, params))) = sig.rule(RuleKind::Select) else {
+            let msg = format!(
+                "kind `{}` is built `from` an operand and has no `select`",
+                self.prog.item_name(def)
+            );
+            self.error(cx.module, "E1037", span, msg);
+            return err(span);
+        };
+        let params = params.clone();
+        let Some(ordered) = self.order_args(cx, "`select`", &params, args, span) else {
+            return err(span);
+        };
         let mut hargs = Vec::new();
-        for (slot, (_, pty)) in ordered.iter().zip(&sig.params) {
-            let a = slot.expect("every slot filled");
+        for (a, (_, pty)) in ordered.iter().zip(&params) {
             hargs.push(self.check_expr(cx, &a.value, Some(pty)));
         }
-        mk(H::Call(inst, hargs), sig.ret, span)
+        mk(H::KindSelect(def, hargs), sig.ty.clone(), span)
     }
 
     fn check_builtin(
@@ -1160,7 +1721,7 @@ impl Checker<'_> {
                 }
                 let x = self.check_expr(cx, &args[0].value, None);
                 let generics = cx.generics.clone();
-                let n = match self.eval_const(cx.module, &generics, &args[1].value) {
+                let n = match self.eval_const(cx.scope, &generics, &args[1].value) {
                     Some(ConstVal::Int(n)) if n >= 1 => n as u32,
                     Some(_) => {
                         self.error(
@@ -1231,6 +1792,8 @@ impl Checker<'_> {
         }
     }
 
+    // -- literals ------------------------------------------------------------------------
+
     fn check_bundle_lit(
         &mut self,
         cx: &mut FnCtx,
@@ -1239,22 +1802,18 @@ impl Checker<'_> {
         rest_default: bool,
         span: Span,
     ) -> Expr {
-        if ty_path.segments.len() != 1 {
+        let def = match ty_path.segments.len() {
+            1 => self.lookup_item(cx.scope, &ty_path.segments[0].name),
+            2 => self.resolve_isa_path(cx, ty_path),
+            _ => None,
+        };
+        let name = ty_path.last().name.clone();
+        let Some(def) = def else {
             self.error(
                 cx.module,
                 "E1000",
                 ty_path.span,
                 format!("unknown bundle `{}`", ty_path.dotted()),
-            );
-            return err(span);
-        }
-        let name = &ty_path.segments[0].name;
-        let Some(def) = self.prog.lookup(cx.module, name) else {
-            self.error(
-                cx.module,
-                "E1000",
-                ty_path.span,
-                format!("unknown bundle `{name}`"),
             );
             return err(span);
         };
@@ -1297,7 +1856,7 @@ impl Checker<'_> {
             let value = match &f.value {
                 Some(v) => self.check_expr(cx, v, Some(&fty)),
                 None => {
-                    // Shorthand: a local of the same name.
+                    // Shorthand: a name in scope.
                     let p = ast::Path::single(f.name.clone());
                     let e = self.check_path(cx, &p, f.name.span);
                     self.coerce(cx, e, &fty)
@@ -1481,6 +2040,33 @@ impl Checker<'_> {
             .collect();
         let n = out.len() as u64;
         mk(H::Array(out), Ty::Array(Box::new(elem_ty), n), span)
+    }
+
+    /// An array literal whose element type is known but whose length is not
+    /// (`run bytes [...]`).
+    pub fn check_array_of(
+        &mut self,
+        cx: &mut FnCtx,
+        e: &ast::Expr,
+        elem: &Ty,
+    ) -> Option<Vec<Expr>> {
+        match &e.kind {
+            A::ArrayLit(items) => {
+                let mut out = Vec::new();
+                let mut ok = true;
+                for item in items {
+                    let h = self.check_expr(cx, item, Some(elem));
+                    ok &= !h.ty.is_error();
+                    out.push(h);
+                }
+                ok.then_some(out)
+            }
+            _ => {
+                let msg = format!("expected an array literal of `{}`", self.display(elem));
+                self.error(cx.module, "E1005", e.span, msg);
+                None
+            }
+        }
     }
 
     fn check_match_expr(

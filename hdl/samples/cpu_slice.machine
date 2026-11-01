@@ -42,6 +42,9 @@ isa I286Isa {
         view arith: ArithFlags { cf: CF, pf: PF, af: AF, zf: ZF, sf: SF, of: OF }
     }
 
+    /// Why memory is being touched; `translate` checks rights by it.
+    enum Access : u2 { Read, Write, Execute }
+
     fault UD { vector: 6, class: Fault }
     fault GP(error: u16) { vector: 13, class: Fault, pushes_error_code: true }
 
@@ -86,7 +89,7 @@ isa I286Isa {
     }
 
     /// 8-bit register or memory through ModRM.
-    operand_kind rm8 : u8 from ModRM {
+    operand_kind rm8 : u8 from m: ModRM {
         is_mem => m.mod != 3;
         read  => if m.mod == 3 { r8.select(m.rm) } else { let (s, o) = effective_address(m); mem.read_u8(translate(s, o, 1, Access::Read)) };
         write(v: u8) => if m.mod == 3 { r8.select(m.rm) = v; } else { let (s, o) = effective_address(m); mem.write_u8(translate(s, o, 1, Access::Write), v); };
@@ -98,7 +101,7 @@ isa I286Isa {
     /// to the first operand.
     instruction Add_rm8_r8 {
         mnemonic "add";
-        encoding { opcode 0x00; modrm { reg: r8, rm: rm8 } }
+        encoding { opcode 0x00; ModRM { reg: r8 } }   // rm8 is built from the fetched ModRM
         operands (dst: rm8, src: r8);
         flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
         semantics {
@@ -116,7 +119,7 @@ isa I286Isa {
     /// without storing the result.
     instruction Cmp_rm8_r8 {
         mnemonic "cmp";
-        encoding { opcode 0x38; modrm { reg: r8, rm: rm8 } }
+        encoding { opcode 0x38; ModRM { reg: r8 } }
         operands (dst: rm8, src: r8);
         flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
         semantics {

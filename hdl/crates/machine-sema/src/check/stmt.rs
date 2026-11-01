@@ -1,4 +1,5 @@
-//! Statement checking for unit and test bodies.
+//! Statement checking for unit, isa (fn, kind rule, instruction semantics)
+//! and test bodies.
 
 use machine_syntax::ast::{self, StmtKind as A};
 use machine_syntax::diagnostics::Diagnostic;
@@ -7,7 +8,7 @@ use machine_syntax::span::Span;
 use super::{Checker, FnCtx};
 use crate::builtins::{bits_for, Builtin};
 use crate::consteval::ConstVal;
-use crate::hir::{self, Block, ExprKind, LetTarget, Stmt, StmtKind as H};
+use crate::hir::{self, Block, ExprKind, LetTarget, RuleKind, Stmt, StmtKind as H};
 use crate::ty::Ty;
 
 impl Checker<'_> {
@@ -15,7 +16,8 @@ impl Checker<'_> {
         cx.push_scope();
         let mut stmts = Vec::new();
         let mut diverged_at: Option<Span> = None;
-        for s in &b.stmts {
+        let n = b.stmts.len();
+        for (i, s) in b.stmts.iter().enumerate() {
             if let Some(at) = diverged_at {
                 self.error_with(
                     cx.module,
@@ -24,7 +26,7 @@ impl Checker<'_> {
                 );
                 diverged_at = None; // report once per block
             }
-            let hs = self.check_stmt(cx, s);
+            let hs = self.check_stmt(cx, s, i + 1 == n);
             if stmt_diverges(&hs) {
                 diverged_at = Some(hs.span);
             }
@@ -37,14 +39,27 @@ impl Checker<'_> {
         }
     }
 
-    fn check_stmt(&mut self, cx: &mut FnCtx, s: &ast::Stmt) -> Stmt {
+    /// Where are we, for diagnostics?
+    fn where_(&self, cx: &FnCtx) -> &'static str {
+        if cx.in_test {
+            "a test body"
+        } else if cx.scope.isa.is_some() {
+            "isa code"
+        } else {
+            "a unit"
+        }
+    }
+
+    /// `is_last`: the statement closes its block, so an expression here may
+    /// be the block's value and is not "unused".
+    fn check_stmt(&mut self, cx: &mut FnCtx, s: &ast::Stmt, is_last: bool) -> Stmt {
         let span = s.span;
         let kind = match &s.kind {
             A::Let { pattern, ty, value } => {
                 let declared = match ty {
                     Some(t) => {
                         let generics = cx.generics.clone();
-                        Some(self.resolve_type(cx.module, &generics, t))
+                        Some(self.resolve_type(cx.scope, &generics, t))
                     }
                     None => None,
                 };
@@ -52,17 +67,30 @@ impl Checker<'_> {
                 let target = self.bind_pattern(cx, pattern, &value.ty);
                 H::Let(target, value)
             }
-            A::Assign { .. } | A::Schedule { .. } => {
-                let what = if matches!(s.kind, A::Assign { .. }) {
-                    "wire drive (`=`)"
+            A::Assign { target, value } => {
+                if cx.scope.isa.is_none() {
+                    let where_ = self.where_(cx);
+                    self.error_with(
+                        cx.module,
+                        Diagnostic::error("E1020", span, format!("wire drive (`=`) is not allowed in {where_}"))
+                            .with_note("units are pure functions: bind values with `let` and produce results with `return`"),
+                    );
+                    H::Error
+                } else if let Some(idx) = self.operand_target(cx, target) {
+                    self.check_operand_write(cx, idx, value, span)
                 } else {
-                    "register update (`<-`)"
-                };
-                let where_ = if cx.in_test { "a test body" } else { "a unit" };
+                    match self.check_assign(cx, target, value) {
+                        Some((place, v)) => H::Assign(place, v),
+                        None => H::Error,
+                    }
+                }
+            }
+            A::Schedule { .. } => {
+                let where_ = self.where_(cx);
                 self.error_with(
                     cx.module,
-                    Diagnostic::error("E1020", span, format!("{what} is not allowed in {where_}"))
-                        .with_note("units are pure functions: bind values with `let` and produce results with `return`"),
+                    Diagnostic::error("E1020", span, format!("register update (`<-`) is not allowed in {where_}"))
+                        .with_note("`<-` schedules a clocked register in rtl; architectural state is assigned with `=`"),
                 );
                 H::Error
             }
@@ -88,9 +116,15 @@ impl Checker<'_> {
                         });
                         H::Unreachable(msg)
                     }
+                    ExprKind::SpaceWrite(def, bits, addr, value) => {
+                        H::SpaceWrite(def, bits, *addr, *value)
+                    }
                     kind => {
                         let he = hir::Expr { kind, ..he };
-                        if !matches!(he.ty, Ty::Unit | Ty::Never | Ty::Error) && !is_block_like(e) {
+                        if !is_last
+                            && !matches!(he.ty, Ty::Unit | Ty::Never | Ty::Error)
+                            && !is_block_like(e)
+                        {
                             self.warning(
                                 cx.module,
                                 "W1002",
@@ -111,7 +145,7 @@ impl Checker<'_> {
                 let then_b = self.check_block(cx, then_branch);
                 let else_s = else_branch
                     .as_ref()
-                    .map(|e| Box::new(self.check_stmt(cx, e)));
+                    .map(|e| Box::new(self.check_stmt(cx, e, true)));
                 H::If(cond, then_b, else_s)
             }
             A::Match { scrutinee, arms } => {
@@ -167,10 +201,10 @@ impl Checker<'_> {
                 };
                 let generics = cx.generics.clone();
                 let lo_v = self
-                    .eval_const(cx.module, &generics, lo)
+                    .eval_const(cx.scope, &generics, lo)
                     .and_then(ConstVal::as_int);
                 let hi_v = self
-                    .eval_const(cx.module, &generics, hi)
+                    .eval_const(cx.scope, &generics, hi)
                     .and_then(ConstVal::as_int);
                 let (Some(lo_v), Some(hi_v)) = (lo_v, hi_v) else {
                     return Stmt {
@@ -200,7 +234,7 @@ impl Checker<'_> {
                 H::For(id, lo_v, hi_excl, body)
             }
             A::Loop(_) | A::While { .. } | A::Break | A::Continue => {
-                let where_ = if cx.in_test { "test bodies" } else { "units" };
+                let where_ = self.where_(cx);
                 self.error_with(
                     cx.module,
                     Diagnostic::error("E1020", span, format!("loops are not allowed in {where_}"))
@@ -221,10 +255,13 @@ impl Checker<'_> {
                 Some(ret) => match value {
                     Some(v) => {
                         if matches!(ret, Ty::Unit) {
-                            self.error(cx.module, "E1005", v.span, "this unit returns nothing");
+                            self.error(cx.module, "E1005", v.span, "this body returns nothing");
+                            self.check_expr(cx, v, None);
+                            H::Return(None)
+                        } else {
+                            let e = self.check_expr(cx, v, Some(&ret));
+                            H::Return(Some(e))
                         }
-                        let e = self.check_expr(cx, v, Some(&ret));
-                        H::Return(Some(e))
                     }
                     None => {
                         if !matches!(ret, Ty::Unit | Ty::Error) {
@@ -236,6 +273,24 @@ impl Checker<'_> {
                     }
                 },
             },
+            A::Raise(e) => {
+                if cx.scope.isa.is_none() {
+                    self.error(
+                        cx.module,
+                        "E1020",
+                        span,
+                        "`raise` is only allowed in isa code",
+                    );
+                    H::Unreachable(None)
+                } else {
+                    match self.check_raise(cx, e) {
+                        Some((def, args)) => H::Raise(def, args),
+                        // Still diverges, so the error does not cascade into
+                        // "does not return on every path".
+                        None => H::Unreachable(None),
+                    }
+                }
+            }
             A::NamedBlock { name, body } if name.name == "expect" && cx.in_test => {
                 let mut checks = Vec::new();
                 for st in &body.stmts {
@@ -252,6 +307,57 @@ impl Checker<'_> {
                 }
                 H::Expect(checks)
             }
+            A::NamedBlock { name, body }
+                if name.name == "given" && cx.in_test && cx.scope.isa.is_some() =>
+            {
+                H::Given(self.check_given(cx, body))
+            }
+            A::Run(spec) if cx.in_test && cx.scope.isa.is_some() => match spec {
+                ast::RunSpec::Instruction { name, operands } => {
+                    match self.check_run_instruction(cx, name, operands, span) {
+                        Some(k) => k,
+                        None => H::Error,
+                    }
+                }
+                ast::RunSpec::Bytes(e) => match self.check_array_of(cx, e, &Ty::UInt(8)) {
+                    Some(items) => {
+                        let mut bytes = Vec::new();
+                        let mut ok = true;
+                        for it in &items {
+                            match it.kind {
+                                ExprKind::Int(v) => bytes.push(v as u8),
+                                _ => {
+                                    self.error(
+                                        cx.module,
+                                        "E1013",
+                                        it.span,
+                                        "`run bytes` takes constant bytes",
+                                    );
+                                    ok = false;
+                                }
+                            }
+                        }
+                        if ok {
+                            H::RunBytes(bytes)
+                        } else {
+                            H::Error
+                        }
+                    }
+                    None => H::Error,
+                },
+                ast::RunSpec::Cycles { .. } | ast::RunSpec::Block(_) => {
+                    self.error_with(
+                        cx.module,
+                        Diagnostic::error(
+                            "E1020",
+                            span,
+                            "an isa test runs instructions, not cycles",
+                        )
+                        .with_note("use `run instruction Name { ... };` or `run bytes [...];`"),
+                    );
+                    H::Error
+                }
+            },
             A::NamedBlock { .. } | A::Run(_) if cx.in_test => {
                 let what = match &s.kind {
                     A::NamedBlock { name, .. } => format!("`{}`", name.name),
@@ -260,14 +366,14 @@ impl Checker<'_> {
                 self.error_with(
                     cx.module,
                     Diagnostic::error("E1020", span, format!("{what} needs a test target"))
-                        .with_note("write `test \"name\" on <Isa or Component.level> { ... }`; targeted tests are not checked yet"),
+                        .with_note("write `test \"name\" on <Isa or Component.level> { ... }`; component tests are not checked yet"),
                 );
                 H::Error
             }
             A::Error => H::Error,
             other => {
                 let what = stmt_name(other);
-                let where_ = if cx.in_test { "a test body" } else { "a unit" };
+                let where_ = self.where_(cx);
                 self.error(
                     cx.module,
                     "E1020",
@@ -278,6 +384,46 @@ impl Checker<'_> {
             }
         };
         Stmt { kind, span }
+    }
+
+    /// Is this assignment target a bare instruction operand name?
+    fn operand_target(&self, cx: &FnCtx, target: &ast::Expr) -> Option<u32> {
+        let ast::ExprKind::Path(p) = &target.kind else {
+            return None;
+        };
+        if p.segments.len() != 1 {
+            return None;
+        }
+        let name = &p.segments[0].name;
+        if cx.lookup_local(name).is_some() {
+            return None;
+        }
+        cx.lookup_operand(name)
+    }
+
+    fn check_operand_write(
+        &mut self,
+        cx: &mut FnCtx,
+        idx: u32,
+        value: &ast::Expr,
+        span: Span,
+    ) -> H {
+        let (oname, kind) = cx.operands[idx as usize].clone();
+        let Some(sig) = self.kinds.get(&kind).cloned() else {
+            return H::Error;
+        };
+        let writable = sig.source.is_none() || sig.rule(RuleKind::Write).is_some();
+        if !writable {
+            let msg = format!(
+                "operand `{oname}` of kind `{}` is read-only (the kind has no `write` rule)",
+                self.prog.item_name(kind)
+            );
+            self.error(cx.module, "E1037", span, msg);
+            self.check_expr(cx, value, None);
+            return H::Error;
+        }
+        let v = self.check_expr(cx, value, Some(&sig.ty));
+        H::OperandWrite(idx, v)
     }
 
     fn bind_pattern(&mut self, cx: &mut FnCtx, pat: &ast::LetPattern, ty: &Ty) -> LetTarget {
@@ -379,7 +525,7 @@ fn stmt_name(k: &ast::StmtKind) -> &'static str {
 /// Does control flow never continue past this statement?
 pub fn stmt_diverges(s: &Stmt) -> bool {
     match &s.kind {
-        H::Return(_) | H::Unreachable(_) => true,
+        H::Return(_) | H::Unreachable(_) | H::Raise(..) => true,
         H::Expr(e) => matches!(e.ty, Ty::Never),
         H::If(_, then_b, Some(else_s)) => block_diverges(then_b) && stmt_diverges(else_s),
         H::Match(_, arms) => {

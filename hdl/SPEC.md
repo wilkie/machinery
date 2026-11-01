@@ -538,29 +538,35 @@ package carries as separate grammar.
 /// in the first.
 instruction Add_rm8_r8 {
     mnemonic "add";
-    encoding { opcode 0x00; modrm reg: r8, rm: rm8; }
+    encoding { opcode 0x00; ModRM { reg: r8 } }   // rm8 is built from the fetched ModRM
     operands (dst: rm8, src: r8);
     flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
     semantics {
-        let (result, raw) = Alu<8>(AluOp::Add, dst, src, 0);
-        dst = result;
-        FLAGS.arith = AluFlags<8>(AluOp::Add, dst_in, src, raw);   // dst_in: value before the write
+        let a = dst;                 // reads through the operand kind (memory, if the form is memory)
+        let (result, raw) = Alu<8>(AluOp::Add, a, src, 0);
+        dst = result;                // writes through the operand kind
+        FLAGS.arith = AluFlags<8>(AluOp::Add, a, src, raw);
     }
     implements add_rm_reg8;        // rtl routine in the component that uses this isa
     references ["Intel 80286 Programmer's Reference Manual, p. B-3"];
 }
 ```
 
-- `encoding` is the byte-level shape, in a small pattern language: fixed
-  bytes, `modrm` with field constraints, immediates `imm8`/`imm16`,
-  displacements, prefixes. The assembler and disassembler are generated
-  from it. When an `implements` routine exists, the compiler also **derives**
-  the encoding from the routine's `fetch` sequence and reports any mismatch.
+- `encoding` is the byte-level shape: `opcode` bytes and the operands to
+  fetch, in order. A fetched operand may bind its fields to **select
+  kinds** (`ModRM { reg: r8 }`: the `reg` field selects an `r8`); **from
+  kinds** (`rm8 from m: ModRM`) bind implicitly to the fetched operand of
+  their source type. Every operand in `operands` must be bound exactly once.
+  The assembler, disassembler and decoder are generated from this. When an
+  `implements` routine exists, the compiler also **derives** the encoding
+  from the routine's `fetch` sequence and reports any mismatch.
 - `operands` names operands by **operand kind** (`r8`, `rm8`, `imm16`,
   `moffs16`...). Kinds are declared in the ISA with how they are read and
-  written (register select, memory via `translate`, immediate), so
-  `dst = result;` in semantics means "write back through the operand kind's
-  writer", including the memory write and its faults.
+  written (register select, memory via `translate`, immediate), so reading
+  `dst` in semantics means "read through the operand kind" and
+  `dst = result;` means "write back through the operand kind's writer",
+  including the memory write and its faults. `dst.is_mem` queries the
+  kind's `is_mem` rule without reading.
 - `semantics` is imperative, over architectural state, operands and units.
   It may call `fn` helpers and `raise`. It has no notion of cycles.
 - `flags { modifies, undefined, reads }` is checked against the semantics
@@ -585,8 +591,27 @@ operand ModRM {
 }
 ```
 
-Operand kinds are declared once in the ISA and used from both levels. In the
-ISA, `rm8` resolves through `ModRM` to a register or a `translate`d memory
+Operand kinds are declared once in the ISA and used from both levels:
+
+```
+/// 8-bit register by 3-bit selector: a select kind.
+operand_kind r8 : u8 {
+    select(n: u3) => match n { 0 => AL, 1 => CL, 2 => DL, 3 => BL, 4 => AH, 5 => CH, 6 => DH, 7 => BH };
+}
+
+/// 8-bit register or memory through ModRM: a from kind.
+operand_kind rm8 : u8 from m: ModRM {
+    is_mem => m.mod != 3;
+    read => if m.mod == 3 { r8.select(m.rm) } else { mem.read_u8(ea(m)) };
+    write(v: u8) => if m.mod == 3 { r8.select(m.rm) = v; } else { mem.write_u8(ea(m), v); };
+}
+```
+
+A select kind names a register by an encoding field; its `select` rule must
+yield a *place* (every branch assignable). A from kind is built from a
+fetched operand bound to a name (`m`) and has `read`, optionally `write` (a
+kind without `write` is read-only, e.g. immediates) and `is_mem`. In the ISA,
+`rm8` resolves through `ModRM` to a register or a `translate`d memory
 access. In rtl routines, `let m = fetch ModRM;` consumes the operand's bytes
 from the instruction stream via the component's `istream` (a routine the
 component designates), taking the cycles that costs. Because `fetch`

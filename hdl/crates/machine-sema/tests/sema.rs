@@ -105,14 +105,402 @@ fn other_samples_resolve_and_skip_unimplemented_bodies() {
     let kinds: Vec<&str> = c.skipped.iter().map(|s| s.kind).collect();
     assert!(kinds.contains(&"component"));
     assert!(kinds.contains(&"bus"));
-    assert!(kinds.contains(&"isa"));
+    assert!(!kinds.contains(&"isa"), "isas are checked now");
     assert!(kinds.contains(&"system"));
     assert!(kinds.contains(&"conformance"));
     assert!(kinds.contains(&"vectors"));
-    assert!(
-        kinds.contains(&"test"),
-        "targeted tests are skipped: {kinds:?}"
+    // The component test is skipped; the two isa tests are checked.
+    let skipped_tests: Vec<&str> = c
+        .skipped
+        .iter()
+        .filter(|s| s.kind == "test")
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(skipped_tests.len(), 1, "{skipped_tests:?}");
+    assert!(skipped_tests[0].contains("Timer.rtl"));
+    assert_eq!(c.hir.tests.iter().filter(|t| t.isa.is_some()).count(), 2);
+}
+
+#[test]
+fn cpu_slice_isa_is_fully_checked() {
+    let c = check_files(vec![sample("alu.machine"), sample("cpu_slice.machine")]);
+    assert_clean(&c);
+    assert_eq!(c.hir.isas.len(), 1);
+    let isa = &c.hir.isas[0];
+    assert_eq!(isa.name, "I286Isa");
+    assert_eq!(isa.spaces.len(), 2);
+    assert_eq!(isa.registers.len(), 14);
+    assert_eq!(isa.faults.len(), 2);
+    assert_eq!(isa.fns.len(), 2);
+    assert_eq!(isa.operands.len(), 3);
+    assert_eq!(isa.kinds.len(), 2);
+    assert_eq!(isa.instructions.len(), 2);
+    let add = &isa.instructions[0];
+    assert_eq!(add.mnemonic.as_deref(), Some("add"));
+    assert_eq!(add.operands.len(), 2);
+    // dst: rm8 comes from the fetched ModRM (step 1); src: r8 is selected by
+    // its `reg` field (field index 1).
+    assert!(matches!(
+        add.operands[0].source,
+        machine_sema::hir::BindSource::From { step: 1 }
+    ));
+    assert!(matches!(
+        add.operands[1].source,
+        machine_sema::hir::BindSource::Select { step: 1, field: 1 }
+    ));
+    assert_eq!(add.flags.modifies.len(), 6);
+    assert!(add.semantics.is_some());
+    // The ModRM tail can be Disp8 or Disp16.
+    let modrm = isa.operands.iter().find(|o| o.name == "ModRM").unwrap();
+    assert_eq!(modrm.tail_set.len(), 2);
+    assert_eq!(modrm.size, 1);
+    // FLAGS has a view onto six fields.
+    let flags = isa.registers.iter().find(|r| r.name == "FLAGS").unwrap();
+    assert_eq!(flags.views.len(), 1);
+    assert_eq!(flags.views[0].mapping.len(), 6);
+}
+
+const ISA_PRELUDE: &str = r#"
+isa T {
+    space mem: addr u16 -> u8, little_endian;
+    register AX: u16 { AL: u8 @ 0; AH: u8 @ 8; }
+    register BX: u16 { BL: u8 @ 0; BH: u8 @ 8; }
+    register F: u8 { CF: u1 @ 0; ZF: u1 @ 6; }
+    mode Mode : u1 { Real, Protected }
+    fault UD { vector: 6, class: Fault }
+    fault GP(code: u16) { vector: 13, class: Fault, pushes_error_code: true }
+    operand Imm8 { size 1; fields { value: u8 @ 0; } }
+    operand ModRM { size 1; fields { mod: u2 @ 6; reg: u3 @ 3; rm: u3 @ 0; } tail { if mod == 1 { Imm8 } } }
+    operand_kind r8 : u8 { select(n: u3) => match n { 0 => AL, 1 => BL, 2 => AH, _ => BH }; }
+    operand_kind imm8 : u8 from i: Imm8 { read => i.value; }
+    operand_kind rm8 : u8 from m: ModRM {
+        is_mem => m.mod != 3;
+        read => if m.mod == 3 { r8.select(m.rm) } else { mem.read_u8(m.tail.Imm8.value as u16) };
+        write(v: u8) => if m.mod == 3 { r8.select(m.rm) = v; } else { mem.write_u8(m.tail.Imm8.value as u16, v); };
+    }
+"#;
+
+fn isa(body: &str) -> String {
+    format!("{ISA_PRELUDE}\n{body}\n}}")
+}
+
+#[test]
+fn isa_prelude_is_clean() {
+    assert_codes(&isa(""), &[]);
+}
+
+#[test]
+fn isa_registers_are_places_and_fields_are_typed() {
+    assert_codes(&isa("fn f() -> u8 { AL = 1; AX.AH = AL; return AL; }"), &[]);
+    assert_codes(&isa("fn f() -> u16 { AX = AL; return AX; }"), &["E1005"]);
+    assert_codes(&isa("fn f() -> u16 { AX = AL as u16; return AX; }"), &[]);
+    assert_codes(
+        &isa("fn f() -> u1 { F.CF = (AX == 0) as u1; return CF; }"),
+        &[],
     );
+    assert_codes(&isa("fn f() -> u8 { return AX.NOPE; }"), &["E1008"]);
+    assert_codes(
+        &isa("fn f() -> u8 { (AL + 1) = 2; return AL; }"),
+        &["E1030"],
+    );
+    assert_codes(
+        &isa("fn f() -> u8 { let x = AL; x = 2; return x; }"),
+        &["E1030"],
+    );
+    assert_codes(
+        &isa("fn f() -> u8 { mode = Mode::Protected; return (mode == Mode::Real) as u8; }"),
+        &["E1011"],
+    );
+    assert_codes(
+        &isa("fn f() -> u8 { return (mode == Mode::Real) as u1 as u8; }"),
+        &[],
+    );
+    assert_codes(
+        &isa("fn f() -> bool { mode = Mode::Protected; return mode == Mode::Real; }"),
+        &[],
+    );
+    assert_codes(&isa("register AX: u8;"), &["E1001"]);
+    assert_codes(&isa("register Q: u8 { X: u8 @ 4; }"), &["E1017"]);
+}
+
+#[test]
+fn isa_views_map_bundle_fields_to_register_fields() {
+    let b = "bundle Two { c: u1, z: u1 }\n";
+    assert_codes(&format!("{b}{}", isa("register G: u8 { C: u1 @ 0; Z: u1 @ 1; view two: Two { c: C, z: Z } } fn f() -> Two { G.two = Two { c: 1, z: 0 }; return G.two; }")), &[]);
+    assert_codes(
+        &format!(
+            "{b}{}",
+            isa("register G: u8 { C: u1 @ 0; view two: Two { c: C } }")
+        ),
+        &["E1035"],
+    );
+    assert_codes(
+        &format!(
+            "{b}{}",
+            isa("register G: u8 { C: u1 @ 0; W: u2 @ 1; view two: Two { c: C, z: W } }")
+        ),
+        &["E1035"],
+    );
+    assert_codes(
+        &isa("register G: u8 { C: u1 @ 0; view v: u8 { c: C } }"),
+        &["E1035"],
+    );
+}
+
+#[test]
+fn isa_spaces() {
+    assert_codes(&isa("fn f() -> u8 { return mem.read_u8(0x100); }"), &[]);
+    assert_codes(&isa("fn f() -> u16 { return mem.read_u16(AX); }"), &[]);
+    assert_codes(
+        &isa("fn f() -> u8 { mem.write_u8(0x100, AL); return mem[0x100]; }"),
+        &[],
+    );
+    assert_codes(
+        &isa("fn f() -> u8 { mem[0x100] = 5; return mem[AX]; }"),
+        &[],
+    );
+    assert_codes(
+        &isa("fn f() -> u8 { return mem.read_u8(0x10000); }"),
+        &["E1006"],
+    );
+    assert_codes(&isa("fn f() -> u8 { return mem.read_u12(0); }"), &["E1031"]);
+    assert_codes(&isa("fn f() -> u8 { return mem.peek(0); }"), &["E1031"]);
+    assert_codes(&isa("fn f() -> u8 { return mem; }"), &["E1000"]);
+    assert_codes(
+        &isa("fn f() -> u8 { mem.write_u8(0, AX); return 0; }"),
+        &["E1005"],
+    );
+}
+
+#[test]
+fn isa_faults_and_raise() {
+    assert_codes(
+        &isa("fn f() -> u8 { if AL == 0 { raise UD; } raise GP(0); }"),
+        &[],
+    );
+    assert_codes(&isa("fn f() -> u8 { raise GP; }"), &["E1007"]);
+    assert_codes(&isa("fn f() -> u8 { raise GP(1, 2); }"), &["E1007"]);
+    assert_codes(&isa("fn f() -> u8 { raise AX; }"), &["E1038"]);
+    assert_codes(&isa("fn f() -> u8 { raise Nope; }"), &["E1000"]);
+    assert_codes(&isa("fn f() -> u8 { return GP(0); }"), &["E1038"]);
+    assert_codes(&isa("fault Q { vector: 1, class: Weird }"), &["E1038"]);
+    assert_codes(&isa("fault Q { vector: 1 }"), &["W1003"]);
+    assert_codes("unit F() -> u8 { raise X; }", &["E1020"]);
+}
+
+#[test]
+fn isa_fns() {
+    assert_codes(
+        &isa("fn g(a: u8) -> u8 { return a + AL; } fn f() -> u8 { return g(1) + g(a: 2); }"),
+        &[],
+    );
+    assert_codes(
+        &isa("fn g(a: u8) -> u8 { return a; } fn f() -> u8 { return g(1, 2); }"),
+        &["E1007"],
+    );
+    assert_codes(
+        &isa("fn g(a: u8) -> u8 { return a; } fn f() -> u8 { return g(AX); }"),
+        &["E1005"],
+    );
+    assert_codes(&isa("fn g(a: u8) -> (x: u8, y: bool) { return (a, true); } fn f() -> u8 { let (x, _) = g(1); return x + g(2).x; }"), &[]);
+    assert_codes(
+        &isa("fn g() -> u8 { if AL == 0 { return 1; } }"),
+        &["E1015"],
+    );
+    assert_codes(
+        &isa("fn g() { AL = 1; } fn f() -> u8 { g(); return AL; }"),
+        &[],
+    );
+    assert_codes(&isa("fn g() { return 1; }"), &["E1005"]);
+    // From outside the isa.
+    assert_codes(
+        &format!(
+            "{}\nunit U(a: u8) -> u8 {{ return a; }}",
+            isa("fn g(a: u8) -> u8 { return U(a); }")
+        ),
+        &[],
+    );
+    assert_codes(
+        &format!(
+            "{}\ntest \"t\" on T {{ given {{ AL = 3; }} expect {{ T::g(1) == 4; }} }}",
+            isa("fn g(a: u8) -> u8 { return a + AL; }")
+        ),
+        &[],
+    );
+}
+
+#[test]
+fn isa_operands_tails_and_kinds() {
+    assert_codes(&isa("fn f(m: ModRM) -> u2 { return m.mod; }"), &[]);
+    assert_codes(
+        &isa("fn f(m: ModRM) -> u8 { return m.tail.Imm8.value; }"),
+        &[],
+    );
+    assert_codes(
+        &isa("fn f(m: ModRM) -> u8 { return m.tail.ModRM.value; }"),
+        &["E1036"],
+    );
+    assert_codes(
+        &isa("fn f(i: Imm8) -> u8 { return i.tail.Imm8.value; }"),
+        &["E1036"],
+    );
+    assert_codes(&isa("fn f(m: ModRM) -> u8 { return m.nope; }"), &["E1008"]);
+    assert_codes(
+        &isa("operand Bad { size 1; fields { v: u16 @ 0; } }"),
+        &["E1017"],
+    );
+    assert_codes(&isa("operand Bad { fields { v: u8 @ 0; } }"), &["E1036"]);
+    assert_codes(&isa("operand Bad { size 1; tail { AX } }"), &["E1036"]);
+    assert_codes(
+        &isa("operand_kind bad : u8 { read => 1; }"),
+        &["E1037", "E1037"],
+    );
+    assert_codes(
+        &isa("operand_kind bad : u8 from m: ModRM { is_mem => false; }"),
+        &["E1037"],
+    );
+    assert_codes(
+        &isa("operand_kind bad : u8 from m: ModRM { read => 1; write(v: u16) => { AL = 1; }; }"),
+        &["E1037"],
+    );
+    assert_codes(
+        &isa("operand_kind bad : u8 from m: ModRM { read => 1; frob => 2; }"),
+        &["E1037"],
+    );
+    assert_codes(
+        &isa("operand_kind bad : u8 { select(n: u3) => AL + 1; }"),
+        &["E1030"],
+    );
+    assert_codes(
+        &isa("operand_kind bad : u8 { select(n: u3) => AX; }"),
+        &["E1005"],
+    );
+    assert_codes(
+        &isa("fn f() -> u8 { r8.select(3) = 7; return r8.select(0); }"),
+        &[],
+    );
+    assert_codes(&isa("fn f() -> u8 { return r8.select(8); }"), &["E1006"]);
+    assert_codes(&isa("fn f() -> u8 { return rm8.select(0); }"), &["E1037"]);
+}
+
+#[test]
+fn isa_instructions() {
+    let add = r#"
+        instruction Add_rm8_r8 {
+            mnemonic "add";
+            encoding { opcode 0x00; ModRM { reg: r8 } }
+            operands (dst: rm8, src: r8);
+            flags { modifies: [CF, ZF]; }
+            semantics { let a = dst; dst = a + src; F.ZF = (dst == 0) as u1; }
+            timing { cycles: dst.is_mem ? 7 : 2 }
+            allowed_in [Mode::Real, Mode::Protected];
+        }"#;
+    assert_codes(&isa(add), &[]);
+    assert_codes(
+        &isa(r#"instruction I { encoding { opcode 0x00; } }"#),
+        &["E1032"],
+    );
+    assert_codes(&isa(r#"instruction I { mnemonic "i"; }"#), &["E1032"]);
+    assert_codes(
+        &isa(r#"instruction I { mnemonic "i"; encoding { ModRM { reg: r8 } } operands (s: r8); }"#),
+        &["E1032"],
+    );
+    assert_codes(
+        &isa(r#"instruction I { mnemonic "i"; encoding { opcode 0x100; } }"#),
+        &["E1032"],
+    );
+    assert_codes(
+        &isa(r#"instruction I { mnemonic "i"; encoding { opcode 0x00; } operands (d: rm8); }"#),
+        &["E1033"],
+    );
+    assert_codes(
+        &isa(
+            r#"instruction I { mnemonic "i"; encoding { opcode 0x00; ModRM { reg: r8 } } operands (d: rm8); }"#,
+        ),
+        &["E1033"],
+    );
+    assert_codes(
+        &isa(
+            r#"instruction I { mnemonic "i"; encoding { opcode 0x00; ModRM { reg: r8 } } operands (s: r8, t: r8); }"#,
+        ),
+        &["E1033"],
+    );
+    assert_codes(
+        &isa(
+            r#"instruction I { mnemonic "i"; encoding { opcode 0x00; ModRM { reg: rm8 } } operands (d: rm8); }"#,
+        ),
+        &["E1033"],
+    );
+    assert_codes(
+        &isa(
+            r#"instruction I { mnemonic "i"; encoding { opcode 0x00; ModRM { mod: r8 } } operands (s: r8); }"#,
+        ),
+        &["E1033"],
+    );
+    assert_codes(
+        &isa(
+            r#"instruction I { mnemonic "i"; encoding { opcode 0x00; Imm8 } operands (s: imm8); semantics { s = 1; } }"#,
+        ),
+        &["E1037"],
+    );
+    assert_codes(
+        &isa(
+            r#"instruction I { mnemonic "i"; encoding { opcode 0x00; Imm8 } operands (s: imm8); semantics { AL = s; } }"#,
+        ),
+        &[],
+    );
+    assert_codes(
+        &isa(
+            r#"instruction I { mnemonic "i"; encoding { opcode 0x00; Imm8 } operands (s: imm8); flags { modifies: [AX]; } }"#,
+        ),
+        &["E1034"],
+    );
+    assert_codes(
+        &isa(
+            r#"instruction I { mnemonic "i"; encoding { opcode 0x00; Imm8 } operands (s: imm8); semantics { AL = s.is_mem; } }"#,
+        ),
+        &["E1037"],
+    );
+    assert_codes(
+        &isa(
+            r#"instruction I { mnemonic "i"; encoding { opcode 0x00; Imm8 } operands (s: imm8); allowed_in [AX]; }"#,
+        ),
+        &["E1005"],
+    );
+    assert_codes(
+        &isa(
+            r#"instruction I { mnemonic "i"; encoding { opcode 0x00; Imm8 } operands (s: imm8); semantics { raise GP(s as u16); } }"#,
+        ),
+        &[],
+    );
+}
+
+#[test]
+fn isa_tests() {
+    let t = |body: &str| {
+        format!(
+            "{}\ntest \"t\" on T {{ {body} }}",
+            isa(
+                r#"instruction Mov_r8_imm8 { mnemonic "mov"; encoding { opcode 0xB0; ModRM { reg: r8 } Imm8 } operands (dst: r8, src: imm8); semantics { dst = src; } }"#
+            )
+        )
+    };
+    assert_codes(&t("given { AL = 1; mem[0x10] = 2; } run instruction Mov_r8_imm8 { dst: BL, src: 5 }; expect { BL == 5; AL == 1; mem[0x10] == 2; }"), &[]);
+    assert_codes(
+        &t("run bytes [0xB0, 0b11_000_011, 0x05]; expect { BL == 5; }"),
+        &[],
+    );
+    assert_codes(&t("run bytes [0x1B0];"), &["E1006"]);
+    assert_codes(&t("run instruction Mov_r8_imm8 { dst: BL };"), &["E1008"]);
+    assert_codes(
+        &t("run instruction Mov_r8_imm8 { dst: BL, src: 5, x: 1 };"),
+        &["E1008"],
+    );
+    assert_codes(&t("run instruction Nope { };"), &["E1000"]);
+    assert_codes(&t("given { AL + 1 = 2; }"), &["E1030"]);
+    assert_codes(&t("given { let x = 1; }"), &["E1020"]);
+    assert_codes(&t("run 4 cycles;"), &["E1020"]);
+    assert_codes(&t("expect { AL; }"), &["E1005"]);
 }
 
 #[test]

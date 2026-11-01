@@ -713,7 +713,9 @@ impl Parser {
                 self.expect_punct(Punct::Colon)?;
                 let ty = self.parse_type()?;
                 let from = if self.eat_word("from") {
-                    Some(self.parse_path_colons()?)
+                    let binding = self.expect_ident()?;
+                    self.expect_punct(Punct::Colon)?;
+                    Some((binding, self.parse_path_colons()?))
                 } else {
                     None
                 };

@@ -936,8 +936,9 @@ pub struct OperandKindDecl {
     pub docs: Docs,
     pub name: Ident,
     pub ty: Type,
-    /// `from ModRM`
-    pub from: Option<Path>,
+    /// `from m: ModRM`: the source operand and the name it is bound to in
+    /// the rules.
+    pub from: Option<(Ident, Path)>,
     pub rules: Vec<KindRule>,
     pub span: Span,
 }

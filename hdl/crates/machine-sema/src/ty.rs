@@ -11,6 +11,7 @@ pub enum Ty {
     /// `i<N>`
     SInt(u32),
     Bool,
+    /// An `enum` or `mode` item.
     Enum(DefId),
     Bundle(DefId),
     Union(DefId),
@@ -22,11 +23,15 @@ pub enum Ty {
     /// const-parameter expressions have this type; it coerces to any integer
     /// type the value fits in.
     Const(i128),
+    /// A fetched instruction operand (`operand ModRM { ... }`).
+    Operand(DefId),
+    /// The `tail` of an operand: whichever operand followed it, or none.
+    OperandTail(DefId),
     /// String literals (metadata and assertion messages only).
     Str,
     /// The type of statements-as-expressions (`assert(...)`).
     Unit,
-    /// The type of `unreachable(...)`: unifies with anything.
+    /// The type of `unreachable(...)` and `raise`: unifies with anything.
     Never,
     /// Produced after an error; suppresses cascades.
     Error,
@@ -77,7 +82,8 @@ pub fn fmt_ty(ty: &Ty, names: &dyn Fn(DefId) -> String, f: &mut fmt::Formatter<'
         Ty::UInt(w) => write!(f, "u{w}"),
         Ty::SInt(w) => write!(f, "i{w}"),
         Ty::Bool => write!(f, "bool"),
-        Ty::Enum(d) | Ty::Bundle(d) | Ty::Union(d) => write!(f, "{}", names(*d)),
+        Ty::Enum(d) | Ty::Bundle(d) | Ty::Union(d) | Ty::Operand(d) => write!(f, "{}", names(*d)),
+        Ty::OperandTail(d) => write!(f, "tail of {}", names(*d)),
         Ty::Array(t, n) => {
             write!(f, "[")?;
             fmt_ty(t, names, f)?;

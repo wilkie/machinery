@@ -36,10 +36,10 @@ impl Checker<'_> {
                 }
                 let generics = cx.generics.clone();
                 let lo_v = self
-                    .eval_const(cx.module, &generics, lo)
+                    .eval_const(cx.scope, &generics, lo)
                     .and_then(ConstVal::as_int);
                 let hi_v = self
-                    .eval_const(cx.module, &generics, hi)
+                    .eval_const(cx.scope, &generics, hi)
                     .and_then(ConstVal::as_int);
                 let (Some(lo_v), Some(mut hi_v)) = (lo_v, hi_v) else {
                     return Pat::Wildcard;
@@ -125,7 +125,7 @@ impl Checker<'_> {
                 },
                 Ty::UInt(_) | Ty::SInt(_) => {
                     let generics = cx.generics.clone();
-                    match self.eval_const(cx.module, &generics, e) {
+                    match self.eval_const(cx.scope, &generics, e) {
                         Some(ConstVal::Int(v)) => {
                             if !scrut.fits(v) {
                                 let msg = format!(

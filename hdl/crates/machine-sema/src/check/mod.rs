@@ -1,11 +1,12 @@
-//! The checker: resolves types, evaluates constants, instantiates units and
-//! type-checks bodies into HIR.
+//! The checker: resolves types, evaluates constants, instantiates units,
+//! checks isas, and type-checks bodies into HIR.
 
 mod expr;
+mod isa;
 mod pattern;
 mod stmt;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use machine_syntax::ast::{self, Decl};
@@ -14,11 +15,11 @@ use machine_syntax::span::Span;
 
 use crate::consteval::{self, ConstEnv, ConstError, ConstVal};
 use crate::hir::{self, LocalId, UnitInstId};
-use crate::program::{DefId, ItemKind, ModuleId, Program};
+use crate::program::{DefId, ItemKind, ModuleId, Program, ScopeEntry};
 use crate::ty::{Ty, TyDisplay};
 use crate::Skipped;
 
-/// Resolved facts about an `enum`.
+/// Resolved facts about an `enum` (or `mode`).
 #[derive(Debug)]
 pub struct EnumInfo {
     pub width: u32,
@@ -64,26 +65,72 @@ pub struct UnitSig {
     pub ret: Ty,
 }
 
+/// The signature of an isa `fn`.
+#[derive(Clone, Debug)]
+pub struct FnSig {
+    pub params: Vec<(String, Ty)>,
+    pub ret: Ty,
+}
+
+/// `(name, kind, parameter types)` of one operand-kind rule.
+pub type RuleSig = (String, hir::RuleKind, Vec<(String, Ty)>);
+
+/// The signature part of an operand kind: what callers need before the
+/// rule bodies are checked.
+#[derive(Clone, Debug)]
+pub struct KindSig {
+    pub ty: Ty,
+    pub source: Option<DefId>,
+    pub rules: Vec<RuleSig>,
+}
+
+impl KindSig {
+    pub fn rule(
+        &self,
+        kind: hir::RuleKind,
+    ) -> Option<(usize, &RuleSig)> {
+        self.rules.iter().enumerate().find(|(_, r)| r.1 == kind)
+    }
+}
+
+/// The signature part of an instruction, for tests.
+#[derive(Clone, Debug)]
+pub struct InstrSig {
+    pub operands: Vec<(String, DefId)>,
+}
+
+/// Where names are looked up: a module, optionally inside an isa.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scope {
+    pub module: ModuleId,
+    pub isa: Option<DefId>,
+}
+
 /// Per-body checking state.
 pub struct FnCtx {
+    pub scope: Scope,
     pub module: ModuleId,
     pub generics: HashMap<String, i128>,
     pub locals: Vec<hir::Local>,
     scopes: Vec<HashMap<String, LocalId>>,
-    /// `Some` in a unit body; `None` in a test body (no `return`).
+    /// `Some` in a unit/fn body; `None` in a test body (no `return`).
     pub ret: Option<Ty>,
     pub in_test: bool,
+    /// Instruction operands in scope: `(name, kind)`.
+    pub operands: Vec<(String, DefId)>,
 }
 
 impl FnCtx {
-    fn new(module: ModuleId, generics: HashMap<String, i128>, ret: Option<Ty>) -> FnCtx {
+    fn new(scope: Scope, generics: HashMap<String, i128>, ret: Option<Ty>) -> FnCtx {
         FnCtx {
-            module,
+            scope,
+            module: scope.module,
             generics,
             locals: Vec::new(),
             scopes: vec![HashMap::new()],
             ret,
             in_test: false,
+            operands: Vec::new(),
         }
     }
 
@@ -112,6 +159,20 @@ impl FnCtx {
     pub fn lookup_local(&self, name: &str) -> Option<LocalId> {
         self.scopes.iter().rev().find_map(|s| s.get(name).copied())
     }
+
+    pub fn lookup_operand(&self, name: &str) -> Option<u32> {
+        self.operands
+            .iter()
+            .position(|(n, _)| n == name)
+            .map(|i| i as u32)
+    }
+
+    /// Is `name` bound by anything local (local, generic, operand)?
+    pub fn shadows(&self, name: &str) -> bool {
+        self.lookup_local(name).is_some()
+            || self.generics.contains_key(name)
+            || self.lookup_operand(name).is_some()
+    }
 }
 
 pub struct Checker<'p> {
@@ -123,12 +184,23 @@ pub struct Checker<'p> {
     consts: HashMap<DefId, Lazy<ConstInfo>>,
     unit_ids: HashMap<(DefId, Vec<i128>), UnitInstId>,
     /// Units somebody tried to instantiate (even unsuccessfully).
-    unit_attempts: std::collections::HashSet<DefId>,
+    unit_attempts: HashSet<DefId>,
     unit_sigs: Vec<UnitSig>,
     /// `None` while the body is being checked (recursion detection).
     unit_insts: Vec<Option<hir::UnitInst>>,
     tests: Vec<hir::TestBody>,
     skipped: Vec<Skipped>,
+    // --- isa ---
+    pub(crate) spaces: HashMap<DefId, Rc<hir::Space>>,
+    pub(crate) registers: HashMap<DefId, Rc<hir::Register>>,
+    pub(crate) faults: HashMap<DefId, Rc<hir::Fault>>,
+    pub(crate) operands: HashMap<DefId, Rc<hir::Operand>>,
+    pub(crate) kinds: HashMap<DefId, Rc<KindSig>>,
+    fn_sigs: HashMap<DefId, Lazy<FnSig>>,
+    pub(crate) instr_sigs: HashMap<DefId, Rc<InstrSig>>,
+    /// The mode enum of each isa.
+    pub(crate) isa_modes: HashMap<DefId, DefId>,
+    isas: Vec<hir::IsaInfo>,
 }
 
 /// Check every item of a program.
@@ -141,14 +213,26 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
         unions: HashMap::new(),
         consts: HashMap::new(),
         unit_ids: HashMap::new(),
-        unit_attempts: std::collections::HashSet::new(),
+        unit_attempts: HashSet::new(),
         unit_sigs: Vec::new(),
         unit_insts: Vec::new(),
         tests: Vec::new(),
         skipped: Vec::new(),
+        spaces: HashMap::new(),
+        registers: HashMap::new(),
+        faults: HashMap::new(),
+        operands: HashMap::new(),
+        kinds: HashMap::new(),
+        fn_sigs: HashMap::new(),
+        instr_sigs: HashMap::new(),
+        isa_modes: HashMap::new(),
+        isas: Vec::new(),
     };
 
-    for id in prog.items_of(ItemKind::Enum) {
+    for id in prog
+        .items_of(ItemKind::Enum)
+        .chain(prog.items_of(ItemKind::Mode))
+    {
         ck.enum_info(id);
     }
     for id in prog.items_of(ItemKind::Const) {
@@ -159,6 +243,9 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
     }
     for id in prog.items_of(ItemKind::Union) {
         ck.union_info(id);
+    }
+    for id in prog.items_of(ItemKind::Isa) {
+        ck.check_isa(id);
     }
     for id in prog.items_of(ItemKind::Unit) {
         let Decl::Unit(u) = prog.decl(id) else {
@@ -192,7 +279,6 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
         let kind = match item.kind {
             ItemKind::Component => "component",
             ItemKind::Bus => "bus",
-            ItemKind::Isa => "isa",
             ItemKind::System => "system",
             ItemKind::Vectors => "vectors",
             ItemKind::Conformance => "conformance",
@@ -214,6 +300,7 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
         hir::Hir {
             units,
             tests: ck.tests,
+            isas: ck.isas,
         },
         ck.skipped,
     )
@@ -274,6 +361,36 @@ impl<'p> Checker<'p> {
         self.error_with(module, d);
     }
 
+    // -- scopes -----------------------------------------------------------------
+
+    /// The scope an item's own declaration is checked in.
+    pub fn scope_of(&self, id: DefId) -> Scope {
+        Scope {
+            module: self.prog.item(id).module,
+            isa: self.prog.parent_isa(id),
+        }
+    }
+
+    /// Resolve a bare name: isa scope first (when inside one), then the
+    /// module.
+    pub fn lookup(&self, scope: Scope, name: &str) -> Option<ScopeEntry> {
+        if let Some(isa) = scope.isa {
+            if let Some(e) = self.prog.lookup_in_isa(isa, name) {
+                return Some(e);
+            }
+        }
+        self.prog.lookup(scope.module, name).map(ScopeEntry::Item)
+    }
+
+    /// Resolve a bare name to an item (register fields and the like are not
+    /// items).
+    pub fn lookup_item(&self, scope: Scope, name: &str) -> Option<DefId> {
+        match self.lookup(scope, name) {
+            Some(ScopeEntry::Item(d)) => Some(d),
+            _ => None,
+        }
+    }
+
     // -- item resolution --------------------------------------------------------
 
     pub fn enum_info(&mut self, id: DefId) -> Option<Rc<EnumInfo>> {
@@ -309,14 +426,11 @@ impl<'p> Checker<'p> {
     }
 
     fn compute_enum(&mut self, id: DefId) -> Option<EnumInfo> {
-        let module = self.prog.item(id).module;
-        let decl = match self.prog.decl(id) {
-            Decl::Enum(e) => e,
-            Decl::Isa(_) => unreachable!("isa-level enums are not items yet"),
-            _ => unreachable!(),
-        };
+        let scope = self.scope_of(id);
+        let module = scope.module;
+        let decl = self.prog.enum_decl(id);
         let empty = HashMap::new();
-        let width = match self.resolve_type(module, &empty, &decl.repr) {
+        let width = match self.resolve_type(scope, &empty, &decl.repr) {
             Ty::UInt(w) => w,
             Ty::Error => return None,
             other => {
@@ -333,7 +447,7 @@ impl<'p> Checker<'p> {
         let mut ok = true;
         for v in &decl.variants {
             let value = match &v.value {
-                Some(e) => match self.eval_const(module, &empty, e) {
+                Some(e) => match self.eval_const(scope, &empty, e) {
                     Some(ConstVal::Int(x)) => x,
                     Some(ConstVal::Bool(_)) => {
                         self.error(
@@ -420,15 +534,14 @@ impl<'p> Checker<'p> {
             None => {}
         }
         self.bundles.insert(id, Lazy::InProgress);
-        let module = self.prog.item(id).module;
-        let Decl::Bundle(decl) = self.prog.decl(id) else {
-            unreachable!()
-        };
+        let scope = self.scope_of(id);
+        let module = scope.module;
+        let decl = self.prog.bundle_decl(id);
         let empty = HashMap::new();
         let mut fields = Vec::new();
         let mut ok = true;
         for f in &decl.fields {
-            let ty = self.resolve_type(module, &empty, &f.ty);
+            let ty = self.resolve_type(scope, &empty, &f.ty);
             if ty.is_error() {
                 ok = false;
             }
@@ -439,7 +552,7 @@ impl<'p> Checker<'p> {
                 }
             }
             let offset = match &f.offset {
-                Some(e) => match self.eval_const(module, &empty, e) {
+                Some(e) => match self.eval_const(scope, &empty, e) {
                     Some(ConstVal::Int(v)) if v >= 0 => Some(v as u32),
                     Some(_) => {
                         self.error(
@@ -455,7 +568,7 @@ impl<'p> Checker<'p> {
                 None => None,
             };
             let default = match &f.default {
-                Some(e) => self.eval_const(module, &empty, e),
+                Some(e) => self.eval_const(scope, &empty, e),
                 None => None,
             };
             if fields.iter().any(|x: &FieldInfo| x.name == f.name.name) {
@@ -502,7 +615,8 @@ impl<'p> Checker<'p> {
             None => {}
         }
         self.unions.insert(id, Lazy::InProgress);
-        let module = self.prog.item(id).module;
+        let scope = self.scope_of(id);
+        let module = scope.module;
         let Decl::Union(decl) = self.prog.decl(id) else {
             unreachable!()
         };
@@ -512,7 +626,7 @@ impl<'p> Checker<'p> {
         for v in &decl.variants {
             let ty = match &v.payload {
                 Some(t) => {
-                    let ty = self.resolve_type(module, &empty, t);
+                    let ty = self.resolve_type(scope, &empty, t);
                     if ty.is_error() {
                         ok = false;
                     }
@@ -562,13 +676,12 @@ impl<'p> Checker<'p> {
             None => {}
         }
         self.consts.insert(id, Lazy::InProgress);
-        let module = self.prog.item(id).module;
-        let Decl::Const(decl) = self.prog.decl(id) else {
-            unreachable!()
-        };
+        let scope = self.scope_of(id);
+        let module = scope.module;
+        let decl = self.prog.const_decl(id);
         let empty = HashMap::new();
-        let ty = self.resolve_type(module, &empty, &decl.ty);
-        let value = self.eval_const(module, &empty, &decl.value);
+        let ty = self.resolve_type(scope, &empty, &decl.ty);
+        let value = self.eval_const(scope, &empty, &decl.value);
         let result = match (&ty, value) {
             (Ty::Error, _) | (_, None) => None,
             (Ty::UInt(_) | Ty::SInt(_), Some(ConstVal::Int(v))) => {
@@ -629,19 +742,54 @@ impl<'p> Checker<'p> {
         }
     }
 
+    /// Signature of an isa `fn`, resolved on first use.
+    pub fn fn_sig(&mut self, id: DefId) -> Option<Rc<FnSig>> {
+        match self.fn_sigs.get(&id) {
+            Some(Lazy::Done(s)) => return Some(s.clone()),
+            Some(Lazy::Failed) => return None,
+            Some(Lazy::InProgress) => return None,
+            None => {}
+        }
+        self.fn_sigs.insert(id, Lazy::InProgress);
+        let scope = self.scope_of(id);
+        let decl = self.prog.fn_decl(id);
+        let empty = HashMap::new();
+        let mut params = Vec::new();
+        let mut ok = true;
+        for p in &decl.params {
+            let ty = self.resolve_type(scope, &empty, &p.ty);
+            ok &= !ty.is_error();
+            params.push((p.name.name.clone(), ty));
+        }
+        let ret = match &decl.ret {
+            Some(t) => self.resolve_type(scope, &empty, t),
+            None => Ty::Unit,
+        };
+        ok &= !ret.is_error();
+        if ok {
+            let rc = Rc::new(FnSig { params, ret });
+            self.fn_sigs.insert(id, Lazy::Done(rc.clone()));
+            Some(rc)
+        } else {
+            self.fn_sigs.insert(id, Lazy::Failed);
+            None
+        }
+    }
+
     // -- types -------------------------------------------------------------------
 
-    /// Resolve a syntactic type in a module with the given generic bindings.
+    /// Resolve a syntactic type in a scope with the given generic bindings.
     pub fn resolve_type(
         &mut self,
-        module: ModuleId,
+        scope: Scope,
         generics: &HashMap<String, i128>,
         ty: &ast::Type,
     ) -> Ty {
+        let module = scope.module;
         match &ty.kind {
             ast::TypeKind::Unsigned(w) | ast::TypeKind::Signed(w) => {
                 let signed = matches!(ty.kind, ast::TypeKind::Signed(_));
-                match self.eval_const(module, generics, w) {
+                match self.eval_const(scope, generics, w) {
                     Some(ConstVal::Int(v)) if (1..=128).contains(&v) => {
                         if signed {
                             Ty::SInt(v as u32)
@@ -676,20 +824,6 @@ impl<'p> Checker<'p> {
                 Ty::Error
             }
             ast::TypeKind::Named(path, args) => {
-                if path.segments.len() != 1 {
-                    self.error(
-                        module,
-                        "E1003",
-                        path.span,
-                        format!("`{}` is not a type here (namespaced types such as bus roles are not supported in this context)", path.dotted()),
-                    );
-                    return Ty::Error;
-                }
-                let name = &path.segments[0].name;
-                let Some(def) = self.prog.lookup(module, name) else {
-                    self.error(module, "E1000", path.span, format!("unknown type `{name}`"));
-                    return Ty::Error;
-                };
                 if !args.is_empty() {
                     self.error(
                         module,
@@ -699,10 +833,79 @@ impl<'p> Checker<'p> {
                     );
                     return Ty::Error;
                 }
+                let def = match path.segments.len() {
+                    1 => {
+                        let name = &path.segments[0].name;
+                        match self.lookup(scope, name) {
+                            Some(ScopeEntry::Item(d)) => d,
+                            Some(_) => {
+                                self.error(
+                                    module,
+                                    "E1003",
+                                    path.span,
+                                    format!("`{name}` is a register field, not a type"),
+                                );
+                                return Ty::Error;
+                            }
+                            None => {
+                                self.error(
+                                    module,
+                                    "E1000",
+                                    path.span,
+                                    format!("unknown type `{name}`"),
+                                );
+                                return Ty::Error;
+                            }
+                        }
+                    }
+                    2 => {
+                        // `Isa::Type`
+                        let (first, second) = (&path.segments[0], &path.segments[1]);
+                        match self.lookup_item(scope, &first.name) {
+                            Some(isa) if self.prog.item(isa).kind == ItemKind::Isa => {
+                                match self.prog.lookup_in_isa(isa, &second.name) {
+                                    Some(ScopeEntry::Item(d)) => d,
+                                    _ => {
+                                        self.error(
+                                            module,
+                                            "E1000",
+                                            second.span,
+                                            format!(
+                                                "isa `{}` has no type `{}`",
+                                                first.name, second.name
+                                            ),
+                                        );
+                                        return Ty::Error;
+                                    }
+                                }
+                            }
+                            _ => {
+                                self.error(
+                                    module,
+                                    "E1003",
+                                    path.span,
+                                    format!("`{}` is not a type here (namespaced types such as bus roles are not supported in this context)", path.dotted()),
+                                );
+                                return Ty::Error;
+                            }
+                        }
+                    }
+                    _ => {
+                        self.error(
+                            module,
+                            "E1003",
+                            path.span,
+                            format!("`{}` is not a type", path.dotted()),
+                        );
+                        return Ty::Error;
+                    }
+                };
+                let name = path.last().name.clone();
                 match self.prog.item(def).kind {
-                    ItemKind::Enum => Ty::Enum(def),
+                    ItemKind::Enum | ItemKind::Mode => Ty::Enum(def),
                     ItemKind::Bundle => Ty::Bundle(def),
                     ItemKind::Union => Ty::Union(def),
+                    ItemKind::Operand => Ty::Operand(def),
                     kind => {
                         self.error(
                             module,
@@ -715,8 +918,8 @@ impl<'p> Checker<'p> {
                 }
             }
             ast::TypeKind::Array(elem, len) => {
-                let elem_ty = self.resolve_type(module, generics, elem);
-                match self.eval_const(module, generics, len) {
+                let elem_ty = self.resolve_type(scope, generics, elem);
+                match self.eval_const(scope, generics, len) {
                     Some(ConstVal::Int(n)) if n >= 0 => Ty::Array(Box::new(elem_ty), n as u64),
                     Some(_) => {
                         self.error(
@@ -743,7 +946,7 @@ impl<'p> Checker<'p> {
                 }
                 let mut out = Vec::new();
                 for e in elems {
-                    let t = self.resolve_type(module, generics, &e.ty);
+                    let t = self.resolve_type(scope, generics, &e.ty);
                     if t.is_error() {
                         return Ty::Error;
                     }
@@ -795,7 +998,10 @@ impl<'p> Checker<'p> {
                 }
                 total
             }
-            Ty::Const(_) | Ty::Str | Ty::Unit | Ty::Never | Ty::Error => return None,
+            Ty::Operand(d) => (self.operands.get(d)?.size * 8) as u32,
+            Ty::OperandTail(_) | Ty::Const(_) | Ty::Str | Ty::Unit | Ty::Never | Ty::Error => {
+                return None
+            }
         })
     }
 
@@ -804,20 +1010,20 @@ impl<'p> Checker<'p> {
     /// Evaluate a constant expression, reporting failure.
     pub fn eval_const(
         &mut self,
-        module: ModuleId,
+        scope: Scope,
         generics: &HashMap<String, i128>,
         e: &ast::Expr,
     ) -> Option<ConstVal> {
         let mut env = CEnv {
             ck: self,
-            module,
+            scope,
             generics,
         };
         match consteval::eval(e, &mut env) {
             Ok(v) => Some(v),
             Err(err) => {
                 if !err.reported {
-                    self.error(module, "E1013", err.span, err.message);
+                    self.error(scope.module, "E1013", err.span, err.message);
                 }
                 None
             }
@@ -827,13 +1033,13 @@ impl<'p> Checker<'p> {
     /// Try to evaluate without reporting; `None` means "not a constant".
     pub fn try_eval_const(
         &mut self,
-        module: ModuleId,
+        scope: Scope,
         generics: &HashMap<String, i128>,
         e: &ast::Expr,
     ) -> Option<ConstVal> {
         let mut env = CEnv {
             ck: self,
-            module,
+            scope,
             generics,
         };
         consteval::eval(e, &mut env).ok()
@@ -853,7 +1059,8 @@ impl<'p> Checker<'p> {
         let Decl::Unit(decl) = self.prog.decl(def) else {
             unreachable!()
         };
-        let def_module = self.prog.item(def).module;
+        let def_scope = self.scope_of(def);
+        let def_module = def_scope.module;
         self.unit_attempts.insert(def);
         if decl.generics.len() != args.len() {
             let msg = format!(
@@ -906,10 +1113,10 @@ impl<'p> Checker<'p> {
 
         let mut params = Vec::new();
         for p in &decl.params {
-            let ty = self.resolve_type(def_module, &generics, &p.ty);
+            let ty = self.resolve_type(def_scope, &generics, &p.ty);
             params.push((p.name.name.clone(), ty));
         }
-        let ret = self.resolve_type(def_module, &generics, &decl.ret);
+        let ret = self.resolve_type(def_scope, &generics, &decl.ret);
         let sig = UnitSig { params, ret };
 
         let id = UnitInstId(self.unit_insts.len() as u32);
@@ -917,7 +1124,7 @@ impl<'p> Checker<'p> {
         self.unit_sigs.push(sig.clone());
         self.unit_insts.push(None);
 
-        let mut cx = FnCtx::new(def_module, generics, Some(sig.ret.clone()));
+        let mut cx = FnCtx::new(def_scope, generics, Some(sig.ret.clone()));
         let mut param_ids = Vec::new();
         for (p, (name, ty)) in decl.params.iter().zip(&sig.params) {
             if cx.lookup_local(name).is_some() {
@@ -961,20 +1168,45 @@ impl<'p> Checker<'p> {
         let Decl::Test(t) = self.prog.decl(id) else {
             unreachable!()
         };
+        let mut isa = None;
         if let Some(target) = &t.target {
-            self.skipped.push(Skipped {
-                module,
-                kind: "test",
-                name: format!("{:?} on {}", t.name.value, target.dotted()),
-            });
-            return;
+            let resolved = if target.segments.len() == 1 {
+                self.prog.lookup(module, &target.segments[0].name)
+            } else {
+                None
+            };
+            match resolved {
+                Some(def) if self.prog.item(def).kind == ItemKind::Isa => isa = Some(def),
+                Some(def)
+                    if target.segments.len() == 1
+                        && self.prog.item(def).kind != ItemKind::Component =>
+                {
+                    let msg = format!(
+                        "`{}` is a {}; tests run on an isa or on `Component.rtl` / `Component.model`",
+                        target.dotted(),
+                        self.prog.item(def).kind.describe()
+                    );
+                    self.error(module, "E1000", target.span, msg);
+                    return;
+                }
+                _ => {
+                    self.skipped.push(Skipped {
+                        module,
+                        kind: "test",
+                        name: format!("{:?} on {}", t.name.value, target.dotted()),
+                    });
+                    return;
+                }
+            }
         }
-        let mut cx = FnCtx::new(module, HashMap::new(), None);
+        let scope = Scope { module, isa };
+        let mut cx = FnCtx::new(scope, HashMap::new(), None);
         cx.in_test = true;
         let body = self.check_block(&mut cx, &t.body);
         self.tests.push(hir::TestBody {
             def: id,
             name: t.name.value.clone(),
+            isa,
             locals: cx.locals,
             body,
         });
@@ -984,7 +1216,7 @@ impl<'p> Checker<'p> {
 /// Const-evaluation environment backed by the checker.
 struct CEnv<'a, 'p> {
     ck: &'a mut Checker<'p>,
-    module: ModuleId,
+    scope: Scope,
     generics: &'a HashMap<String, i128>,
 }
 
@@ -993,8 +1225,8 @@ impl ConstEnv for CEnv<'_, '_> {
         if let Some(v) = self.generics.get(name) {
             return Ok(ConstVal::Int(*v));
         }
-        match self.ck.prog.lookup(self.module, name) {
-            Some(def) if self.ck.prog.item(def).kind == ItemKind::Const => {
+        match self.ck.lookup(self.scope, name) {
+            Some(ScopeEntry::Item(def)) if self.ck.prog.item(def).kind == ItemKind::Const => {
                 match self.ck.const_info(def) {
                     Some(info) => Ok(info.value),
                     None => Err(ConstError {
@@ -1004,12 +1236,17 @@ impl ConstEnv for CEnv<'_, '_> {
                     }),
                 }
             }
-            Some(def) => Err(ConstError {
+            Some(ScopeEntry::Item(def)) => Err(ConstError {
                 span,
                 message: format!(
                     "`{name}` is a {}, not a constant",
                     self.ck.prog.item(def).kind.describe()
                 ),
+                reported: false,
+            }),
+            Some(_) => Err(ConstError {
+                span,
+                message: format!("`{name}` is architectural state, not a constant"),
                 reported: false,
             }),
             None => Err(ConstError {
@@ -1026,14 +1263,14 @@ impl ConstEnv for CEnv<'_, '_> {
         variant: &str,
         span: Span,
     ) -> Result<ConstVal, ConstError> {
-        let Some(def) = self.ck.prog.lookup(self.module, enum_name) else {
+        let Some(def) = self.ck.lookup_item(self.scope, enum_name) else {
             return Err(ConstError {
                 span,
                 message: format!("unknown enum `{enum_name}`"),
                 reported: false,
             });
         };
-        if self.ck.prog.item(def).kind != ItemKind::Enum {
+        if !self.ck.prog.item(def).kind.is_enum() {
             return Err(ConstError {
                 span,
                 message: format!("`{enum_name}` is not an enum"),
@@ -1058,7 +1295,7 @@ impl ConstEnv for CEnv<'_, '_> {
     }
 
     fn cast_width(&mut self, ty: &ast::Type) -> Result<(bool, u32), ConstError> {
-        match self.ck.resolve_type(self.module, self.generics, ty) {
+        match self.ck.resolve_type(self.scope, self.generics, ty) {
             Ty::UInt(w) => Ok((false, w)),
             Ty::SInt(w) => Ok((true, w)),
             Ty::Error => Err(ConstError {

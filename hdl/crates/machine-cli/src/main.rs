@@ -155,9 +155,12 @@ fn check(args: &[String]) -> ExitCode {
                     }
                 }
             }
+            let instructions: usize = checked.hir.isas.iter().map(|i| i.instructions.len()).sum();
             eprintln!(
-                "checked {} unit instance(s), {} test(s)",
+                "checked {} unit instance(s), {} isa(s) with {} instruction(s), {} test(s)",
                 checked.hir.units.len(),
+                checked.hir.isas.len(),
+                instructions,
                 checked.hir.tests.len()
             );
         }

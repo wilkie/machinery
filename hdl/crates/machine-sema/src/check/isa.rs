@@ -73,6 +73,15 @@ impl Checker<'_> {
             }
         }
 
+        let mut latches = Vec::new();
+        for id in self.prog.isa_items_of(isa, ItemKind::Latch) {
+            if let Some(l) = self.check_latch(scope, id) {
+                let rc = Rc::new(l);
+                self.latches.insert(id, rc.clone());
+                latches.push((*rc).clone());
+            }
+        }
+
         let mut faults = Vec::new();
         for id in self.prog.isa_items_of(isa, ItemKind::Fault) {
             if let Some(f) = self.check_fault(scope, id) {
@@ -144,41 +153,72 @@ impl Checker<'_> {
             kinds,
             instructions,
             istream,
+            latches,
         });
     }
 
-    /// Two instructions may not share leading opcode bytes (equal or one a
-    /// prefix of the other) up to their first operand fetch.
+    /// No byte sequence may decode to two instructions (or prefixes). Two
+    /// leading opcode patterns overlap when some concrete bytes match both;
+    /// overlapping instructions must then fetch the same operand first and
+    /// be told apart by disjoint field constraints on it.
     fn check_opcode_conflicts(&mut self, scope: Scope, instructions: &[hir::Instruction]) {
-        let lead = |i: &hir::Instruction| -> Vec<u8> {
+        fn lead(i: &hir::Instruction) -> Vec<hir::OpcodeByte> {
             let mut bytes = Vec::new();
             for step in &i.encoding {
                 match step {
-                    hir::EncodingStep::Opcode(b) => bytes.extend_from_slice(b),
+                    hir::EncodingStep::Opcode { bytes: b, .. } => bytes.extend_from_slice(b),
                     hir::EncodingStep::Fetch { .. } => break,
                 }
             }
             bytes
+        }
+        fn first_fetch(i: &hir::Instruction) -> Option<(DefId, &[(u32, i128)])> {
+            i.encoding.iter().find_map(|s| match s {
+                hir::EncodingStep::Fetch {
+                    operand,
+                    constraints,
+                } => Some((*operand, constraints.as_slice())),
+                _ => None,
+            })
+        }
+        let overlap = |a: &[hir::OpcodeByte], b: &[hir::OpcodeByte]| {
+            a.iter()
+                .zip(b)
+                .all(|(x, y)| (x.value ^ y.value) & x.mask & y.mask == 0)
         };
-        for (a, ia) in instructions.iter().enumerate() {
+        for (ai, ia) in instructions.iter().enumerate() {
             let la = lead(ia);
-            for ib in &instructions[..a] {
+            for ib in &instructions[..ai] {
                 let lb = lead(ib);
-                if la.starts_with(&lb) || lb.starts_with(&la) {
-                    let span = self.prog.item(ia.def).span;
-                    let msg = format!(
-                        "opcode {} of `{}` conflicts with {} of `{}`",
-                        hex_bytes(&la),
-                        ia.name,
-                        hex_bytes(&lb),
-                        ib.name
-                    );
-                    self.error_with(
-                        scope.module,
-                        Diagnostic::error("E1045", span, msg)
-                            .with_label(self.prog.item(ib.def).span, "the other instruction"),
-                    );
+                if !overlap(&la, &lb) {
+                    continue;
                 }
+                let distinguished = la.len() == lb.len()
+                    && !ia.prefix
+                    && !ib.prefix
+                    && match (first_fetch(ia), first_fetch(ib)) {
+                        (Some((oa, ca)), Some((ob, cb))) if oa == ob => ca
+                            .iter()
+                            .any(|(fa, va)| cb.iter().any(|(fb, vb)| fa == fb && va != vb)),
+                        _ => false,
+                    };
+                if distinguished {
+                    continue;
+                }
+                let span = self.prog.item(ia.def).span;
+                let msg = format!(
+                    "opcode {} of `{}` overlaps {} of `{}`",
+                    pattern_text(&la),
+                    ia.name,
+                    pattern_text(&lb),
+                    ib.name
+                );
+                self.error_with(
+                    scope.module,
+                    Diagnostic::error("E1045", span, msg)
+                        .with_label(self.prog.item(ib.def).span, "the other instruction")
+                        .with_note("instructions sharing opcode bytes must fetch the same operand and constrain one of its fields to different values, e.g. `ModRM { reg: 0 }`"),
+                );
             }
         }
     }
@@ -885,6 +925,7 @@ impl Checker<'_> {
         for r in &decl.rules {
             let kind = match r.name.name.as_str() {
                 "select" => RuleKind::Select,
+                "value" => RuleKind::Value,
                 "read" => RuleKind::Read,
                 "write" => RuleKind::Write,
                 "is_mem" => RuleKind::IsMem,
@@ -896,7 +937,9 @@ impl Checker<'_> {
                             r.name.span,
                             format!("unknown operand kind rule `{other}`"),
                         )
-                        .with_note("rules are `select(n)`, `read`, `write(v)` and `is_mem`"),
+                        .with_note(
+                            "rules are `select(n)`, `value(n)`, `read`, `write(v)` and `is_mem`",
+                        ),
                     );
                     ok = false;
                     continue;
@@ -918,14 +961,22 @@ impl Checker<'_> {
                 params.push((p.name.name.clone(), pty));
             }
             match kind {
-                RuleKind::Select if params.len() != 1 => {
-                    self.error(
-                        module,
-                        "E1037",
-                        r.span,
-                        "`select` takes exactly one parameter: the encoding field",
-                    );
-                    ok = false;
+                RuleKind::Select | RuleKind::Value => {
+                    if params.len() != 1 {
+                        let msg = format!(
+                            "`{}` takes exactly one parameter: the encoding field",
+                            r.name.name
+                        );
+                        self.error(module, "E1037", r.span, msg);
+                        ok = false;
+                    } else if !matches!(params[0].1, Ty::UInt(_) | Ty::Error) {
+                        let msg = format!(
+                            "an encoding field is `u<N>`, not `{}`",
+                            self.display(&params[0].1)
+                        );
+                        self.error(module, "E1037", r.params[0].span, msg);
+                        ok = false;
+                    }
                 }
                 RuleKind::Write => {
                     if params.len() != 1 {
@@ -961,13 +1012,8 @@ impl Checker<'_> {
         }
         let has = |k: RuleKind| rules.iter().any(|(_, rk, _)| *rk == k);
         if source.is_some() {
-            if has(RuleKind::Select) {
-                self.error(
-                    module,
-                    "E1037",
-                    decl.name.span,
-                    "a kind with `from` is built from an operand and cannot have `select`",
-                );
+            if has(RuleKind::Select) || has(RuleKind::Value) {
+                self.error(module, "E1037", decl.name.span, "a kind with `from` is built from an operand and cannot have `select` or `value`");
                 ok = false;
             }
             if !has(RuleKind::Read) {
@@ -980,15 +1026,25 @@ impl Checker<'_> {
                 ok = false;
             }
         } else {
-            if !has(RuleKind::Select) {
+            let field_rules = has(RuleKind::Select) as u32 + has(RuleKind::Value) as u32;
+            if field_rules == 0 {
+                self.error_with(
+                    module,
+                    Diagnostic::error(
+                        "E1037",
+                        decl.name.span,
+                        format!("kind `{}` has no `from` operand, so it needs a `select` or `value` rule", decl.name.name),
+                    )
+                    .with_note("`select(n)` names a register by an encoding field; `value(n)` turns the field into a value"),
+                );
+                ok = false;
+            }
+            if field_rules == 2 {
                 self.error(
                     module,
                     "E1037",
                     decl.name.span,
-                    format!(
-                        "kind `{}` has no `from` operand, so it needs a `select` rule",
-                        decl.name.name
-                    ),
+                    "a kind has either `select` or `value`, not both",
                 );
                 ok = false;
             }
@@ -997,7 +1053,7 @@ impl Checker<'_> {
                     module,
                     "E1037",
                     decl.name.span,
-                    "a `select` kind is a register; it has no `read`, `write` or `is_mem` rules",
+                    "a field kind has no `read`, `write` or `is_mem` rules",
                 );
                 ok = false;
             }
@@ -1020,7 +1076,7 @@ impl Checker<'_> {
                 continue;
             };
             let ret = match kind {
-                RuleKind::Select | RuleKind::Read => Some(sig.ty.clone()),
+                RuleKind::Select | RuleKind::Read | RuleKind::Value => Some(sig.ty.clone()),
                 RuleKind::IsMem => Some(Ty::Bool),
                 RuleKind::Write => Some(Ty::Unit),
             };
@@ -1049,14 +1105,18 @@ impl Checker<'_> {
                     hir::ArmBody::Expr(he)
                 }
                 ast::ArmBody::Block(b) => {
-                    let (hb, bty) = self.check_block_expr(&mut cx, b);
+                    let (mut hb, bty) = self.check_block_expr(&mut cx, b);
                     if let Some(want) = &ret {
                         if *kind != RuleKind::Write
                             && bty != *want
                             && !bty.is_error()
                             && !matches!(bty, Ty::Never)
                         {
-                            self.mismatch(module, b.span, want, &bty);
+                            let tail_ty = bty.clone();
+                            self.coerce_block_tail(&cx, &mut hb, want);
+                            if !matches!(tail_ty, Ty::Const(_)) {
+                                self.mismatch(module, b.span, want, &tail_ty);
+                            }
                         }
                     }
                     hir::ArmBody::Block(hb)
@@ -1076,6 +1136,37 @@ impl Checker<'_> {
             ty: sig.ty.clone(),
             source: sig.source,
             rules,
+        })
+    }
+
+    // -- latches ------------------------------------------------------------------------------
+
+    fn check_latch(&mut self, scope: Scope, id: DefId) -> Option<hir::Latch> {
+        let decl = self.prog.latch_decl(id);
+        let empty = HashMap::new();
+        let ty = self.resolve_type(scope, &empty, &decl.ty);
+        if ty.is_error() {
+            return None;
+        }
+        let mut cx = FnCtx::new(scope, HashMap::new(), None);
+        let init = self.check_expr(&mut cx, &decl.init, Some(&ty));
+        if init.ty.is_error() {
+            return None;
+        }
+        if !cx.locals.is_empty() || !is_constant_init(&init) {
+            self.error(
+                scope.module,
+                "E1047",
+                decl.init.span,
+                "a latch resets to a constant",
+            );
+            return None;
+        }
+        Some(hir::Latch {
+            def: id,
+            name: decl.name.name.clone(),
+            ty,
+            init,
         })
     }
 
@@ -1162,11 +1253,146 @@ impl Checker<'_> {
         InstrSig { operands }
     }
 
+    /// Parse an opcode argument (byte, pattern string, or list of those)
+    /// into bytes and named fields.
+    fn parse_opcode(
+        &mut self,
+        scope: Scope,
+        arg: &ast::Expr,
+    ) -> Option<(Vec<hir::OpcodeByte>, Vec<hir::OpcodeField>)> {
+        let module = scope.module;
+        let empty = HashMap::new();
+        let parts: Vec<&ast::Expr> = match &arg.kind {
+            A::ArrayLit(items) => items.iter().collect(),
+            _ => vec![arg],
+        };
+        let mut bytes = Vec::new();
+        let mut fields: Vec<hir::OpcodeField> = Vec::new();
+        for part in parts {
+            if let A::Str(pattern) = &part.kind {
+                let bits: Vec<char> = pattern.chars().filter(|c| *c != '_' && *c != ' ').collect();
+                if bits.is_empty() || !bits.len().is_multiple_of(8) {
+                    self.error_with(
+                        module,
+                        Diagnostic::error("E1032", part.span, "an opcode pattern is a multiple of 8 bits")
+                            .with_note("`0`/`1` are fixed bits, `-` is don't-care, letters are fields: \"00ooo000\""),
+                    );
+                    return None;
+                }
+                for chunk in bits.chunks(8) {
+                    let byte_index = bytes.len() as u32;
+                    let mut value = 0u8;
+                    let mut mask = 0u8;
+                    for (i, c) in chunk.iter().enumerate() {
+                        let bit = 7 - i as u32;
+                        match c {
+                            '0' => mask |= 1 << bit,
+                            '1' => {
+                                mask |= 1 << bit;
+                                value |= 1 << bit;
+                            }
+                            '-' => {}
+                            c if c.is_ascii_alphabetic() => {
+                                let name = c.to_string();
+                                match fields.iter_mut().find(|f| f.name == name) {
+                                    Some(f) => {
+                                        if f.byte != byte_index || f.shift != bit + 1 {
+                                            let msg = format!("field `{name}` must be one contiguous run of bits within a byte");
+                                            self.error(module, "E1032", part.span, msg);
+                                            return None;
+                                        }
+                                        f.shift = bit;
+                                        f.width += 1;
+                                    }
+                                    None => fields.push(hir::OpcodeField {
+                                        name,
+                                        byte: byte_index,
+                                        shift: bit,
+                                        width: 1,
+                                    }),
+                                }
+                            }
+                            other => {
+                                let msg = format!("unexpected `{other}` in opcode pattern");
+                                self.error(module, "E1032", part.span, msg);
+                                return None;
+                            }
+                        }
+                    }
+                    bytes.push(hir::OpcodeByte { value, mask });
+                }
+                continue;
+            }
+            match self.eval_const(scope, &empty, part) {
+                Some(ConstVal::Int(v)) if (0..=255).contains(&v) => bytes.push(hir::OpcodeByte {
+                    value: v as u8,
+                    mask: 0xFF,
+                }),
+                Some(_) => {
+                    self.error(module, "E1032", part.span, "opcode bytes are 0..=255");
+                    return None;
+                }
+                None => return None,
+            }
+        }
+        Some((bytes, fields))
+    }
+
+    /// Resolve the kind named by a field binding and check it accepts a
+    /// field of type `field_ty`.
+    fn field_kind(
+        &mut self,
+        scope: Scope,
+        binding: &ast::FieldInit,
+        field_ty: &Ty,
+    ) -> Option<DefId> {
+        let module = scope.module;
+        let kind_name = match binding.value.as_ref().map(|v| &v.kind) {
+            Some(A::Path(p)) if p.segments.len() == 1 => p.segments[0].name.clone(),
+            _ => {
+                self.error(module, "E1032", binding.span, "a field binding names an operand kind (`reg: r8`) or constrains the field (`reg: 0`)");
+                return None;
+            }
+        };
+        let Some(kdef) = self
+            .lookup_item(scope, &kind_name)
+            .filter(|d| self.prog.item(*d).kind == ItemKind::OperandKind)
+        else {
+            self.error(
+                module,
+                "E1033",
+                binding.span,
+                format!("`{kind_name}` is not an operand kind"),
+            );
+            return None;
+        };
+        let ksig = self.kinds.get(&kdef).cloned()?;
+        let rule = ksig
+            .rule(RuleKind::Select)
+            .or_else(|| ksig.rule(RuleKind::Value));
+        let Some((_, (rname, _, params))) = rule else {
+            let msg = format!("kind `{kind_name}` is built `from` an operand; it binds to a fetched operand, not to a field");
+            self.error(module, "E1033", binding.span, msg);
+            return None;
+        };
+        if params[0].1 != *field_ty {
+            let msg = format!(
+                "field `{}` is `{}` but `{kind_name}.{rname}` takes `{}`",
+                binding.name.name,
+                self.display(field_ty),
+                self.display(&params[0].1)
+            );
+            self.error(module, "E1033", binding.span, msg);
+            return None;
+        }
+        Some(kdef)
+    }
+
     fn check_instruction(&mut self, scope: Scope, id: DefId) -> Option<hir::Instruction> {
         let decl = self.prog.instruction_decl(id);
         let module = scope.module;
         let sig = self.instr_sigs.get(&id)?.clone();
-        let empty = HashMap::new();
+        let what = if decl.prefix { "prefix" } else { "instruction" };
         let mut ok = true;
 
         let mut mnemonic = None;
@@ -1182,9 +1408,16 @@ impl Checker<'_> {
         let mut requires = None;
         let mut seen: Vec<&'static str> = Vec::new();
 
-        // Binding slots: which kind each encoding select/fetch produces.
-        let mut select_bindings: Vec<(DefId, u32, u32)> = Vec::new(); // (kind, step, field)
-        let mut fetch_steps: Vec<(DefId, u32)> = Vec::new(); // (operand, step)
+        // Field bindings: (kind, step, field) for opcode and operand fields;
+        // fetched operands: (operand, step).
+        let mut field_bindings: Vec<(DefId, u32, u32)> = Vec::new();
+        let mut fetch_steps: Vec<(DefId, u32)> = Vec::new();
+
+        let ops_cx = |sig: &InstrSig| {
+            let mut cx = FnCtx::new(scope, HashMap::new(), None);
+            cx.operands = sig.operands.clone();
+            cx
+        };
 
         for item in &decl.items {
             let key = match item {
@@ -1206,16 +1439,32 @@ impl Checker<'_> {
                         module,
                         "E1001",
                         decl.name.span,
-                        format!("instruction `{}` has `{key}` twice", decl.name.name),
+                        format!("{what} `{}` has `{key}` twice", decl.name.name),
                     );
                     ok = false;
                 }
                 seen.push(key);
             }
             match item {
-                InstructionItem::Mnemonic(s) => mnemonic = Some(s.value.clone()),
+                InstructionItem::Mnemonic(e) => {
+                    if let A::Str(s) = &e.kind {
+                        mnemonic = Some(hir::Mnemonic::Fixed(s.clone()));
+                    } else {
+                        let mut cx = ops_cx(&sig);
+                        let he = self.check_expr(&mut cx, e, Some(&Ty::Str));
+                        if he.ty.is_error() {
+                            ok = false;
+                        } else {
+                            mnemonic = Some(hir::Mnemonic::Expr {
+                                locals: cx.locals,
+                                expr: he,
+                            });
+                        }
+                    }
+                }
                 InstructionItem::Encoding(items) => {
                     let mut steps = Vec::new();
+                    let wrote_opcode = items.iter().any(|ei| ei.name.name == "opcode");
                     for ei in items {
                         let step = steps.len() as u32;
                         if ei.name.name == "opcode" {
@@ -1224,38 +1473,45 @@ impl Checker<'_> {
                                     module,
                                     "E1032",
                                     ei.span,
-                                    "`opcode` takes a byte or a list of bytes",
+                                    "`opcode` takes a byte, a pattern string, or a list of those",
                                 );
                                 ok = false;
                                 continue;
                             };
-                            let byte_exprs: Vec<&ast::Expr> = match &arg.kind {
-                                A::ArrayLit(items) => items.iter().collect(),
-                                _ => vec![arg],
+                            let Some((bytes, fields)) = self.parse_opcode(scope, arg) else {
+                                ok = false;
+                                continue;
                             };
-                            let mut bytes = Vec::new();
-                            for b in byte_exprs {
-                                match self.eval_const(scope, &empty, b) {
-                                    Some(ConstVal::Int(v)) if (0..=255).contains(&v) => {
-                                        bytes.push(v as u8)
-                                    }
-                                    Some(_) => {
-                                        self.error(
-                                            module,
-                                            "E1032",
-                                            b.span,
-                                            "opcode bytes are 0..=255",
-                                        );
-                                        ok = false;
-                                        bytes.push(0);
-                                    }
-                                    None => {
-                                        ok = false;
-                                        bytes.push(0);
-                                    }
+                            let mut bound = vec![false; fields.len()];
+                            for b in &ei.fields {
+                                let Some(fi) = fields.iter().position(|f| f.name == b.name.name)
+                                else {
+                                    self.error(
+                                        module,
+                                        "E1032",
+                                        b.name.span,
+                                        format!(
+                                            "the opcode pattern has no field `{}`",
+                                            b.name.name
+                                        ),
+                                    );
+                                    ok = false;
+                                    continue;
+                                };
+                                bound[fi] = true;
+                                match self.field_kind(scope, b, &Ty::UInt(fields[fi].width)) {
+                                    Some(k) => field_bindings.push((k, step, fi as u32)),
+                                    None => ok = false,
                                 }
                             }
-                            steps.push(hir::EncodingStep::Opcode(bytes));
+                            for (f, b) in fields.iter().zip(&bound) {
+                                if !b {
+                                    let msg = format!("opcode field `{}` is not bound to an operand kind; use `-` for don't-care bits", f.name);
+                                    self.error(module, "E1032", arg.span, msg);
+                                    ok = false;
+                                }
+                            }
+                            steps.push(hir::EncodingStep::Opcode { bytes, fields });
                             continue;
                         }
                         // An operand to fetch.
@@ -1266,11 +1522,20 @@ impl Checker<'_> {
                             self.error_with(
                                 module,
                                 Diagnostic::error("E1032", ei.name.span, format!("`{}` is not an encoding item", ei.name.name))
-                                    .with_note("encoding items are `opcode <byte>` and operand names, optionally with `{ field: kind }` bindings"),
+                                    .with_note("encoding items are `opcode <byte or pattern>` and operand names, optionally with `{ field: kind }` bindings or `{ field: 0 }` constraints"),
                             );
                             ok = false;
                             continue;
                         };
+                        if decl.prefix {
+                            self.error(
+                                module,
+                                "E1048",
+                                ei.span,
+                                "a prefix is opcode bytes only; it fetches no operands",
+                            );
+                            ok = false;
+                        }
                         if ei.arg.is_some() {
                             self.error(
                                 module,
@@ -1284,142 +1549,112 @@ impl Checker<'_> {
                             ok = false;
                             continue;
                         };
-                        let mut selects = Vec::new();
+                        let mut constraints = Vec::new();
                         for f in &ei.fields {
                             let Some(fi) =
                                 oinfo.fields.iter().position(|of| of.name == f.name.name)
                             else {
-                                self.error(
-                                    module,
-                                    "E1032",
-                                    f.name.span,
-                                    format!(
-                                        "operand `{}` has no field `{}`",
-                                        oinfo.name, f.name.name
-                                    ),
+                                let msg = format!(
+                                    "operand `{}` has no field `{}`",
+                                    oinfo.name, f.name.name
                                 );
+                                self.error(module, "E1032", f.name.span, msg);
                                 ok = false;
                                 continue;
                             };
-                            let kind_name = match f.value.as_ref().map(|v| &v.kind) {
-                                Some(A::Path(p)) if p.segments.len() == 1 => {
-                                    p.segments[0].name.clone()
-                                }
-                                _ => {
-                                    self.error(
-                                        module,
-                                        "E1032",
-                                        f.span,
-                                        "a field binding names an operand kind: `reg: r8`",
+                            let fty = oinfo.fields[fi].ty.clone();
+                            if let Some(A::Int { value, .. }) = f.value.as_ref().map(|v| &v.kind) {
+                                let v = *value as i128;
+                                if !fty.fits(v) {
+                                    let msg = format!(
+                                        "constraint {v} does not fit field `{}` (`{}`)",
+                                        f.name.name,
+                                        self.display(&fty)
                                     );
+                                    self.error(module, "E1006", f.span, msg);
                                     ok = false;
                                     continue;
                                 }
-                            };
-                            let Some(kdef) = self
-                                .lookup_item(scope, &kind_name)
-                                .filter(|d| self.prog.item(*d).kind == ItemKind::OperandKind)
-                            else {
-                                self.error(
-                                    module,
-                                    "E1033",
-                                    f.span,
-                                    format!("`{kind_name}` is not an operand kind"),
-                                );
-                                ok = false;
+                                constraints.push((fi as u32, v));
                                 continue;
-                            };
-                            let Some(ksig) = self.kinds.get(&kdef).cloned() else {
-                                ok = false;
-                                continue;
-                            };
-                            let Some((_, (_, _, params))) = ksig.rule(RuleKind::Select) else {
-                                let msg = format!("kind `{kind_name}` is built `from` an operand; it binds to a fetched operand, not to a field");
-                                self.error(module, "E1033", f.span, msg);
-                                ok = false;
-                                continue;
-                            };
-                            if params[0].1 != oinfo.fields[fi].ty {
-                                let msg = format!(
-                                    "field `{}` is `{}` but `{kind_name}.select` takes `{}`",
-                                    f.name.name,
-                                    self.display(&oinfo.fields[fi].ty),
-                                    self.display(&params[0].1)
-                                );
-                                self.error(module, "E1033", f.span, msg);
-                                ok = false;
                             }
-                            // Which operand binding this select feeds is
-                            // resolved below; record the slot now.
-                            select_bindings.push((kdef, step, fi as u32));
-                            selects.push((fi as u32, u32::MAX));
+                            match self.field_kind(scope, f, &fty) {
+                                Some(k) => field_bindings.push((k, step, fi as u32)),
+                                None => ok = false,
+                            }
                         }
                         fetch_steps.push((odef, step));
                         steps.push(hir::EncodingStep::Fetch {
                             operand: odef,
-                            selects,
+                            constraints,
                         });
                     }
-                    if !steps
-                        .iter()
-                        .any(|s| matches!(s, hir::EncodingStep::Opcode(b) if !b.is_empty()))
-                    {
+                    if !wrote_opcode {
                         self.error(
                             module,
                             "E1032",
                             decl.name.span,
-                            format!("instruction `{}` has no `opcode`", decl.name.name),
+                            format!("{what} `{}` has no `opcode`", decl.name.name),
                         );
                         ok = false;
+                    }
+                    if let Some(pos) = steps.iter().position(|s| !s.is_opcode()) {
+                        if steps[pos..].iter().any(|s| s.is_opcode()) {
+                            self.error(
+                                module,
+                                "E1032",
+                                decl.name.span,
+                                "opcode bytes after an operand fetch are not supported",
+                            );
+                            ok = false;
+                        }
                     }
                     encoding = Some(steps);
                 }
                 InstructionItem::Operands(_) => {} // in the signature
                 InstructionItem::Flags(sets) => {
+                    let mut cx = ops_cx(&sig);
                     for set in sets {
-                        let target = match set.name.name.as_str() {
-                            "modifies" => &mut flags.modifies,
-                            "undefined" => &mut flags.undefined,
-                            "reads" => &mut flags.reads,
-                            other => {
-                                self.error(module, "E1034", set.name.span, format!("unknown flag set `{other}`; use `modifies`, `undefined` or `reads`"));
-                                ok = false;
-                                continue;
-                            }
-                        };
-                        let Some(A::ArrayLit(names)) = set.value.as_ref().map(|v| &v.kind) else {
-                            self.error(
-                                module,
-                                "E1034",
-                                set.span,
-                                "a flag set is a list: `modifies: [CF, ZF]`",
-                            );
-                            ok = false;
-                            continue;
-                        };
-                        for n in names {
-                            let A::Path(p) = &n.kind else {
-                                self.error(module, "E1034", n.span, "flags are register fields");
+                        let mut target = Vec::new();
+                        for entry in &set.entries {
+                            let fname = entry.flag.last().name.clone();
+                            let Some(ScopeEntry::RegField { reg, index }) =
+                                self.lookup(scope, &fname)
+                            else {
+                                self.error(
+                                    module,
+                                    "E1034",
+                                    entry.flag.span,
+                                    format!("`{fname}` is not a register field"),
+                                );
                                 ok = false;
                                 continue;
                             };
-                            let fname = p.last().name.clone();
-                            match self.lookup(scope, &fname) {
-                                Some(ScopeEntry::RegField { reg, index }) => {
-                                    target.push((reg, index))
-                                }
-                                _ => {
-                                    self.error(
-                                        module,
-                                        "E1034",
-                                        n.span,
-                                        format!("`{fname}` is not a register field"),
-                                    );
-                                    ok = false;
-                                }
+                            let cond = entry
+                                .cond
+                                .as_ref()
+                                .map(|c| self.check_expr(&mut cx, c, Some(&Ty::Bool)));
+                            if cond.as_ref().is_some_and(|c| c.ty.is_error()) {
+                                ok = false;
+                            }
+                            target.push(hir::FlagUse {
+                                reg,
+                                field: index,
+                                cond,
+                            });
+                        }
+                        match set.name.name.as_str() {
+                            "modifies" => flags.modifies = target,
+                            "undefined" => flags.undefined = target,
+                            "reads" => flags.reads = target,
+                            other => {
+                                let msg = format!("unknown flag set `{other}`; use `modifies`, `undefined` or `reads`");
+                                self.error(module, "E1034", set.name.span, msg);
+                                ok = false;
                             }
                         }
                     }
+                    flags.locals = cx.locals;
                 }
                 InstructionItem::Semantics(block) => {
                     let mut cx = FnCtx::new(scope, HashMap::new(), Some(Ty::Unit));
@@ -1431,15 +1666,11 @@ impl Checker<'_> {
                 InstructionItem::Timing(items) => {
                     for it in items {
                         if it.name.name != "cycles" {
-                            self.error(
-                                module,
-                                "E1032",
-                                it.name.span,
-                                format!(
-                                    "unknown timing attribute `{}`; use `cycles`",
-                                    it.name.name
-                                ),
+                            let msg = format!(
+                                "unknown timing attribute `{}`; use `cycles`",
+                                it.name.name
                             );
+                            self.error(module, "E1032", it.name.span, msg);
                             ok = false;
                             continue;
                         }
@@ -1448,8 +1679,7 @@ impl Checker<'_> {
                             ok = false;
                             continue;
                         };
-                        let mut cx = FnCtx::new(scope, HashMap::new(), None);
-                        cx.operands = sig.operands.clone();
+                        let mut cx = ops_cx(&sig);
                         let e = self.check_expr(&mut cx, v, Some(&Ty::UInt(32)));
                         timing_locals = cx.locals;
                         timing = Some(e);
@@ -1489,8 +1719,7 @@ impl Checker<'_> {
                     }
                 }
                 InstructionItem::Requires(e) => {
-                    let mut cx = FnCtx::new(scope, HashMap::new(), None);
-                    cx.operands = sig.operands.clone();
+                    let mut cx = ops_cx(&sig);
                     requires = Some(self.check_expr(&mut cx, e, Some(&Ty::Bool)));
                 }
                 InstructionItem::Other(name, _) => {
@@ -1498,14 +1727,14 @@ impl Checker<'_> {
                         module,
                         "E1032",
                         name.span,
-                        format!("unknown instruction item `{}`", name.name),
+                        format!("unknown {what} item `{}`", name.name),
                     );
                     ok = false;
                 }
             }
         }
 
-        if mnemonic.is_none() {
+        if !seen.contains(&"mnemonic") && !decl.prefix {
             self.error(
                 module,
                 "E1032",
@@ -1514,12 +1743,12 @@ impl Checker<'_> {
             );
             ok = false;
         }
-        let Some(mut encoding) = encoding else {
+        let Some(encoding) = encoding else {
             self.error(
                 module,
                 "E1032",
                 decl.name.span,
-                format!("instruction `{}` needs an `encoding`", decl.name.name),
+                format!("{what} `{}` needs an `encoding`", decl.name.name),
             );
             return None;
         };
@@ -1531,54 +1760,43 @@ impl Checker<'_> {
 
         // Bind operands to the encoding.
         let mut bindings = Vec::new();
-        let mut used_selects = vec![false; select_bindings.len()];
+        let mut used_fields = vec![false; field_bindings.len()];
         let mut used_fetches = vec![false; fetch_steps.len()];
-        for (oi, (oname, kdef)) in sig.operands.iter().enumerate() {
+        for (oname, kdef) in &sig.operands {
             let Some(ksig) = self.kinds.get(kdef).cloned() else {
                 ok = false;
                 continue;
             };
+            let kname = self.prog.item_name(*kdef);
             let source = match ksig.source {
                 None => {
-                    let candidates: Vec<usize> = select_bindings
+                    let candidates: Vec<usize> = field_bindings
                         .iter()
                         .enumerate()
-                        .filter(|(i, (k, _, _))| *k == *kdef && !used_selects[*i])
+                        .filter(|(i, (k, _, _))| *k == *kdef && !used_fields[*i])
                         .map(|(i, _)| i)
                         .collect();
                     match candidates.as_slice() {
                         [i] => {
-                            used_selects[*i] = true;
-                            let (_, step, field) = select_bindings[*i];
-                            // Record the binding index in the step.
-                            if let hir::EncodingStep::Fetch { selects, .. } =
-                                &mut encoding[step as usize]
-                            {
-                                for s in selects.iter_mut() {
-                                    if s.0 == field {
-                                        s.1 = oi as u32;
-                                    }
-                                }
-                            }
-                            hir::BindSource::Select { step, field }
+                            used_fields[*i] = true;
+                            let (_, step, field) = field_bindings[*i];
+                            hir::BindSource::Field { step, field }
                         }
                         [] => {
                             let msg = format!(
-                                "operand `{oname}` of kind `{}` is not bound by the encoding",
-                                self.prog.item_name(*kdef)
+                                "operand `{oname}` of kind `{kname}` is not bound by the encoding"
                             );
                             self.error_with(
                                 module,
                                 Diagnostic::error("E1033", decl.name.span, msg).with_note(format!(
-                                    "add `{{ field: {} }}` to a fetched operand in `encoding`",
-                                    self.prog.item_name(*kdef)
+                                    "bind an encoding field to it: `{{ field: {kname} }}`"
                                 )),
                             );
                             ok = false;
                             continue;
                         }
                         _ => {
-                            let msg = format!("operand `{oname}` is ambiguous: several encoding fields bind kind `{}`", self.prog.item_name(*kdef));
+                            let msg = format!("operand `{oname}` is ambiguous: several encoding fields bind kind `{kname}`");
                             self.error(module, "E1033", decl.name.span, msg);
                             ok = false;
                             continue;
@@ -1601,8 +1819,7 @@ impl Checker<'_> {
                         }
                         [] => {
                             let msg = format!(
-                                "operand `{oname}` of kind `{}` needs a fetched `{}` in the encoding",
-                                self.prog.item_name(*kdef),
+                                "operand `{oname}` of kind `{kname}` needs a fetched `{}` in the encoding",
                                 self.prog.item_name(src)
                             );
                             self.error(module, "E1033", decl.name.span, msg);
@@ -1624,9 +1841,9 @@ impl Checker<'_> {
                 source,
             });
         }
-        for (i, used) in used_selects.iter().enumerate() {
+        for (i, used) in used_fields.iter().enumerate() {
             if !used {
-                let (k, _, _) = select_bindings[i];
+                let (k, _, _) = field_bindings[i];
                 let msg = format!(
                     "the encoding binds kind `{}` but no operand has that kind",
                     self.prog.item_name(k)
@@ -1642,6 +1859,7 @@ impl Checker<'_> {
         Some(hir::Instruction {
             def: id,
             name: decl.name.name.clone(),
+            prefix: decl.prefix,
             mnemonic,
             description: decl.docs.clone(),
             encoding,
@@ -1807,6 +2025,193 @@ impl Checker<'_> {
     }
 
     /// `run instruction Name { operand: value, ... }`
+    /// `vectors "glob" on Isa { format moo; memory mem; reg ax = AX; ... }`
+    pub(super) fn check_vectors(&mut self, id: DefId) -> Option<hir::VectorsInfo> {
+        let module = self.prog.item(id).module;
+        let ast::Decl::Vectors(d) = self.prog.decl(id) else {
+            unreachable!()
+        };
+        let isa = match d.target.segments.as_slice() {
+            [one] => self
+                .prog
+                .lookup(module, &one.name)
+                .filter(|i| self.prog.item(*i).kind == ItemKind::Isa),
+            _ => None,
+        };
+        let Some(isa) = isa else {
+            self.error(
+                module,
+                "E1049",
+                d.target.span,
+                format!(
+                    "`{}` is not an isa; vectors run on an isa",
+                    d.target.dotted()
+                ),
+            );
+            return None;
+        };
+        if d.items.is_empty() {
+            self.error_with(
+                module,
+                Diagnostic::error("E1049", d.span, "a `vectors` declaration needs a body saying how to read the vectors")
+                    .with_note("`vectors \"dir/*.MOO.gz\" on Isa { format moo; memory mem; reg ax = AX; ... }`"),
+            );
+            return None;
+        }
+        let scope = Scope {
+            module,
+            isa: Some(isa),
+            bus: None,
+        };
+        let mut ok = true;
+        let mut format = None;
+        let mut memory = None;
+        let mut regs: Vec<hir::VectorReg> = Vec::new();
+        const MOO_REGS: &[&str] = &[
+            "ax", "bx", "cx", "dx", "cs", "ss", "ds", "es", "sp", "bp", "si", "di", "ip", "flags",
+        ];
+        for item in &d.items {
+            match item {
+                ast::VectorsItem::Format(f) => {
+                    if f.name != "moo" {
+                        self.error(
+                            module,
+                            "E1049",
+                            f.span,
+                            format!("unknown vector format `{}`; supported: `moo`", f.name),
+                        );
+                        ok = false;
+                    }
+                    format = Some(f.name.clone());
+                }
+                ast::VectorsItem::Memory(m) => match self.lookup_item(scope, &m.name) {
+                    Some(sp) if self.prog.item(sp).kind == ItemKind::Space => memory = Some(sp),
+                    _ => {
+                        self.error(
+                            module,
+                            "E1049",
+                            m.span,
+                            format!(
+                                "`{}` is not an address space of `{}`",
+                                m.name,
+                                d.target.dotted()
+                            ),
+                        );
+                        ok = false;
+                    }
+                },
+                ast::VectorsItem::Reg { name, place, span }
+                | ast::VectorsItem::RegCustom {
+                    name,
+                    read: place,
+                    span,
+                    ..
+                } => {
+                    if !MOO_REGS.contains(&name.name.as_str()) {
+                        let msg = format!(
+                            "`{}` is not a register of the vector format (registers: {})",
+                            name.name,
+                            MOO_REGS.join(", ")
+                        );
+                        self.error(module, "E1049", name.span, msg);
+                        ok = false;
+                        continue;
+                    }
+                    if regs.iter().any(|r| r.name == name.name) {
+                        self.error(
+                            module,
+                            "E1001",
+                            name.span,
+                            format!("register `{}` mapped twice", name.name),
+                        );
+                        ok = false;
+                        continue;
+                    }
+                    let mut cx = FnCtx::new(scope, HashMap::new(), None);
+                    let value = cx.declare("value", Ty::UInt(16), *span);
+                    let load = match item {
+                        ast::VectorsItem::Reg { place, .. } => {
+                            let assign = ast::Stmt {
+                                kind: ast::StmtKind::Assign {
+                                    target: place.clone(),
+                                    value: ast::Expr {
+                                        kind: A::Path(ast::Path::single(ast::Ident {
+                                            name: "value".into(),
+                                            span: *span,
+                                        })),
+                                        span: *span,
+                                    },
+                                },
+                                span: *span,
+                            };
+                            ast::Block {
+                                stmts: vec![assign],
+                                span: *span,
+                            }
+                        }
+                        ast::VectorsItem::RegCustom { load, .. } => ast::Block {
+                            stmts: vec![(**load).clone()],
+                            span: load.span,
+                        },
+                        _ => unreachable!(),
+                    };
+                    let errors_before = self.diags[module].error_count();
+                    let load = self.check_block(&mut cx, &load);
+                    if self.diags[module].error_count() > errors_before {
+                        ok = false;
+                        continue;
+                    }
+                    let read = self.check_expr(&mut cx, place, Some(&Ty::UInt(16)));
+                    if read.ty.is_error() {
+                        ok = false;
+                        continue;
+                    }
+                    let masked_reg = match &read.kind {
+                        H::Register(r) => Some(*r),
+                        _ => None,
+                    };
+                    regs.push(hir::VectorReg {
+                        name: name.name.clone(),
+                        locals: cx.locals,
+                        value,
+                        load,
+                        read,
+                        masked_reg,
+                    });
+                }
+            }
+        }
+        let Some(format) = format else {
+            self.error(module, "E1049", d.span, "`vectors` needs `format moo;`");
+            return None;
+        };
+        let Some(memory) = memory else {
+            self.error(
+                module,
+                "E1049",
+                d.span,
+                "`vectors` needs `memory <space>;` for the vectors' RAM",
+            );
+            return None;
+        };
+        if !ok {
+            return None;
+        }
+        let base = std::path::Path::new(&self.prog.modules[module].file.name)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        let glob = base.join(&d.glob.value).to_string_lossy().into_owned();
+        Some(hir::VectorsInfo {
+            def: id,
+            isa,
+            glob,
+            format,
+            memory,
+            regs,
+        })
+    }
+
     pub(super) fn check_run_instruction(
         &mut self,
         cx: &mut FnCtx,
@@ -1893,7 +2298,40 @@ impl Checker<'_> {
     }
 }
 
-fn hex_bytes(b: &[u8]) -> String {
-    let parts: Vec<String> = b.iter().map(|x| format!("{x:#04x}")).collect();
+/// `[0x80, 00--0000]`-style rendering of an opcode pattern.
+fn pattern_text(b: &[hir::OpcodeByte]) -> String {
+    let parts: Vec<String> = b
+        .iter()
+        .map(|x| {
+            if x.mask == 0xFF {
+                format!("{:#04x}", x.value)
+            } else {
+                (0..8)
+                    .rev()
+                    .map(|i| {
+                        if x.mask >> i & 1 == 0 {
+                            '-'
+                        } else if x.value >> i & 1 == 1 {
+                            '1'
+                        } else {
+                            '0'
+                        }
+                    })
+                    .collect()
+            }
+        })
+        .collect();
     format!("[{}]", parts.join(", "))
+}
+
+/// Is a latch initialiser a compile-time value?
+fn is_constant_init(e: &hir::Expr) -> bool {
+    match &e.kind {
+        H::Int(_) | H::Bool(_) | H::Variant(..) => true,
+        H::BundleLit(_, fields) | H::Tuple(fields) | H::Array(fields) => {
+            fields.iter().all(is_constant_init)
+        }
+        H::ArrayRepeat(v, _) => is_constant_init(v),
+        _ => false,
+    }
 }

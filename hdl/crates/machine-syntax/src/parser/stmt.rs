@@ -274,6 +274,11 @@ impl Parser {
                 self.expect_semi()?;
                 Ok(self.mk(StmtKind::WaitUntil(cond), start))
             }
+            "halt" if self.nth_is_punct(1, Punct::Semi) => {
+                self.advance();
+                self.advance();
+                Ok(self.mk(StmtKind::Halt, start))
+            }
             "retire" if self.nth_is_punct(1, Punct::Semi) => {
                 self.advance();
                 self.advance();

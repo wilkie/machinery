@@ -6,6 +6,9 @@
 
 use std::collections::HashMap;
 
+#[cfg(feature = "vectors")]
+pub mod vectors;
+
 /// The class of a fault, as declared in the isa.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FaultClass {

@@ -41,8 +41,11 @@ fn cpu_slice_generates_expected_items() {
         "pub fn exec_Add_rm8_r8(",
         "pub fn decode(&mut self)",
         "pub fn step(&mut self)",
-        "fn t0_add_al__bl()",
-        "fn t1_add__bx_si___cl_through_memory()",
+        "fn t4_add_al__bl()",
+        "fn t5_add__bx_si___cl_through_memory()",
+        "fn t2_sub_borrow_is_bit_w_of_the_wide_result()",
+        "pub mod vectors {",
+        "pub fn undefined_mask(",
     ] {
         assert!(
             src.contains(needle),
@@ -79,7 +82,93 @@ fn cpu_slice_interpreter_compiles_and_passes_its_tests() {
         crate_.lib_rs
     );
     assert!(
-        stdout.contains("2 passed") || stderr.contains("2 passed"),
-        "expected 2 generated tests to pass:\n{stdout}\n{stderr}"
+        stdout.contains("6 passed") || stderr.contains("6 passed"),
+        "expected 6 generated tests to pass:\n{stdout}\n{stderr}"
     );
+}
+
+fn target(name: &str) -> SourceFile {
+    let path = hdl_root().join("targets").join("i286").join(name);
+    SourceFile::new(name, std::fs::read_to_string(&path).unwrap())
+}
+
+/// The real i286 description: its own tests pass, and, when the
+/// SingleStepTests corpus is present, a representative subset of hardware
+/// vectors passes too (prefixed ALU forms, the immediate group, a
+/// conditional jump, a constrained group opcode, HLT).
+#[test]
+fn i286_target_passes_its_tests_and_hardware_vectors() {
+    let checked = check_files(vec![target("alu.machine"), target("i286.machine")]);
+    assert!(!checked.has_errors());
+    let src = generate_isa(&checked, "I286").unwrap_or_else(|e| panic!("{e}"));
+    let root = hdl_root();
+    let crate_ = package(
+        &crate_name("I286"),
+        src,
+        &root.join("crates").join("machine-runtime"),
+    );
+    assert!(crate_.vectors_bin.is_some());
+    let dir = root.join("target").join("gen-tests").join("i286");
+    write_crate(&dir, &crate_).unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let target_dir = root.join("target").join("gen-target");
+
+    let output = Command::new(&cargo)
+        .args(["test", "--quiet", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("run cargo");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "i286 tests failed:\n{stdout}\n{stderr}"
+    );
+    assert!(stdout.contains("10 passed"), "expected 10 tests:\n{stdout}");
+
+    let vectors = root
+        .join("..")
+        .join("simulators")
+        .join("test")
+        .join("i286")
+        .join("SingleStepTests")
+        .join("v1_real_mode");
+    if !vectors.join("00.MOO.gz").exists() {
+        eprintln!(
+            "SingleStepTests corpus not found at {}; skipping hardware vectors",
+            vectors.display()
+        );
+        return;
+    }
+    let output = Command::new(&cargo)
+        .args([
+            "run",
+            "--quiet",
+            "--features",
+            "vectors",
+            "--bin",
+            "vectors",
+            "--manifest-path",
+        ])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .arg("--")
+        .arg("--dir")
+        .arg(&vectors)
+        .args([
+            "--filter",
+            "00,05,26,2B,80.4,83.5,74,C6,F4",
+            "--max-failures",
+            "5",
+        ])
+        .output()
+        .expect("run vectors");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "hardware vectors failed:\n{stdout}\n{stderr}"
+    );
+    assert!(stdout.contains(" 0 failed"), "{stdout}");
 }

@@ -110,7 +110,6 @@ fn other_samples_resolve_and_skip_unimplemented_bodies() {
     assert!(!kinds.contains(&"isa"), "isas are checked now");
     assert!(kinds.contains(&"system"));
     assert!(kinds.contains(&"conformance"));
-    assert!(kinds.contains(&"vectors"));
     // The component test is skipped; the two isa tests are checked.
     let skipped_tests: Vec<&str> = c
         .skipped
@@ -138,7 +137,10 @@ fn cpu_slice_isa_is_fully_checked() {
     assert_eq!(isa.kinds.len(), 2);
     assert_eq!(isa.instructions.len(), 2);
     let add = &isa.instructions[0];
-    assert_eq!(add.mnemonic.as_deref(), Some("add"));
+    assert_eq!(
+        add.mnemonic,
+        Some(machine_sema::hir::Mnemonic::Fixed("add".into()))
+    );
     assert_eq!(add.operands.len(), 2);
     // dst: rm8 comes from the fetched ModRM (step 1); src: r8 is selected by
     // its `reg` field (field index 1).
@@ -148,7 +150,7 @@ fn cpu_slice_isa_is_fully_checked() {
     ));
     assert!(matches!(
         add.operands[1].source,
-        machine_sema::hir::BindSource::Select { step: 1, field: 1 }
+        machine_sema::hir::BindSource::Field { step: 1, field: 1 }
     ));
     assert_eq!(add.flags.modifies.len(), 6);
     assert!(add.semantics.is_some());
@@ -1143,4 +1145,195 @@ fn component_ports() {
         &format!("{BUS_PRELUDE}\ncomponent C<const W: width> {{ ports {{ }} }}"),
         &["E1042"],
     );
+}
+
+// ---------------------------------------------------------------------------
+// Decoding features: patterns, value kinds, constraints, prefixes, latches
+// ---------------------------------------------------------------------------
+
+const DEC_PRELUDE: &str = r#"
+isa T {
+    space mem: addr u16 -> u8, little_endian;
+    register AX: u16 { AL: u8 @ 0; AH: u8 @ 8; }
+    register F: u8 { CF: u1 @ 0; AF: u1 @ 4; }
+    register IP: u16;
+    enum Op : u2 { Add, Or, Sub, Cmp }
+    enum Seg : u2 { A, B, C, None }
+    latch seg: Seg = Seg::None;
+    fault UD { vector: 6, class: Fault }
+    fn code_address() -> u16 { return IP; }
+    fn next_byte() -> u8 { let b = mem.read_u8(IP); IP = IP + 1; return b; }
+    istream { space mem; address code_address; next next_byte; undefined UD; }
+    operand ModRM { size 1; fields { mod: u2 @ 6; reg: u3 @ 3; rm: u3 @ 0; } }
+    operand Imm8 { size 1; fields { value: u8 @ 0; } }
+    operand_kind r8 : u8 { select(n: u3) => match n { 0 => AL, 1 => AH, _ => AL }; }
+    operand_kind op : Op { value(n: u2) => n as Op; }
+    operand_kind imm8 : u8 from i: Imm8 { read => i.value; }
+    fn name(o: Op) -> str { return match o { Op::Add => "add", Op::Or => "or", Op::Sub => "sub", Op::Cmp => "cmp" }; }
+"#;
+
+fn dec(body: &str) -> String {
+    format!("{DEC_PRELUDE}\n{body}\n}}")
+}
+
+#[test]
+fn decoding_prelude_is_clean() {
+    assert_codes(&dec(""), &[]);
+}
+
+#[test]
+fn opcode_patterns_and_value_kinds() {
+    let ok = r#"instruction AluI { mnemonic name(o); encoding { opcode "0100oo00" { o: op }; Imm8 } operands (o: op, src: imm8);
+        flags { modifies: [CF]; undefined: [AF if o == Op::Or]; } semantics { if o != Op::Cmp { AL = AL + src; } } }"#;
+    assert_codes(&dec(ok), &[]);
+    // Field width must match the kind's parameter.
+    assert_codes(
+        &dec(
+            r#"instruction I { mnemonic "i"; encoding { opcode "0100ooo0" { o: op } } operands (o: op); }"#,
+        ),
+        &["E1033"],
+    );
+    // Every field must be bound; `-` is don't-care.
+    assert_codes(
+        &dec(r#"instruction I { mnemonic "i"; encoding { opcode "0100oo00" } }"#),
+        &["E1032"],
+    );
+    assert_codes(
+        &dec(r#"instruction I { mnemonic "i"; encoding { opcode "0100--00" } }"#),
+        &[],
+    );
+    // Patterns are whole bytes, fields contiguous, characters known.
+    assert_codes(
+        &dec(r#"instruction I { mnemonic "i"; encoding { opcode "0100" } }"#),
+        &["E1032"],
+    );
+    assert_codes(
+        &dec(
+            r#"instruction I { mnemonic "i"; encoding { opcode "o100oo00" { o: op } } operands (o: op); }"#,
+        ),
+        &["E1032"],
+    );
+    assert_codes(
+        &dec(r#"instruction I { mnemonic "i"; encoding { opcode "0100?000" } }"#),
+        &["E1032"],
+    );
+    // Value-kind operands are read-only.
+    assert_codes(
+        &dec(
+            r#"instruction I { mnemonic "i"; encoding { opcode "0100oo00" { o: op } } operands (o: op); semantics { o = Op::Add; } }"#,
+        ),
+        &["E1037"],
+    );
+    // A kind has one of select/value.
+    assert_codes(
+        &dec("operand_kind bad : u8 { value(n: u3) => n as u8; select(n: u3) => AL; }"),
+        &["E1037"],
+    );
+    assert_codes(
+        &dec("operand_kind bad : u8 { value(n: u8, m: u8) => n; }"),
+        &["E1037"],
+    );
+    assert_codes(
+        &dec("operand_kind bad : u8 { value(n: bool) => 1; }"),
+        &["E1037"],
+    );
+    // Mnemonic expressions are strings.
+    assert_codes(
+        &dec(r#"instruction I { mnemonic 3; encoding { opcode 0x40; } }"#),
+        &["E1005"],
+    );
+}
+
+#[test]
+fn field_constraints_and_overlap() {
+    let pair = r#"
+        instruction A { mnemonic "a"; encoding { opcode 0xC6; ModRM { reg: 0 } } }
+        instruction B { mnemonic "b"; encoding { opcode 0xC6; ModRM { reg: 1 } } }"#;
+    assert_codes(&dec(pair), &[]);
+    let clash = r#"
+        instruction A { mnemonic "a"; encoding { opcode 0xC6; ModRM { reg: 0 } } }
+        instruction B { mnemonic "b"; encoding { opcode 0xC6; ModRM { reg: 0, mod: 3 } } }"#;
+    assert_codes(&dec(clash), &["E1045"]);
+    let unconstrained = r#"
+        instruction A { mnemonic "a"; encoding { opcode 0xC6; ModRM { reg: 0 } } }
+        instruction B { mnemonic "b"; encoding { opcode 0xC6; ModRM } }"#;
+    assert_codes(&dec(unconstrained), &["E1045"]);
+    let pattern_overlap = r#"
+        instruction A { mnemonic "a"; encoding { opcode "0100oo00" { o: op } } operands (o: op); }
+        instruction B { mnemonic "b"; encoding { opcode 0x48; } }"#;
+    assert_codes(&dec(pattern_overlap), &["E1045"]);
+    assert_codes(
+        &dec(r#"instruction A { mnemonic "a"; encoding { opcode 0xC6; ModRM { reg: 9 } } }"#),
+        &["E1006"],
+    );
+}
+
+#[test]
+fn prefixes_latches_and_halt() {
+    let ok = r#"
+        prefix P { encoding { opcode "001ss110" { s: segk } } operands (s: segk); semantics { seg = s; } }
+        operand_kind segk : Seg { value(n: u2) => n as Seg; }
+        instruction H { mnemonic "hlt"; encoding { opcode 0xF4; } semantics { if seg == Seg::A { halt; } } }"#;
+    assert_codes(&dec(ok), &[]);
+    // Prefixes fetch no operands; they need no mnemonic.
+    assert_codes(
+        &dec(r#"prefix P { encoding { opcode 0xF0; Imm8 } }"#),
+        &["E1048"],
+    );
+    // Latches reset to a constant.
+    assert_codes(&dec("latch bad: u8 = AL;"), &["E1047"]);
+    // Prefixes share the opcode space with instructions.
+    assert_codes(
+        &dec(
+            r#"prefix P { encoding { opcode 0xF0; } } instruction I { mnemonic "i"; encoding { opcode 0xF0; } }"#,
+        ),
+        &["E1045"],
+    );
+    // `halt` only in isa code.
+    assert_codes("unit F() -> u8 { halt; return 0; }", &["E1020"]);
+}
+
+#[test]
+fn vectors_declarations() {
+    let isa = dec("");
+    let v = |body: &str| format!("{isa}\nvectors \"x/*.MOO.gz\" on T {{ {body} }}");
+    assert_codes(&v("format moo; memory mem; reg ax = AX; reg ip = IP;"), &[]);
+    assert_codes(
+        &v("format moo; memory mem; reg ax { load => AX = value + 1; read => AX - 1; }"),
+        &[],
+    );
+    assert_codes(&v("format json; memory mem;"), &["E1049"]);
+    assert_codes(&v("format moo;"), &["E1049"]);
+    assert_codes(&v("memory mem;"), &["E1049"]);
+    assert_codes(&v("format moo; memory nope;"), &["E1049", "E1049"]);
+    assert_codes(&v("format moo; memory mem; reg zz = AX;"), &["E1049"]);
+    assert_codes(
+        &v("format moo; memory mem; reg ax = AX; reg ax = AX;"),
+        &["E1001"],
+    );
+    assert_codes(&v("format moo; memory mem; reg ax = AL;"), &["E1005"]);
+    assert_codes(&format!("{isa}\nvectors \"x\" on T;"), &["E1049"]);
+    assert_codes(
+        &format!("{isa}\nvectors \"x\" on Nope {{ format moo; }}"),
+        &["E1049"],
+    );
+}
+
+#[test]
+fn i286_target_checks_clean() {
+    let root: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "targets", "i286"]
+        .iter()
+        .collect();
+    let files = ["alu.machine", "i286.machine"]
+        .iter()
+        .map(|f| SourceFile::new(*f, std::fs::read_to_string(root.join(f)).unwrap()))
+        .collect();
+    let c = check_files(files);
+    assert_clean(&c);
+    let isa = &c.hir.isas[0];
+    assert_eq!(isa.instructions.iter().filter(|i| i.prefix).count(), 2);
+    assert_eq!(isa.instructions.iter().filter(|i| !i.prefix).count(), 31);
+    assert_eq!(isa.latches.len(), 1);
+    assert_eq!(c.hir.vectors.len(), 1);
+    assert_eq!(c.hir.vectors[0].regs.len(), 14);
 }

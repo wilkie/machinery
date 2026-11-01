@@ -44,6 +44,7 @@ pub enum ItemKind {
     Operand,
     OperandKind,
     Instruction,
+    Latch,
     // Nested in a `bus`:
     Transaction,
     Signal,
@@ -72,6 +73,7 @@ impl ItemKind {
             ItemKind::Operand => "operand",
             ItemKind::OperandKind => "operand kind",
             ItemKind::Instruction => "instruction",
+            ItemKind::Latch => "latch",
             ItemKind::Transaction => "transaction",
             ItemKind::Signal => "signal",
         }
@@ -163,6 +165,7 @@ fn isa_item_meta(item: &IsaItem) -> Option<(String, ItemKind, Span)> {
         IsaItem::Enum(d) => (d.name.name.clone(), ItemKind::Enum, d.name.span),
         IsaItem::Bundle(d) => (d.name.name.clone(), ItemKind::Bundle, d.name.span),
         IsaItem::Const(d) => (d.name.name.clone(), ItemKind::Const, d.name.span),
+        IsaItem::Latch(d) => (d.name.name.clone(), ItemKind::Latch, d.name.span),
         IsaItem::Istream(_) => return None,
     })
 }
@@ -642,6 +645,13 @@ impl Program {
         match self.isa_item(id) {
             Some(IsaItem::Instruction(d)) => d,
             _ => panic!("not an instruction"),
+        }
+    }
+
+    pub fn latch_decl(&self, id: DefId) -> &ast::LatchDecl {
+        match self.isa_item(id) {
+            Some(IsaItem::Latch(d)) => d,
+            _ => panic!("not a latch"),
         }
     }
 

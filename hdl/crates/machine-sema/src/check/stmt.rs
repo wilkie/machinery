@@ -312,6 +312,19 @@ impl Checker<'_> {
                     }
                 },
             },
+            A::Halt => {
+                if cx.scope.isa.is_none() || cx.in_test || cx.component.is_some() {
+                    self.error(
+                        cx.module,
+                        "E1020",
+                        span,
+                        "`halt` is only allowed in isa code",
+                    );
+                    H::Error
+                } else {
+                    H::Halt
+                }
+            }
             A::Raise(e) => {
                 if cx.scope.isa.is_none() {
                     self.error(
@@ -451,7 +464,10 @@ impl Checker<'_> {
         let Some(sig) = self.kinds.get(&kind).cloned() else {
             return H::Error;
         };
-        let writable = sig.source.is_none() || sig.rule(RuleKind::Write).is_some();
+        let writable = match sig.source {
+            None => sig.rule(RuleKind::Select).is_some(),
+            Some(_) => sig.rule(RuleKind::Write).is_some(),
+        };
         if !writable {
             let msg = format!(
                 "operand `{oname}` of kind `{}` is read-only (the kind has no `write` rule)",
@@ -531,6 +547,7 @@ fn stmt_name(k: &ast::StmtKind) -> &'static str {
         A::Cycle(_) => "cycle",
         A::WaitUntil(_) => "wait until",
         A::Retire => "retire",
+        A::Halt => "halt",
         A::Fault(_) => "fault",
         A::Raise(_) => "raise",
         A::Start(_) => "start",

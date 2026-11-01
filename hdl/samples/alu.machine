@@ -48,9 +48,9 @@ unit Alu<const W: width>(op: AluOp, a: u<W>, b: u<W>, cin: u1) -> (result: u<W>,
 
 /// Post-operation flags for an ALU op at width W.
 ///
-/// `raw[W]` is the adder carry-out; for subtraction the datapath computes
-/// a + ~b + 1, whose carry-out is the inverse of the x86 borrow, hence the
-/// `~` on the Sub/Sbb/Cmp arm.
+/// `raw[W]` is the carry out of bit W-1. The datapath works in W+1 bits, so
+/// for subtraction `a + ~b + 1` is `a - b mod 2^(W+1)` and bit W is already
+/// the x86 borrow: CF is `raw[W]` for both addition and subtraction.
 unit AluFlags<const W: width>(op: AluOp, a: u<W>, b: u<W>, raw: u<W + 1>) -> ArithFlags {
     let r: u<W> = raw as u<W>;
     let msb = W - 1;
@@ -60,7 +60,7 @@ unit AluFlags<const W: width>(op: AluOp, a: u<W>, b: u<W>, raw: u<W + 1>) -> Ari
              raw[4] ^ a[4] ^ b[4],
              ~(a[msb] ^ b[msb]) & (a[msb] ^ r[msb])),
         AluOp::Sub | AluOp::Sbb | AluOp::Cmp =>
-            (~raw[W],
+            (raw[W],
              raw[4] ^ a[4] ^ b[4],
              (a[msb] ^ b[msb]) & (a[msb] ^ r[msb])),
         AluOp::And | AluOp::Or | AluOp::Xor =>
@@ -88,7 +88,7 @@ test "signed overflow on 16-bit add" {
     expect { result == 0x8000; f.of == 1; f.sf == 1; f.cf == 0; }
 }
 
-test "sub borrow is the inverted adder carry" {
+test "sub borrow is bit W of the wide result" {
     let (result, raw) = Alu<8>(AluOp::Sub, 0x00, 0x01, 0);
     let f = AluFlags<8>(AluOp::Sub, 0x00, 0x01, raw);
     expect { result == 0xFF; f.cf == 1; f.sf == 1; f.zf == 0; }

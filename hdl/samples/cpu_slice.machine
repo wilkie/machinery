@@ -386,14 +386,33 @@ test "ADD [BX+SI], CL through memory" on I286Isa {
     expect { mem[0x10102] == 0x05; FLAGS.CF == 1; IP == 2; }
 }
 
-/// Existing single-step corpus, reused as-is.
-vectors "simulators/test/i286/simple/*.json" on I286Isa;
+/// The SingleStepTests 80286 corpus (hardware-captured, one instruction plus
+/// HLT per vector). The real i286 description in `targets/i286` runs it; this
+/// slice only shows the shape of the mapping.
+vectors "../../simulators/test/i286/SingleStepTests/v1_real_mode/*.MOO.gz" on I286Isa {
+    format moo;
+    memory mem;
+    reg ax = AX;
+    reg bx = BX;
+    reg cx = CX;
+    reg dx = DX;
+    reg sp = SP;
+    reg bp = BP;
+    reg si = SI;
+    reg di = DI;
+    reg ip = IP;
+    reg flags = FLAGS;
+    reg cs { load => CS = Segment { selector: value, base: (value as u24) << 4 }; read => CS.selector; }
+    reg ds { load => DS = Segment { selector: value, base: (value as u24) << 4 }; read => DS.selector; }
+    reg es { load => ES = Segment { selector: value, base: (value as u24) << 4 }; read => ES.selector; }
+    reg ss { load => SS = Segment { selector: value, base: (value as u24) << 4 }; read => SS.selector; }
+}
 
 /// Derived interpreter vs. rtl: same instruction stream, compare the
 /// architectural projection after every retire. The timing report compares
 /// measured rtl cycles with any `timing` overrides (none here).
 conformance I286 {
-    stimulus vectors "simulators/test/i286/simple/*.json";
+    stimulus vectors "../../simulators/test/i286/SingleStepTests/v1_real_mode/*.MOO.gz";
     stimulus random_instructions(seed: 7, count: 100_000, from: [Add_rm8_r8, Cmp_rm8_r8]);
     compare architectural at retire;
     report timing;

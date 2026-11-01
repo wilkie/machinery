@@ -208,6 +208,8 @@ pub struct Checker<'p> {
     pub(crate) instr_sigs: HashMap<DefId, Rc<InstrSig>>,
     /// The mode enum of each isa.
     pub(crate) isa_modes: HashMap<DefId, DefId>,
+    pub(crate) latches: HashMap<DefId, Rc<hir::Latch>>,
+    vectors: Vec<hir::VectorsInfo>,
     isas: Vec<hir::IsaInfo>,
     // --- buses and components ---
     pub(crate) buses: HashMap<DefId, Rc<hir::BusInfo>>,
@@ -239,6 +241,8 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
         fn_sigs: HashMap::new(),
         instr_sigs: HashMap::new(),
         isa_modes: HashMap::new(),
+        latches: HashMap::new(),
+        vectors: Vec::new(),
         isas: Vec::new(),
         buses: HashMap::new(),
         comps: HashMap::new(),
@@ -287,6 +291,11 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
     for id in prog.items_of(ItemKind::Test) {
         ck.check_test(id);
     }
+    for id in prog.items_of(ItemKind::Vectors) {
+        if let Some(v) = ck.check_vectors(id) {
+            ck.vectors.push(v);
+        }
+    }
     for id in prog.items_of(ItemKind::Unit) {
         let Decl::Unit(u) = prog.decl(id) else {
             unreachable!()
@@ -307,7 +316,7 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
     for item in &prog.items {
         let kind = match item.kind {
             ItemKind::System => "system",
-            ItemKind::Vectors => "vectors",
+
             ItemKind::Conformance => "conformance",
             _ => continue,
         };
@@ -367,6 +376,7 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
             components: ck.components,
             enums,
             bundles,
+            vectors: ck.vectors,
         },
         ck.skipped,
     )
@@ -908,6 +918,9 @@ impl<'p> Checker<'p> {
                 let def = match path.segments.len() {
                     1 => {
                         let name = &path.segments[0].name;
+                        if name == "str" && self.lookup(scope, name).is_none() {
+                            return Ty::Str;
+                        }
                         match self.lookup(scope, name) {
                             Some(ScopeEntry::Item(d)) => d,
                             Some(_) => {

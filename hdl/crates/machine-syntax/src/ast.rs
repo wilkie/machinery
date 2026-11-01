@@ -431,6 +431,8 @@ pub enum StmtKind {
     WaitUntil(Expr),
     /// `retire;`
     Retire,
+    /// `halt;` in isa code: stop until an interrupt or reset.
+    Halt,
     /// `fault Path(args)?;`
     Fault(Expr),
     /// `raise Fault(args);` in isa code.
@@ -962,11 +964,13 @@ pub struct OperandBinding {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum InstructionItem {
-    Mnemonic(StrLit),
+    /// A string, or a string-valued expression over the operands.
+    Mnemonic(Expr),
     Encoding(Vec<EncodingItem>),
     Operands(Vec<OperandBinding>),
     /// `flags { modifies: [..]; undefined: [..]; reads: [..]; }`
-    Flags(Vec<FieldInit>),
+    /// `flags { modifies: [CF, ZF]; undefined: [AF if is_logic(op)]; }`
+    Flags(Vec<FlagSet>),
     Semantics(Block),
     Timing(Vec<FieldInit>),
     Implements(Path),
@@ -976,9 +980,37 @@ pub enum InstructionItem {
     Other(Ident, Option<Expr>),
 }
 
+/// One entry of a flag set: a register field, optionally conditional.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlagEntry {
+    pub flag: Path,
+    pub cond: Option<Expr>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlagSet {
+    pub name: Ident,
+    pub entries: Vec<FlagEntry>,
+    pub span: Span,
+}
+
+/// `latch name: T = init;`: per-instruction state, reset at every
+/// instruction boundary (prefix effects).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LatchDecl {
+    pub docs: Docs,
+    pub name: Ident,
+    pub ty: Type,
+    pub init: Expr,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct InstructionDecl {
     pub docs: Docs,
+    /// Declared with `prefix` instead of `instruction`.
+    pub prefix: bool,
     pub name: Ident,
     pub items: Vec<InstructionItem>,
     pub span: Span,
@@ -1000,6 +1032,7 @@ pub enum IsaItem {
     Const(ConstDecl),
     /// `istream { space mem; address code_address; next next_byte; undefined UD; }`
     Istream(IstreamDecl),
+    Latch(LatchDecl),
 }
 
 /// Where instruction bytes come from: the space they live in, the function
@@ -1146,7 +1179,30 @@ pub struct VectorsDecl {
     pub docs: Docs,
     pub glob: StrLit,
     pub target: Path,
+    /// `{ format moo; memory mem; reg ax = AX; ... }`
+    pub items: Vec<VectorsItem>,
     pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum VectorsItem {
+    /// `format moo;`
+    Format(Ident),
+    /// `memory mem;`: the address space vector RAM addresses refer to.
+    Memory(Ident),
+    /// `reg ax = AX;`: load assigns the place, compare reads it.
+    Reg {
+        name: Ident,
+        place: Expr,
+        span: Span,
+    },
+    /// `reg cs { load => <stmt using `value`>; read => <expr>; }`
+    RegCustom {
+        name: Ident,
+        load: Box<Stmt>,
+        read: Expr,
+        span: Span,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

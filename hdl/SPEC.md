@@ -584,13 +584,27 @@ instruction Add_rm8_r8 {
 ```
 
 - `encoding` is the byte-level shape: `opcode` bytes and the operands to
-  fetch, in order. A fetched operand may bind its fields to **select
-  kinds** (`ModRM { reg: r8 }`: the `reg` field selects an `r8`); **from
-  kinds** (`rm8 from m: ModRM`) bind implicitly to the fetched operand of
-  their source type. Every operand in `operands` must be bound exactly once.
-  The assembler, disassembler and decoder are generated from this. When an
-  `implements` routine exists, the compiler also **derives** the encoding
-  from the routine's `fetch` sequence and reports any mismatch.
+  fetch, in order. An `opcode` is a byte (`0x88`), a **pattern string**, or
+  a list of those. In a pattern, `0`/`1` are fixed bits, `-` is a
+  don't-care bit, `_` and spaces are separators, and a letter names a
+  **field**: one contiguous run of bits within a byte, bound to an operand
+  kind (`opcode "00ooo000" { o: alu_op }`). A fetched operand may bind its
+  fields to kinds (`ModRM { reg: r8 }`) or **constrain** them to a value
+  (`ModRM { reg: 0 }`); constraints are how group opcodes such as `C6 /0`
+  are told apart. Field-bound kinds are **select kinds** (the field names
+  a register) or **value kinds** (the field carries a value: an ALU
+  operation, a condition code). **From kinds** (`rm8 from m: ModRM`) bind
+  implicitly to the fetched operand of their source type. Every operand in
+  `operands` must be bound exactly once. No byte sequence may decode to two
+  instructions: instructions whose leading opcode patterns overlap must
+  fetch the same operand first and constrain one of its fields to different
+  values (E1045). The assembler, disassembler and decoder are generated
+  from this. When an `implements` routine exists, the compiler also
+  **derives** the encoding from the routine's `fetch` sequence and reports
+  any mismatch.
+- `mnemonic` is a string, or a string-valued expression over the operands
+  for a family: `mnemonic alu_name(op);` with `fn alu_name(op: AluOp) ->
+  str`.
 - `operands` names operands by **operand kind** (`r8`, `rm8`, `imm16`,
   `moffs16`...). Kinds are declared in the ISA with how they are read and
   written (register select, memory via `translate`, immediate), so reading
@@ -600,9 +614,11 @@ instruction Add_rm8_r8 {
   kind's `is_mem` rule without reading.
 - `semantics` is imperative, over architectural state, operands and units.
   It may call `fn` helpers and `raise`. It has no notion of cycles.
-- `flags { modifies, undefined, reads }` is checked against the semantics
-  where possible (a flag listed as modified must be written on some path;
-  a flag written must be listed).
+- `flags { modifies, undefined, reads }` lists register fields; an entry
+  may be conditional on the operands (`undefined: [AF if is_logic(op)]`).
+  Hardware vectors are compared with exactly the flags the executed
+  instruction leaves undefined masked out. (Checking `modifies` against
+  the semantics is planned.)
 - `timing { ... }` is optional. Default: derived (section 14). When given,
   it is a cycle count expression over operand shapes, e.g.
   `timing { cycles: if dst.is_mem { 7 } else { 2 } }`, and it overrides.
@@ -610,6 +626,28 @@ instruction Add_rm8_r8 {
   derivation. Optional; a 386 model may have an `isa` and no rtl at all.
 - `mode` restrictions: `allowed_in [Mode::Protected]` and privilege
   `requires cpl == 0`.
+
+### 11.2a Prefixes and latches
+
+```
+enum SegOv : u3 { ES = 0, CS = 1, SS = 2, DS = 3, None = 4 }
+latch seg_override: SegOv = SegOv::None;
+
+prefix SegOverride {
+    encoding { opcode "001ss110" { s: seg_ov } }
+    operands (s: seg_ov);
+    semantics { seg_override = s; }
+}
+```
+
+A `latch` is per-instruction state: it resets to its (constant) initial
+value at every instruction boundary. A `prefix` is declared like an
+instruction but has only opcode bytes; the decoder runs its semantics and
+continues decoding, so any number of prefixes may precede an instruction.
+Prefixes communicate with instructions only through latches.
+
+`halt;` in isa code stops the processor: the interpreter's `step` does
+nothing until it is restarted (interrupt delivery is not yet described).
 
 ### 11.3 Operand kinds and `fetch`
 
@@ -639,7 +677,9 @@ operand_kind rm8 : u8 from m: ModRM {
 ```
 
 A select kind names a register by an encoding field; its `select` rule must
-yield a *place* (every branch assignable). A from kind is built from a
+yield a *place* (every branch assignable). A value kind turns an encoding
+field into a value (`operand_kind alu_op : AluOp { value(n: u3) => n as
+AluOp; }`); its operands are read-only. A from kind is built from a
 fetched operand bound to a name (`m`) and has `read`, optionally `write` (a
 kind without `write` is read-only, e.g. immediates) and `is_mem`. In the ISA,
 `rm8` resolves through `ModRM` to a register or a `translate`d memory
@@ -745,8 +785,26 @@ Built into the language and the compiler:
        expect { output.count == 6; }
    }
    ```
-4. **External vectors**: the existing single-step JSON vectors are a
-   first-class test input: `vectors "tests/i286/*.json" on I286Isa;`.
+4. **External vectors**: hardware-captured vectors are a first-class test
+   input. The declaration says where they are (a glob relative to the
+   file), their format, the address space their RAM addresses refer to, and
+   how each register of the format maps onto the isa:
+   ```
+   vectors "../SingleStepTests/v1_real_mode/*.MOO.gz" on I286 {
+       format moo;
+       memory mem;
+       reg ax = AX;                    // load assigns the place, compare reads it
+       reg cs { load => CS = Segment { selector: value, base: (value as u24) << 4 };
+                read => CS.selector; }
+   }
+   ```
+   The generated runner loads the initial state, steps until `halt`,
+   compares every mapped register and every RAM byte the vector mentions
+   (registers it omits must be unchanged), masks the executed instruction's
+   undefined flags, skips vectors that raise an exception (until exception
+   delivery is described) or are revoked, and reports opcodes that do not
+   decode as unimplemented rather than failed. `machine vectors --isa I286
+   files...` runs it.
 5. **Conformance (differential)**: for every component with two levels, the
    compiler generates a harness that runs both from the same initial state
    and stimulus and compares the architectural projection (processors) at

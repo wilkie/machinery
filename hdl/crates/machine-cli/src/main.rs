@@ -15,6 +15,7 @@ Usage:
   machine check [--message-format=text|json] [--syntax-only] <file.machine>...
   machine build --isa <Name> --out <dir> <file.machine>...
   machine test --isa <Name> <file.machine>...
+  machine vectors --isa <Name> [--filter 00,80.] [--max-failures N] [--quiet] <file.machine>...
   machine dump-ast <file.machine>
 
 Commands:
@@ -24,6 +25,8 @@ Commands:
   build      Check, then generate the Rust interpreter crate for an isa into <dir>.
   test       Check, generate the interpreter into target/machine/<isa>, and run
              its tests (the `test ... on <Isa>` blocks) with cargo.
+  vectors    Check, generate, and run the isa's `vectors` (hardware-captured
+             test vectors) through the interpreter in release mode.
   dump-ast   Parse one file and print its syntax tree (debug form).
 
 Options:
@@ -47,6 +50,7 @@ fn main() -> ExitCode {
         "check" => check(&args[1..]),
         "build" => build(&args[1..], false),
         "test" => build(&args[1..], true),
+        "vectors" => build(&args[1..], true),
         "dump-ast" => dump_ast(&args[1..]),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
@@ -213,9 +217,11 @@ fn dump_ast(args: &[String]) -> ExitCode {
 
 /// `machine build` / `machine test`.
 fn build(args: &[String], run_tests: bool) -> ExitCode {
+    let vectors_mode = std::env::args().nth(1).as_deref() == Some("vectors");
     let mut isa = None;
     let mut out_dir = None;
     let mut paths = Vec::new();
+    let mut passthrough: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
@@ -232,6 +238,15 @@ fn build(args: &[String], run_tests: bool) -> ExitCode {
             continue;
         } else if let Some(v) = a.strip_prefix("--out=") {
             out_dir = Some(v.to_string());
+        } else if vectors_mode && (a == "--filter" || a == "--max-failures" || a == "--dir") {
+            passthrough.push(a.clone());
+            if let Some(v) = args.get(i + 1) {
+                passthrough.push(v.clone());
+            }
+            i += 2;
+            continue;
+        } else if vectors_mode && a == "--quiet" {
+            passthrough.push(a.clone());
         } else if a.starts_with('-') {
             eprintln!("error: unknown option `{a}`");
             return ExitCode::from(2);
@@ -300,11 +315,31 @@ fn build(args: &[String], run_tests: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let status = std::process::Command::new(cargo)
-        .arg("test")
-        .arg("--manifest-path")
+    let mut cmd = std::process::Command::new(cargo);
+    if vectors_mode {
+        if crate_.vectors_bin.is_none() {
+            eprintln!("error: isa `{isa}` has no `vectors` declaration");
+            return ExitCode::FAILURE;
+        }
+        cmd.args([
+            "run",
+            "--quiet",
+            "--release",
+            "--features",
+            "vectors",
+            "--bin",
+            "vectors",
+            "--manifest-path",
+        ])
         .arg(dir.join("Cargo.toml"))
-        .status();
+        .arg("--")
+        .args(&passthrough);
+    } else {
+        cmd.arg("test")
+            .arg("--manifest-path")
+            .arg(dir.join("Cargo.toml"));
+    }
+    let status = cmd.status();
     match status {
         Ok(s) if s.success() => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,

@@ -658,6 +658,13 @@ impl Checker<'_> {
                     },
                     None => err(span),
                 },
+                ItemKind::Latch => match self.latches.get(&def) {
+                    Some(l) => {
+                        let ty = l.ty.clone();
+                        mk(H::Latch(def), ty, span)
+                    }
+                    None => err(span),
+                },
                 ItemKind::Register => match self.registers.get(&def) {
                     Some(r) => {
                         let ty = r.ty.clone();

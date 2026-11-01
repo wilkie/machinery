@@ -96,6 +96,8 @@ pub enum ExprKind {
     KindSelect(DefId, Vec<Expr>),
     /// Call of an isa `fn`.
     FnCall(DefId, Vec<Expr>),
+    /// A `latch` of the isa (place).
+    Latch(DefId),
 
     // --- component model ---
     /// A wire port of the enclosing component; the flag says whether it is
@@ -117,6 +119,7 @@ pub fn is_place(e: &Expr) -> bool {
         | ExprKind::RegField(..)
         | ExprKind::RegView(..)
         | ExprKind::Mode(_)
+        | ExprKind::Latch(_)
         | ExprKind::SpaceCell(..)
         | ExprKind::KindSelect(..) => true,
         ExprKind::Port(_, _, out) => *out,
@@ -221,6 +224,8 @@ pub enum StmtKind {
     RunInstruction(DefId, Vec<Expr>),
     /// `run bytes [...];`
     RunBytes(Vec<u8>),
+    /// `halt;`
+    Halt,
 
     // --- component model ---
     /// `emit port.signal(args) = value;`
@@ -371,6 +376,9 @@ pub enum RuleKind {
     Write,
     /// `is_mem => bool`
     IsMem,
+    /// `value(n) => expr`: the operand is a value carried by an encoding
+    /// field (an ALU operation, a condition code).
+    Value,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -398,10 +406,29 @@ pub struct OperandKind {
 /// How an instruction operand is obtained from the encoding.
 #[derive(Clone, Debug, PartialEq)]
 pub enum BindSource {
-    /// `kind.select(field)` of the fetched operand at `step`.
-    Select { step: u32, field: u32 },
+    /// An encoding field fed to the kind's `select` or `value` rule: field
+    /// `field` of the fetched operand at `step`, or of the opcode pattern
+    /// at `step`.
+    Field { step: u32, field: u32 },
     /// The whole fetched operand at `step` (a `from` kind).
     From { step: u32 },
+}
+
+/// One opcode byte: the bits under `mask` must equal `value`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpcodeByte {
+    pub value: u8,
+    pub mask: u8,
+}
+
+/// A named run of bits in an opcode pattern.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpcodeField {
+    pub name: String,
+    /// Index of the byte within this opcode step.
+    pub byte: u32,
+    pub shift: u32,
+    pub width: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -413,29 +440,61 @@ pub struct OperandBinding {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EncodingStep {
-    Opcode(Vec<u8>),
-    /// Fetch an operand; `selects` maps its fields to operand bindings.
+    /// Fixed and pattern bytes; fields bound to operands.
+    Opcode {
+        bytes: Vec<OpcodeByte>,
+        fields: Vec<OpcodeField>,
+    },
+    /// Fetch an operand. `constraints` are `(field, value)` pairs the
+    /// fetched operand must match for this instruction to apply (group
+    /// opcodes such as `C6 /0`).
     Fetch {
         operand: DefId,
-        selects: Vec<(u32, u32)>,
+        constraints: Vec<(u32, i128)>,
     },
 }
 
-/// A register field reference `(register, field index)`.
-pub type FlagRef = (DefId, u32);
+impl EncodingStep {
+    pub fn is_opcode(&self) -> bool {
+        matches!(self, EncodingStep::Opcode { .. })
+    }
+}
+
+/// A flag (register field), optionally only when a condition over the
+/// instruction's operands holds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlagUse {
+    pub reg: DefId,
+    pub field: u32,
+    pub cond: Option<Expr>,
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FlagSets {
-    pub modifies: Vec<FlagRef>,
-    pub undefined: Vec<FlagRef>,
-    pub reads: Vec<FlagRef>,
+    pub modifies: Vec<FlagUse>,
+    pub undefined: Vec<FlagUse>,
+    pub reads: Vec<FlagUse>,
+    /// Locals used by the conditions.
+    pub locals: Vec<Local>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Mnemonic {
+    Fixed(String),
+    /// A string-valued expression over the operands.
+    Expr {
+        locals: Vec<Local>,
+        expr: Expr,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Instruction {
     pub def: DefId,
     pub name: String,
-    pub mnemonic: Option<String>,
+    /// A `prefix`: its semantics run during decoding and decoding continues.
+    pub prefix: bool,
+    pub mnemonic: Option<Mnemonic>,
     pub description: Vec<String>,
     pub encoding: Vec<EncodingStep>,
     pub operands: Vec<OperandBinding>,
@@ -465,6 +524,41 @@ pub struct IsaInfo {
     pub kinds: Vec<OperandKind>,
     pub instructions: Vec<Instruction>,
     pub istream: Option<Istream>,
+    pub latches: Vec<Latch>,
+}
+
+/// Per-instruction state, reset to `init` at every instruction boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Latch {
+    pub def: DefId,
+    pub name: String,
+    pub ty: Ty,
+    pub init: Expr,
+}
+
+/// How one register of a vector format maps onto the isa.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VectorReg {
+    pub name: String,
+    pub locals: Vec<Local>,
+    /// The local holding the vector's value during `load`.
+    pub value: LocalId,
+    pub load: Block,
+    pub read: Expr,
+    /// The register read by `read`, if it is a whole register: its
+    /// instruction-undefined flag fields are masked when comparing.
+    pub masked_reg: Option<DefId>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VectorsInfo {
+    pub def: DefId,
+    pub isa: DefId,
+    /// Glob resolved against the declaring file's directory.
+    pub glob: String,
+    pub format: String,
+    pub memory: DefId,
+    pub regs: Vec<VectorReg>,
 }
 
 /// Where instruction bytes come from.
@@ -653,4 +747,5 @@ pub struct Hir {
     /// Every resolved enum and bundle, by definition order.
     pub enums: Vec<EnumDef>,
     pub bundles: Vec<BundleDef>,
+    pub vectors: Vec<VectorsInfo>,
 }

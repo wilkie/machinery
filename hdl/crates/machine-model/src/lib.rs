@@ -52,17 +52,31 @@ fn find_isa(prog: &Program, name: &str) -> Result<DefId, GenError> {
 pub struct GeneratedCrate {
     pub cargo_toml: String,
     pub lib_rs: String,
+    /// `src/bin/vectors.rs`, when the isa has `vectors`.
+    pub vectors_bin: Option<String>,
 }
 
 /// Assemble a standalone crate around the generated source. `runtime_path`
 /// is the path to the `machine-runtime` crate the generated code links
 /// against.
 pub fn package(name: &str, lib_rs: String, runtime_path: &Path) -> GeneratedCrate {
-    let cargo_toml = format!(
-        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n\n[lib]\npath = \"src/lib.rs\"\n\n[dependencies]\nmachine-runtime = {{ path = {:?} }}\n\n[workspace]\n",
+    let has_vectors = lib_rs.contains("pub mod vectors {");
+    let mut cargo_toml = format!(
+        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n\n[lib]\npath = \"src/lib.rs\"\n\n[dependencies]\nmachine-runtime = {{ path = {:?} }}\n\n[features]\nvectors = [\"machine-runtime/vectors\"]\n",
         runtime_path.display().to_string()
     );
-    GeneratedCrate { cargo_toml, lib_rs }
+    let vectors_bin = if has_vectors {
+        cargo_toml.push_str("\n[[bin]]\nname = \"vectors\"\npath = \"src/bin/vectors.rs\"\nrequired-features = [\"vectors\"]\n");
+        Some(format!("fn main() {{\n    std::process::exit(if {name}::vectors::main_entry() {{ 0 }} else {{ 1 }});\n}}\n"))
+    } else {
+        None
+    };
+    cargo_toml.push_str("\n[profile.release]\ndebug = 1\n\n[workspace]\n");
+    GeneratedCrate {
+        cargo_toml,
+        lib_rs,
+        vectors_bin,
+    }
 }
 
 /// Write a generated crate to `dir` (created if needed).
@@ -70,6 +84,10 @@ pub fn write_crate(dir: &Path, crate_: &GeneratedCrate) -> std::io::Result<()> {
     std::fs::create_dir_all(dir.join("src"))?;
     std::fs::write(dir.join("Cargo.toml"), &crate_.cargo_toml)?;
     std::fs::write(dir.join("src").join("lib.rs"), &crate_.lib_rs)?;
+    if let Some(bin) = &crate_.vectors_bin {
+        std::fs::create_dir_all(dir.join("src").join("bin"))?;
+        std::fs::write(dir.join("src").join("bin").join("vectors.rs"), bin)?;
+    }
     Ok(())
 }
 

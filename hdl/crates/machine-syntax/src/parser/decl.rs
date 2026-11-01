@@ -56,11 +56,18 @@ impl Parser {
                     let glob = self.expect_str()?;
                     self.expect_word("on")?;
                     let target = self.parse_path_dotted()?;
-                    self.expect_semi()?;
+                    let mut items = Vec::new();
+                    if self.at_punct(Punct::LBrace) {
+                        self.advance();
+                        items = self.parse_items_until_rbrace(|p| p.parse_vectors_item())?;
+                    } else {
+                        self.expect_semi()?;
+                    }
                     Ok(Decl::Vectors(VectorsDecl {
                         docs,
                         glob,
                         target,
+                        items,
                         span: start.to(self.prev_span()),
                     }))
                 }
@@ -746,6 +753,22 @@ impl Parser {
                     span: start.to(self.prev_span()),
                 }))
             }
+            "latch" => {
+                self.advance();
+                let name = self.expect_ident()?;
+                self.expect_punct(Punct::Colon)?;
+                let ty = self.parse_type()?;
+                self.expect_punct(Punct::Eq)?;
+                let init = self.parse_expr()?;
+                self.expect_semi()?;
+                Ok(IsaItem::Latch(LatchDecl {
+                    docs,
+                    name,
+                    ty,
+                    init,
+                    span: start.to(self.prev_span()),
+                }))
+            }
             "operand_kind" => {
                 self.advance();
                 let name = self.expect_ident()?;
@@ -795,20 +818,22 @@ impl Parser {
                     span: start.to(self.prev_span()),
                 }))
             }
-            "instruction" => {
+            "instruction" | "prefix" => {
+                let prefix = word == "prefix";
                 self.advance();
                 let name = self.expect_ident()?;
                 self.expect_punct(Punct::LBrace)?;
                 let items = self.parse_items_until_rbrace(|p| p.parse_instruction_item())?;
                 Ok(IsaItem::Instruction(InstructionDecl {
                     docs,
+                    prefix,
                     name,
                     items,
                     span: start.to(self.prev_span()),
                 }))
             }
             _ => Err(self.error_expected(
-                "`space`, `register`, `mode`, `fault`, `fn`, `operand`, `operand_kind`, `instruction`, `istream`, `enum`, `bundle` or `const`",
+                "`space`, `register`, `mode`, `fault`, `fn`, `operand`, `operand_kind`, `instruction`, `prefix`, `latch`, `istream`, `enum`, `bundle` or `const`",
             )),
         }
     }
@@ -818,9 +843,9 @@ impl Parser {
         let key = self.expect_ident()?;
         let item = match key.name.as_str() {
             "mnemonic" => {
-                let s = self.expect_str()?;
+                let e = self.parse_expr()?;
                 self.expect_semi()?;
-                InstructionItem::Mnemonic(s)
+                InstructionItem::Mnemonic(e)
             }
             "encoding" => {
                 let items =
@@ -858,7 +883,39 @@ impl Parser {
                 self.expect_semi()?;
                 InstructionItem::Operands(ops)
             }
-            "flags" => InstructionItem::Flags(self.parse_field_inits(false)?.0),
+            "flags" => {
+                let sets = self.parse_delimited(
+                    Punct::LBrace,
+                    Punct::RBrace,
+                    &[Punct::Semi, Punct::Comma],
+                    |p| {
+                        let name = p.expect_ident()?;
+                        p.expect_punct(Punct::Colon)?;
+                        let entries = p.parse_delimited(
+                            Punct::LBracket,
+                            Punct::RBracket,
+                            &[Punct::Comma],
+                            |p| {
+                                let flag = p.parse_path_dotted()?;
+                                let cond = if p.eat_kw(Keyword::If) {
+                                    Some(p.parse_expr()?)
+                                } else {
+                                    None
+                                };
+                                let span = flag.span.to(p.prev_span());
+                                Ok(FlagEntry { flag, cond, span })
+                            },
+                        )?;
+                        let span = name.span.to(p.prev_span());
+                        Ok(FlagSet {
+                            name,
+                            entries,
+                            span,
+                        })
+                    },
+                )?;
+                InstructionItem::Flags(sets)
+            }
             "semantics" => InstructionItem::Semantics(self.parse_block()?),
             "timing" => InstructionItem::Timing(self.parse_field_inits(false)?.0),
             "implements" => {
@@ -1076,6 +1133,56 @@ impl Parser {
                     source,
                 })
             }
+        }
+    }
+
+    /// One item of a `vectors { ... }` block.
+    fn parse_vectors_item(&mut self) -> PResult<VectorsItem> {
+        let start = self.cur_span();
+        let key = self.expect_ident()?;
+        match key.name.as_str() {
+            "format" => {
+                let f = self.expect_ident()?;
+                self.expect_semi()?;
+                Ok(VectorsItem::Format(f))
+            }
+            "memory" => {
+                let m = self.expect_ident()?;
+                self.expect_semi()?;
+                Ok(VectorsItem::Memory(m))
+            }
+            "reg" => {
+                let name = self.expect_ident()?;
+                if self.eat_punct(Punct::Eq) {
+                    let place = self.parse_expr()?;
+                    self.expect_semi()?;
+                    return Ok(VectorsItem::Reg {
+                        name,
+                        place,
+                        span: start.to(self.prev_span()),
+                    });
+                }
+                self.expect_punct(Punct::LBrace)?;
+                self.expect_word("load")?;
+                self.expect_punct(Punct::FatArrow)?;
+                let load = self.parse_stmt()?;
+                self.expect_word("read")?;
+                self.expect_punct(Punct::FatArrow)?;
+                let read = self.parse_expr()?;
+                self.expect_semi()?;
+                self.expect_punct(Punct::RBrace)?;
+                Ok(VectorsItem::RegCustom {
+                    name,
+                    load: Box::new(load),
+                    read,
+                    span: start.to(self.prev_span()),
+                })
+            }
+            other => Err(self.error(
+                "E0107",
+                key.span,
+                format!("unknown `vectors` item `{other}`; expected `format`, `memory` or `reg`"),
+            )),
         }
     }
 }

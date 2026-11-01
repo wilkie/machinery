@@ -6,7 +6,13 @@ license.workspace = true
 repository.workspace = true
 description = "Support library linked by code generated from Machine hardware descriptions."
 
+[features]
+default = []
+# Reading hardware-captured test vectors (SingleStepTests MOO files).
+vectors = ["dep:flate2"]
+
 [dependencies]
+flate2 = { version = "1", optional = true }
 
 [lints]
 workspace = true

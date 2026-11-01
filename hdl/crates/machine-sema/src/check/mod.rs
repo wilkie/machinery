@@ -7,6 +7,7 @@ mod expr;
 mod isa;
 mod pattern;
 mod stmt;
+mod system;
 
 pub use component::{CompEntry, CompScope};
 
@@ -124,6 +125,8 @@ pub struct FnCtx {
     pub component: Option<DefId>,
     /// Nesting depth of `while`/`loop`, for `break`/`continue`.
     pub loop_depth: u32,
+    /// In a transaction handler, which may not start transactions.
+    pub responding: bool,
 }
 
 impl FnCtx {
@@ -139,6 +142,7 @@ impl FnCtx {
             operands: Vec::new(),
             component: None,
             loop_depth: 0,
+            responding: false,
         }
     }
 
@@ -216,6 +220,7 @@ pub struct Checker<'p> {
     pub(crate) comps: HashMap<DefId, Rc<CompScope>>,
     bus_infos: Vec<hir::BusInfo>,
     components: Vec<hir::ComponentInfo>,
+    systems: Vec<hir::SystemInfo>,
 }
 
 /// Check every item of a program.
@@ -248,6 +253,7 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
         comps: HashMap::new(),
         bus_infos: Vec::new(),
         components: Vec::new(),
+        systems: Vec::new(),
     };
 
     for id in prog
@@ -296,6 +302,11 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
             ck.vectors.push(v);
         }
     }
+    for id in prog.items_of(ItemKind::System) {
+        if let Some(s) = ck.check_system(id) {
+            ck.systems.push(s);
+        }
+    }
     for id in prog.items_of(ItemKind::Unit) {
         let Decl::Unit(u) = prog.decl(id) else {
             unreachable!()
@@ -315,8 +326,6 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
     }
     for item in &prog.items {
         let kind = match item.kind {
-            ItemKind::System => "system",
-
             ItemKind::Conformance => "conformance",
             _ => continue,
         };
@@ -377,6 +386,7 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
             enums,
             bundles,
             vectors: ck.vectors,
+            systems: ck.systems,
         },
         ck.skipped,
     )

@@ -108,7 +108,7 @@ fn other_samples_resolve_and_skip_unimplemented_bodies() {
     assert!(kinds.contains(&"rtl"));
     assert!(kinds.contains(&"bus protocol"));
     assert!(!kinds.contains(&"isa"), "isas are checked now");
-    assert!(kinds.contains(&"system"));
+    assert!(!kinds.contains(&"system"), "systems are checked now");
     assert!(kinds.contains(&"conformance"));
     // The component test is skipped; the two isa tests are checked.
     let skipped_tests: Vec<&str> = c
@@ -1355,4 +1355,195 @@ fn istream_fault_delivery_fn() {
     assert_codes(&format!("{bad_sig}\n}}"), &["E1046"]);
     let not_fn = DEC_PRELUDE.replace("undefined UD; }", "undefined UD; fault AX; }");
     assert_codes(&format!("{not_fn}\n}}"), &["E1046"]);
+}
+
+#[test]
+fn counter_bus_system_resolves_clocks_and_bindings() {
+    let c = check_files(vec![sample("counter_bus.machine")]);
+    assert_clean(&c);
+    let sys = &c.hir.systems[0];
+    assert_eq!(sys.name, "TimerBoard");
+    // 8 MHz and 2 MHz: the time unit is 125 ns.
+    assert_eq!((sys.base_num, sys.base_den), (1, 8_000_000));
+    let periods: Vec<u64> = sys.clocks.iter().map(|c| c.period).collect();
+    assert_eq!(periods, [1, 4]);
+    let timer = &sys.components[1];
+    assert_eq!(timer.name, "timer");
+    // `@ (bus_clk: bus_clk, tick: tick)`: ports 0 and 1.
+    assert_eq!(timer.clocks, [(Some(0), 0), (Some(1), 1)]);
+    let bus = &sys.buses[0];
+    assert_eq!(bus.master, Some((0, 0)));
+    assert_eq!(bus.slaves.len(), 1);
+    assert_eq!((bus.slaves[0].1[0].lo, bus.slaves[0].1[0].hi), (0x40, 0x43));
+    assert_eq!(sys.profiles.len(), 2);
+}
+
+/// A bus whose transactions have a derivable base cost and an address
+/// space, and two devices for systems.
+const SYS_PRELUDE: &str = r#"
+enum Sp : u1 { Mem, Io }
+bus B {
+    clock clk;
+    wires { addr: u8 driven_by M; data: u8 shared; ready: bool wired_and; irq: [bool; 2] driven_by S; }
+    roles { M; S; }
+    transaction read(space: Sp, addr: u8) -> (data: u8) { M { cycle { } wait until ready; cycle { } } }
+    transaction write(space: Sp, addr: u8, data: u8) { M { cycle { } if true { cycle { } } } }
+    signal interrupt(line: u1) = irq[line];
+}
+component Host { ports { bus io: B::M; } model { } }
+component Dev { ports { bus io: B::S; } model {
+    state n: u32 = 0;
+    on io.read(space: Sp, addr: u8) -> (data: u8, wait: u8) { return (data: addr, wait: 0); }
+    on tick(k: u32) { n = n + k; }
+} }
+"#;
+
+fn system(body: &str) -> String {
+    format!("{SYS_PRELUDE}\nsystem S {{ {body} }}")
+}
+
+#[test]
+fn transaction_base_cycles_count_the_initiator_cycles() {
+    let c = check_src(&system(""));
+    assert_clean(&c);
+    let bus = &c.hir.buses[0];
+    assert_eq!(bus.transactions[0].base_cycles, Some(2));
+    // A branch makes the count data-dependent.
+    assert_eq!(bus.transactions[1].base_cycles, None);
+}
+
+#[test]
+fn systems_check() {
+    let good = "clock a: 4 MHz; clock b = a / 4; component h: Host; component d: Dev @ b;
+        bus x: B @ a { master h.io; slave d.io @ mem 0x00..=0x0F, io 0x10..0x20; }
+        profile fast { default: model; }";
+    let c = check_src(&system(good));
+    assert_clean(&c);
+    let sys = &c.hir.systems[0];
+    assert_eq!(
+        sys.clocks.iter().map(|c| c.period).collect::<Vec<_>>(),
+        [1, 4]
+    );
+    let ranges = &sys.buses[0].slaves[0].1;
+    assert_eq!(ranges[0].space, Some(0));
+    assert_eq!(
+        (ranges[1].space, ranges[1].lo, ranges[1].hi),
+        (Some(1), 0x10, 0x1F)
+    );
+
+    // A 14.31818 MHz crystal and 1/12 of it share an exact time unit.
+    let c = check_src(&system(
+        "clock osc: 14.31818 MHz; component d: Dev @ (osc / 12);",
+    ));
+    assert_clean(&c);
+    let sys = &c.hir.systems[0];
+    assert_eq!(sys.clocks[1].period, 12 * sys.clocks[0].period);
+
+    // A clock used before it is declared.
+    assert_codes(&system("clock b = a / 2; clock a: 1 MHz;"), &["E1049"]);
+    // A device with `on tick` needs its clock bound.
+    assert_codes(&system("component d: Dev;"), &["E1049"]);
+    // Overlapping slaves.
+    assert_codes(
+        &system(
+            "clock a: 1 MHz; component d: Dev @ a; component e: Dev @ a;
+            bus x: B @ a { slave d.io @ 0..=7; slave e.io @ 4..=9; }",
+        ),
+        &["E1049"],
+    );
+    // The same address in different spaces does not overlap.
+    assert_codes(
+        &system(
+            "clock a: 1 MHz; component d: Dev @ a; component e: Dev @ a;
+            bus x: B @ a { slave d.io @ mem 0..=7; slave e.io @ io 0..=7; }",
+        ),
+        &[],
+    );
+    // A responding port attached as master.
+    assert_codes(
+        &system("clock a: 1 MHz; component d: Dev @ a; bus x: B @ a { master d.io; }"),
+        &["E1049"],
+    );
+    // An unknown space name.
+    assert_codes(
+        &system("clock a: 1 MHz; component d: Dev @ a; bus x: B @ a { slave d.io @ rom 0..=7; }"),
+        &["E1049"],
+    );
+    // An unknown level.
+    assert_codes(&system("profile p { default: fast; }"), &["E1049"]);
+}
+
+#[test]
+fn transaction_handlers_cannot_start_transactions() {
+    let src = format!(
+        "{SYS_PRELUDE}\ncomponent Bridge {{ ports {{ bus up: B::S; bus down: B::M; }} model {{
+            on up.read(space: Sp, addr: u8) -> (data: u8, wait: u8) {{
+                let r = down.read(space: space, addr: addr);
+                return (data: r.data, wait: 1);
+            }}
+        }} }}"
+    );
+    assert_codes(&src, &["E1048"]);
+}
+
+#[test]
+fn processor_models_bind_isa_spaces() {
+    let cpu = |model: &str| {
+        format!(
+            "{}\n{SYS_PRELUDE}\ncomponent Cpu {{ isa T; ports {{ bus io: B::M; }} model {{ {model} }} }}",
+            isa("")
+        )
+    };
+    let read = "on mem.read_u8(addr: u16) -> u8 { return io.read(space: Sp::Mem, addr: addr as u8).data; }";
+    let write = "on mem.write_u8(addr: u16, data: u8) { io.write(space: Sp::Mem, addr: addr as u8, data: data); }";
+    assert_codes(&cpu(&format!("{read} {write}")), &[]);
+    // A wider access may have its own handler.
+    assert_codes(
+        &cpu(&format!(
+            "{read} {write} on mem.read_u16(addr: u16) -> u16 {{ return 0; }}"
+        )),
+        &[],
+    );
+    // Writes unbound.
+    assert_codes(&cpu(read), &["E1041"]);
+    // Not a multiple of the cell.
+    assert_codes(
+        &cpu(&format!(
+            "{read} {write} on mem.read_u12(addr: u16) -> u12 {{ return 0; }}"
+        )),
+        &["E1041"],
+    );
+    // The wrong address type.
+    assert_codes(
+        &cpu(&format!(
+            "{write} on mem.read_u8(addr: u8) -> u8 {{ return 0; }}"
+        )),
+        &["E1041", "E1041"],
+    );
+}
+
+#[test]
+fn isa_reset_fn_takes_nothing() {
+    assert_codes(&isa("fn reset() { AX = 0; }"), &[]);
+    assert_codes(&isa("fn reset(v: u16) { AX = v; }"), &["E1046"]);
+}
+
+#[test]
+fn i286_board_system_checks_clean() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("targets")
+        .join("i286");
+    let files = ["alu.machine", "i286.machine", "board.machine"]
+        .iter()
+        .map(|f| SourceFile::new(*f, std::fs::read_to_string(root.join(f)).unwrap()))
+        .collect();
+    let c = check_files(files);
+    assert_clean(&c);
+    let sys = &c.hir.systems[0];
+    assert_eq!(sys.components.len(), 5);
+    assert_eq!(sys.buses[0].slaves.len(), 4);
+    // The ROM answers at the top of both the 1 MB and the 16 MB space.
+    assert_eq!(sys.buses[0].slaves[1].1.len(), 2);
 }

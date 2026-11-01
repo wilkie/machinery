@@ -10,6 +10,10 @@
 //!   functions, isa `fn`s, one `exec_*` method per instruction, a decoder,
 //!   and `step()` with fault rollback;
 //! - one `#[test]` per `test ... on <Isa>` block.
+//!
+//! For a `system`, the crate also holds one struct per component model and
+//! `system::System`, which runs the processor over a board of device models
+//! (see `gen/system.rs`).
 
 mod gen;
 
@@ -26,6 +30,31 @@ pub fn generate_isa(checked: &Checked, isa_name: &str) -> Result<String, GenErro
     let prog = &checked.program;
     let isa = find_isa(prog, isa_name)?;
     gen::generate(prog, &checked.hir, isa)
+}
+
+/// Generate the crate source for the system named `system_name`: its
+/// processor's interpreter, every component model, and the system. With a
+/// `profile`, check that it selects the model level everywhere.
+pub fn generate_system(
+    checked: &Checked,
+    system_name: &str,
+    profile: Option<&str>,
+) -> Result<String, GenError> {
+    let prog = &checked.program;
+    let found = prog
+        .items_of(ItemKind::System)
+        .find(|i| prog.item_name(*i) == system_name);
+    let Some(sys) = found else {
+        let known: Vec<String> = prog
+            .items_of(ItemKind::System)
+            .map(|i| prog.item_name(i))
+            .collect();
+        return Err(GenError::new(format!(
+            "no system named `{system_name}` (known: {})",
+            known.join(", ")
+        )));
+    };
+    gen::generate_system(prog, &checked.hir, sys, profile)
 }
 
 fn find_isa(prog: &Program, name: &str) -> Result<DefId, GenError> {

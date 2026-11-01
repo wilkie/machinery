@@ -329,6 +329,10 @@ The transaction level. Contents:
 - Ordinary statements plus `while`/`for` with dynamic bounds (models are
   software; they may loop).
 
+A transaction handler runs inside the initiator's transaction, so it may
+`emit` signals but not start a transaction of its own (E1048); a device
+that masters a bus does so from `on tick`.
+
 A model's observable behaviour is its **transaction trace** (the
 transactions it initiates and the data and `wait` it returns) and the levels
 of the signals it emits, both taken at transaction boundaries. The emulator
@@ -367,6 +371,34 @@ recompiler) over the architectural state, issuing bus transactions through
 the component's bus port. The author may add a `model` body for things the
 ISA cannot express: prefetch-queue visible effects, timing tables,
 bus-interface quirks.
+
+The model body says how the isa's address spaces reach the buses, with one
+handler per access width:
+
+```
+model {
+    on mem.read_u8(addr: u24) -> u8 {
+        return local.read(space: Space::Mem, addr: addr, size: BusSize::Byte).data as u8;
+    }
+    /// An aligned word is one transfer; an odd address takes two.
+    on mem.read_u16(addr: u24) -> u16 {
+        if addr[0] == 0 { return local.read(space: Space::Mem, addr: addr, size: BusSize::Word).data; }
+        let lo = local.read(space: Space::Mem, addr: addr, size: BusSize::Byte).data as u8;
+        let hi = local.read(space: Space::Mem, addr: addr + 1, size: BusSize::Byte).data as u8;
+        return concat(hi, lo);
+    }
+    on mem.write_u8(addr: u24, data: u8) { ... }
+    on io.read_u8(addr: u16) -> u8 { ... }
+    ...
+}
+```
+
+`on <space>.read_uN(addr: A) -> uN` and `on <space>.write_uN(addr: A,
+data: uN)` take the space's address type; N is a multiple of the cell
+width. Every space needs at least the one-cell read and write (E1041); an
+access of a width without a handler is composed from cells in the space's
+byte order. This is where bus sizing and alignment live, and with them
+the bus time an access costs.
 
 ## 9. Routines: multi-cycle control inside `rtl`
 
@@ -500,7 +532,18 @@ both levels.
 
 Bus-level timing in the emulator: a master model's `let v = isa.read(...)`
 returns after the slave's handler runs, and the bus layer charges the
-protocol's base cycle count plus `wait`. This is how a 386 instruction's
+protocol's base cycle count plus `wait`. The base cycle count is the
+number of `cycle` statements in the initiating role's body; `wait until`
+marks where the responder's `wait` is inserted. It is derived only for a
+straight-line body (`cycle`, `wait until`, `let` and assignments); a
+transaction whose count cannot be derived cannot be generated in a model
+build.
+
+Address decoding reads the transaction parameter named `addr` and, when a
+range names a space (`io 0x40..=0x43`), the parameter named `space`, whose
+enum variant is matched ignoring case. A slave without ranges answers what
+no ranged slave does. A read nobody answers returns all ones and a write
+nobody answers is dropped; both still take the base cycles. This is how a 386 instruction's
 duration in the emulator includes correct ISA wait states without the
 emulator simulating the bus wires.
 
@@ -571,7 +614,10 @@ described once, in the ISA, because it is architecture: on the 286 in real
 mode it pushes FLAGS, CS and IP, clears IF and TF, and loads CS:IP from the
 IVT at `vector * 4`. Multi-byte operands are assembled from
 consecutive bytes least-significant first. Architectural registers reset to
-zero; a `given` block in a test sets what the test needs.
+zero, then the isa's `fn reset()` runs if it declares one (it takes no
+parameters and returns nothing, E1046): on the 286 it loads CS:IP with
+F000:FFF0 and the CS base with FF0000. A `given` block in a test sets what
+the test needs and does not run `fn reset()`.
 
 ### 11.2 Instructions
 
@@ -774,6 +820,33 @@ system PcAt386 {
 - The system also binds bus roles, address ranges and interrupt lines, and
   the compiler generates address decoders for both levels.
 
+**The model build** (`machine build --system <Name> [--profile <p>]`)
+generates one crate: the processor's interpreter, one struct per component
+model with a ports trait (the transactions it starts and the signals it
+drives), and `system::System`:
+
+- The processor runs over a `Board` that owns every other model, the
+  signal levels and the time. Each isa space access runs the processor
+  model's space handler; its bus calls decode the address and run the
+  answering device's handler, charging the bus clock period times (base
+  cycles + `wait`).
+- Time is an integer count of the base unit above, kept exact: a
+  14.31818 MHz crystal and `osc / 12` share a unit.
+- A device catches up lazily: before a transaction reaches it and after
+  every instruction, its `on tick` runs with the cycles of its clock that
+  elapsed since the last call (in one call, which is what lets a model
+  take shortcuts).
+- `emit` sets a signal level at once; the edges are delivered to the
+  observing ports' `on port.signal(...)` handlers after each instruction.
+- `step()` runs one instruction and catches the devices up; `run(n)` runs
+  until the processor halts.
+
+Not generated yet, and reported when a system needs them: more than one
+processor, a bus mastered by anything but the processor, `bridge`,
+`wire`, an rtl level in the profile, and processor time between bus
+transfers (an instruction costs only its bus time until timing is derived,
+section 14). A processor model does not yet take external interrupts.
+
 ## 13. Verification
 
 Built into the language and the compiler:
@@ -893,7 +966,7 @@ with stable error codes, so agents and editors can act on them.
    hard error.
 5. **Timing derivation scope**: which routine shapes are symbolically
    derivable vs measured. Decide after the 286 corpus is ported.
-6. **Memory initialisation from files** for ROMs: `mem bios: [u8; 0x10000] { init: file("bios.bin") }` is the obvious form; question is whether ROM contents are part of the description or of the system build.
+6. **Memory initialisation from files** for ROMs: `mem bios: [u8; 0x10000] { init: file("bios.bin") }` is the obvious form; question is whether ROM contents are part of the description or of the system build. For now the generated system's model memories are public, and the embedding program fills them.
 7. **Metastability / async inputs**: proposal is to model none of it.
 8. **Name of the language.** "Machine" with `.machine` files, as the
    exemplar used. Easy to change before any code exists.

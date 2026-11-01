@@ -12,6 +12,8 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+mod system;
+
 use machine_sema::builtins::Builtin;
 use machine_sema::hir::{
     self, ArmBody, Block, Expr, ExprKind as H, LetTarget, Local, Pat, Stmt, StmtKind as S,
@@ -101,6 +103,8 @@ struct Cx<'a> {
     recv: &'a str,
     /// Instruction operand bindings in scope (instruction semantics).
     ops: Option<&'a hir::Instruction>,
+    /// The component whose model body this is (state, ports, `ctx`).
+    comp: Option<&'a hir::ComponentInfo>,
 }
 
 pub struct Gen<'a> {
@@ -119,32 +123,59 @@ pub struct Gen<'a> {
 }
 
 pub fn generate(prog: &Program, hir: &hir::Hir, isa_def: DefId) -> R<String> {
-    let isa = hir
-        .isas
-        .iter()
-        .find(|i| i.def == isa_def)
-        .ok_or_else(|| GenError::new("isa was not checked (errors earlier)"))?;
-    let mut g = Gen {
-        prog,
-        hir,
-        isa,
-        enums: hir.enums.iter().map(|e| (e.def, e)).collect(),
-        bundles: hir.bundles.iter().map(|b| (b.def, b)).collect(),
-        regs: isa
-            .registers
-            .iter()
-            .enumerate()
-            .map(|(i, r)| (r.def, (i, r)))
-            .collect(),
-        spaces: isa.spaces.iter().map(|s| (s.def, s)).collect(),
-        operands: isa.operands.iter().map(|o| (o.def, o)).collect(),
-        kinds: isa.kinds.iter().map(|k| (k.def, k)).collect(),
-        faults: isa.faults.iter().map(|f| (f.def, f)).collect(),
-        fns: isa.fns.iter().map(|f| (f.def, f)).collect(),
-        out: String::new(),
-    };
+    let mut g = Gen::new(prog, hir, isa_def)?;
     g.emit_all()?;
     Ok(g.out)
+}
+
+/// The interpreter of the system's processor, then the system: component
+/// models, buses with their address decoders, time and signals.
+pub fn generate_system(
+    prog: &Program,
+    hir: &hir::Hir,
+    sys_def: DefId,
+    profile: Option<&str>,
+) -> R<String> {
+    let sys = hir
+        .systems
+        .iter()
+        .find(|s| s.def == sys_def)
+        .ok_or_else(|| GenError::new("system was not checked (errors earlier)"))?;
+    let proc_idx = system::processor(hir, sys)?;
+    let comp = system::comp_info(hir, sys.components[proc_idx].component)?;
+    let mut g = Gen::new(prog, hir, comp.isa.unwrap())?;
+    g.emit_all()?;
+    g.emit_system(sys, proc_idx, profile)?;
+    Ok(g.out)
+}
+
+impl<'a> Gen<'a> {
+    fn new(prog: &'a Program, hir: &'a hir::Hir, isa_def: DefId) -> R<Gen<'a>> {
+        let isa = hir
+            .isas
+            .iter()
+            .find(|i| i.def == isa_def)
+            .ok_or_else(|| GenError::new("isa was not checked (errors earlier)"))?;
+        Ok(Gen {
+            prog,
+            hir,
+            isa,
+            enums: hir.enums.iter().map(|e| (e.def, e)).collect(),
+            bundles: hir.bundles.iter().map(|b| (b.def, b)).collect(),
+            regs: isa
+                .registers
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (r.def, (i, r)))
+                .collect(),
+            spaces: isa.spaces.iter().map(|s| (s.def, s)).collect(),
+            operands: isa.operands.iter().map(|o| (o.def, o)).collect(),
+            kinds: isa.kinds.iter().map(|k| (k.def, k)).collect(),
+            faults: isa.faults.iter().map(|f| (f.def, f)).collect(),
+            fns: isa.fns.iter().map(|f| (f.def, f)).collect(),
+            out: String::new(),
+        })
+    }
 }
 
 impl<'a> Gen<'a> {
@@ -463,7 +494,7 @@ impl<'a> Gen<'a> {
                 let sp = self.spaces[d];
                 let (_, _, out_ty) = self.int_shape(&e.ty).unwrap();
                 format!(
-                    "{{ let a = ({}) as u64; {}.{}.read(a, {bits}) as {out_ty} }}",
+                    "{{ let a = ({}) as u64; {}.bus.{}_read(a, {bits}) as {out_ty} }}",
                     self.expr(cx, addr)?,
                     cx.recv,
                     ident(&sp.name)
@@ -473,16 +504,17 @@ impl<'a> Gen<'a> {
                 let sp = self.spaces[d];
                 let (_, _, out_ty) = self.int_shape(&e.ty).unwrap();
                 format!(
-                    "{{ let a = ({}) as u64; {}.{}.read_cell(a) as {out_ty} }}",
+                    "{{ let a = ({}) as u64; {}.bus.{}_read(a, {}) as {out_ty} }}",
                     self.expr(cx, addr)?,
                     cx.recv,
-                    ident(&sp.name)
+                    ident(&sp.name),
+                    sp.cell_bits
                 )
             }
             H::SpaceWrite(d, bits, addr, v) => {
                 let sp = self.spaces[d];
                 format!(
-                    "{{ let a = ({}) as u64; let v = ({}) as u128; {}.{}.write(a, {bits}, v); }}",
+                    "{{ let a = ({}) as u64; let v = ({}) as u128; {}.bus.{}_write(a, {bits}, v); }}",
                     self.expr(cx, addr)?,
                     self.expr(cx, v)?,
                     cx.recv,
@@ -528,9 +560,35 @@ impl<'a> Gen<'a> {
                 );
                 s
             }
-            H::Port(..) | H::State(..) | H::ModelMem(..) | H::BusCall(..) => {
+            H::State(_, i) => {
+                let c = cx
+                    .comp
+                    .ok_or_else(|| GenError::new("state outside a component"))?;
+                let m = c.model.as_ref().unwrap();
+                format!("{}.{}", cx.recv, ident(&m.states[*i as usize].name))
+            }
+            H::ModelMem(_, i) => {
+                let c = cx
+                    .comp
+                    .ok_or_else(|| GenError::new("mem outside a component"))?;
+                let m = c.model.as_ref().unwrap();
+                format!("{}.{}", cx.recv, ident(&m.mems[*i as usize].name))
+            }
+            H::BusCall(port, t, args) => {
+                let c = cx
+                    .comp
+                    .ok_or_else(|| GenError::new("bus call outside a component"))?;
+                let a: R<Vec<String>> = args.iter().map(|x| self.expr(cx, x)).collect();
+                format!(
+                    "ctx.{}_{}({})",
+                    ident(&c.ports[*port as usize].name),
+                    ident(&self.prog.item_name(*t)),
+                    a?.join(", ")
+                )
+            }
+            H::Port(..) => {
                 return Err(GenError::new(
-                    "component model constructs are not part of an isa interpreter",
+                    "wire ports are not readable in the model backend yet",
                 ))
             }
             H::Error => return Err(GenError::new("error expression")),
@@ -870,7 +928,7 @@ impl<'a> Gen<'a> {
             S::SpaceWrite(d, bits, addr, v) => {
                 let sp = self.spaces[d];
                 format!(
-                    "{{ let a = ({}) as u64; let v = ({}) as u128; {}.{}.write(a, {bits}, v); }}\n",
+                    "{{ let a = ({}) as u64; let v = ({}) as u128; {}.bus.{}_write(a, {bits}, v); }}\n",
                     self.expr(cx, addr)?,
                     self.expr(cx, v)?,
                     cx.recv,
@@ -891,9 +949,35 @@ impl<'a> Gen<'a> {
             S::Expect(_) | S::Given(_) | S::RunInstruction(..) | S::RunBytes(_) => {
                 return Err(GenError::new("test statement outside a test"))
             }
-            S::Emit { .. } | S::While(..) | S::Loop(_) | S::Break | S::Continue => {
-                return Err(GenError::new("component model statement in an isa"))
+            S::Emit {
+                port,
+                signal,
+                args,
+                value,
+            } => {
+                let c = cx
+                    .comp
+                    .ok_or_else(|| GenError::new("emit outside a component"))?;
+                let mut a: Vec<String> = Vec::new();
+                for x in args {
+                    a.push(self.expr(cx, x)?);
+                }
+                a.push(self.expr(cx, value)?);
+                format!(
+                    "ctx.emit_{}_{}({});\n",
+                    ident(&c.ports[*port as usize].name),
+                    ident(&self.prog.item_name(*signal)),
+                    a.join(", ")
+                )
             }
+            S::While(c, b) => format!(
+                "while {} {{\n{}}}\n",
+                self.expr(cx, c)?,
+                self.block_stmts(cx, b)?
+            ),
+            S::Loop(b) => format!("loop {{\n{}}}\n", self.block_stmts(cx, b)?),
+            S::Break => "break;\n".into(),
+            S::Continue => "continue;\n".into(),
             S::Error => return Err(GenError::new("error statement")),
         })
     }
@@ -901,6 +985,14 @@ impl<'a> Gen<'a> {
     /// Statements that store `rhs` (an expression text) into `place`.
     fn assign(&self, cx: &Cx, place: &Expr, rhs: &str) -> R<String> {
         Ok(match &place.kind {
+            H::Index(b, idx) if matches!(b.ty, Ty::Array(..)) && Self::is_lvalue(place) => {
+                format!(
+                    "{{ let v = {rhs}; let i = ({}) as usize; {}[i] = v; }}\n",
+                    self.expr(cx, idx)?,
+                    self.expr(cx, b)?
+                )
+            }
+            H::State(..) => format!("{} = {rhs};\n", self.expr(cx, place)?),
             H::Register(_) | H::Mode(_) | H::Latch(_) => {
                 format!("{} = {rhs};\n", self.expr(cx, place)?)
             }
@@ -951,10 +1043,11 @@ impl<'a> Gen<'a> {
             H::SpaceCell(d, addr) => {
                 let sp = self.spaces[d];
                 format!(
-                    "{{ let a = ({}) as u64; let v = ({rhs}) as u128; {}.{}.write_cell(a, v); }}\n",
+                    "{{ let a = ({}) as u64; let v = ({rhs}) as u128; {}.bus.{}_write(a, {}, v); }}\n",
                     self.expr(cx, addr)?,
                     cx.recv,
-                    ident(&sp.name)
+                    ident(&sp.name),
+                    sp.cell_bits
                 )
             }
             H::KindSelect(k, args) => {
@@ -1022,7 +1115,11 @@ impl<'a> Gen<'a> {
     /// Is `e` a direct Rust lvalue (`self.r.X`, `self.r.CS.base`, `self.mode`)?
     fn is_lvalue(e: &Expr) -> bool {
         match &e.kind {
-            H::Register(_) | H::Mode(_) | H::Latch(_) => true,
+            H::Register(_) | H::Mode(_) | H::Latch(_) | H::State(..) => true,
+            H::Index(b, _) => {
+                matches!(b.kind, H::ModelMem(..))
+                    || (Self::is_lvalue(b) && matches!(b.ty, Ty::Array(..)))
+            }
             H::Field(b, _) => Self::is_lvalue(b),
             _ => false,
         }
@@ -1118,7 +1215,7 @@ impl<'a> Gen<'a> {
     fn emit_all(&mut self) -> R<()> {
         let isa_name = ident(&self.isa.name);
         self.line("// Generated by machine-model from a Machine isa description. Do not edit.");
-        self.line("#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, unused_variables, unused_mut, unused_parens, unused_imports, unused_braces, unused_labels, dead_code, unreachable_code, unreachable_patterns, clippy::all)]");
+        self.line("#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, unused_variables, unused_mut, unused_parens, unused_imports, unused_braces, unused_labels, dead_code, unreachable_code, unreachable_patterns, unused_comparisons, clippy::all)]");
         self.line("use machine_runtime as rt;");
         self.line("");
 
@@ -1152,6 +1249,7 @@ impl<'a> Gen<'a> {
                 fallible: false,
                 recv: "self",
                 ops: None,
+                comp: None,
             };
             let mut params = Vec::new();
             for p in &u.params {
@@ -1258,21 +1356,17 @@ impl<'a> Gen<'a> {
             Some(m) => native(self.enums[&m].width, false).1,
             None => "u8",
         };
-        let mut s = format!(
-            "#[derive(Clone, Debug)]\npub struct {isa_name} {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n"
-        );
+        // The bus: how the machine reaches its address spaces.
+        let mut s = String::from("/// The isa's address spaces as the machine reaches them: plain memory\n/// ([`Flat`]) or a system's buses.\npub trait Bus {\n");
+        for sp in &self.isa.spaces {
+            let n = ident(&sp.name);
+            let _ = writeln!(s, "    fn {n}_read(&mut self, addr: u64, bits: u32) -> u128;\n    fn {n}_write(&mut self, addr: u64, bits: u32, value: u128);");
+        }
+        s.push_str("}\n/// Every space as plain memory: the standalone interpreter, tests and vectors.\n#[derive(Clone, Debug)]\npub struct Flat {\n");
         for sp in &self.isa.spaces {
             let _ = writeln!(s, "    pub {}: rt::Memory,", ident(&sp.name));
         }
-        for l in &self.isa.latches {
-            let _ = writeln!(s, "    pub latch_{}: {},", ident(&l.name), self.rty(&l.ty)?);
-        }
-        s.push_str("}\n");
-        self.out.push_str(&s);
-
-        let mut s = format!(
-            "impl {isa_name} {{\n    pub fn new() -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n"
-        );
+        s.push_str("}\nimpl Flat {\n    pub fn new() -> Flat {\n        Flat {\n");
         for sp in &self.isa.spaces {
             let _ = writeln!(
                 s,
@@ -1282,6 +1376,27 @@ impl<'a> Gen<'a> {
                 sp.little_endian
             );
         }
+        s.push_str("        }\n    }\n}\nimpl Default for Flat { fn default() -> Flat { Flat::new() } }\nimpl Bus for Flat {\n");
+        for sp in &self.isa.spaces {
+            let n = ident(&sp.name);
+            let _ = writeln!(s, "    fn {n}_read(&mut self, addr: u64, bits: u32) -> u128 {{ self.{n}.read(addr, bits) }}\n    fn {n}_write(&mut self, addr: u64, bits: u32, value: u128) {{ self.{n}.write(addr, bits, value) }}");
+        }
+        s.push_str("}\n");
+        self.out.push_str(&s);
+
+        let mut s = format!(
+            "#[derive(Clone, Debug)]\npub struct {isa_name}<B: Bus = Flat> {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n"
+        );
+        s.push_str("    pub bus: B,\n");
+        for l in &self.isa.latches {
+            let _ = writeln!(s, "    pub latch_{}: {},", ident(&l.name), self.rty(&l.ty)?);
+        }
+        s.push_str("}\n");
+        self.out.push_str(&s);
+
+        let mut s = format!(
+            "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            bus,\n"
+        );
         for l in &self.isa.latches {
             let _ = writeln!(
                 s,
@@ -1290,6 +1405,18 @@ impl<'a> Gen<'a> {
             );
         }
         s.push_str("        };\n        m.reset_latches();\n        m\n    }\n");
+        // Reset: architectural state to zero, then the isa's `fn reset()`.
+        let reset_fn = self
+            .isa
+            .fns
+            .iter()
+            .find(|f| f.name == "reset" && f.params.is_empty());
+        let _ = write!(
+            s,
+            "    /// Processor reset: architectural state to zero{}.\n    pub fn reset(&mut self) {{\n        self.r = Regs::default();\n        self.mode = 0;\n        self.halted = false;\n        self.last = None;\n        self.last_fault = None;\n        self.reset_latches();\n{}    }}\n",
+            if reset_fn.is_some() { ", then the isa's `fn reset()`" } else { "" },
+            if reset_fn.is_some() { "        self.fn_reset().expect(\"fn reset() raised a fault\");\n" } else { "" }
+        );
         s.push_str("    /// Per-instruction state back to its reset values.\n    pub fn reset_latches(&mut self) {\n");
         for l in &self.isa.latches {
             let cx = Cx {
@@ -1297,6 +1424,7 @@ impl<'a> Gen<'a> {
                 fallible: false,
                 recv: "self",
                 ops: None,
+                comp: None,
             };
             let _ = writeln!(
                 s,
@@ -1321,7 +1449,7 @@ impl<'a> Gen<'a> {
         self.emit_instr_info()?;
         self.line("}");
         self.line(&format!(
-            "impl Default for {isa_name} {{ fn default() -> Self {{ Self::new() }} }}"
+            "impl Default for {isa_name}<Flat> {{ fn default() -> Self {{ Self::new() }} }}"
         ));
 
         self.emit_tests()?;
@@ -1389,6 +1517,7 @@ impl<'a> Gen<'a> {
             fallible: false,
             recv: "self",
             ops: None,
+            comp: None,
         };
         for (i, f) in o.fields.iter().enumerate() {
             if i < o.tail_locals.len() {
@@ -1436,6 +1565,7 @@ impl<'a> Gen<'a> {
             fallible: true,
             recv: "self",
             ops: None,
+            comp: None,
         };
         let mut params = vec!["&mut self".to_string()];
         for p in &f.params {
@@ -1477,6 +1607,7 @@ impl<'a> Gen<'a> {
                 fallible: true,
                 recv: "self",
                 ops: None,
+                comp: None,
             };
             let pure = Cx {
                 fallible: false,
@@ -1669,6 +1800,7 @@ impl<'a> Gen<'a> {
             fallible: true,
             recv: "self",
             ops: Some(i),
+            comp: None,
         };
         let body = match &i.semantics {
             Some(b) => self.block_stmts(&cx, b)?,
@@ -1697,6 +1829,7 @@ impl<'a> Gen<'a> {
         let next = ident(&self.fns[&istream.next].name);
         let address = ident(&self.fns[&istream.address].name);
         let space = ident(&self.spaces[&istream.space].name);
+        let cell = self.spaces[&istream.space].cell_bits;
         let undefined = match istream.undefined {
             Some(f) => format!("return Err(Fault::{})", ident(&self.faults[&f].name)),
             None => "panic!(\"undefined opcode\")".into(),
@@ -1816,7 +1949,7 @@ impl<'a> Gen<'a> {
         );
         let _ = write!(
             s,
-            "    /// Place `bytes` at the instruction stream address and execute one instruction.\n    pub fn run_bytes(&mut self, bytes: &[u8]) -> Result<(), Fault> {{\n        let a = self.fn_{address}()? as u64;\n        for (i, b) in bytes.iter().enumerate() {{ self.{space}.write_cell(a + i as u64, *b as u128); }}\n        self.step()\n    }}\n"
+            "    /// Place `bytes` at the instruction stream address and execute one instruction.\n    pub fn run_bytes(&mut self, bytes: &[u8]) -> Result<(), Fault> {{\n        let a = self.fn_{address}()? as u64;\n        for (i, b) in bytes.iter().enumerate() {{ self.bus.{space}_write(a + i as u64, {cell}, *b as u128); }}\n        self.step()\n    }}\n"
         );
         self.out.push_str(&s);
         Ok(())
@@ -1976,6 +2109,7 @@ impl<'a> Gen<'a> {
                 fallible: true,
                 recv: "self",
                 ops: Some(i),
+                comp: None,
             };
             let mut arm = String::new();
             for f in &i.flags.undefined {
@@ -2018,6 +2152,7 @@ impl<'a> Gen<'a> {
                         fallible: true,
                         recv: "self",
                         ops: Some(i),
+                        comp: None,
                     };
                     self.expr(&cx, expr)?
                 }
@@ -2077,8 +2212,9 @@ impl<'a> Gen<'a> {
                 fallible: true,
                 recv: "m",
                 ops: None,
+                comp: None,
             };
-            let mut body = format!("let mut m = {isa_name}::new();\n");
+            let mut body = format!("let mut m = <{isa_name}>::new();\n");
             for s in &t.body.stmts {
                 match &s.kind {
                     S::Given(pairs) => {
@@ -2228,7 +2364,7 @@ impl<'a> Gen<'a> {
         for (sp, v) in &v.open {
             let _ = writeln!(
                 open,
-                "        m.{}.set_open_bus({v});",
+                "        m.bus.{}.set_open_bus({v});",
                 ident(&self.spaces[sp].name)
             );
         }
@@ -2242,6 +2378,7 @@ impl<'a> Gen<'a> {
                 fallible: true,
                 recv: "m",
                 ops: None,
+                comp: None,
             };
             let value_name = self.local_name(&cx, r.value);
             let _ = writeln!(
@@ -2284,7 +2421,7 @@ pub mod vectors {{
 {load}            _ => {{}}
             }}
         }}
-        for (a, b) in &st.ram {{ m.{mem}.write_cell(*a as u64, *b as u128); }}
+        for (a, b) in &st.ram {{ m.bus.{mem}.write_cell(*a as u64, *b as u128); }}
         Ok(())
     }}
 
@@ -2312,7 +2449,7 @@ pub mod vectors {{
     }}
 
     pub fn run_test(t: &MooTest) -> Outcome {{
-        let mut m = {isa_name}::new();
+        let mut m = <{isa_name}>::new();
         if let Err(f) = load(&mut m, &t.initial) {{
             return Outcome::Fail(vec![format!("fault while loading the initial state: {{f:?}}")]);
         }}
@@ -2326,9 +2463,9 @@ pub mod vectors {{
             if n == 0 && !m.known_opcode && (r.is_err() || m.last_fault.is_some()) {{ return Outcome::Unimplemented; }}
             if first.is_none() {{ first = m.last; }}
             if let Some(f) = &m.last_fault {{ delivered = Some(f.clone()); }}
-            if trace.len() < 6 {{ trace.push(format!("step {{n}}: {{}} -> {{}}{{}}", before.join(" "), m.last.map(|i| {isa_name}::instr_name(&i)).unwrap_or("?"), m.last_fault.as_ref().map(|f| format!(", delivered {{f:?}}")).unwrap_or_default())); }}
+            if trace.len() < 6 {{ trace.push(format!("step {{n}}: {{}} -> {{}}{{}}", before.join(" "), m.last.map(|i| <{isa_name}>::instr_name(&i)).unwrap_or("?"), m.last_fault.as_ref().map(|f| format!(", delivered {{f:?}}")).unwrap_or_default())); }}
             if let Err(f) = r {{
-                let at = first.map(|i| {isa_name}::instr_name(&i)).unwrap_or("?");
+                let at = first.map(|i| <{isa_name}>::instr_name(&i)).unwrap_or("?");
                 return Outcome::Fail(vec![format!("undelivered fault {{f:?}} (after {{at}})")]);
             }}
         }}
@@ -2337,7 +2474,7 @@ pub mod vectors {{
         if !m.halted {{ errors.push("did not halt".to_string()); }}
         // Flag conditions describe the state before the instruction
         // (`undefined: [OF if CL != 1]` must not see `shl cl, cl`'s result).
-        let mut pre = {isa_name}::new();
+        let mut pre = <{isa_name}>::new();
         let _ = load(&mut pre, &t.initial);
         pre.reset_latches();
         for name in REGS {{
@@ -2366,7 +2503,7 @@ pub mod vectors {{
         addrs.dedup();
         for a in addrs {{
             let expected = t.final_.ram.iter().chain(t.initial.ram.iter()).find(|(x, _)| *x == a).map(|(_, v)| *v).unwrap_or(0);
-            let actual = m.{mem}.read_cell(a as u64) as u8;
+            let actual = m.bus.{mem}.read_cell(a as u64) as u8;
             if actual != expected {{
                 let diff = actual ^ expected;
                 if delivered.is_some() && t.exception.is_some() && (diff & !(leak_mask as u8) == 0 || diff & !((leak_mask >> 8) as u8) == 0) {{ leaks += 1; }}
@@ -2377,7 +2514,7 @@ pub mod vectors {{
             return Outcome::UndefinedLeak(errors);
         }}
         if errors.is_empty() {{ Outcome::Pass }} else {{
-            if let Some(i) = first {{ errors.insert(0, format!("decoded as {{}} ({{}})", {isa_name}::instr_name(&i), m.mnemonic(&i))); }}
+            if let Some(i) = first {{ errors.insert(0, format!("decoded as {{}} ({{}})", <{isa_name}>::instr_name(&i), m.mnemonic(&i))); }}
             if let Some(f) = delivered {{ errors.insert(1, format!("delivered {{f:?}}; vector expects {{:?}}", t.exception)); }}
             else if let Some(v) = t.exception {{ errors.insert(1, format!("vector expects exception {{v}}, none was raised")); }}
             for (k, line) in trace.iter().take(6).enumerate() {{ errors.insert(2 + k, line.clone()); }}

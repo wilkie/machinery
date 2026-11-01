@@ -88,6 +88,16 @@ isa I286 {
         return Segment { selector: sel, base: (sel as u24) << 4 };
     }
 
+    /// Processor reset, after the registers clear: execution starts at
+    /// F000:FFF0 with the code segment's cached base at FF0000, so the
+    /// first fetch is from FFFFF0 at the top of the 16 MB space until the
+    /// first far jump reloads CS. FLAGS reads 0002.
+    fn reset() {
+        CS = Segment { selector: 0xF000, base: 0xFF0000 };
+        IP = 0xFFF0;
+        FLAGS = 0x0002;
+    }
+
     fn push16(v: u16) {
         SP = SP - 2;
         mem.write_u16(translate(SS, SP, 2, Access::Write), v);

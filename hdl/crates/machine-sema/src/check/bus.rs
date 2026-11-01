@@ -237,11 +237,18 @@ impl Checker<'_> {
                 }
                 has_role_bodies = true;
             }
+            let base_cycles = roles.first().and_then(|init| {
+                t.roles
+                    .iter()
+                    .find(|rb| &rb.role.name == init)
+                    .and_then(|rb| base_cycles(&rb.body))
+            });
             transactions.push(hir::TransactionSig {
                 def: id,
                 name: t.name.name.clone(),
                 params,
                 ret,
+                base_cycles,
             });
         }
         if has_role_bodies {
@@ -375,4 +382,23 @@ impl Checker<'_> {
             }
         }
     }
+}
+
+/// The bus cycles a transaction takes when no responder adds wait states:
+/// the `cycle` statements of the initiating role's body. Defined only for a
+/// straight-line body (`cycle`, `wait until`, `let` and assignments at the
+/// top level); `wait until` is where the responder's `wait` is inserted.
+fn base_cycles(body: &ast::Block) -> Option<u32> {
+    let mut n = 0;
+    for s in &body.stmts {
+        match &s.kind {
+            ast::StmtKind::Cycle(_) => n += 1,
+            ast::StmtKind::WaitUntil(_)
+            | ast::StmtKind::Let { .. }
+            | ast::StmtKind::Assign { .. }
+            | ast::StmtKind::Expr(_) => {}
+            _ => return None,
+        }
+    }
+    Some(n)
 }

@@ -14,6 +14,7 @@ const USAGE: &str = "\
 Usage:
   machine check [--message-format=text|json] [--syntax-only] <file.machine>...
   machine build --isa <Name> --out <dir> <file.machine>...
+  machine build --system <Name> [--profile <name>] --out <dir> <file.machine>...
   machine test --isa <Name> <file.machine>...
   machine vectors --isa <Name> [--filter 00,80.] [--max-failures N] [--quiet] <file.machine>...
   machine dump-ast <file.machine>
@@ -22,7 +23,9 @@ Commands:
   check      Parse and check the given files as one program; report diagnostics.
              Files refer to each other with `use <stem>::{...}`, so pass every
              file of the program.
-  build      Check, then generate the Rust interpreter crate for an isa into <dir>.
+  build      Check, then generate the Rust interpreter crate for an isa into <dir>;
+             with --system, the crate for a system (its processor's interpreter,
+             every component model and the system that links them).
   test       Check, generate the interpreter into target/machine/<isa>, and run
              its tests (the `test ... on <Isa>` blocks) with cargo.
   vectors    Check, generate, and run the isa's `vectors` (hardware-captured
@@ -219,6 +222,8 @@ fn dump_ast(args: &[String]) -> ExitCode {
 fn build(args: &[String], run_tests: bool) -> ExitCode {
     let vectors_mode = std::env::args().nth(1).as_deref() == Some("vectors");
     let mut isa = None;
+    let mut system: Option<String> = None;
+    let mut profile: Option<String> = None;
     let mut out_dir = None;
     let mut paths = Vec::new();
     let mut passthrough: Vec<String> = Vec::new();
@@ -227,6 +232,16 @@ fn build(args: &[String], run_tests: bool) -> ExitCode {
         let a = &args[i];
         if a == "--isa" {
             isa = args.get(i + 1).cloned();
+            i += 2;
+            continue;
+        }
+        if !run_tests && (a == "--system" || a == "--profile") {
+            let v = args.get(i + 1).cloned();
+            if a == "--system" {
+                system = v;
+            } else {
+                profile = v;
+            }
             i += 2;
             continue;
         }
@@ -255,8 +270,8 @@ fn build(args: &[String], run_tests: bool) -> ExitCode {
         }
         i += 1;
     }
-    let Some(isa) = isa else {
-        eprintln!("error: `--isa <Name>` is required");
+    let Some(isa) = isa.or_else(|| system.clone()) else {
+        eprintln!("error: `--isa <Name>` (or, for `build`, `--system <Name>`) is required");
         return ExitCode::from(2);
     };
     if paths.is_empty() {
@@ -281,7 +296,11 @@ fn build(args: &[String], run_tests: bool) -> ExitCode {
         eprintln!("not generating: the program has errors");
         return ExitCode::FAILURE;
     }
-    let src = match machine_model::generate_isa(&checked, &isa) {
+    let generated = match &system {
+        Some(sys) => machine_model::generate_system(&checked, sys, profile.as_deref()),
+        None => machine_model::generate_isa(&checked, &isa),
+    };
+    let src = match generated {
         Ok(s) => s,
         Err(e) => {
             eprintln!("error: {e}");

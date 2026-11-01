@@ -531,6 +531,13 @@ impl Program {
         }
     }
 
+    pub fn system_decl(&self, id: DefId) -> &ast::SystemDecl {
+        match self.decl(id) {
+            Decl::System(d) => d,
+            _ => panic!("not a system"),
+        }
+    }
+
     pub fn component_decl(&self, id: DefId) -> &ast::ComponentDecl {
         match self.decl(id) {
             Decl::Component(d) => d,

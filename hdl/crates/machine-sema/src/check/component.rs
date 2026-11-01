@@ -30,6 +30,8 @@ pub struct CompScope {
     pub states: Vec<(String, Ty)>,
     pub mems: Vec<(String, Ty, u64)>,
     pub names: HashMap<String, CompEntry>,
+    /// The processor's isa, whose spaces a model body binds.
+    pub isa: Option<DefId>,
 }
 
 impl Checker<'_> {
@@ -205,6 +207,7 @@ impl Checker<'_> {
                 states: states.clone(),
                 mems: mems.clone(),
                 names,
+                isa,
             }),
         );
 
@@ -270,6 +273,9 @@ impl Checker<'_> {
                         ok = false;
                     }
                 }
+            }
+            if let Some(isa) = isa {
+                ok &= self.check_space_bindings(module, isa, &handlers, decl.name.span);
             }
             model = Some(hir::ModelBody {
                 init_locals: init_cx.locals,
@@ -399,6 +405,54 @@ impl Checker<'_> {
                         Some(vec![(pname, Ty::UInt(32))]),
                         Ty::Unit,
                     )
+                }
+                [port, event]
+                    if !cs.names.contains_key(&port.name)
+                        && self.isa_space(cs.isa, &port.name).is_some() =>
+                {
+                    let sp = self.isa_space(cs.isa, &port.name).unwrap();
+                    let parsed = event
+                        .name
+                        .strip_prefix("read_u")
+                        .map(|b| (false, b))
+                        .or_else(|| event.name.strip_prefix("write_u").map(|b| (true, b)))
+                        .and_then(|(w, b)| b.parse::<u32>().ok().map(|b| (w, b)));
+                    let Some((write, bits)) =
+                        parsed.filter(|(_, b)| *b > 0 && *b <= 128 && b % sp.cell_bits == 0)
+                    else {
+                        let msg = format!(
+                            "a space handler is `on {0}.read_uN(addr) -> uN` or `on {0}.write_uN(addr, data: uN)`, N a multiple of the {1}-bit cell; found `{2}`",
+                            sp.name, sp.cell_bits, event.name
+                        );
+                        self.error(module, "E1041", event.span, msg);
+                        return None;
+                    };
+                    if clock.is_some() {
+                        self.error(module, "E1041", span, "a space handler takes no `@ clock`");
+                        return None;
+                    }
+                    if write {
+                        (
+                            HandlerKind::SpaceWrite {
+                                space: sp.def,
+                                bits,
+                            },
+                            Some(vec![
+                                ("addr".into(), sp.addr.clone()),
+                                ("data".into(), Ty::UInt(bits)),
+                            ]),
+                            Ty::Unit,
+                        )
+                    } else {
+                        (
+                            HandlerKind::SpaceRead {
+                                space: sp.def,
+                                bits,
+                            },
+                            Some(vec![("addr".into(), sp.addr.clone())]),
+                            Ty::UInt(bits),
+                        )
+                    }
                 }
                 [port, event] => {
                     let Some(CompEntry::Port(pi)) = cs.names.get(&port.name).copied() else {
@@ -540,6 +594,7 @@ impl Checker<'_> {
         // The body.
         let mut cx = FnCtx::new(scope, HashMap::new(), Some(ret_ty.clone()));
         cx.component = Some(comp);
+        cx.responding = matches!(kind, HandlerKind::Transaction { .. });
         let mut param_ids = Vec::new();
         for (n, t, sp) in &decl_params {
             param_ids.push(cx.declare(n, t.clone(), *sp));
@@ -560,6 +615,57 @@ impl Checker<'_> {
             body: hbody,
             span,
         })
+    }
+
+    /// A space of the component's isa, by name.
+    fn isa_space(&self, isa: Option<DefId>, name: &str) -> Option<hir::Space> {
+        let isa = isa?;
+        self.isas
+            .iter()
+            .find(|i| i.def == isa)?
+            .spaces
+            .iter()
+            .find(|s| s.name == name)
+            .cloned()
+    }
+
+    /// A processor's model body binds every isa space to its buses: at least
+    /// the one-cell read and write; wider accesses without a handler are
+    /// composed from cells in the space's byte order.
+    fn check_space_bindings(
+        &mut self,
+        module: crate::program::ModuleId,
+        isa: DefId,
+        handlers: &[hir::Handler],
+        span: Span,
+    ) -> bool {
+        let Some(info) = self.isas.iter().find(|i| i.def == isa).cloned() else {
+            return true;
+        };
+        let mut ok = true;
+        for sp in &info.spaces {
+            for write in [false, true] {
+                let found = handlers.iter().any(|h| match h.kind {
+                    HandlerKind::SpaceRead { space, bits } => {
+                        !write && space == sp.def && bits == sp.cell_bits
+                    }
+                    HandlerKind::SpaceWrite { space, bits } => {
+                        write && space == sp.def && bits == sp.cell_bits
+                    }
+                    _ => false,
+                });
+                if !found {
+                    let msg = if write {
+                        format!("the model does not bind writes to space `{0}`: add `on {0}.write_u{1}(addr: ..., data: u{1}) {{ ... }}`", sp.name, sp.cell_bits)
+                    } else {
+                        format!("the model does not bind reads of space `{0}`: add `on {0}.read_u{1}(addr: ...) -> u{1} {{ ... }}`", sp.name, sp.cell_bits)
+                    };
+                    self.error(module, "E1041", span, msg);
+                    ok = false;
+                }
+            }
+        }
+        ok
     }
 
     /// `emit port.signal(args) = value;`
@@ -722,6 +828,18 @@ impl Checker<'_> {
             }
             return err;
         };
+        if cx.responding {
+            self.error_with(
+                cx.module,
+                Diagnostic::error(
+                    "E1048",
+                    span,
+                    "a transaction handler cannot start a transaction",
+                )
+                .with_note("it runs inside the initiator's transaction; it may `emit` signals, and a device that masters a bus does so from `on tick`"),
+            );
+            return err;
+        }
         if role != 0 {
             let msg = format!(
                 "only the initiating role `{}` calls `{}`; this port is a `{}` and handles it with `on {}.{}(...)`",

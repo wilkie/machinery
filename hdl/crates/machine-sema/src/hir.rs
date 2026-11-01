@@ -635,6 +635,9 @@ pub struct TransactionSig {
     pub params: Vec<(String, Ty)>,
     /// A named tuple, or `None` for a transaction that returns nothing.
     pub ret: Option<Ty>,
+    /// Bus cycles without wait states, counted from the initiating role's
+    /// `cycle`s; `None` when the body is absent or not straight-line.
+    pub base_cycles: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -711,6 +714,16 @@ pub enum HandlerKind {
         port: u32,
         signal: DefId,
     },
+    /// A processor's binding of an isa space read of `bits` to its buses.
+    SpaceRead {
+        space: DefId,
+        bits: u32,
+    },
+    /// A processor's binding of an isa space write of `bits`.
+    SpaceWrite {
+        space: DefId,
+        bits: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -743,6 +756,89 @@ pub struct ComponentInfo {
     pub has_rtl: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Systems
+// ---------------------------------------------------------------------------
+
+/// A clock of a system, with its exact frequency.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SystemClock {
+    /// The declared name, or the expression text for a clock written
+    /// inline in a binding (`osc / 12`).
+    pub name: String,
+    /// Frequency in Hz as a reduced fraction `hz_num / hz_den`.
+    pub hz_num: u128,
+    pub hz_den: u128,
+    /// The clock period in the system's base time unit (an integer).
+    pub period: u64,
+}
+
+/// A component instance and the system clock of each of its clocks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SystemComponent {
+    pub name: String,
+    pub component: DefId,
+    /// `(clock port index, system clock index)`; the port is `None` for a
+    /// component's implicit single clock.
+    pub clocks: Vec<(Option<u32>, u32)>,
+}
+
+/// One address range a slave answers, inclusive.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AddressRange {
+    /// The value of the transactions' `space` parameter it applies to, or
+    /// `None` for every space.
+    pub space: Option<i128>,
+    pub lo: u128,
+    pub hi: u128,
+}
+
+/// A bus port of an instance: `(instance index, port index)`.
+pub type InstPort = (u32, u32);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SystemBus {
+    pub name: String,
+    pub bus: DefId,
+    pub clock: u32,
+    /// The port in the initiating role.
+    pub master: Option<InstPort>,
+    /// Responding ports and the ranges each answers.
+    pub slaves: Vec<(InstPort, Vec<AddressRange>)>,
+    /// `bridge` targets (not generated yet).
+    pub bridges: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Level {
+    Model,
+    Rtl,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profile {
+    pub name: String,
+    pub default: Level,
+    /// Instance paths (`vga`, `vga.crtc`) and their level.
+    pub overrides: Vec<(String, Level)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SystemInfo {
+    pub def: DefId,
+    pub name: String,
+    /// The base time unit in seconds, `base_num / base_den`: the largest
+    /// unit in which every clock period is an integer.
+    pub base_num: u128,
+    pub base_den: u128,
+    pub clocks: Vec<SystemClock>,
+    pub components: Vec<SystemComponent>,
+    pub buses: Vec<SystemBus>,
+    /// `wire` items (not generated yet).
+    pub wires: usize,
+    pub profiles: Vec<Profile>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Hir {
     pub units: Vec<UnitInst>,
@@ -754,4 +850,5 @@ pub struct Hir {
     pub enums: Vec<EnumDef>,
     pub bundles: Vec<BundleDef>,
     pub vectors: Vec<VectorsInfo>,
+    pub systems: Vec<SystemInfo>,
 }

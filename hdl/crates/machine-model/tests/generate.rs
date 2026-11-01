@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use machine_model::{crate_name, generate_isa, package, write_crate};
+use machine_model::{crate_name, generate_isa, generate_system, package, write_crate};
 use machine_sema::check_files;
 use machine_syntax::SourceFile;
 
@@ -171,4 +171,55 @@ fn i286_target_passes_its_tests_and_hardware_vectors() {
         "hardware vectors failed:\n{stdout}\n{stderr}"
     );
     assert!(stdout.contains(" 0 failed"), "{stdout}");
+}
+
+/// The model backend: the i286 board system generates, compiles, boots a
+/// ROM program (`targets/i286/board_test.rs`) and charges bus time.
+#[test]
+fn i286_board_system_boots() {
+    let checked = check_files(vec![
+        target("alu.machine"),
+        target("i286.machine"),
+        target("board.machine"),
+    ]);
+    assert!(!checked.has_errors());
+    let src = generate_system(&checked, "Board286", Some("fast")).unwrap_or_else(|e| panic!("{e}"));
+    let root = hdl_root();
+    let crate_ = package(
+        &crate_name("Board286"),
+        src,
+        &root.join("crates").join("machine-runtime"),
+    );
+    let dir = root.join("target").join("gen-tests").join("board286");
+    write_crate(&dir, &crate_).unwrap();
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::copy(
+        root.join("targets").join("i286").join("board_test.rs"),
+        dir.join("tests").join("board.rs"),
+    )
+    .unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let output = Command::new(&cargo)
+        .args(["test", "--quiet", "--test", "board", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+        .output()
+        .expect("run cargo");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "board tests failed:\n{stdout}\n{stderr}"
+    );
+    assert!(stdout.contains("2 passed"), "expected 2 tests:\n{stdout}");
+}
+
+/// The sample timer board has no processor (its master is an rtl script),
+/// which the model backend reports instead of generating.
+#[test]
+fn system_without_processor_is_reported() {
+    let checked = check_files(vec![sample("counter_bus.machine")]);
+    assert!(!checked.has_errors());
+    let err = generate_system(&checked, "TimerBoard", None).unwrap_err();
+    assert!(err.to_string().contains("no processor"), "{err}");
 }

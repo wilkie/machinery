@@ -127,6 +127,15 @@ impl Checker<'_> {
         let mut fns = Vec::new();
         for id in self.prog.isa_items_of(isa, ItemKind::Fn) {
             if let Some(f) = self.check_fn(scope, id) {
+                if f.name == "reset" && (!f.params.is_empty() || f.ret != Ty::Unit) {
+                    let span = self.prog.item(id).span;
+                    self.error(
+                        scope.module,
+                        "E1046",
+                        span,
+                        "`fn reset()` is the processor's reset: it takes no parameters and returns nothing",
+                    );
+                }
                 fns.push(f);
             }
         }

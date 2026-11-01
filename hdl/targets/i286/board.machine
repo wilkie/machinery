@@ -1,0 +1,213 @@
+// A small 80286 board for the model backend: the i286 isa as a processor
+// on a 16-bit local bus, with RAM, a boot ROM, a one-shot timer and a
+// debugging console port.
+//
+// `machine build --system Board286 --out <dir> targets/i286/*.machine`
+// generates the emulator crate: the interpreter, one struct per component
+// model, and `system::System`, which runs the processor and charges every
+// bus transaction to the system clock.
+
+use i286::{I286};
+
+enum Space : u1 { Mem, Io }
+enum BusSize : u1 { Byte, Word }
+
+/// The 286 local bus at the transaction level. A word transfer is aligned;
+/// the processor splits an odd-address word into two byte transfers, as
+/// the 286 does. A byte transfer carries its data in the low 8 bits
+/// whatever the address: steering it to the right byte lane is the bus's
+/// business, not the devices'.
+bus LocalBus {
+    clock clk;
+    wires {
+        addr:  u24  driven_by Master;
+        data:  u16  shared;
+        mio:   bool driven_by Master;
+        rd:    bool driven_by Master;
+        wr:    bool driven_by Master;
+        bhe:   bool driven_by Master;
+        ready: bool wired_and;
+        irq:   [bool; 8] driven_by Slave;
+    }
+    roles { Master; Slave; }
+
+    /// Two bus cycles (Ts, Tc) without wait states.
+    transaction read(space: Space, addr: u24, size: BusSize) -> (data: u16) {
+        Master {
+            cycle { addr = addr; mio = space == Space::Mem; bhe = size == BusSize::Word; rd = true; }
+            wait until ready;
+            cycle { let v = data; rd = false; return v; }
+        }
+    }
+    transaction write(space: Space, addr: u24, size: BusSize, data: u16) {
+        Master {
+            cycle { addr = addr; mio = space == Space::Mem; bhe = size == BusSize::Word; data = data; wr = true; }
+            wait until ready;
+            cycle { wr = false; }
+        }
+    }
+
+    signal interrupt(line: u3) = irq[line];
+}
+
+/// The processor: the i286 isa, with its two address spaces bound to the
+/// local bus. Instruction fetch reads one byte per bus transfer (no
+/// prefetch queue yet).
+component Cpu286 {
+    isa I286;
+    ports { bus local: LocalBus::Master; }
+    model {
+        on mem.read_u8(addr: u24) -> u8 {
+            return local.read(space: Space::Mem, addr: addr, size: BusSize::Byte).data as u8;
+        }
+        /// An aligned word is one transfer; an odd address takes two.
+        on mem.read_u16(addr: u24) -> u16 {
+            if addr[0] == 0 {
+                return local.read(space: Space::Mem, addr: addr, size: BusSize::Word).data;
+            }
+            let lo = local.read(space: Space::Mem, addr: addr, size: BusSize::Byte).data as u8;
+            let hi = local.read(space: Space::Mem, addr: addr + 1, size: BusSize::Byte).data as u8;
+            return concat(hi, lo);
+        }
+        on mem.write_u8(addr: u24, data: u8) {
+            local.write(space: Space::Mem, addr: addr, size: BusSize::Byte, data: data as u16);
+        }
+        on mem.write_u16(addr: u24, data: u16) {
+            if addr[0] == 0 {
+                local.write(space: Space::Mem, addr: addr, size: BusSize::Word, data: data);
+            } else {
+                local.write(space: Space::Mem, addr: addr, size: BusSize::Byte, data: data & 0xFF);
+                local.write(space: Space::Mem, addr: addr + 1, size: BusSize::Byte, data: data >> 8);
+            }
+        }
+        on io.read_u8(addr: u16) -> u8 {
+            return local.read(space: Space::Io, addr: addr as u24, size: BusSize::Byte).data as u8;
+        }
+        on io.write_u8(addr: u16, data: u8) {
+            local.write(space: Space::Io, addr: addr as u24, size: BusSize::Byte, data: data as u16);
+        }
+    }
+}
+
+/// 640 KB of zero-wait-state RAM at the bottom of memory.
+component Ram {
+    ports { bus port: LocalBus::Slave; }
+    model {
+        mem cells: [u8; 0xA0000];
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            if size == BusSize::Word {
+                return (data: concat(cells[addr + 1], cells[addr]), wait: 0);
+            }
+            return (data: cells[addr] as u16, wait: 0);
+        }
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            cells[addr] = data as u8;
+            if size == BusSize::Word {
+                cells[addr + 1] = (data >> 8) as u8;
+            }
+            return (wait: 0);
+        }
+    }
+}
+
+/// A 64 KB boot ROM with one wait state, answering at the top of the first
+/// megabyte and at the top of the 16 MB space, where the 286 starts.
+/// Writes are not answered.
+component Rom {
+    ports { bus port: LocalBus::Slave; }
+    model {
+        mem cells: [u8; 0x10000];
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            let a = addr[15:0];
+            if size == BusSize::Word {
+                return (data: concat(cells[a + 1], cells[a]), wait: 1);
+            }
+            return (data: cells[a] as u16, wait: 1);
+        }
+    }
+}
+
+/// A one-shot down-counter on its own clock, raising interrupt line 0 when
+/// it reaches zero. Registers (relative to the base port):
+///   0  reload (W): loads the count
+///   1  count (R)
+///   2  control (R/W): bit 0 enable, bit 1 interrupt enable; a write
+///      clears a pending interrupt
+component Timer {
+    ports { bus port: LocalBus::Slave; }
+    model {
+        state count: u8 = 0;
+        state control: u8 = 0;
+        state pending: bool = false;
+
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            let v: u8 = match addr[1:0] {
+                1 => count,
+                2 => control,
+                _ => 0xFF,
+            };
+            return (data: v as u16, wait: 1);
+        }
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            match addr[1:0] {
+                0 => { count = data as u8; }
+                2 => {
+                    control = data as u8;
+                    pending = false;
+                    emit port.interrupt(0) = false;
+                }
+                _ => { }
+            }
+            return (wait: 1);
+        }
+        /// Catches up `n` cycles in one step.
+        on tick(n: u32) {
+            if control[0] == 0 { return; }
+            if count as u32 > n {
+                count = count - n as u8;
+                return;
+            }
+            count = 0;
+            control = control & 0xFE;
+            if control[1] == 1 {
+                pending = true;
+                emit port.interrupt(0) = true;
+            }
+        }
+    }
+}
+
+/// Collects the bytes written to its port (like the Bochs port E9 hack).
+component Console {
+    ports { bus port: LocalBus::Slave; }
+    model {
+        mem text: [u8; 256];
+        state len: u8 = 0;
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            text[len] = data as u8;
+            len = len + 1;
+            return (wait: 0);
+        }
+    }
+}
+
+system Board286 {
+    clock cpu_clk: 8 MHz;                    // the processor clock (CLK / 2)
+    clock timer_clk = cpu_clk / 8;           // 1 MHz
+
+    component cpu: Cpu286 @ cpu_clk;
+    component ram: Ram;
+    component rom: Rom;
+    component timer: Timer @ timer_clk;
+    component console: Console;
+
+    bus local: LocalBus @ cpu_clk {
+        master cpu.local;
+        slave ram.port @ mem 0x00000..=0x9FFFF;
+        slave rom.port @ mem 0xF0000..=0xFFFFF, mem 0xFF0000..=0xFFFFFF;
+        slave timer.port @ io 0x40..=0x43;
+        slave console.port @ io 0xE9..=0xE9;
+    }
+
+    profile fast { default: model; }
+}

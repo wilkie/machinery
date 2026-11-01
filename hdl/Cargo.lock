@@ -6,6 +6,14 @@ version = 4
 name = "machine-cli"
 version = "0.1.0"
 dependencies = [
+ "machine-sema",
+ "machine-syntax",
+]
+
+[[package]]
+name = "machine-sema"
+version = "0.1.0"
+dependencies = [
  "machine-syntax",
 ]
 

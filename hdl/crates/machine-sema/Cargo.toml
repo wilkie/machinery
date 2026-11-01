@@ -1,0 +1,13 @@
+[package]
+name = "machine-sema"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Semantic analysis for the Machine hardware description language: name resolution, const evaluation, monomorphisation, type and width checking, typed HIR."
+
+[dependencies]
+machine-syntax = { path = "../machine-syntax" }
+
+[lints]
+workspace = true

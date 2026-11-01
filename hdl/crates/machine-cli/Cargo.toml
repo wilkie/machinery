@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 machine-syntax = { path = "../machine-syntax" }
+machine-sema = { path = "../machine-sema" }
 
 [lints]
 workspace = true

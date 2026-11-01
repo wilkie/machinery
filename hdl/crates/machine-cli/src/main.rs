@@ -1,24 +1,29 @@
 //! `machine`: the Machine language command-line driver.
 //!
 //! ```text
-//! machine check [--message-format=text|json] <file>...
+//! machine check [--message-format=text|json] [--syntax-only] <file>...
 //! machine dump-ast <file>
 //! ```
-//!
-//! Only the syntax phase exists yet; `check` parses and reports diagnostics.
 
 use std::process::ExitCode;
 
-use machine_syntax::{parse, SourceFile};
+use machine_sema::check_files;
+use machine_syntax::{parse, Severity, SourceFile};
 
 const USAGE: &str = "\
 Usage:
-  machine check [--message-format=text|json] <file.machine>...
+  machine check [--message-format=text|json] [--syntax-only] <file.machine>...
   machine dump-ast <file.machine>
 
 Commands:
-  check      Parse the given files and report diagnostics.
+  check      Parse and check the given files as one program; report diagnostics.
+             Files refer to each other with `use <stem>::{...}`, so pass every
+             file of the program.
   dump-ast   Parse one file and print its syntax tree (debug form).
+
+Options:
+  --message-format=json   One JSON object per diagnostic on stdout.
+  --syntax-only           Stop after parsing.
 ";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -60,7 +65,8 @@ fn load(path: &str) -> Option<SourceFile> {
 
 fn check(args: &[String]) -> ExitCode {
     let mut format = Format::Text;
-    let mut files = Vec::new();
+    let mut syntax_only = false;
+    let mut paths = Vec::new();
     for a in args {
         if let Some(f) = a.strip_prefix("--message-format=") {
             format = match f {
@@ -71,39 +77,89 @@ fn check(args: &[String]) -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
+        } else if a == "--syntax-only" {
+            syntax_only = true;
         } else if a.starts_with('-') {
             eprintln!("error: unknown option `{a}`");
             return ExitCode::from(2);
         } else {
-            files.push(a.clone());
+            paths.push(a.clone());
         }
     }
-    if files.is_empty() {
+    if paths.is_empty() {
         eprintln!("error: no input files\n");
         eprint!("{USAGE}");
         return ExitCode::from(2);
     }
 
+    let mut files = Vec::new();
+    for p in &paths {
+        match load(p) {
+            Some(f) => files.push(f),
+            None => return ExitCode::FAILURE,
+        }
+    }
+
     let mut errors = 0usize;
     let mut warnings = 0usize;
-    for path in &files {
-        let Some(file) = load(path) else {
-            errors += 1;
-            continue;
-        };
-        let parsed = parse(&file.text);
-        for d in parsed.diagnostics.iter() {
-            match d.severity {
-                machine_syntax::Severity::Error => errors += 1,
-                machine_syntax::Severity::Warning => warnings += 1,
+    let mut emit = |file: &SourceFile, d: &machine_syntax::Diagnostic| {
+        match d.severity {
+            Severity::Error => errors += 1,
+            Severity::Warning => warnings += 1,
+        }
+        match format {
+            Format::Text => eprintln!("{}", d.render_text(file)),
+            Format::Json => println!("{}", d.render_json(file)),
+        }
+    };
+
+    if syntax_only {
+        for file in &files {
+            let parsed = parse(&file.text);
+            for d in parsed.diagnostics.iter() {
+                emit(file, d);
             }
-            match format {
-                Format::Text => eprintln!("{}", d.render_text(&file)),
-                Format::Json => println!("{}", d.render_json(&file)),
+            if format == Format::Text && parsed.diagnostics.is_empty() {
+                eprintln!(
+                    "{}: syntax ok ({} declarations)",
+                    file.name,
+                    parsed.file.decls.len()
+                );
             }
         }
-        if format == Format::Text && parsed.diagnostics.is_empty() {
-            eprintln!("{path}: ok ({} declarations)", parsed.file.decls.len());
+    } else {
+        let checked = check_files(files);
+        for (m, diags) in checked.diagnostics.iter().enumerate() {
+            let file = &checked.program.modules[m].file;
+            for d in diags.iter() {
+                emit(file, d);
+            }
+        }
+        if format == Format::Text {
+            for (m, module) in checked.program.modules.iter().enumerate() {
+                if checked.diagnostics[m].is_empty() {
+                    let skipped: Vec<String> = checked
+                        .skipped
+                        .iter()
+                        .filter(|s| s.module == m)
+                        .map(|s| format!("{} {}", s.kind, s.name))
+                        .collect();
+                    if skipped.is_empty() {
+                        eprintln!("{}: ok", module.file.name);
+                    } else {
+                        eprintln!(
+                            "{}: ok (not yet checked: {})",
+                            module.file.name,
+                            skipped.join(", ")
+                        );
+                    }
+                }
+            }
+            eprintln!(
+                "checked {} unit instance(s), {} test(s)",
+                checked.hir.units.len(),
+                checked.hir.tests.len()
+            );
         }
     }
     if format == Format::Text && (errors > 0 || warnings > 0) {

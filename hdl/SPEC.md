@@ -1222,11 +1222,17 @@ with stable error codes, so agents and editors can act on them.
    exemplar used. Easy to change before any code exists.
 9. **Host-visible output.** A CGA produces pixels; at the rtl level they
    are RGBI and sync pins sampled by a monitor component, but the model
-   level has no output notion. Interim: a `Display` component with a
-   public framebuffer `mem` the host reads after `sync`, the mirror of
-   ROM filling (question 6). A real mechanism (frame and audio sinks)
-   belongs to the Wasm/TypeScript binding layer, and the CGA model should
-   be written against a monitor component so that it slots in.
+   level has no output notion. Current convention
+   (`targets/i286/board.machine`, `Cga`): a display model renders each
+   scanline into a public framebuffer `mem` of colour indices as the beam
+   finishes it, with `frame_width`, `frame_height` and a `frames`
+   counter, and the host reads them after `sync`, the mirror of ROM
+   filling (question 6). Rendering on scanline completion keeps raster
+   effects (a palette change mid-frame) right at scanline granularity. A
+   real mechanism (frame and audio sinks with a declared format) belongs
+   to the Wasm/TypeScript binding layer; the open part is whether the
+   language should name a component's outputs to the host so bindings
+   are generated rather than written.
 10. **More than one device master in the model backend.** Resolved for
    one (the 8237, section 12): devices master between instructions and
    charge the cycles they steal. Two device masters would each need the

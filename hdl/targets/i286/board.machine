@@ -1,7 +1,7 @@
 // A small 80286 board for the model backend: the i286 isa as a processor
 // on a 16-bit local bus, with RAM, a boot ROM, the AT's two cascaded 8259
 // interrupt controllers, an 8254 timer, an 8237 DMA controller, a host data
-// link on DMA channel 1 (and IRQ 12), and a debugging console port.
+// link on DMA channel 1 (and IRQ 12), a CGA, and a debugging console port.
 //
 // `machine build --system Board286 --out <dir> targets/i286/*.machine`
 // generates the emulator crate: the interpreter, one struct per component
@@ -686,6 +686,201 @@ component HostLink {
     }
 }
 
+/// The IBM Color Graphics Adapter: 16 KB of video RAM at B8000 (mirrored
+/// to BFFFF), an MC6845 CRTC at 3D4/3D5, the mode control register at 3D8,
+/// colour select at 3D9 and status at 3DA. It counts its 14.318 MHz dot
+/// clock; as the beam finishes each scanline of the display area it renders
+/// that line into `frame`, 640 dots wide, one colour index (0-15, IRGB)
+/// per dot, so low-resolution modes draw every pixel twice. The host reads
+/// `frame`, `frame_width`, `frame_height` and the `frames` counter. The
+/// character generator's 8x8 font is in `font` (eight rows per character,
+/// most significant bit leftmost), which the host fills, as it fills the
+/// boot ROM.
+component Cga {
+    ports { bus port: LocalBus::Slave; }
+    model {
+        mem vram: [u8; 0x4000];
+        mem font: [u8; 2048];
+        mem frame: [u8; 163840];
+        state frame_width: u32 = 0;
+        state frame_height: u32 = 0;
+        /// Completed frames.
+        state frames: u32 = 0;
+        state crtc: [u8; 18];
+        state index: u8 = 0;
+        /// 3D8: bit 0 80-column text, 1 graphics, 2 monochrome, 3 video
+        /// enable, 4 640-dot graphics, 5 blink.
+        state mode: u8 = 0;
+        /// 3D9: bits 0-3 background (or 640-dot foreground), 4 intensity,
+        /// 5 palette.
+        state color: u8 = 0;
+        /// The beam, in dots from the top left of the frame.
+        state pos: u32 = 0;
+
+        /// Dots per character: 8 in 80-column text, else 16.
+        fn char_dots() -> u32 {
+            return if mode[0] == 1 && mode[1] == 0 { 8 } else { 16 };
+        }
+        fn line_dots() -> u32 {
+            return (crtc[0] as u32 + 1) * char_dots();
+        }
+        fn rows() -> u32 {
+            return crtc[9] as u32 % 32 + 1;
+        }
+        fn frame_lines() -> u32 {
+            return (crtc[4] as u32 % 128 + 1) * rows() + crtc[5] as u32 % 32;
+        }
+        fn display_lines() -> u32 {
+            return crtc[6] as u32 % 128 * rows();
+        }
+
+        /// Draw scanline `line` of the display area into `frame`.
+        fn render(line: u32) {
+            let ra = line % rows();
+            let row = line / rows();
+            let cd = char_dots();
+            let cols = crtc[1] as u32;
+            let start = concat(crtc[12] & 0x3F, crtc[13]) as u32;
+            let cursor = concat(crtc[14] & 0x3F, crtc[15]) as u32;
+            let base = line * 640;
+            for col in 0..80 {
+                if (col as u32) < cols && (col as u32 + 1) * cd <= 640 {
+                    let ma = (start + row * cols + col as u32) & 0x3FFF;
+                    let x0 = base + col as u32 * cd;
+                    if mode[3] == 0 {
+                        for d in 0..16 {
+                            if (d as u32) < cd { frame[x0 + d as u32] = 0; }
+                        }
+                    } else if mode[1] == 1 {
+                        // Graphics: even scanlines in the first 8 KB, odd in
+                        // the second; two bytes per character.
+                        let a = ((ma * 2) & 0x1FFF) | ((ra & 1) << 13);
+                        let bits = concat(vram[a], vram[a + 1]);
+                        for d in 0..16 {
+                            let mut c: u8 = 0;
+                            if mode[4] == 1 {
+                                if bits[15 - d] == 1 { c = color & 15; }
+                            } else {
+                                let px = d / 2;
+                                let v = (bits >> (14 - px * 2)) & 3;
+                                c = if v == 0 { color & 15 } else { (v as u8) * 2 + color[5] as u8 + (color[4] as u8) * 8 };
+                            }
+                            frame[x0 + d as u32] = c;
+                        }
+                    } else {
+                        // Text: a character and its attribute.
+                        let a = (ma * 2) & 0x3FFF;
+                        let ch = vram[a];
+                        let attr = vram[a + 1];
+                        let mut glyph = font[ch as u32 * 8 + (ra & 7)];
+                        let mut fg = attr & 15;
+                        let bg = if mode[5] == 1 { (attr >> 4) & 7 } else { attr >> 4 };
+                        if mode[5] == 1 && attr[7] == 1 && frames[4] == 1 {
+                            fg = bg;
+                        }
+                        let cur_start = crtc[10] & 31;
+                        let cur_on = crtc[10][6:5] != 1 && (crtc[10][6:5] == 0 || frames[3] == 1);
+                        if ma == cursor && cur_on && ra as u8 >= cur_start && ra as u8 <= (crtc[11] & 31) {
+                            glyph = 0xFF;
+                            fg = attr & 15;
+                        }
+                        for d in 0..16 {
+                            if (d as u32) < cd {
+                                let px = if cd == 16 { d / 2 } else { d };
+                                frame[x0 + d as u32] = if glyph[7 - px[2:0]] == 1 { fg } else { bg };
+                            }
+                        }
+                    }
+                }
+            }
+            frame_width = if cols * cd < 640 { cols * cd } else { 640 };
+        }
+
+        on tick(n: u32) {
+            let ld = line_dots();
+            let total = ld * frame_lines();
+            if total == 0 {
+                return;
+            }
+            let mut left = n;
+            while left > 0 {
+                let line = pos / ld;
+                let end = (line + 1) * ld;
+                if pos + left < end {
+                    pos = pos + left;
+                    left = 0;
+                } else {
+                    left = left - (end - pos);
+                    if line < display_lines() && line < 256 {
+                        render(line);
+                    }
+                    pos = end;
+                    if pos >= total {
+                        pos = 0;
+                        frames = frames + 1;
+                        frame_height = if display_lines() < 256 { display_lines() } else { 256 };
+                    }
+                }
+            }
+        }
+
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            if space == Space::Mem {
+                let a = addr[13:0];
+                if size == BusSize::Word {
+                    return (data: concat(vram[a + 1], vram[a]), wait: 1);
+                }
+                return (data: vram[a] as u16, wait: 1);
+            }
+            let r = addr[3:0];
+            if r == 10 {
+                // Status: bit 0 outside the display area, bit 3 vertical
+                // retrace (16 lines from the sync row).
+                let ld = line_dots();
+                let line = if ld == 0 { 0 } else { pos / ld };
+                let h = if ld == 0 { 0 } else { pos % ld };
+                let shown = h < crtc[1] as u32 * char_dots() && line < display_lines();
+                let vs = crtc[7] as u32 % 128 * rows();
+                let retrace = line >= vs && line < vs + 16;
+                let v: u8 = (if shown { 0 } else { 1 }) | (if retrace { 8 } else { 0 });
+                return (data: v as u16, wait: 1);
+            }
+            if r[2:0] == 5 || r[2:0] == 1 || r[2:0] == 3 || r[2:0] == 7 {
+                if r < 8 {
+                    let v: u8 = if index >= 12 && index < 18 { crtc[index] } else { 0 };
+                    return (data: v as u16, wait: 1);
+                }
+            }
+            return (data: 0xFF, wait: 1);
+        }
+
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            if space == Space::Mem {
+                let a = addr[13:0];
+                vram[a] = data as u8;
+                if size == BusSize::Word {
+                    vram[(a + 1) & 0x3FFF] = (data >> 8) as u8;
+                }
+                return (wait: 1);
+            }
+            let r = addr[3:0];
+            let d = data as u8;
+            if r < 8 {
+                if r[0] == 0 {
+                    index = d & 31;
+                } else if index < 18 {
+                    crtc[index] = d;
+                }
+            } else if r == 8 {
+                mode = d;
+            } else if r == 9 {
+                color = d;
+            }
+            return (wait: 1);
+        }
+    }
+}
+
 /// Collects the bytes written to its port (like the Bochs port E9 hack).
 component Console {
     ports { bus port: LocalBus::Slave; }
@@ -720,6 +915,7 @@ system Board286 {
     component pit: Pit8254 @ pit_clk;
     component dma: Dma8237 @ dma_clk;
     component link: HostLink;
+    component cga: Cga @ osc;
     component console: Console;
 
     bus local: LocalBus @ cpu_clk {
@@ -735,6 +931,7 @@ system Board286 {
         master dma.dma;
         slave link.port;
         slave console.port @ io 0xE9..=0xE9;
+        slave cga.port @ mem 0xB8000..=0xBFFFF, io 0x3D0..=0x3DF;
     }
 
     /// IRQ 0-7: the timer on 0, the slave controller on 2.

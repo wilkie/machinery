@@ -318,3 +318,130 @@ fn slave_controller_interrupts_through_the_master() {
     assert_eq!(b.pic2.irr & 0x10, 0);
     assert_eq!(b.pic1.irr & 0x04, 0);
 }
+
+// --- CGA ---
+
+/// `mov dx, port; mov al, v; out dx, al`
+fn out8(code: &mut Vec<u8>, port: u16, v: u8) {
+    code.extend_from_slice(&[0xBA, port as u8, (port >> 8) as u8, 0xB0, v, 0xEE]);
+}
+
+/// Program the 6845's registers from R0.
+fn crtc(code: &mut Vec<u8>, regs: &[u8]) {
+    for (i, v) in regs.iter().enumerate() {
+        out8(code, 0x3D4, i as u8);
+        out8(code, 0x3D5, *v);
+    }
+}
+
+/// Wait for the start of vertical retrace (status bit 3).
+fn wait_vsync(code: &mut Vec<u8>) {
+    code.extend_from_slice(&[
+        0xBA, 0xDA, 0x03, // mov dx, 0x3DA
+        0xEC, 0xA8, 0x08, 0x75, 0xFB, // in al, dx; test al, 8; jnz (still in retrace)
+        0xEC, 0xA8, 0x08, 0x74, 0xFB, // in al, dx; test al, 8; jz (until retrace)
+    ]);
+}
+
+/// Program the CRTC and mode, run `video` (with DS = B800), wait two
+/// retraces so a whole frame is drawn in between, halt.
+fn cga_program(regs: &[u8], mode: u8, color: u8, video: &[u8]) -> Vec<u8> {
+    let mut code = SETUP.to_vec();
+    crtc(&mut code, regs);
+    out8(&mut code, 0x3D8, mode);
+    out8(&mut code, 0x3D9, color);
+    code.extend_from_slice(&[0xB8, 0x00, 0xB8, 0x8E, 0xD8]); // mov ax, 0xB800; mov ds, ax
+    code.extend_from_slice(video);
+    wait_vsync(&mut code);
+    wait_vsync(&mut code);
+    code.push(0xF4);
+    code
+}
+
+/// 80x25 text with the cursor off (R10 = 0x20).
+const TEXT_80X25: [u8; 16] = [
+    0x71, 0x50, 0x5A, 0x0A, 0x1F, 0x06, 0x19, 0x1C, 0x02, 0x07, 0x20, 0x07, 0, 0, 0, 0,
+];
+/// 320x200 graphics.
+const GRAPHICS_320X200: [u8; 16] = [
+    0x38, 0x28, 0x2D, 0x0A, 0x7F, 0x06, 0x64, 0x70, 0x02, 0x01, 0x06, 0x07, 0, 0, 0, 0,
+];
+
+fn boot_cga(code: &[u8]) -> System {
+    let mut sys = boot(rom(code, &[]));
+    let font = &mut sys.board().cga.font;
+    font[0x41 * 8..0x41 * 8 + 8].copy_from_slice(&[0xFF, 0x81, 0, 0, 0, 0, 0, 0x18]); // 'A'
+    font[0x42 * 8..0x42 * 8 + 8].copy_from_slice(&[0xF0; 8]); // 'B'
+    sys
+}
+
+#[test]
+fn cga_renders_text() {
+    let code = cga_program(
+        &TEXT_80X25,
+        0x09, // 80 columns, video on
+        0x00,
+        &[
+            0xC7, 0x06, 0x00, 0x00, 0x41, 0x1F, // 'A' white on blue at row 0, column 0
+            0xC7, 0x06, 0xA0, 0x00, 0x42, 0x4E, // 'B' yellow on red at row 1, column 0
+        ],
+    );
+    let mut sys = boot_cga(&code);
+    let n = sys.run(200_000).unwrap();
+    assert!(sys.cpu.halted, "halted after {n} steps");
+    let cga = &sys.board().cga;
+    assert!(cga.frames >= 1);
+    assert_eq!((cga.frame_width, cga.frame_height), (640, 200));
+    let f = &cga.frame;
+    // 'A', raster 0: all foreground; raster 1: the two edges.
+    assert_eq!(&f[0..8], &[15; 8]);
+    assert_eq!(&f[640..648], &[15, 1, 1, 1, 1, 1, 1, 15]);
+    // Raster 7: the middle two dots.
+    assert_eq!(&f[7 * 640..7 * 640 + 8], &[1, 1, 1, 15, 15, 1, 1, 1]);
+    // 'B' on the next character row (scanline 8).
+    assert_eq!(&f[8 * 640..8 * 640 + 8], &[14, 14, 14, 14, 4, 4, 4, 4]);
+    // An empty cell is black.
+    assert_eq!(&f[8..16], &[0; 8]);
+}
+
+#[test]
+fn cga_renders_320x200_graphics() {
+    let code = cga_program(
+        &GRAPHICS_320X200,
+        0x0A, // graphics, video on
+        0x21, // palette 1 (cyan, magenta, white), background blue
+        &[
+            0xC6, 0x06, 0x00, 0x00, 0x1B, // the first four pixels of line 0: 0, 1, 2, 3
+            0xC6, 0x06, 0x00, 0x20, 0xFF, // line 1 (the odd bank): colour 3
+        ],
+    );
+    let mut sys = boot_cga(&code);
+    sys.run(200_000).unwrap();
+    assert!(sys.cpu.halted);
+    let cga = &sys.board().cga;
+    assert_eq!((cga.frame_width, cga.frame_height), (640, 200));
+    let f = &cga.frame;
+    // Each low-resolution pixel is two dots.
+    assert_eq!(&f[0..8], &[1, 1, 3, 3, 5, 5, 7, 7]);
+    assert_eq!(&f[640..648], &[7; 8]);
+    // The rest of line 0 is background.
+    assert_eq!(&f[8..16], &[1; 8]);
+}
+
+/// A frame is 912 dots by 262 lines of the 14.318 MHz clock: 59.92 Hz.
+#[test]
+fn cga_frame_rate() {
+    let code = cga_program(&TEXT_80X25, 0x09, 0x00, &[]);
+    let mut sys = boot_cga(&code);
+    // Until the CRTC is programmed its registers are zero and a "frame" is
+    // one character: measure once the program has set the mode and halted.
+    sys.run(1_000_000).unwrap();
+    assert!(sys.cpu.halted);
+    let f0 = sys.board().cga.frames;
+    sys.run_until(1_000_000, |s| s.board().cga.frames == f0 + 1).unwrap();
+    let t1 = sys.seconds();
+    sys.run_until(1_000_000, |s| s.board().cga.frames == f0 + 2).unwrap();
+    let t2 = sys.seconds();
+    let expected = 912.0 * 262.0 / 14_318_180.0;
+    assert!(((t2 - t1) - expected).abs() < 20e-6, "frame took {} s, expected {expected}", t2 - t1);
+}

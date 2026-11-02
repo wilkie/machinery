@@ -1546,10 +1546,10 @@ fn i286_board_system_checks_clean() {
     let c = check_files(files);
     assert_clean(&c);
     let sys = &c.hir.systems[0];
-    assert_eq!(sys.components.len(), 9);
+    assert_eq!(sys.components.len(), 10);
     // RAM, ROM, both PICs, PIT, the DMA registers and pages, the link, the
-    // console.
-    assert_eq!(sys.buses[0].slaves.len(), 9);
+    // console, the CGA.
+    assert_eq!(sys.buses[0].slaves.len(), 10);
     // SP straps, CAS, and INTR.
     assert_eq!(sys.wires.len(), 4);
     // The processor and the DMA controller master the local bus.

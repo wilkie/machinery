@@ -132,7 +132,7 @@ fn i286_target_passes_its_tests_and_hardware_vectors() {
         output.status.success(),
         "i286 tests failed:\n{stdout}\n{stderr}"
     );
-    assert!(stdout.contains("16 passed"), "expected 16 tests:\n{stdout}");
+    assert!(stdout.contains("18 passed"), "expected 18 tests:\n{stdout}");
 
     // The self-checking test programs (`simulators/test/i286`, assembled
     // with `assemble-tests.sh`): real mode and protected mode. Skipped

@@ -383,6 +383,39 @@ impl Checker<'_> {
                 }
             },
         };
+        // The double fault takes no arguments (its error code is 0).
+        let double = match &d.double {
+            None => None,
+            Some(p) => match self.lookup_item(scope, &p.last().name) {
+                Some(f) if self.prog.item(f).kind == ItemKind::Fault => {
+                    if self
+                        .faults
+                        .get(&f)
+                        .map(|i| !i.params.is_empty())
+                        .unwrap_or(false)
+                    {
+                        self.error(
+                            module,
+                            "E1046",
+                            p.span,
+                            "the `double` fault takes no arguments",
+                        );
+                        ok = false;
+                    }
+                    Some(f)
+                }
+                _ => {
+                    self.error(
+                        module,
+                        "E1046",
+                        p.span,
+                        format!("`{}` is not a fault of this isa", p.dotted()),
+                    );
+                    ok = false;
+                    None
+                }
+            },
+        };
         let limit = match &d.limit {
             None => None,
             Some(p) => match fn_item(self, p) {
@@ -412,6 +445,7 @@ impl Checker<'_> {
             fault,
             boundary,
             limit,
+            double,
         })
     }
 
@@ -638,6 +672,7 @@ impl Checker<'_> {
         let mut vector = None;
         let mut class = hir::FaultClass::Fault;
         let mut pushes_error_code = false;
+        let mut contributory = false;
         let mut seen_class = false;
         for a in &decl.attrs {
             let Some(value) = &a.value else {
@@ -699,6 +734,19 @@ impl Checker<'_> {
                     }
                     None => ok = false,
                 },
+                "contributory" => match self.eval_const(scope, &empty, value) {
+                    Some(ConstVal::Bool(b)) => contributory = b,
+                    Some(_) => {
+                        self.error(
+                            module,
+                            "E1038",
+                            value.span,
+                            "`contributory` is `true` or `false`",
+                        );
+                        ok = false;
+                    }
+                    None => ok = false,
+                },
                 other => {
                     self.error(
                         module,
@@ -731,6 +779,7 @@ impl Checker<'_> {
             vector,
             class,
             pushes_error_code,
+            contributory,
         })
     }
 

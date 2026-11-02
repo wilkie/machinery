@@ -869,6 +869,15 @@ fn take_interrupt() -> bool {
 }
 ```
 
+`double` names the double fault: a fault declared `contributory: true`
+raised while a contributory fault is delivered becomes it (on the 286,
+#DE, #TS, #NP, #SS and #GP are contributory), any other fault raised
+during a delivery is delivered in its place, and a fault while the
+double fault is delivered **shuts the processor down**: it halts, an
+interrupt does not wake it, only reset does, and the bus is told
+(`Bus::shutdown`; a PC board resets the processor, which is how AT
+software leaves protected mode).
+
 `limit` names a `fn () -> u32`: how many bytes the stream holds from the
 current address before its segment ends. It is timing information only:
 a processor model's bus unit does not prefetch past it (section 11.2c).

@@ -1428,6 +1428,24 @@ impl<'a> Gen<'a> {
         if self.isa.faults.is_empty() {
             s.push_str("            _ => rt::FaultClass::Fault,\n");
         }
+        // Whether a fault is contributory (two make a double fault).
+        s.push_str("        }\n    }\n    /// A fault raised while delivering another contributory one makes a double fault.\n    pub fn contributory(&self) -> bool {\n        match self {\n");
+        for f in &self.isa.faults {
+            let pat = if f.params.is_empty() {
+                String::new()
+            } else {
+                "(..)".into()
+            };
+            let _ = writeln!(
+                s,
+                "            Fault::{}{pat} => {},",
+                ident(&f.name),
+                f.contributory
+            );
+        }
+        if self.isa.faults.is_empty() {
+            s.push_str("            _ => false,\n");
+        }
         // The error code a fault pushes (`pushes_error_code`): its first
         // parameter, or 0 without one.
         s.push_str("        }\n    }\n    /// The error code this fault pushes, if it pushes one.\n    pub fn error_code(&self) -> Option<u16> {\n        match self {\n");
@@ -1510,7 +1528,7 @@ impl<'a> Gen<'a> {
             let n = ident(&sp.name);
             let _ = writeln!(s, "    fn {n}_read(&mut self, addr: u64, bits: u32) -> u128;\n    fn {n}_write(&mut self, addr: u64, bits: u32, value: u128);");
         }
-        s.push_str("    /// An instruction (or an interrupt taken at a boundary) finished, having spent\n    /// `cycles` of execution beyond its bus transfers, to `schedule`.\n    #[allow(unused_variables)]\n    fn retire(&mut self, cycles: u32, schedule: Schedule) {}\n");
+        s.push_str("    /// An instruction (or an interrupt taken at a boundary) finished, having spent\n    /// `cycles` of execution beyond its bus transfers, to `schedule`.\n    #[allow(unused_variables)]\n    fn retire(&mut self, cycles: u32, schedule: Schedule) {}\n    /// The processor shut down (a fault while delivering a double fault);\n    /// it stays halted until reset.\n    fn shutdown(&mut self) {}\n");
         if let Some(ist) = &self.isa.istream {
             let n = ident(&self.spaces[&ist.space].name);
             let _ = writeln!(s, "    /// An instruction-stream fetch (a code bus cycle); a read by default.\n    fn {n}_fetch(&mut self, addr: u64, bits: u32) -> u128 {{ self.{n}_read(addr, bits) }}");
@@ -1566,7 +1584,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut s = format!(
-            "#[derive(Clone, Debug)]\npub struct {isa_name}<B: Bus = Flat> {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n    /// Execution cycles of the last step beyond its bus transfers (the\n    /// timing table: the instruction, its prefixes, a delivered fault).\n    pub cycles: u32,\n    /// Prefix cycles accumulated while decoding.\n    pub prefix_cycles: u32,\n    /// Where the last step started, and whether this one started there too.\n    pub last_start: u64,\n    pub restarted: bool,\n    /// Bytes decoded this step, and the extra decoder clocks on each.\n    pub fetched: u8,\n    pub decode_at: [u8; 16],\n    /// Data accesses made this step (a fault's delivery follows those the\n    /// instruction made).\n    pub accesses: u8,\n"
+            "#[derive(Clone, Debug)]\npub struct {isa_name}<B: Bus = Flat> {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n    /// Execution cycles of the last step beyond its bus transfers (the\n    /// timing table: the instruction, its prefixes, a delivered fault).\n    pub cycles: u32,\n    /// Prefix cycles accumulated while decoding.\n    pub prefix_cycles: u32,\n    /// Where the last step started, and whether this one started there too.\n    pub last_start: u64,\n    pub restarted: bool,\n    /// Bytes decoded this step, and the extra decoder clocks on each.\n    pub fetched: u8,\n    pub decode_at: [u8; 16],\n    /// Data accesses made this step (a fault's delivery follows those the\n    /// instruction made).\n    pub accesses: u8,\n    /// Shut down: a fault while delivering a double fault.\n    pub shutdown: bool,\n"
         );
         s.push_str("    pub bus: B,\n");
         for l in &self.isa.latches {
@@ -1576,7 +1594,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut s = format!(
-            "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            cycles: 0,\n            prefix_cycles: 0,\n            last_start: u64::MAX,\n            restarted: false,\n            fetched: 0,\n            decode_at: [0; 16],\n            accesses: 0,\n            bus,\n"
+            "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            cycles: 0,\n            prefix_cycles: 0,\n            last_start: u64::MAX,\n            restarted: false,\n            fetched: 0,\n            decode_at: [0; 16],\n            accesses: 0,\n            shutdown: false,\n            bus,\n"
         );
         for l in &self.isa.latches {
             let _ = writeln!(
@@ -1594,7 +1612,7 @@ impl<'a> Gen<'a> {
             .find(|f| f.name == "reset" && f.params.is_empty());
         let _ = write!(
             s,
-            "    /// Processor reset: architectural state to zero{}.\n    pub fn reset(&mut self) {{\n        self.r = Regs::default();\n        self.mode = 0;\n        self.halted = false;\n        self.last = None;\n        self.last_fault = None;\n        self.reset_latches();\n{}    }}\n",
+            "    /// Processor reset: architectural state to zero{}.\n    pub fn reset(&mut self) {{\n        self.r = Regs::default();\n        self.mode = 0;\n        self.halted = false;\n        self.shutdown = false;\n        self.last = None;\n        self.last_fault = None;\n        self.reset_latches();\n{}    }}\n",
             if reset_fn.is_some() { ", then the isa's `fn reset()`" } else { "" },
             if reset_fn.is_some() { "        self.fn_reset().expect(\"fn reset() raised a fault\");\n" } else { "" }
         );
@@ -2143,8 +2161,8 @@ impl<'a> Gen<'a> {
             s.push_str("            _ => Ok(()),\n");
         }
         s.push_str("        }\n    }\n");
-        let deliver = match istream.fault {
-            Some(f) => {
+        let deliver = match (istream.fault, istream.double) {
+            (Some(f), None) => {
                 let args = if self.fns[&f].params.len() == 4 {
                     "v, restart, f.error_code().is_some(), f.error_code().unwrap_or(0)"
                 } else {
@@ -2152,7 +2170,20 @@ impl<'a> Gen<'a> {
                 };
                 format!("if let Some(v) = f.vector() {{ let restart = f.class() == rt::FaultClass::Fault; self.fn_{}({args})?; self.cycles += self.fault_cycles(v); self.last_fault = Some(f); return Ok(()); }}", ident(&self.fns[&f].name))
             }
-            None => String::new(),
+            // With a double fault: a contributory fault raised while
+            // delivering a contributory one becomes the double fault, any
+            // other is delivered in its place, and a fault while delivering
+            // the double fault shuts the processor down.
+            (Some(f), Some(df)) => {
+                let args = if self.fns[&f].params.len() == 4 {
+                    "v, restart, cur.error_code().is_some(), cur.error_code().unwrap_or(0)"
+                } else {
+                    "v, restart"
+                };
+                let dfn = ident(&self.faults[&df].name);
+                format!("if let Some(v0) = f.vector() {{\n                    let mut cur = f;\n                    let mut v = v0;\n                    let mut tries = 0;\n                    loop {{\n                        let restart = cur.class() == rt::FaultClass::Fault;\n                        match self.fn_{}({args}) {{\n                            Ok(()) => {{ self.cycles += self.fault_cycles(v); self.last_fault = Some(cur); return Ok(()); }}\n                            Err(g) => {{\n                                tries += 1;\n                                if matches!(cur, Fault::{dfn}) || tries >= 3 {{\n                                    self.shutdown = true;\n                                    self.halted = true;\n                                    self.bus.shutdown();\n                                    self.last_fault = Some(cur);\n                                    return Ok(());\n                                }}\n                                cur = if cur.contributory() && g.contributory() {{ Fault::{dfn} }} else {{ g }};\n                                v = match cur.vector() {{ Some(v) => v, None => return Err(cur) }};\n                            }}\n                        }}\n                    }}\n                }}", ident(&self.fns[&f].name))
+            }
+            _ => String::new(),
         };
         let _ = write!(
             s,
@@ -2195,7 +2226,7 @@ impl<'a> Gen<'a> {
             "        let _ = (performed, cur);\n        let k = (sched.steps as usize).min(8);\n        sched.work[k] = sched.work[k].saturating_add(self.cycles.saturating_sub(before) as u16);\n".to_string()
         };
         s.push_str(&format!(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.fetched = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let mut cur: Option<Instr> = None;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); cur = Some(i); sched = self.schedule_of(&i); self.cycles = self.timing_of(&i) + self.prefix_cycles; self.exec(i) }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.fetched = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let mut cur: Option<Instr> = None;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); cur = Some(i); sched = self.schedule_of(&i); self.cycles = self.timing_of(&i) + self.prefix_cycles; self.exec(i) }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
         ));
         let _ = write!(
             s,

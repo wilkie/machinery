@@ -338,6 +338,9 @@ pub struct Fault {
     pub vector: Option<i128>,
     pub class: FaultClass,
     pub pushes_error_code: bool,
+    /// A fault raised while delivering another contributory one is a
+    /// double fault (`istream { double ...; }`).
+    pub contributory: bool,
 }
 
 /// An isa `fn`: imperative over architectural state.
@@ -631,6 +634,9 @@ pub struct Istream {
     /// `fn () -> u32`: bytes the stream holds from the current address
     /// before its segment ends (a processor model stops prefetching there).
     pub limit: Option<DefId>,
+    /// The fault delivered when a contributory fault is raised while one is
+    /// delivered; a fault while delivering it shuts the processor down.
+    pub double: Option<DefId>,
 }
 
 /// A resolved `enum`/`mode`, exported for backends.

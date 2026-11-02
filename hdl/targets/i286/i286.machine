@@ -107,18 +107,23 @@ isa I286 {
     enum Rep : u2 { None = 0, Ne = 1, E = 2 }
     latch rep: Rep = Rep::None;
 
-    fault DE { vector: 0, class: Fault }
+    fault DE { vector: 0, class: Fault, contributory: true }
     fault BR { vector: 5, class: Fault }
     /// The divider faults with the flags its last internal step left, so a
     /// faulting DIV/IDIV pushes data-dependent flags the description does not
     /// model (the vector runner reports those as undefined-flag leaks).
     fault UD { vector: 6, class: Fault }
     /// A fault while delivering a fault.
-    fault DoubleFault { vector: 8, class: Fault, pushes_error_code: true }
-    fault InvalidTss(error: u16) { vector: 10, class: Fault, pushes_error_code: true }
-    fault NP(error: u16) { vector: 11, class: Fault, pushes_error_code: true }
-    fault StackFault(error: u16) { vector: 12, class: Fault, pushes_error_code: true }
-    fault GP(error: u16) { vector: 13, class: Fault, pushes_error_code: true }
+    /// A contributory fault while delivering another (the error code is 0);
+    /// a fault while delivering this one shuts the processor down.
+    fault DoubleFault { vector: 8, class: Abort, pushes_error_code: true }
+    /// ESC with no coprocessor to run it (MSW.EM), or after a task switch
+    /// (MSW.TS); WAIT too when MSW.MP.
+    fault NM { vector: 7, class: Fault }
+    fault InvalidTss(error: u16) { vector: 10, class: Fault, pushes_error_code: true, contributory: true }
+    fault NP(error: u16) { vector: 11, class: Fault, pushes_error_code: true, contributory: true }
+    fault StackFault(error: u16) { vector: 12, class: Fault, pushes_error_code: true, contributory: true }
+    fault GP(error: u16) { vector: 13, class: Fault, pushes_error_code: true, contributory: true }
 
     // -- addressing ------------------------------------------------------------
 
@@ -724,7 +729,7 @@ isa I286 {
         return b;
     }
 
-    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; }
+    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; double DoubleFault; }
 
     /// The INTR pin, and the two interrupt-acknowledge bus cycles that
     /// fetch the vector from the interrupt controller: the processor model
@@ -2239,6 +2244,7 @@ isa I286 {
         encoding { opcode "11011eee" { e: bits3 }; ModRM }
         operands (e: bits3, m: esc_op);
         semantics {
+            if MSW.EM == 1 || MSW.TS == 1 { raise NM; }
             let o = m;
             io.write_u16(0xF8, concat(o.modrm, 0xD8_u8 | (e as u8)));
             io.write_u16(0xFC, start_ip);
@@ -2249,7 +2255,7 @@ isa I286 {
             }
         }
     }
-    instruction Wait { mnemonic "wait"; encoding { opcode 0x9B; } }
+    instruction Wait { mnemonic "wait"; encoding { opcode 0x9B; } semantics { if MSW.TS == 1 && MSW.MP == 1 { raise NM; } } }
 
     // -- strings -------------------------------------------------------------------------------
     //
@@ -2421,6 +2427,47 @@ test "mov ss inhibits interrupts for one instruction" on I286 {
     given { AX = 0x2000; }
     run bytes [0x8E, 0xD0];
     expect { SS.selector == 0x2000; INHIBIT == 1; }
+}
+
+// A protected-mode machine for the delivery tests: a flat code segment at
+// GDT entry 1, data at entry 2, the IDT at 0800 with an interrupt gate for
+// vector 8 (#DF) to 0008:0300 when the IDT reaches it.
+test "a fault while delivering a fault is a double fault" on I286 {
+    given {
+        MSW = 0x0001;
+        GDTR = TableReg { base: 0, limit: 0x17 };
+        IDTR = TableReg { base: 0x0800, limit: 0x47 };
+        mem[0x08] = 0xFF; mem[0x09] = 0xFF; mem[0x0D] = 0x9B;
+        mem[0x10] = 0xFF; mem[0x11] = 0xFF; mem[0x15] = 0x93;
+        mem[0x841] = 0x03; mem[0x842] = 0x08; mem[0x845] = 0x86;
+        CS = Segment { selector: 0x08, base: 0, limit: 0xFFFF, rights: 0x9B }; IP = 0x0100;
+        SS = Segment { selector: 0x10, base: 0, limit: 0xFFFF, rights: 0x93 }; SP = 0x1000;
+        DS = Segment { selector: 0x10, base: 0, limit: 0xFFFF, rights: 0x93 };
+    }
+    // mov ax, [0xFFFF]: #GP(0); vector 13 is past the IDT's limit, so its
+    // delivery is #GP too: a double fault, delivered with error code 0.
+    run bytes [0xA1, 0xFF, 0xFF];
+    expect {
+        CS.selector == 0x0008; IP == 0x0300; SP == 0x0FF8;
+        mem[0x0FF8] == 0x00; mem[0x0FF9] == 0x00;      // error code
+        mem[0x0FFA] == 0x00; mem[0x0FFB] == 0x01;      // the faulting instruction
+    }
+}
+
+test "a fault while delivering a double fault shuts down" on I286 {
+    given {
+        MSW = 0x0001;
+        GDTR = TableReg { base: 0, limit: 0x17 };
+        IDTR = TableReg { base: 0x0800, limit: 0x07 };
+        mem[0x08] = 0xFF; mem[0x09] = 0xFF; mem[0x0D] = 0x9B;
+        CS = Segment { selector: 0x08, base: 0, limit: 0xFFFF, rights: 0x9B }; IP = 0x0100;
+        SS = Segment { selector: 0x10, base: 0, limit: 0xFFFF, rights: 0x93 }; SP = 0x1000;
+        DS = Segment { selector: 0x10, base: 0, limit: 0xFFFF, rights: 0x93 };
+    }
+    // Neither #GP nor #DF has a gate: nothing is pushed, and the processor
+    // stops where the instruction started.
+    run bytes [0xA1, 0xFF, 0xFF];
+    expect { IP == 0x0100; SP == 0x1000; CS.selector == 0x0008; }
 }
 
 test "add al, bl" on I286 {

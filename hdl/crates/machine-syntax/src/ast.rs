@@ -1069,6 +1069,8 @@ pub struct IstreamDecl {
     /// `limit code_room;`: a `fn () -> u32`, how many bytes the stream
     /// holds from the current address before its segment ends.
     pub limit: Option<Path>,
+    /// `double DF;`: the double-fault fault.
+    pub double: Option<Path>,
     pub span: Span,
 }
 

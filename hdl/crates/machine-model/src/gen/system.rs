@@ -347,6 +347,9 @@ impl<'a> Gen<'a> {
                 HandlerKind::SpaceWrite { space, bits } => {
                     format!("{}_write_u{bits}", ident(&self.spaces[space].name))
                 }
+                HandlerKind::SpaceFetch { space, bits } => {
+                    format!("{}_fetch_u{bits}", ident(&self.spaces[space].name))
+                }
                 HandlerKind::Extern { def } => format!("ext_{}", ident(&self.prog.item_name(*def))),
                 HandlerKind::Input { port } => {
                     format!("on_{}", ident(&comp.ports[*port as usize].name))
@@ -973,9 +976,9 @@ impl<'a> Gen<'a> {
         let ctx_cpu = |b: &str| ctx_for(proc_idx, b, false);
 
         // The board.
-        let mut fields = String::from("        pub sig: Signals,\n        pub marks: Marks,\n");
+        let mut fields = String::from("        pub sig: Signals,\n        pub marks: Marks,\n        /// Time the current instruction spent fetching code (overlapped\n        /// with its execution at retire).\n        pub code_time: u64,\n");
         let mut init = String::from(
-            "            sig: Signals::new(),\n            marks: Marks::default(),\n",
+            "            sig: Signals::new(),\n            marks: Marks::default(),\n            code_time: 0,\n",
         );
         for i in &insts {
             let _ = writeln!(
@@ -1034,6 +1037,50 @@ impl<'a> Gen<'a> {
                     );
                 }
             }
+        }
+        // Instruction fetches: the fetch handler (else the read handler),
+        // timed as code; and retire, which overlaps execution with them.
+        if let Some(ist) = &self.isa.istream {
+            let sp = self.spaces[&ist.space];
+            let n = ident(&sp.name);
+            let (abits, aty) = match &sp.addr {
+                Ty::UInt(b) => (*b, native(*b, false).1),
+                _ => return Err(GenError::new("space address type")),
+            };
+            let amask = mask_literal(abits, "u64");
+            let cell = sp.cell_bits;
+            let fetch_bits: Vec<u32> = cpu
+                .model
+                .handlers
+                .iter()
+                .filter_map(|h| match h.kind {
+                    HandlerKind::SpaceFetch { space, bits } if space == sp.def => Some(bits),
+                    _ => None,
+                })
+                .collect();
+            let mut arms = String::new();
+            for b in &fetch_bits {
+                let _ = writeln!(arms, "            {b} => self.{cpu_name}.{n}_fetch_u{b}(&mut ctx, addr as {aty}) as u128,");
+            }
+            let cell_fetch = if fetch_bits.contains(&cell) {
+                format!("self.{cpu_name}.{n}_fetch_u{cell}(&mut ctx, a as {aty})")
+            } else {
+                format!("self.{cpu_name}.{n}_read_u{cell}(&mut ctx, a as {aty})")
+            };
+            let shift = if sp.little_endian {
+                format!("i * {cell}")
+            } else {
+                format!("(n - 1 - i) * {cell}")
+            };
+            let _ = write!(
+                bus_impl,
+                "    fn {n}_fetch(&mut self, addr: u64, bits: u32) -> u128 {{\n        let t0 = self.sig.now;\n        let v = {{\n            let mut ctx = {};\n            let addr = addr & {amask};\n            match bits {{\n{arms}                _ => {{\n                    let n = bits / {cell};\n                    let mut v: u128 = 0;\n                    for i in 0..n {{\n                        let a = (addr + i as u64) & {amask};\n                        v |= ({cell_fetch} as u128) << ({shift});\n                    }}\n                    v\n                }}\n            }}\n        }};\n        self.code_time += self.sig.now - t0;\n        v\n    }}\n",
+                ctx_cpu("self")
+            );
+            let _ = write!(
+                bus_impl,
+                "    /// The instruction's execution overlaps its code fetches: charge what\n    /// exceeds them.\n    fn retire(&mut self, cycles: u32) {{\n        let x = cycles as u64 * clock::C{cpu_clock};\n        if x > self.code_time {{\n            self.sig.now += x - self.code_time;\n        }}\n        self.code_time = 0;\n    }}\n"
+            );
         }
         for f in self.isa.fns.iter().filter(|f| f.external) {
             let cx = Cx {

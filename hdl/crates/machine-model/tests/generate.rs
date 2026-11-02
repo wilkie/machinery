@@ -100,7 +100,11 @@ fn target(name: &str) -> SourceFile {
 /// conditional jump, a constrained group opcode, HLT).
 #[test]
 fn i286_target_passes_its_tests_and_hardware_vectors() {
-    let checked = check_files(vec![target("alu.machine"), target("i286.machine")]);
+    let checked = check_files(vec![
+        target("alu.machine"),
+        target("i286.machine"),
+        target("timing.machine"),
+    ]);
     assert!(!checked.has_errors());
     let src = generate_isa(&checked, "I286").unwrap_or_else(|e| panic!("{e}"));
     let root = hdl_root();
@@ -173,6 +177,51 @@ fn i286_target_passes_its_tests_and_hardware_vectors() {
         "hardware vectors failed:\n{stdout}\n{stderr}"
     );
     assert!(stdout.contains(" 0 failed"), "{stdout}");
+
+    // The timing table against the same vectors' cycle traces: most match
+    // exactly and nearly all within a cycle (the rest is the queue's
+    // overlap, which tier 1 does not model).
+    let output = Command::new(&cargo)
+        .args([
+            "run",
+            "--quiet",
+            "--features",
+            "vectors",
+            "--bin",
+            "vectors",
+            "--manifest-path",
+        ])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .arg("--")
+        .arg("--dir")
+        .arg(&vectors)
+        .args([
+            "--timing",
+            "--quiet",
+            "--filter",
+            "00,05,74,F4,CC,9D,50,E8,A4,AB,AD,D3.5,C0.2,F7.4,F6.6,87,C8,60",
+        ])
+        .output()
+        .expect("run timing");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
+        .lines()
+        .find(|l| l.starts_with("timing:"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    let pct = |label: &str| -> f64 {
+        let i = line.find(label).unwrap_or_else(|| panic!("{line}"));
+        let head = line[..i].trim_end_matches('%').trim_end();
+        let head = head.trim_end_matches('%');
+        head.rsplit(' ')
+            .next()
+            .unwrap()
+            .trim_end_matches('%')
+            .parse()
+            .unwrap()
+    };
+    assert!(pct("exact") >= 70.0, "{line}");
+    assert!(pct("within 1") >= 90.0, "{line}");
 }
 
 /// The model backend: the i286 board system generates, compiles, boots a
@@ -182,6 +231,7 @@ fn i286_board_system_boots() {
     let checked = check_files(vec![
         target("alu.machine"),
         target("i286.machine"),
+        target("timing.machine"),
         target("board.machine"),
     ]);
     assert!(!checked.has_errors());
@@ -213,7 +263,7 @@ fn i286_board_system_boots() {
         output.status.success(),
         "board tests failed:\n{stdout}\n{stderr}"
     );
-    assert!(stdout.contains("12 passed"), "expected 12 tests:\n{stdout}");
+    assert!(stdout.contains("13 passed"), "expected 13 tests:\n{stdout}");
 }
 
 /// The sample timer board has no processor (its master is an rtl script),

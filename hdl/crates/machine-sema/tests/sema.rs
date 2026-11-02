@@ -1924,3 +1924,50 @@ fn tick_may_return_its_next_deadline() {
         &["E1015"],
     );
 }
+
+// --- timing tables ---
+
+#[test]
+fn timing_tables_check() {
+    let table = |entries: &str| {
+        let src = DEC_PRELUDE.replace(
+            "undefined UD; }",
+            "undefined UD; fault deliver; }\n    fn deliver(v: u8, restart: bool) { IP = v as u16; }\n    instruction Nop { mnemonic \"nop\"; encoding { opcode 0x90; } }",
+        );
+        format!("{src}\n}}\ntiming on T {{ {entries} }}")
+    };
+    let good = table("Nop => 3; fault => match vector { 0 => 8, _ => 9 }; interrupt => 9;");
+    let c = check_src(&good);
+    assert_clean(&c);
+    let info = &c.hir.isas[0];
+    assert!(info
+        .instructions
+        .iter()
+        .find(|i| i.name == "Nop")
+        .unwrap()
+        .timing
+        .is_some());
+    assert!(info.fault_cycles.is_some() && info.interrupt_cycles.is_some());
+    // An unknown instruction, an entry twice, a non-isa target.
+    assert_codes(&table("Nope => 3;"), &["E1055"]);
+    assert_codes(&table("Nop => 3; Nop => 4;"), &["E1055"]);
+    assert_codes(
+        &format!("{}\ntiming on Nothing {{ }}", table("")),
+        &["E1055"],
+    );
+    // `restarted()` belongs to timing expressions.
+    assert_codes(&table("Nop => if restarted() { 0 } else { 3 };"), &[]);
+    assert_codes(&isa("fn f() -> bool { return restarted(); }"), &["E1020"]);
+}
+
+#[test]
+fn a_trailing_if_or_match_is_the_block_value() {
+    assert_codes(
+        &unit_src("let x: u8 = if c { if v[0] == 1 { 1 } else { 2 } } else { 3 }; return x;"),
+        &[],
+    );
+    assert_codes(
+        &unit_src("let x: u8 = if c { match v[1:0] { 0 => 1, _ => 2 } } else { 3 }; return x;"),
+        &[],
+    );
+}

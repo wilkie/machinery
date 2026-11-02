@@ -57,15 +57,33 @@ const TICK_HANDLER: &[u8] = &[
     0xCF, // iret
 ];
 
-/// The first instruction after reset is the far jump at FFFFF0: five byte
-/// fetches from the ROM, each two bus cycles plus the ROM's wait state.
+/// The first instruction after reset is the far jump at FFFFF0: its five
+/// bytes are three word fetches from the ROM, each two bus cycles plus the
+/// ROM's wait state, and they cover its 8 execution cycles.
 #[test]
 fn reset_jump_costs_its_rom_fetches() {
     let mut sys = boot(rom(&[], &[]));
     sys.step().unwrap();
     assert_eq!(sys.cpu.r.IP, 0x0000);
     assert_eq!(sys.cpu.r.CS.selector, 0xF000);
-    assert_eq!(sys.now(), 5 * (2 + 1) * clock::C1);
+    assert_eq!(sys.cpu.cycles, 8);
+    assert_eq!(sys.now(), 3 * (2 + 1) * clock::C1);
+}
+
+/// A multiply's 22 execution cycles exceed its code fetch: the instruction
+/// costs its execution, which is what tier 1 timing adds.
+#[test]
+fn mul_costs_its_execution_cycles() {
+    // mov ax, 3; mov bx, 5; mul bx; hlt
+    let mut sys = boot(rom(&[0xB8, 0x03, 0x00, 0xBB, 0x05, 0x00, 0xF7, 0xE3], &[]));
+    for _ in 0..3 {
+        sys.step().unwrap();
+    }
+    let t0 = sys.now();
+    sys.step().unwrap();
+    assert_eq!(sys.cpu.r.AX, 15);
+    assert_eq!(sys.cpu.cycles, 22);
+    assert_eq!(sys.now() - t0, 22 * clock::C1);
 }
 
 #[test]

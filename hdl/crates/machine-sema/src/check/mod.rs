@@ -127,6 +127,10 @@ pub struct FnCtx {
     pub loop_depth: u32,
     /// In a transaction handler, which may not start transactions.
     pub responding: bool,
+    /// In a timing expression, where `restarted()` is defined.
+    pub in_timing: bool,
+    /// The expected type of the next block's value (taken by it).
+    pub tail_hint: Option<Ty>,
     /// Mutable locals declared without a value and not yet assigned on
     /// the path being checked (definite assignment, E1051).
     pub unassigned: std::collections::BTreeSet<LocalId>,
@@ -146,6 +150,8 @@ impl FnCtx {
             component: None,
             loop_depth: 0,
             responding: false,
+            in_timing: false,
+            tail_hint: None,
             unassigned: std::collections::BTreeSet::new(),
         }
     }
@@ -310,6 +316,9 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
         if let Some(v) = ck.check_vectors(id) {
             ck.vectors.push(v);
         }
+    }
+    for id in prog.items_of(ItemKind::Timing) {
+        ck.check_timing(id);
     }
     for id in prog.items_of(ItemKind::System) {
         if let Some(s) = ck.check_system(id) {

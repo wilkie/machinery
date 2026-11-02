@@ -1677,6 +1677,10 @@ vectors "../../../simulators/test/i286/SingleStepTests/v1_real_mode/*.MOO.gz" on
     memory mem;
     /// The capture rig has nothing on the I/O bus: reads float high.
     open io = 0xFF;
+    /// Each trace starts at the jump to the instruction and ends at the
+    /// injected HLT; one cycle of that belongs to no instruction (NOP
+    /// measures 3 and INC r16 2, as Intel documents).
+    harness_cycles 1;
     reg ax = AX;
     reg bx = BX;
     reg cx = CX;

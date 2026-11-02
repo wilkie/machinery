@@ -408,7 +408,7 @@ impl Checker<'_> {
             } => {
                 let cond = self.check_expr(cx, cond, Some(&Ty::Bool));
                 let before = cx.unassigned.clone();
-                let then_b = self.check_block_expr(cx, then_branch);
+                let then_b = self.check_block_expr(cx, then_branch, expected);
                 let after_then = (!matches!(then_b.1, Ty::Never)).then(|| cx.unassigned.clone());
                 cx.unassigned = before;
                 let Some(else_e) = else_branch else {
@@ -439,7 +439,7 @@ impl Checker<'_> {
                 )
             }
             A::Block(b) => {
-                let (block, ty) = self.check_block_expr(cx, b);
+                let (block, ty) = self.check_block_expr(cx, b, expected);
                 mk(H::Block(block), ty, span)
             }
             A::RoutineCall(_) | A::Fetch(_) => {
@@ -470,7 +470,31 @@ impl Checker<'_> {
 
     /// A block in value position: its type is that of a trailing expression
     /// statement, or `()`.
-    pub fn check_block_expr(&mut self, cx: &mut FnCtx, b: &ast::Block) -> (hir::Block, Ty) {
+    /// A block in value position; `expected` types its final expression.
+    pub fn check_block_expr(
+        &mut self,
+        cx: &mut FnCtx,
+        b: &ast::Block,
+        expected: Option<&Ty>,
+    ) -> (hir::Block, Ty) {
+        cx.tail_hint = expected.cloned();
+        // A trailing `if`/`else` or `match` is the block's value, as in
+        // Rust: `{ if a { 0 } else { 1 } }`.
+        if let Some(last) = b.stmts.last() {
+            if let Some(e) = stmt_as_value(last) {
+                let mut head = b.clone();
+                head.stmts.pop();
+                head.stmts.push(ast::Stmt {
+                    kind: ast::StmtKind::Expr(e),
+                    span: last.span,
+                });
+                return self.check_block_expr_plain(cx, &head);
+            }
+        }
+        self.check_block_expr_plain(cx, b)
+    }
+
+    fn check_block_expr_plain(&mut self, cx: &mut FnCtx, b: &ast::Block) -> (hir::Block, Ty) {
         let block = self.check_block(cx, b);
         let ty = match block.stmts.last() {
             Some(hir::Stmt {
@@ -1972,6 +1996,21 @@ impl Checker<'_> {
                 );
                 err(span)
             }
+            Builtin::Restarted => {
+                if !cx.in_timing {
+                    self.error(
+                        cx.module,
+                        "E1020",
+                        span,
+                        "`restarted()` is only meaningful in a timing expression",
+                    );
+                    return err(span);
+                }
+                if !args.is_empty() {
+                    return arity_err(self, "0");
+                }
+                mk(H::Builtin(b, Vec::new()), Ty::Bool, span)
+            }
         }
     }
 
@@ -2288,7 +2327,8 @@ impl Checker<'_> {
                     (hir::ArmBody::Expr(e), t)
                 }
                 ast::ArmBody::Block(b) => {
-                    let (b, t) = self.check_block_expr(cx, b);
+                    let hint = ty.clone().filter(|t| !matches!(t, Ty::Const(_)));
+                    let (b, t) = self.check_block_expr(cx, b, hint.as_ref());
                     (hir::ArmBody::Block(b), t)
                 }
             };
@@ -2398,4 +2438,37 @@ fn fold_in_type(op: BinaryOp, x: i128, y: i128, ty: &Ty) -> Option<i128> {
         _ => return None,
     };
     Some(truncate(r, signed, w))
+}
+
+/// A statement that, ending a block in value position, is its value: an
+/// `if` with an `else` on every level, or a `match`.
+fn stmt_as_value(s: &ast::Stmt) -> Option<ast::Expr> {
+    match &s.kind {
+        ast::StmtKind::If {
+            cond,
+            then_branch,
+            else_branch: Some(el),
+        } => {
+            let else_e = match &el.kind {
+                ast::StmtKind::Expr(e) => e.clone(),
+                _ => stmt_as_value(el)?,
+            };
+            Some(ast::Expr {
+                kind: ast::ExprKind::If {
+                    cond: Box::new(cond.clone()),
+                    then_branch: then_branch.clone(),
+                    else_branch: Some(Box::new(else_e)),
+                },
+                span: s.span,
+            })
+        }
+        ast::StmtKind::Match { scrutinee, arms } => Some(ast::Expr {
+            kind: ast::ExprKind::Match {
+                scrutinee: Box::new(scrutinee.clone()),
+                arms: arms.clone(),
+            },
+            span: s.span,
+        }),
+        _ => None,
+    }
 }

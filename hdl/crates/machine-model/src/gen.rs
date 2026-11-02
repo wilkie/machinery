@@ -123,6 +123,8 @@ pub struct Gen<'a> {
     faults: HashMap<DefId, &'a hir::Fault>,
     fns: HashMap<DefId, &'a hir::FnBody>,
     out: String,
+    /// Emitting the istream's `next` fn, whose reads are code fetches.
+    in_istream_next: std::cell::Cell<bool>,
 }
 
 pub fn generate(prog: &Program, hir: &hir::Hir, isa_def: DefId) -> R<String> {
@@ -177,6 +179,7 @@ impl<'a> Gen<'a> {
             faults: isa.faults.iter().map(|f| (f.def, f)).collect(),
             fns: isa.fns.iter().map(|f| (f.def, f)).collect(),
             out: String::new(),
+            in_istream_next: std::cell::Cell::new(false),
         })
     }
 }
@@ -496,8 +499,15 @@ impl<'a> Gen<'a> {
             H::SpaceRead(d, bits, addr) => {
                 let sp = self.spaces[d];
                 let (_, _, out_ty) = self.int_shape(&e.ty).unwrap();
+                let op = if self.in_istream_next.get()
+                    && self.isa.istream.as_ref().is_some_and(|i| i.space == *d)
+                {
+                    "fetch"
+                } else {
+                    "read"
+                };
                 format!(
-                    "{{ let a = ({}) as u64; {}.bus.{}_read(a, {bits}) as {out_ty} }}",
+                    "{{ let a = ({}) as u64; {}.bus.{}_{op}(a, {bits}) as {out_ty} }}",
                     self.expr(cx, addr)?,
                     cx.recv,
                     ident(&sp.name)
@@ -782,6 +792,7 @@ impl<'a> Gen<'a> {
                 }
             }
             Builtin::Sync => return Err(GenError::new("`sync` in an isa")),
+            Builtin::Restarted => format!("{}.restarted", cx.recv),
         })
     }
 
@@ -1444,6 +1455,11 @@ impl<'a> Gen<'a> {
             let n = ident(&sp.name);
             let _ = writeln!(s, "    fn {n}_read(&mut self, addr: u64, bits: u32) -> u128;\n    fn {n}_write(&mut self, addr: u64, bits: u32, value: u128);");
         }
+        s.push_str("    /// An instruction (or an interrupt taken at a boundary) finished, having spent\n    /// `cycles` of execution beyond its bus transfers.\n    #[allow(unused_variables)]\n    fn retire(&mut self, cycles: u32) {}\n");
+        if let Some(ist) = &self.isa.istream {
+            let n = ident(&self.spaces[&ist.space].name);
+            let _ = writeln!(s, "    /// An instruction-stream fetch (a code bus cycle); a read by default.\n    fn {n}_fetch(&mut self, addr: u64, bits: u32) -> u128 {{ self.{n}_read(addr, bits) }}");
+        }
         let mut ext_flat = String::new();
         for f in self.isa.fns.iter().filter(|f| f.external) {
             let cx = Cx {
@@ -1495,7 +1511,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut s = format!(
-            "#[derive(Clone, Debug)]\npub struct {isa_name}<B: Bus = Flat> {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n"
+            "#[derive(Clone, Debug)]\npub struct {isa_name}<B: Bus = Flat> {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n    /// Execution cycles of the last step beyond its bus transfers (the\n    /// timing table: the instruction, its prefixes, a delivered fault).\n    pub cycles: u32,\n    /// Prefix cycles accumulated while decoding.\n    pub prefix_cycles: u32,\n    /// Where the last step started, and whether this one started there too.\n    pub last_start: u64,\n    pub restarted: bool,\n"
         );
         s.push_str("    pub bus: B,\n");
         for l in &self.isa.latches {
@@ -1505,7 +1521,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut s = format!(
-            "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            bus,\n"
+            "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            cycles: 0,\n            prefix_cycles: 0,\n            last_start: u64::MAX,\n            restarted: false,\n            bus,\n"
         );
         for l in &self.isa.latches {
             let _ = writeln!(
@@ -1675,6 +1691,14 @@ impl<'a> Gen<'a> {
         if f.external {
             return Ok(());
         }
+        let next = self.isa.istream.as_ref().is_some_and(|i| i.next == f.def);
+        self.in_istream_next.set(next);
+        let r = self.emit_fn_body(f);
+        self.in_istream_next.set(false);
+        r
+    }
+
+    fn emit_fn_body(&mut self, f: &hir::FnBody) -> R<()> {
         let cx = Cx {
             locals: &f.locals,
             fallible: true,
@@ -2053,7 +2077,7 @@ impl<'a> Gen<'a> {
         }
         s.push_str("        }\n    }\n");
         let deliver = match istream.fault {
-            Some(f) => format!("if let Some(v) = f.vector() {{ let restart = f.class() == rt::FaultClass::Fault; self.fn_{}(v, restart)?; self.last_fault = Some(f); return Ok(()); }}", ident(&self.fns[&f].name)),
+            Some(f) => format!("if let Some(v) = f.vector() {{ let restart = f.class() == rt::FaultClass::Fault; self.fn_{}(v, restart)?; self.cycles += self.fault_cycles(v); self.last_fault = Some(f); return Ok(()); }}", ident(&self.fns[&f].name)),
             None => String::new(),
         };
         let _ = write!(
@@ -2065,13 +2089,13 @@ impl<'a> Gen<'a> {
         );
         let boundary = match istream.boundary {
             Some(b) => format!(
-                "        // The isa's boundary fn may take an interrupt in place of the\n        // next instruction (and wakes a halted processor when it does).\n        match self.fn_{}() {{\n            Ok(true) => {{ self.halted = false; return Ok(()); }}\n            Ok(false) => {{}}\n            Err(f) => return self.finish(Err(f)),\n        }}\n",
+                "        // The isa's boundary fn may take an interrupt in place of the\n        // next instruction (and wakes a halted processor when it does).\n        match self.fn_{}() {{\n            Ok(true) => {{ self.halted = false; self.cycles = self.interrupt_cycles(); self.bus.retire(self.cycles); return Ok(()); }}\n            Ok(false) => {{}}\n            Err(f) => return self.finish(Err(f)),\n        }}\n",
                 ident(&self.fns[&b].name)
             ),
             None => String::new(),
         };
         s.push_str(&format!(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n{boundary}        if self.halted {{ return Ok(()); }}\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); self.exec(i) }}\n            Err(f) => Err(f),\n        }};\n        self.finish(r)\n    }}\n"
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); self.cycles = self.timing_of(&i) + self.prefix_cycles; self.exec(i) }}\n            Err(f) => Err(f),\n        }};\n        let r = self.finish(r);\n        self.bus.retire(self.cycles);\n        r\n    }}\n"
         ));
         let _ = write!(
             s,
@@ -2210,9 +2234,23 @@ impl<'a> Gen<'a> {
         }
         let ops = format!("{} {{ {} }}", Self::ops_struct_name(i), fields.join(", "));
         if i.prefix {
+            let cost = match &i.timing {
+                Some(t) => {
+                    let cx = Cx {
+                        locals: &i.timing_locals,
+                        fallible: true,
+                        recv: "self",
+                        ops: Some(i),
+                        comp: None,
+                        opt: false,
+                    };
+                    format!("self.prefix_cycles += ({}) as u32;\n", self.expr(&cx, t)?)
+                }
+                None => String::new(),
+            };
             let _ = writeln!(
                 out,
-                "self.exec_{}({ops})?;\ncontinue 'decode;",
+                "let ops = {ops};\n{cost}self.exec_{}(ops)?;\ncontinue 'decode;",
                 ident(&i.name)
             );
         } else {
@@ -2267,6 +2305,99 @@ impl<'a> Gen<'a> {
             s.push_str("            _ => {}\n");
         }
         s.push_str("        } Ok(m) })();\n        r.unwrap_or(0)\n    }\n");
+
+        // timing
+        s.push_str("    /// Execution cycles of `i` beyond its bus transfers (its timing entry, on the state\n    /// before it runs; 0 without one).\n    pub fn timing_of(&mut self, i: &Instr) -> u32 {\n        let r: Result<u32, Fault> = (|| Ok(match *i {\n");
+        let mut has = String::from("    /// Whether `i` has a timing entry.\n    pub fn has_timing(i: &Instr) -> bool {\n        match i {\n");
+        let mut feats = String::from("    /// For fitting timing: whether each memory-capable operand of `i` is in memory.\n    pub fn timing_features(&mut self, i: &Instr) -> Vec<(&'static str, bool)> {\n        match *i {\n");
+        for i in &instrs {
+            let text = match &i.timing {
+                Some(t) => {
+                    let cx = Cx {
+                        locals: &i.timing_locals,
+                        fallible: true,
+                        recv: "self",
+                        ops: Some(i),
+                        comp: None,
+                        opt: false,
+                    };
+                    format!("({}) as u32", self.expr(&cx, t)?)
+                }
+                None => "0".into(),
+            };
+            let _ = writeln!(s, "            Instr::{}(ops) => {text},", ident(&i.name));
+            let _ = writeln!(
+                has,
+                "            Instr::{}(_) => {},",
+                ident(&i.name),
+                i.timing.is_some()
+            );
+            let mut fs = Vec::new();
+            for b in &i.operands {
+                let kind = self.kinds[&b.kind];
+                if kind.rules.iter().any(|r| r.kind == hir::RuleKind::IsMem) {
+                    fs.push(format!(
+                        "({:?}, self.kind_{}_is_mem(ops.{}).unwrap_or(false))",
+                        b.name,
+                        ident(&kind.name),
+                        ident(&b.name)
+                    ));
+                }
+            }
+            let _ = writeln!(
+                feats,
+                "            Instr::{}(ops) => vec![{}],",
+                ident(&i.name),
+                fs.join(", ")
+            );
+        }
+        if instrs.is_empty() {
+            s.push_str("            _ => 0,\n");
+            has.push_str("            _ => false,\n");
+            feats.push_str("            _ => Vec::new(),\n");
+        }
+        s.push_str("        }))();\n        r.unwrap_or(0)\n    }\n");
+        has.push_str("        }\n    }\n");
+        feats.push_str("        }\n    }\n");
+        s.push_str(&has);
+        s.push_str(&feats);
+        for (name, t) in [
+            ("fault_cycles", &self.isa.fault_cycles),
+            ("interrupt_cycles", &self.isa.interrupt_cycles),
+        ] {
+            let mut params = String::new();
+            if name == "fault_cycles" {
+                params = match t {
+                    Some(t) if !t.params.is_empty() => {
+                        let cx = Cx {
+                            locals: &t.locals,
+                            fallible: true,
+                            recv: "self",
+                            ops: None,
+                            comp: None,
+                            opt: false,
+                        };
+                        format!("{}: u8", self.local_name(&cx, t.params[0]))
+                    }
+                    _ => "_vector: u8".into(),
+                };
+            }
+            let body = match t {
+                Some(t) => {
+                    let cx = Cx {
+                        locals: &t.locals,
+                        fallible: true,
+                        recv: "self",
+                        ops: None,
+                        comp: None,
+                        opt: false,
+                    };
+                    format!("let r: Result<u32, Fault> = (|| Ok(({}) as u32))();\n        r.unwrap_or(0)", self.expr(&cx, &t.expr)?)
+                }
+                None => "0".into(),
+            };
+            let _ = write!(s, "    /// Timing table: `{}`.\n    pub fn {name}(&mut self, {params}) -> u32 {{\n        {body}\n    }}\n", name.trim_end_matches("_cycles"));
+        }
 
         // mnemonic
         s.push_str("    pub fn mnemonic(&mut self, i: &Instr) -> &'static str {\n        let r: Result<&'static str, Fault> = (|| Ok(match *i {\n");
@@ -2465,6 +2596,7 @@ impl<'a> Gen<'a> {
         let Some(v) = vs.first() else { return Ok(()) };
         let isa_name = ident(&self.isa.name);
         let mem = ident(&self.spaces[&v.memory].name);
+        let harness = v.harness_cycles;
         let undefined = match self.isa.istream.as_ref().and_then(|s| s.undefined) {
             Some(f) => format!("Fault::{}", ident(&self.faults[&f].name)),
             None => {
@@ -2716,6 +2848,165 @@ pub mod vectors {{
         all.failed == 0
     }}
 
+    /// Cycles of each trace that belong to the capture rig.
+    pub const HARNESS_CYCLES: u32 = {harness};
+
+    /// One vector's timing: the table's prediction against the trace.
+    #[derive(Debug, Clone)]
+    pub struct TimingSample {{
+        pub name: &'static str,
+        pub features: Vec<(&'static str, bool)>,
+        /// Execution cycles the timing table gives, summed over the steps.
+        pub predicted: i64,
+        /// The trace's cycles outside bus cycles, less the rig's.
+        pub measured: i64,
+        pub fault: bool,
+        /// The vector of a delivered fault.
+        pub fault_vector: Option<u8>,
+        /// Every step had a timing entry.
+        pub timed: bool,
+    }}
+
+    /// Run a vector and compare its timing, or `None` without a trace or
+    /// when it does not run cleanly to the rig's HALT.
+    pub fn timing_sample(t: &MooTest) -> Option<TimingSample> {{
+        let c = t.timing?;
+        let mut m = <{isa_name}>::new();
+        load(&mut m, &t.initial).ok()?;
+        let mut pre = <{isa_name}>::new();
+        let _ = load(&mut pre, &t.initial);
+        pre.reset_latches();
+        let mut first: Option<Instr> = None;
+        let mut started = false;
+        let mut predicted: i64 = 0;
+        let mut fault = false;
+        let mut fault_vector: Option<u8> = None;
+        let mut timed = true;
+        for _ in 0..4096 {{
+            if m.halted {{ break; }}
+            if m.step().is_err() {{ return None; }}
+            // The rig's HALT is the harness's, not the instruction's.
+            if m.halted && started {{ break; }}
+            if !started {{
+                started = true;
+                first = m.last;
+                // Faulted before an instruction decoded (an undefined
+                // opcode): only the delivery is timed.
+                if first.is_none() {{
+                    return Some(TimingSample {{ name: "(fault while decoding)", features: Vec::new(), predicted: m.cycles as i64, measured: c.execution(HARNESS_CYCLES), fault: true, fault_vector: m.last_fault.as_ref().and_then(|f| f.vector()), timed: true }});
+                }}
+            }}
+            if let Some(i) = &m.last {{ if !<{isa_name}>::has_timing(i) {{ timed = false; }} }}
+            fault |= m.last_fault.is_some();
+            if let Some(f) = &m.last_fault {{ fault_vector = f.vector(); }}
+            predicted += m.cycles as i64;
+        }}
+        if !m.halted {{ return None; }}
+        let i = first?;
+        Some(TimingSample {{
+            name: <{isa_name}>::instr_name(&i),
+            features: pre.timing_features(&i),
+            predicted,
+            measured: c.execution(HARNESS_CYCLES),
+            fault,
+            fault_vector,
+            timed,
+        }})
+    }}
+
+    #[derive(Default, Debug, Clone)]
+    struct TimingTally {{ n: usize, exact: usize, near: usize, abs: i64 }}
+    impl TimingTally {{
+        fn add(&mut self, s: &TimingSample) {{
+            let e = (s.predicted - s.measured).abs();
+            self.n += 1;
+            if e == 0 {{ self.exact += 1; }}
+            if e <= 1 {{ self.near += 1; }}
+            self.abs += e;
+        }}
+        fn line(&self) -> String {{
+            if self.n == 0 {{ return "no timed vectors".into(); }}
+            format!("{{:>6}} vectors  {{:5.1}}% exact  {{:5.1}}% within 1  mean error {{:.2}}",
+                self.n, 100.0 * self.exact as f64 / self.n as f64, 100.0 * self.near as f64 / self.n as f64, self.abs as f64 / self.n as f64)
+        }}
+    }}
+
+    /// The timing report (`--timing`), or suggested table entries (`--fit`).
+    pub fn run_timing(dir: Option<&str>, filter: &[String], fit: bool, quiet: bool) -> bool {{
+        let pattern = match dir {{
+            Some(d) => format!("{{}}/{{}}", d.trim_end_matches('/'), std::path::Path::new(GLOB).file_name().and_then(|f| f.to_str()).unwrap_or("*")),
+            None => GLOB.to_string(),
+        }};
+        let files = rt::vectors::glob(&pattern);
+        if files.is_empty() {{ eprintln!("no vector files match {{pattern}}"); return false; }}
+        let revoked = rt::vectors::revocations(std::path::Path::new(&pattern).parent().unwrap_or(std::path::Path::new(".")));
+        let mut all = TimingTally::default();
+        let mut by_name: std::collections::BTreeMap<&'static str, TimingTally> = Default::default();
+        let mut untimed: std::collections::BTreeMap<&'static str, usize> = Default::default();
+        // For fitting: per (instruction, features) the measured cycles of
+        // vectors that did not fault; per instruction the excess of
+        // faulting ones over the table.
+        let mut hist: std::collections::BTreeMap<(&'static str, String), std::collections::BTreeMap<i64, usize>> = Default::default();
+        let mut fault_excess: std::collections::BTreeMap<Option<u8>, std::collections::BTreeMap<i64, usize>> = Default::default();
+        for path in files {{
+            let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
+            if !filter.is_empty() && !filter.iter().any(|p| fname.starts_with(p.as_str())) {{ continue; }}
+            let tests = match rt::vectors::read_moo(&path) {{ Ok(t) => t, Err(e) => {{ eprintln!("{{e}}"); continue; }} }};
+            let mut file = TimingTally::default();
+            for t in &tests {{
+                if t.hash.as_ref().is_some_and(|h| revoked.contains(h)) {{ continue; }}
+                let Some(s) = timing_sample(t) else {{ continue }};
+                if !s.timed && !fit {{ *untimed.entry(s.name).or_default() += 1; continue; }}
+                if fit {{
+                    if s.fault {{
+                        *fault_excess.entry(s.fault_vector).or_default().entry(s.measured - s.predicted).or_default() += 1;
+                    }} else {{
+                        let key = s.features.iter().map(|(n, m)| format!("{{n}}.is_mem={{m}}")).collect::<Vec<_>>().join(" ");
+                        *hist.entry((s.name, key)).or_default().entry(s.measured).or_default() += 1;
+                    }}
+                }}
+                file.add(&s);
+                by_name.entry(s.name).or_default().add(&s);
+                all.add(&s);
+            }}
+            if !quiet && !fit {{ println!("{{fname:<14}} {{}}", file.line()); }}
+        }}
+        if fit {{
+            println!("// Suggested timing entries: the most common measured cycles per form,");
+            println!("// with the share of vectors it explains. Below 80% the cycles depend on");
+            println!("// data or on alignment the table cannot see; write those by hand.");
+            let mut last = "";
+            for ((name, key), h) in &hist {{
+                let n: usize = h.values().sum();
+                let (mode, count) = h.iter().max_by_key(|(_, c)| **c).map(|(v, c)| (*v, *c)).unwrap();
+                let share = 100.0 * count as f64 / n as f64;
+                if *name != last {{ println!("// {{name}}"); last = name; }}
+                let flag = if share < 80.0 {{ "  <- data-dependent?" }} else {{ "" }};
+                let spread: Vec<String> = h.iter().map(|(v, c)| format!("{{v}}x{{c}}")).collect();
+                println!("//   [{{key}}] {{mode}} ({{share:.0}}% of {{n}}){{flag}}   {{}}", spread.join(" "));
+            }}
+            for (v, h) in &fault_excess {{
+                let (mode, count) = h.iter().max_by_key(|(_, c)| **c).map(|(v, c)| (*v, *c)).unwrap();
+                let n: usize = h.values().sum();
+                let spread: Vec<String> = h.iter().map(|(v, c)| format!("{{v}}x{{c}}")).collect();
+                println!("// fault {{v:?}}: exceeds the table by {{mode}} most often ({{:.0}}% of {{n}})   {{}}", 100.0 * count as f64 / n as f64, spread.join(" "));
+            }}
+            return true;
+        }}
+        let mut worst: Vec<(&&'static str, &TimingTally)> = by_name.iter().filter(|(_, t)| t.n > 0).collect();
+        worst.sort_by(|a, b| (b.1.abs as f64 / b.1.n as f64).partial_cmp(&(a.1.abs as f64 / a.1.n as f64)).unwrap());
+        if !worst.is_empty() && worst[0].1.abs > 0 {{
+            println!("worst instructions:");
+            for (n, t) in worst.iter().take(12) {{ if t.abs > 0 {{ println!("  {{n:<22}} {{}}", t.line()); }} }}
+        }}
+        if !untimed.is_empty() {{
+            let names: Vec<String> = untimed.iter().map(|(n, c)| format!("{{n}} ({{c}})")).collect();
+            println!("no timing entry: {{}}", names.join(", "));
+        }}
+        println!("timing: {{}}", all.line());
+        true
+    }}
+
     /// Command-line entry used by the generated `vectors` binary.
     pub fn main_entry() -> bool {{
         let args: Vec<String> = std::env::args().skip(1).collect();
@@ -2723,6 +3014,8 @@ pub mod vectors {{
         let mut filter = Vec::new();
         let mut max_failures = 20usize;
         let mut quiet = false;
+        let mut timing = false;
+        let mut fit = false;
         let mut i = 0;
         while i < args.len() {{
             match args[i].as_str() {{
@@ -2730,10 +3023,13 @@ pub mod vectors {{
                 "--filter" => {{ if let Some(f) = args.get(i + 1) {{ filter.extend(f.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string())); }} i += 1; }}
                 "--max-failures" => {{ max_failures = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(20); i += 1; }}
                 "--quiet" => quiet = true,
+                "--timing" => timing = true,
+                "--fit" => fit = true,
                 other => {{ eprintln!("unknown argument {{other}}"); return false; }}
             }}
             i += 1;
         }}
+        if timing || fit {{ return run_timing(dir.as_deref(), &filter, fit, quiet); }}
         run(dir.as_deref(), &filter, max_failures, quiet)
     }}
 }}

@@ -71,6 +71,32 @@ impl Parser {
                         span: start.to(self.prev_span()),
                     }))
                 }
+                "timing" if self.nth_is_word(1, "on") => {
+                    self.advance();
+                    self.expect_word("on")?;
+                    let target = self.parse_path_dotted()?;
+                    self.expect_punct(Punct::LBrace)?;
+                    let entries = self.parse_items_until_rbrace(|p| {
+                        let docs = p.take_docs();
+                        let name = p.expect_ident()?;
+                        p.expect_punct(Punct::FatArrow)?;
+                        let value = p.parse_expr()?;
+                        p.expect_semi()?;
+                        let span = name.span.to(p.prev_span());
+                        Ok(TimingEntry {
+                            docs,
+                            name,
+                            value,
+                            span,
+                        })
+                    })?;
+                    Ok(Decl::Timing(TimingDecl {
+                        docs,
+                        target,
+                        entries,
+                        span: start.to(self.prev_span()),
+                    }))
+                }
                 "conformance" => {
                     self.advance();
                     let target = self.parse_path_dotted()?;
@@ -1185,6 +1211,14 @@ impl Parser {
                     span: start.to(self.prev_span()),
                 })
             }
+            "harness_cycles" => {
+                let value = self.parse_expr()?;
+                self.expect_semi()?;
+                Ok(VectorsItem::HarnessCycles {
+                    value,
+                    span: start.to(self.prev_span()),
+                })
+            }
             "reg" => {
                 let name = self.expect_ident()?;
                 if self.eat_punct(Punct::Eq) {
@@ -1215,7 +1249,7 @@ impl Parser {
             other => Err(self.error(
                 "E0107",
                 key.span,
-                format!("unknown `vectors` item `{other}`; expected `format`, `memory`, `open` or `reg`"),
+                format!("unknown `vectors` item `{other}`; expected `format`, `memory`, `open`, `harness_cycles` or `reg`"),
             )),
         }
     }

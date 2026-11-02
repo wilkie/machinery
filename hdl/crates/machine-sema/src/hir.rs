@@ -541,6 +541,19 @@ pub struct IsaInfo {
     pub instructions: Vec<Instruction>,
     pub istream: Option<Istream>,
     pub latches: Vec<Latch>,
+    /// Cycles to deliver a fault, and to take an interrupt at an
+    /// instruction boundary (`fault =>`, `interrupt =>` in a timing table).
+    pub fault_cycles: Option<TimingExpr>,
+    pub interrupt_cycles: Option<TimingExpr>,
+}
+
+/// A timing expression with its locals.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimingExpr {
+    pub locals: Vec<Local>,
+    /// `vector: u8` for `fault`.
+    pub params: Vec<LocalId>,
+    pub expr: Expr,
 }
 
 /// Per-instruction state, reset to `init` at every instruction boundary.
@@ -578,6 +591,8 @@ pub struct VectorsInfo {
     /// value every read returns)`.
     pub open: Vec<(DefId, i128)>,
     pub regs: Vec<VectorReg>,
+    /// Cycles of each trace that belong to the capture rig (`harness_cycles`).
+    pub harness_cycles: u32,
 }
 
 /// Where instruction bytes come from.
@@ -740,6 +755,12 @@ pub enum HandlerKind {
     },
     /// A processor's binding of an isa space write of `bits`.
     SpaceWrite {
+        space: DefId,
+        bits: u32,
+    },
+    /// An instruction-stream fetch from the istream's space (a code bus
+    /// cycle); without one, fetches use the read handler.
+    SpaceFetch {
         space: DefId,
         bits: u32,
     },

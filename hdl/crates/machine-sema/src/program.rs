@@ -32,6 +32,7 @@ pub enum ItemKind {
     System,
     Test,
     Vectors,
+    Timing,
     Conformance,
     // Nested in an `isa`:
     /// `mode Name : u1 { ... }`: an enum that is also the isa's `mode`
@@ -64,6 +65,7 @@ impl ItemKind {
             ItemKind::System => "system",
             ItemKind::Test => "test",
             ItemKind::Vectors => "vectors",
+            ItemKind::Timing => "timing",
             ItemKind::Conformance => "conformance",
             ItemKind::Mode => "mode",
             ItemKind::Space => "address space",
@@ -253,6 +255,11 @@ impl Program {
                         format!("{:?}", d.glob.value),
                         ItemKind::Vectors,
                         d.glob.span,
+                    ),
+                    Decl::Timing(d) => (
+                        format!("timing on {}", d.target.dotted()),
+                        ItemKind::Timing,
+                        d.target.span,
                     ),
                     Decl::Conformance(d) => {
                         (d.target.dotted(), ItemKind::Conformance, d.target.span)

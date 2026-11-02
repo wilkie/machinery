@@ -16,7 +16,7 @@ Usage:
   machine build --isa <Name> --out <dir> <file.machine>...
   machine build --system <Name> [--profile <name>] --out <dir> <file.machine>...
   machine test --isa <Name> <file.machine>...
-  machine vectors --isa <Name> [--filter 00,80.] [--max-failures N] [--quiet] <file.machine>...
+  machine vectors --isa <Name> [--filter 00,80.] [--max-failures N] [--quiet] [--timing | --fit] <file.machine>...
   machine dump-ast <file.machine>
 
 Commands:
@@ -29,7 +29,9 @@ Commands:
   test       Check, generate the interpreter into target/machine/<isa>, and run
              its tests (the `test ... on <Isa>` blocks) with cargo.
   vectors    Check, generate, and run the isa's `vectors` (hardware-captured
-             test vectors) through the interpreter in release mode.
+             test vectors) through the interpreter in release mode. With
+             --timing, compare the isa's timing table with the cycle traces;
+             with --fit, suggest timing entries from them.
   dump-ast   Parse one file and print its syntax tree (debug form).
 
 Options:
@@ -260,7 +262,7 @@ fn build(args: &[String], run_tests: bool) -> ExitCode {
             }
             i += 2;
             continue;
-        } else if vectors_mode && a == "--quiet" {
+        } else if vectors_mode && (a == "--quiet" || a == "--timing" || a == "--fit") {
             passthrough.push(a.clone());
         } else if a.starts_with('-') {
             eprintln!("error: unknown option `{a}`");

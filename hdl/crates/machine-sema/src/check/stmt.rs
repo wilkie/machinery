@@ -13,6 +13,9 @@ use crate::ty::Ty;
 
 impl Checker<'_> {
     pub fn check_block(&mut self, cx: &mut FnCtx, b: &ast::Block) -> Block {
+        // The expected type of this block's value, if it is in value
+        // position; nested blocks do not inherit it.
+        let hint = cx.tail_hint.take();
         cx.push_scope();
         let mut stmts = Vec::new();
         let mut diverged_at: Option<Span> = None;
@@ -26,7 +29,13 @@ impl Checker<'_> {
                 );
                 diverged_at = None; // report once per block
             }
-            let hs = self.check_stmt(cx, s, i + 1 == n);
+            let hs = match (&s.kind, &hint) {
+                (A::Expr(e), Some(t)) if i + 1 == n => Stmt {
+                    kind: H::Expr(self.check_expr(cx, e, Some(t))),
+                    span: s.span,
+                },
+                _ => self.check_stmt(cx, s, i + 1 == n),
+            };
             if stmt_diverges(&hs) {
                 diverged_at = Some(hs.span);
             }

@@ -163,6 +163,8 @@ impl Checker<'_> {
             instructions,
             istream,
             latches,
+            fault_cycles: None,
+            interrupt_cycles: None,
         });
     }
 
@@ -1156,7 +1158,11 @@ impl Checker<'_> {
                     hir::ArmBody::Expr(he)
                 }
                 ast::ArmBody::Block(b) => {
-                    let (mut hb, bty) = self.check_block_expr(&mut cx, b);
+                    let expected = match kind {
+                        RuleKind::Write => None,
+                        _ => ret.as_ref(),
+                    };
+                    let (mut hb, bty) = self.check_block_expr(&mut cx, b, expected);
                     if let Some(want) = &ret {
                         if *kind != RuleKind::Write
                             && bty != *want
@@ -1749,6 +1755,7 @@ impl Checker<'_> {
                             continue;
                         };
                         let mut cx = ops_cx(&sig);
+                        cx.in_timing = true;
                         let e = self.check_expr(&mut cx, v, Some(&Ty::UInt(32)));
                         timing_locals = cx.locals;
                         timing = Some(e);
@@ -2165,6 +2172,7 @@ impl Checker<'_> {
         let mut memory = None;
         let mut regs: Vec<hir::VectorReg> = Vec::new();
         let mut open: Vec<(DefId, i128)> = Vec::new();
+        let mut harness_cycles: u32 = 0;
         const MOO_REGS: &[&str] = &[
             "ax", "bx", "cx", "dx", "cs", "ss", "ds", "es", "sp", "bp", "si", "di", "ip", "flags",
         ];
@@ -2181,6 +2189,18 @@ impl Checker<'_> {
                         ok = false;
                     }
                     format = Some(f.name.clone());
+                }
+                ast::VectorsItem::HarnessCycles { value, span } => {
+                    match self.eval_const(scope, &HashMap::new(), value) {
+                        Some(ConstVal::Int(v)) if (0..=u32::MAX as i128).contains(&v) => {
+                            harness_cycles = v as u32
+                        }
+                        Some(_) => {
+                            self.error(module, "E1049", *span, "`harness_cycles` is a cycle count");
+                            ok = false;
+                        }
+                        None => ok = false,
+                    }
                 }
                 ast::VectorsItem::Open { space, value, span } => {
                     let Some(sp) = self
@@ -2341,6 +2361,7 @@ impl Checker<'_> {
             memory,
             open,
             regs,
+            harness_cycles,
         })
     }
 
@@ -2485,5 +2506,105 @@ fn place_local(e: &hir::Expr) -> Option<hir::LocalId> {
         hir::ExprKind::Local(id) => Some(*id),
         hir::ExprKind::Field(b, _) | hir::ExprKind::Index(b, _) => place_local(b),
         _ => None,
+    }
+}
+
+impl Checker<'_> {
+    /// `timing on Isa { Name => cycles; ... }`: each entry is the execution
+    /// cycles of an instruction (or prefix) beyond its bus transfers, in the
+    /// context of its flag conditions (operands, registers and latches on
+    /// the state before it runs); `fault` and `interrupt` are delivery.
+    pub(super) fn check_timing(&mut self, id: DefId) {
+        let module = self.prog.item(id).module;
+        let ast::Decl::Timing(d) = self.prog.decl(id) else {
+            unreachable!()
+        };
+        let isa = match d.target.segments.as_slice() {
+            [one] => self
+                .prog
+                .lookup(module, &one.name)
+                .filter(|i| self.prog.item(*i).kind == ItemKind::Isa),
+            _ => None,
+        };
+        let Some(isa) = isa else {
+            self.error(
+                module,
+                "E1055",
+                d.target.span,
+                format!(
+                    "`{}` is not an isa; a timing table belongs to one",
+                    d.target.dotted()
+                ),
+            );
+            return;
+        };
+        let Some(ii) = self.isas.iter().position(|i| i.def == isa) else {
+            return;
+        };
+        let scope = Scope {
+            module,
+            isa: Some(isa),
+            bus: None,
+        };
+        let mut seen: Vec<String> = Vec::new();
+        for e in &d.entries {
+            if seen.contains(&e.name.name) {
+                self.error(
+                    module,
+                    "E1055",
+                    e.name.span,
+                    format!("`{}` already has an entry", e.name.name),
+                );
+                continue;
+            }
+            seen.push(e.name.name.clone());
+            if e.name.name == "fault" || e.name.name == "interrupt" {
+                let mut cx = FnCtx::new(scope, HashMap::new(), None);
+                cx.in_timing = true;
+                // A fault's cost may depend on which fault it is.
+                let params = if e.name.name == "fault" {
+                    vec![cx.declare("vector", Ty::UInt(8), e.name.span)]
+                } else {
+                    Vec::new()
+                };
+                let expr = self.check_expr(&mut cx, &e.value, Some(&Ty::UInt(32)));
+                let t = Some(hir::TimingExpr {
+                    locals: cx.locals,
+                    params,
+                    expr,
+                });
+                if e.name.name == "fault" {
+                    self.isas[ii].fault_cycles = t;
+                } else {
+                    self.isas[ii].interrupt_cycles = t;
+                }
+                continue;
+            }
+            let Some(j) = self.isas[ii]
+                .instructions
+                .iter()
+                .position(|i| i.name == e.name.name)
+            else {
+                let msg = format!("isa `{}` has no instruction `{}` (entries are instructions, prefixes, `fault` and `interrupt`)", d.target.dotted(), e.name.name);
+                self.error(module, "E1055", e.name.span, msg);
+                continue;
+            };
+            if self.isas[ii].instructions[j].timing.is_some() {
+                let msg = format!("`{}` has timing in its declaration already", e.name.name);
+                self.error(module, "E1055", e.name.span, msg);
+                continue;
+            }
+            let def = self.isas[ii].instructions[j].def;
+            let Some(sig) = self.instr_sigs.get(&def).cloned() else {
+                continue;
+            };
+            let mut cx = FnCtx::new(scope, HashMap::new(), None);
+            cx.operands = sig.operands.clone();
+            cx.in_timing = true;
+            let expr = self.check_expr(&mut cx, &e.value, Some(&Ty::UInt(32)));
+            let ins = &mut self.isas[ii].instructions[j];
+            ins.timing_locals = cx.locals;
+            ins.timing = Some(expr);
+        }
     }
 }

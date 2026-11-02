@@ -194,6 +194,12 @@ Other expression forms:
 - `if c { a } else { b }` as an expression, both branches required.
 - Bundle literal, array literal `[0_u8; 6]` or `[a, b, c]`.
 
+A block in value position (the branches of an `if` expression, a `match`
+arm, a `{ ... }` expression) has the value of its final expression, and a
+final `if`/`else` or `match` statement counts as one: `{ if a { 0 } else
+{ 1 } }`. The expected type flows into that final expression, so bare
+literals there take their width from context.
+
 There is no operator overloading and no user-defined infix.
 
 ## 6. Statements
@@ -583,6 +589,13 @@ access of a width without a handler is composed from cells in the space's
 byte order. This is where bus sizing and alignment live, and with them
 the bus time an access costs.
 
+`on <space>.fetch_uN(addr) -> uN` binds instruction-stream reads of the
+istream's space (code bus cycles; the 286's COD status) separately from
+data reads; without one they use the read handler. The model build times
+fetches separately, which is what lets execution overlap them; the i286
+board's processor fetches aligned words into a one-word buffer, as its bus
+unit does.
+
 The model also supplies every `extern fn` of the isa with a handler of the
 same name and signature (E1041), typically from signals and transactions,
 and may factor its handlers through model fns (section 8.3a):
@@ -914,6 +927,8 @@ instruction Add_rm8_r8 {
 - `timing { ... }` is optional. Default: derived (section 14). When given,
   it is a cycle count expression over operand shapes, e.g.
   `timing { cycles: if dst.is_mem { 7 } else { 2 } }`, and it overrides.
+  It may instead come from a timing table (section 11.2b), usually in a
+  file of its own; giving both is an error (E1055).
 - `implements` links to the rtl routine for differential testing and
   derivation. Optional; a 386 model may have an `isa` and no rtl at all.
 - `mode` restrictions: `allowed_in [Mode::Protected]` and privilege
@@ -944,6 +959,49 @@ Prefixes communicate with instructions only through latches.
 
 `halt;` in isa code stops the processor: the interpreter's `step` does
 nothing until it is restarted (interrupt delivery is not yet described).
+
+### 11.2b Timing tables
+
+```
+timing on I286 {
+    Mul_rm16 => if src.is_mem { 24 } else { 22 };
+    Shift_rm16_cl => if dst.is_mem { 5 + (CL & 0x1F) as u32 } else { 6 + (CL & 0x1F) as u32 };
+    Jcc => if condition(c) { 4 } else { 5 };
+    Stosb => if !repeating() { 1 } else if restarted() { 1 } else if CX == 0 { 7 } else { 7 };
+    fault => match vector { 0 => 8, 5 => 5, 6 => 5, 13 => 20, _ => 9 };
+    interrupt => 9;
+}
+```
+
+An entry is the instruction's **execution cycles beyond its bus
+transfers**: the cycles its bus cycles do not account for. It is
+evaluated in the context of the instruction's flag conditions: its
+operands (shapes and values), registers and latches on the state before
+it runs, and the isa's fns. `restarted()` is true when the step starts
+where the previous one did, which is how a repeated string instruction's
+later iterations are told from its first. An entry for a prefix is added
+for each prefix byte decoded. `fault` is added when a fault is delivered,
+with the fault's `vector` in scope; `interrupt` is the cost of taking an
+interrupt at an instruction boundary. An instruction without an entry
+costs 0 and is reported by the timing comparison.
+
+The interpreter computes a step's cycles and hands them to the bus
+(`Bus::retire`); the plain-memory bus ignores them. The model build charges
+an instruction its data transfers plus the larger of its code fetches and
+its execution cycles: execution overlaps prefetching, so an instruction
+whose execution is shorter than its fetches costs its fetches (section 12).
+
+The table is meant to be **measured**, not typed in from a datasheet.
+For the i286 it comes from the SingleStepTests cycle traces
+(`targets/i286/timing.machine`): `machine vectors --fit` suggests an entry
+per instruction form from the traces (the most common value, with the
+share it explains), the author writes the data-dependent entries
+(counts, REP iterations, taken branches) from the same data, and
+`machine vectors --timing` compares every vector with the table. A trace
+there starts with an empty prefetch queue, so the memory forms vary by a
+cycle or two around their entry with how operand transfers overlap the
+refill; modelling the queue (cycle-accurate bus timing, tier 2) would
+remove that, and is the processor model's business, not the table's.
 
 ### 11.3 Operand kinds and `fetch`
 
@@ -1156,7 +1214,13 @@ Built into the language and the compiler:
    ```
    `open io = 0xFF;` declares a space on which nothing answers in the test
    environment (reads return the value, writes are discarded); it describes
-   the rig, not the processor.
+   the rig, not the processor. `harness_cycles 1;` is how many cycles of
+   each captured cycle trace belong to the rig (its start and end) rather
+   than to the instruction. With a trace, a vector's measured execution
+   cycles are its cycles not spent in bus cycles (two clocks each on the
+   286), less the harness's; `machine vectors --timing` compares them with
+   the timing table and reports exact and within-one-cycle shares per file
+   and the worst instructions, and `--fit` suggests table entries.
    The generated runner loads the initial state, steps until `halt`,
    compares every mapped register and every RAM byte the vector mentions
    (registers it omits must be unchanged), masks the executed instruction's
@@ -1184,7 +1248,7 @@ Built into the language and the compiler:
 |---|---|---|
 | Fast interpreter | `isa` | emulator |
 | Decode tables, lengths, operand shapes | `isa.encoding`, cross-checked with routine `fetch` sequences | both, assembler, disassembler |
-| Instruction cycle counts | symbolic execution of the `implements` routine (count `cycle`s, sum bus transaction base costs; `wait` becomes a runtime bus cost), or **measurement** of the rtl over the vector corpus at build time | emulator timing tables |
+| Instruction cycle counts | **measurement** of hardware cycle traces into a timing table (section 11.2b; done for the i286), symbolic execution of the `implements` routine (count `cycle`s, sum bus transaction base costs; `wait` becomes a runtime bus cost), or measurement of the rtl over the vector corpus | emulator timing tables |
 | Transaction view of a bus | `bus` wire protocol | model ports |
 | Protocol adapters | `bus` + a component's `model` handlers | accurate build |
 | Address decoders | `system` ranges | both |
@@ -1230,8 +1294,12 @@ with stable error codes, so agents and editors can act on them.
    to rely on it.
 4. **Register write-conflict policy**: last-wins with warning (proposed) vs
    hard error.
-5. **Timing derivation scope**: which routine shapes are symbolically
-   derivable vs measured. Decide after the 286 corpus is ported.
+5. **Timing derivation scope**: for the 286, timing is measured from the
+   hardware traces (section 11.2b): 73% of vectors match the table exactly
+   and 94% within a cycle. Open: whether the prefetch queue (tier 2) is
+   modelled in the processor model, which would make the bus sequence
+   itself comparable with the traces, and what that leaves for the rtl
+   level to add.
 6. **Memory initialisation from files** for ROMs: `mem bios: [u8; 0x10000] { init: file("bios.bin") }` is the obvious form; question is whether ROM contents are part of the description or of the system build. For now the generated system's model memories are public, and the embedding program fills them.
 7. **Metastability / async inputs**: proposal is to model none of it.
 8. **Name of the language.** "Machine" with `.machine` files, as the

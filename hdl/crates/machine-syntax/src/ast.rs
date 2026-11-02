@@ -616,6 +616,7 @@ pub enum Decl {
     System(SystemDecl),
     Test(TestDecl),
     Vectors(VectorsDecl),
+    Timing(TimingDecl),
     Conformance(ConformanceDecl),
     /// Placeholder for an unparseable declaration.
     Error(Span),
@@ -636,6 +637,7 @@ impl Decl {
             Decl::System(d) => d.span,
             Decl::Test(d) => d.span,
             Decl::Vectors(d) => d.span,
+            Decl::Timing(d) => d.span,
             Decl::Conformance(d) => d.span,
             Decl::Error(s) => *s,
         }
@@ -655,6 +657,7 @@ impl Decl {
             Decl::System(_) => "system",
             Decl::Test(_) => "test",
             Decl::Vectors(_) => "vectors",
+            Decl::Timing(_) => "timing",
             Decl::Conformance(_) => "conformance",
             Decl::Error(_) => "<error>",
         }
@@ -1216,6 +1219,9 @@ pub enum VectorsItem {
         value: Expr,
         span: Span,
     },
+    /// `harness_cycles 1;`: cycles of each captured trace that belong to
+    /// the rig (its start and end), not to the instruction.
+    HarnessCycles { value: Expr, span: Span },
     /// `reg ax = AX;`: load assigns the place, compare reads it.
     Reg {
         name: Ident,
@@ -1229,6 +1235,26 @@ pub enum VectorsItem {
         read: Expr,
         span: Span,
     },
+}
+
+/// `timing on I286 { Name => cycles; ... }`: the execution cycles of each
+/// instruction beyond its bus transfers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimingDecl {
+    pub docs: Docs,
+    pub target: Path,
+    pub entries: Vec<TimingEntry>,
+    pub span: Span,
+}
+
+/// `Name => expr;`: an instruction (or prefix) of the isa, or `fault` /
+/// `interrupt` for delivery.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimingEntry {
+    pub docs: Docs,
+    pub name: Ident,
+    pub value: Expr,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq)]

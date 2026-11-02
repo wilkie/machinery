@@ -40,6 +40,63 @@ pub struct MooTest {
     pub exception: Option<u8>,
     /// Lower-case hex.
     pub hash: Option<String>,
+    /// The hardware's cycle trace, summarised, when the file has one.
+    pub timing: Option<CycleSummary>,
+}
+
+/// What timing needs from a captured cycle trace: every cycle from the jump
+/// that starts the test to the HALT that ends it, and how many of them
+/// belong to bus cycles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CycleSummary {
+    /// Cycles in the trace.
+    pub total: u32,
+    /// Code-fetch bus cycles (each one starts with ALE).
+    pub code: u32,
+    /// Memory, I/O and interrupt-acknowledge bus cycles.
+    pub data: u32,
+}
+
+impl CycleSummary {
+    /// Clocks per bus cycle on the 286 with no wait states (Ts, Tc).
+    pub const BUS_CLOCKS: u32 = 2;
+
+    /// The cycles not spent in bus cycles, less `harness` (the fixed cost
+    /// of the test's start and end that no instruction owns): the
+    /// execution unit's time beyond what the bus did.
+    pub fn execution(&self, harness: u32) -> i64 {
+        self.total as i64 - (Self::BUS_CLOCKS * (self.code + self.data)) as i64 - harness as i64
+    }
+}
+
+/// One record of a `CYCL` chunk (the corpus tool's `<B I B B B B H B B B B>`):
+/// pins, address, segment, memory and I/O status, BHE, data, bus status,
+/// T-state, queue operation, queue byte.
+const CYCLE_RECORD: usize = 1 + 4 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1;
+
+fn decode_cycles(body: &[u8]) -> Result<CycleSummary, MooError> {
+    let mut r = Reader { buf: body, pos: 0 };
+    let n = r.u32()? as usize;
+    let mut s = CycleSummary {
+        total: n as u32,
+        ..CycleSummary::default()
+    };
+    for _ in 0..n {
+        let rec = r.bytes(CYCLE_RECORD)?;
+        let ale = rec[0] & 1 != 0;
+        let status = rec[11] & 0x0F;
+        if ale {
+            // The 286 status (COD/INTA, M/IO, S1, S0), as the corpus tool
+            // decodes it.
+            match status {
+                0x0D => s.code += 1,
+                // IRQA, MEMR, MEMW, IOR, IOW
+                0x00 | 0x05 | 0x06 | 0x09 | 0x0A => s.data += 1,
+                _ => {}
+            }
+        }
+    }
+    Ok(s)
 }
 
 #[derive(Debug)]
@@ -151,6 +208,7 @@ fn decode_test(body: &[u8]) -> Result<MooTest, MooError> {
             b"INIT" => t.initial = decode_state(chunk)?,
             b"FINA" => t.final_ = decode_state(chunk)?,
             b"EXCP" => t.exception = Some(c.u8()?),
+            b"CYCL" => t.timing = Some(decode_cycles(chunk)?),
             b"HASH" => t.hash = Some(chunk.iter().map(|b| format!("{b:02x}")).collect()),
             _ => {}
         }

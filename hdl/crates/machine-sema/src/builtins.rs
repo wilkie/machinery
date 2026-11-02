@@ -20,6 +20,10 @@ pub enum Builtin {
     Unreachable,
     /// `sync(x)`: cross-clock-domain read (rtl only; typed as identity).
     Sync,
+    /// `restarted() -> bool` in a timing expression: this step starts at the
+    /// address the previous one did (a repeated string instruction's later
+    /// iterations).
+    Restarted,
 }
 
 impl Builtin {
@@ -34,6 +38,7 @@ impl Builtin {
             "assert" => Builtin::Assert,
             "unreachable" => Builtin::Unreachable,
             "sync" => Builtin::Sync,
+            "restarted" => Builtin::Restarted,
             _ => return None,
         })
     }
@@ -49,6 +54,7 @@ impl Builtin {
             Builtin::Assert => "assert",
             Builtin::Unreachable => "unreachable",
             Builtin::Sync => "sync",
+            Builtin::Restarted => "restarted",
         }
     }
 }

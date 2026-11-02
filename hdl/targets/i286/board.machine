@@ -83,8 +83,10 @@ bus IrqLines {
 }
 
 /// The processor: the i286 isa, with its two address spaces bound to the
-/// local bus. Instruction fetch reads one byte per bus transfer (no
-/// prefetch queue yet).
+/// local bus. Instruction fetch reads aligned words into a one-word buffer,
+/// as the bus unit does; the queue's look-ahead is not modelled (tier 2).
+/// With the timing table, an instruction costs its data transfers plus the
+/// larger of its code fetches and its execution cycles.
 component Cpu286 {
     isa I286;
     ports {
@@ -93,7 +95,29 @@ component Cpu286 {
         in intr_line: bool;
     }
     model {
+        /// The code word last fetched, and whether it is still good.
+        state code: u16 = 0;
+        state code_addr: u24 = 0;
+        state code_valid: bool = false;
+
         on intr() -> bool { return intr_line; }
+
+        on mem.fetch_u8(addr: u24) -> u8 {
+            let w = addr & 0xFFFFFE;
+            if !code_valid || w != code_addr {
+                code = local.read(space: Space::Mem, addr: w, size: BusSize::Word).data;
+                code_addr = w;
+                code_valid = true;
+            }
+            return if addr[0] == 0 { code as u8 } else { (code >> 8) as u8 };
+        }
+
+        /// A store into the buffered word makes it stale.
+        fn wrote(addr: u24) {
+            if (addr & 0xFFFFFE) == code_addr || ((addr + 1) & 0xFFFFFE) == code_addr {
+                code_valid = false;
+            }
+        }
         on acknowledge() -> u8 { return local.inta().vector; }
 
         on mem.read_u8(addr: u24) -> u8 {
@@ -109,9 +133,11 @@ component Cpu286 {
             return concat(hi, lo);
         }
         on mem.write_u8(addr: u24, data: u8) {
+            wrote(addr);
             local.write(space: Space::Mem, addr: addr, size: BusSize::Byte, data: data as u16);
         }
         on mem.write_u16(addr: u24, data: u16) {
+            wrote(addr);
             if addr[0] == 0 {
                 local.write(space: Space::Mem, addr: addr, size: BusSize::Word, data: data);
             } else {

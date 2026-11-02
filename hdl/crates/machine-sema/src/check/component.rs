@@ -508,17 +508,19 @@ impl Checker<'_> {
                         && self.isa_space(cs.isa, &port.name).is_some() =>
                 {
                     let sp = self.isa_space(cs.isa, &port.name).unwrap();
+                    // 0 read, 1 write, 2 fetch (instruction stream).
                     let parsed = event
                         .name
                         .strip_prefix("read_u")
-                        .map(|b| (false, b))
-                        .or_else(|| event.name.strip_prefix("write_u").map(|b| (true, b)))
+                        .map(|b| (0, b))
+                        .or_else(|| event.name.strip_prefix("write_u").map(|b| (1, b)))
+                        .or_else(|| event.name.strip_prefix("fetch_u").map(|b| (2, b)))
                         .and_then(|(w, b)| b.parse::<u32>().ok().map(|b| (w, b)));
-                    let Some((write, bits)) =
+                    let Some((op, bits)) =
                         parsed.filter(|(_, b)| *b > 0 && *b <= 128 && b % sp.cell_bits == 0)
                     else {
                         let msg = format!(
-                            "a space handler is `on {0}.read_uN(addr) -> uN` or `on {0}.write_uN(addr, data: uN)`, N a multiple of the {1}-bit cell; found `{2}`",
+                            "a space handler is `on {0}.read_uN(addr) -> uN`, `on {0}.write_uN(addr, data: uN)` or `on {0}.fetch_uN(addr) -> uN`, N a multiple of the {1}-bit cell; found `{2}`",
                             sp.name, sp.cell_bits, event.name
                         );
                         self.error(module, "E1041", event.span, msg);
@@ -528,8 +530,27 @@ impl Checker<'_> {
                         self.error(module, "E1041", span, "a space handler takes no `@ clock`");
                         return None;
                     }
-                    if write {
-                        (
+                    let is_istream = self
+                        .isas
+                        .iter()
+                        .find(|i| Some(i.def) == cs.isa)
+                        .and_then(|i| i.istream.as_ref())
+                        .is_some_and(|ist| ist.space == sp.def);
+                    match op {
+                        2 if !is_istream => {
+                            let msg = format!("`{}` is not the instruction stream's space; only it is fetched from", sp.name);
+                            self.error(module, "E1041", event.span, msg);
+                            return None;
+                        }
+                        2 => (
+                            HandlerKind::SpaceFetch {
+                                space: sp.def,
+                                bits,
+                            },
+                            Some(vec![("addr".into(), sp.addr.clone())]),
+                            Ty::UInt(bits),
+                        ),
+                        1 => (
                             HandlerKind::SpaceWrite {
                                 space: sp.def,
                                 bits,
@@ -539,16 +560,15 @@ impl Checker<'_> {
                                 ("data".into(), Ty::UInt(bits)),
                             ]),
                             Ty::Unit,
-                        )
-                    } else {
-                        (
+                        ),
+                        _ => (
                             HandlerKind::SpaceRead {
                                 space: sp.def,
                                 bits,
                             },
                             Some(vec![("addr".into(), sp.addr.clone())]),
                             Ty::UInt(bits),
-                        )
+                        ),
                     }
                 }
                 [port, event] => {

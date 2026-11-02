@@ -1,0 +1,682 @@
+// The Intel 80386 instruction set architecture, real mode.
+//
+// The architectural level of the 386, checked against the SingleStepTests
+// 80386 hardware vectors (a 386EX; see `vectors` at the end):
+// `machine vectors --isa I386 targets/i286/alu.machine targets/i386/i386.machine`.
+//
+// Most instructions run at 16 or 32 bits, chosen by the operand-size
+// prefix (66), and address memory with 16- or 32-bit forms, chosen by the
+// address-size prefix (67); in real mode both default to 16. They are
+// written once, as families over the operand size (SPEC 11.2d); what
+// depends on the address size (the ModRM's tail, string pointers, the
+// count register) is decided where it is used.
+//
+// The arithmetic units are the 286's (`targets/i286/alu.machine`): they are
+// generic over the width.
+
+use alu::{AluOp, ArithFlags, Alu, AluFlags, Parity8};
+
+/// A segment register: the selector and its descriptor cache. Real mode
+/// loads the selector and the base (`selector << 4`); the limit stays
+/// 0xFFFF. `stack` marks SS, whose limit faults are #SS rather than #GP.
+bundle Segment { selector: u16, base: u32, limit: u32, rights: u8, stack: bool }
+
+/// A descriptor-table register (GDTR, IDTR).
+bundle TableReg { base: u32, limit: u16 }
+
+isa I386 {
+    space mem: addr u32 -> u8, little_endian;
+    space io:  addr u16 -> u8, little_endian;
+
+    register EAX: u32 { AX: u16 @ 0; AL: u8 @ 0; AH: u8 @ 8; }
+    register EBX: u32 { BX: u16 @ 0; BL: u8 @ 0; BH: u8 @ 8; }
+    register ECX: u32 { CX: u16 @ 0; CL: u8 @ 0; CH: u8 @ 8; }
+    register EDX: u32 { DX: u16 @ 0; DL: u8 @ 0; DH: u8 @ 8; }
+    register ESI: u32 { SI: u16 @ 0; }
+    register EDI: u32 { DI: u16 @ 0; }
+    register EBP: u32 { BP: u16 @ 0; }
+    register ESP: u32 { SP: u16 @ 0; }
+    register EIP: u32 { IP: u16 @ 0; }
+    /// Internal: set by an instruction after which no maskable interrupt is
+    /// taken (STI from IF clear, MOV SS, POP SS), cleared at the next boundary.
+    register INHIBIT: u1;
+    register CS: Segment;
+    register DS: Segment;
+    register ES: Segment;
+    register SS: Segment;
+    register FS: Segment;
+    register GS: Segment;
+    /// The reserved bits keep whatever they hold (the 386EX's read as set).
+    register EFLAGS: u32 {
+        FLAGS: u16 @ 0;
+        CF: u1 @ 0; PF: u1 @ 2; AF: u1 @ 4; ZF: u1 @ 6; SF: u1 @ 7;
+        TF: u1 @ 8; IF: u1 @ 9; DF: u1 @ 10; OF: u1 @ 11;
+        IOPL: u2 @ 12; NT: u1 @ 14; RF: u1 @ 16; VM: u1 @ 17;
+        view arith: ArithFlags { cf: CF, pf: PF, af: AF, zf: ZF, sf: SF, of: OF }
+    }
+    register CR0: u32 { PE: u1 @ 0; MP: u1 @ 1; EM: u1 @ 2; TS: u1 @ 3; ET: u1 @ 4; PG: u1 @ 31; }
+    register CR2: u32;
+    register CR3: u32;
+    register DR6: u32;
+    register DR7: u32;
+    register GDTR: TableReg;
+    register IDTR: TableReg;
+
+    /// Why memory is touched.
+    enum Access : u2 { Read, Write, Execute }
+
+    /// A segment-override prefix in effect for the current instruction.
+    enum SegOv : u3 { ES = 0, CS = 1, SS = 2, DS = 3, FS = 4, GS = 5, None = 6 }
+    latch seg_override: SegOv = SegOv::None;
+    /// The operand-size (66) and address-size (67) prefixes.
+    latch opsize: u1 = 0;
+    latch adsize: u1 = 0;
+    /// Bytes of the current instruction fetched so far.
+    latch fetched: u8 = 0;
+    /// Where the current instruction (its first prefix) starts.
+    latch start_ip: u32 = EIP;
+    /// A repeat prefix: F2 (REPNE) or F3 (REP/REPE).
+    enum Rep : u2 { None = 0, Ne = 1, E = 2 }
+    latch rep: Rep = Rep::None;
+    /// A LOCK prefix: only some read-modify-write forms with a memory
+    /// destination accept it (their `lock` item); before any other
+    /// instruction it is #UD.
+    latch locked: u1 = 0;
+
+    fault DE { vector: 0, class: Fault, contributory: true }
+    fault BR { vector: 5, class: Fault }
+    fault UD { vector: 6, class: Fault }
+    fault NM { vector: 7, class: Fault }
+    fault DoubleFault { vector: 8, class: Abort, pushes_error_code: true }
+    fault StackFault(error: u16) { vector: 12, class: Fault, pushes_error_code: true, contributory: true }
+    fault GP(error: u16) { vector: 13, class: Fault, pushes_error_code: true, contributory: true }
+
+    // -- sizes and addressing -----------------------------------------------------
+
+    fn operand_size() -> u6 { return if opsize == 1 { 32 } else { 16 }; }
+    fn address_size() -> u6 { return if adsize == 1 { 32 } else { 16 }; }
+
+    /// Real mode: base plus offset; an access past the segment's limit is
+    /// #GP(0).
+    fn translate(seg: Segment, off: u32, size: u8, access: Access) -> u32 {
+        if (off as u64) + (size as u64) - 1 > (seg.limit as u64) {
+            if seg.stack { raise StackFault(0); }
+            raise GP(0);
+        }
+        return seg.base + off;
+    }
+
+    /// A stack access at `off`: past SS's limit it is #SS(0).
+    fn translate_stack(off: u32, size: u8) -> u32 {
+        if (off as u64) + (size as u64) - 1 > (SS.limit as u64) { raise StackFault(0); }
+        return SS.base + off;
+    }
+
+    fn load_segment(sel: u16) -> Segment {
+        return Segment { selector: sel, base: (sel as u32) << 4, limit: 0xFFFF, rights: 0x93, stack: false };
+    }
+
+    fn load_stack_segment(sel: u16) -> Segment {
+        return Segment { selector: sel, base: (sel as u32) << 4, limit: 0xFFFF, rights: 0x93, stack: true };
+    }
+
+    /// Processor reset: execution starts at F000:FFF0 with the code
+    /// segment's base at FFFF0000.
+    fn reset() {
+        CS = Segment { selector: 0xF000, base: 0xFFFF0000, limit: 0xFFFF, rights: 0x9B, stack: false };
+        DS = load_segment(0);
+        ES = load_segment(0);
+        SS = load_stack_segment(0);
+        FS = load_segment(0);
+        GS = load_segment(0);
+        EIP = 0xFFF0;
+        EFLAGS = 0x0002;
+        IDTR = TableReg { base: 0, limit: 0x03FF };
+    }
+
+    /// The stack is 16 bits wide in real mode: SP moves, ESP's upper half
+    /// stays. A push writes before SP moves, so a faulting push restarts.
+    fn push<const W: width> in [16, 32](v: u<W>) {
+        let sp = SP - ((W / 8) as u16);
+        mem.write<W>(translate_stack(sp as u32, (W / 8) as u8), v);
+        SP = sp;
+    }
+
+    /// The stack word or dword `off` bytes above SP, without popping it.
+    fn peek<const W: width> in [16, 32](off: u16) -> u<W> {
+        return mem.read<W>(translate_stack((SP + off) as u32, (W / 8) as u8));
+    }
+
+    fn pop<const W: width> in [16, 32]() -> u<W> {
+        let v = mem.read<W>(translate_stack(SP as u32, (W / 8) as u8));
+        SP = SP + ((W / 8) as u16);
+        return v;
+    }
+
+    /// FLAGS from POPF or IRET: in real mode every flag but bit 15 may
+    /// change (unlike the 286, IOPL and NT too); bit 1 reads as set.
+    fn load_flags16(v: u16) {
+        FLAGS = (v & 0x7FD5) | 0x0002;
+    }
+
+    /// EFLAGS from a 32-bit POPF or IRET: RF and VM are not changed by them
+    /// in real mode, and the reserved bits keep their value.
+    fn load_flags32(v: u32) {
+        EFLAGS = (EFLAGS & 0xFFFC8000) | (v & 0x00007FD5) | 0x0002;
+    }
+
+    /// Real-mode interrupt delivery through the vector table at IDTR's
+    /// base. A restarting fault pushes the instruction's start.
+    fn deliver(vector: u8, restart: bool, has_error: bool, error: u16) {
+        if restart { EIP = start_ip; }
+        interrupt(vector);
+    }
+
+    fn interrupt(vector: u8) {
+        push<16>(FLAGS);
+        push<16>(CS.selector);
+        push<16>(IP);
+        EFLAGS.IF = 0;
+        EFLAGS.TF = 0;
+        let entry = IDTR.base + (vector as u32) * 4;
+        let ip = mem.read_u16(entry);
+        CS = load_segment(mem.read_u16(entry + 2));
+        EIP = ip as u32;
+    }
+
+    fn code_address() -> u32 { return translate(CS, EIP, 1, Access::Execute); }
+    fn code_room() -> u32 { return if EIP > CS.limit { 0 } else { CS.limit - EIP + 1 }; }
+
+    /// A 386 instruction is at most 15 bytes, prefixes included; a longer
+    /// one is #UD on the 386EX (the vectors show vector 6).
+    fn next_byte() -> u8 {
+        if fetched == 15 { raise UD; }
+        fetched = fetched + 1;
+        let b = mem.read_u8(code_address());
+        EIP = EIP + 1;
+        return b;
+    }
+
+    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; double DoubleFault; lock locked; }
+
+    extern fn intr() -> bool;
+    extern fn acknowledge() -> u8;
+
+    fn take_interrupt() -> bool {
+        if INHIBIT == 1 {
+            INHIBIT = 0;
+            return false;
+        }
+        if EFLAGS.IF == 1 && intr() {
+            let v = acknowledge();
+            interrupt(v);
+            return true;
+        }
+        return false;
+    }
+
+    fn segment(s: SegOv) -> Segment {
+        return match s {
+            SegOv::ES => ES, SegOv::CS => CS, SegOv::SS => SS, SegOv::FS => FS, SegOv::GS => GS, _ => DS,
+        };
+    }
+
+    /// The segment of a memory operand that defaults to DS.
+    fn src_seg() -> Segment { return if seg_override == SegOv::None { DS } else { segment(seg_override) }; }
+
+    /// ModRM; its tail is the displacement (and for 32-bit addresses the
+    /// SIB) its addressing form carries.
+    operand ModRM {
+        size 1;
+        fields { mod: u2 @ 6; reg: u3 @ 3; rm: u3 @ 0; }
+        tail {
+            if address_size() == 32 {
+                if mod != 3 && rm == 4 { Sib }
+                else if mod == 1 { Disp8 }
+                else if mod == 2 || (mod == 0 && rm == 5) { Disp32 }
+            } else if mod == 1 { Disp8 }
+            else if mod == 2 || (mod == 0 && rm == 6) { Disp16 }
+        }
+    }
+    /// The scale-index-base byte of a 32-bit address; its displacement
+    /// depends on the ModRM it follows.
+    operand Sib {
+        size 1;
+        fields { scale: u2 @ 6; index: u3 @ 3; base: u3 @ 0; }
+        tail {
+            if parent.mod == 1 { Disp8 }
+            else if parent.mod == 2 || (parent.mod == 0 && base == 5) { Disp32 }
+        }
+    }
+    operand Disp8  { size 1; fields { value: i8 @ 0; } }
+    operand Disp16 { size 2; fields { value: i16 @ 0; } }
+    operand Disp32 { size 4; fields { value: i32 @ 0; } }
+    operand Imm<8>  { size 1; fields { value: u8 @ 0; } }
+    operand Imm<16> { size 2; fields { value: u16 @ 0; } }
+    operand Imm<32> { size 4; fields { value: u32 @ 0; } }
+    /// A direct memory offset (A0-A3) at each address size.
+    operand Moffs<16> { size 2; fields { off: u16 @ 0; } }
+    operand Moffs<32> { size 4; fields { off: u32 @ 0; } }
+
+    fn reg32(n: u3) -> u32 {
+        return match n { 0 => EAX, 1 => ECX, 2 => EDX, 3 => EBX, 4 => ESP, 5 => EBP, 6 => ESI, _ => EDI };
+    }
+
+    /// Segment and offset of a ModRM memory form. 16-bit forms are the
+    /// 286's; 32-bit ones take a base register, or a SIB's base plus scaled
+    /// index (where the SIB names no index but a scale, the 386 scales the
+    /// base), and a displacement. EBP and ESP bases default to SS, the
+    /// others to DS; a segment-override prefix replaces either.
+    fn effective_address(m: ModRM) -> (seg: Segment, off: u32) {
+        if address_size() == 16 {
+            let disp: u16 = match m.mod {
+                0 => if m.rm == 6 { m.tail.Disp16.value as u16 } else { 0 },
+                1 => m.tail.Disp8.value as u16,
+                2 => m.tail.Disp16.value as u16,
+                _ => unreachable("register form"),
+            };
+            let (base, seg) = match m.rm {
+                0 => (BX + SI, DS), 1 => (BX + DI, DS), 2 => (BP + SI, SS), 3 => (BP + DI, SS),
+                4 => (SI, DS),      5 => (DI, DS),      6 => if m.mod == 0 { (0, DS) } else { (BP, SS) },
+                7 => (BX, DS),
+            };
+            let s = if seg_override == SegOv::None { seg } else { segment(seg_override) };
+            return (s, (base + disp) as u32);
+        }
+        let mut off: u32 = 0;
+        let mut ss = false;
+        if m.rm == 4 {
+            let b = m.tail.Sib;
+            let disp: u32 = match m.mod {
+                0 => if b.base == 5 { b.tail.Disp32.value as u32 } else { 0 },
+                1 => (b.tail.Disp8.value as i32) as u32,
+                _ => b.tail.Disp32.value as u32,
+            };
+            let has_base = !(b.base == 5 && m.mod == 0);
+            if b.index != 4 {
+                off = reg32(b.index) << b.scale;
+                if has_base { off = off + reg32(b.base); }
+            } else if has_base {
+                off = reg32(b.base) << b.scale;
+            }
+            ss = has_base && (b.base == 4 || b.base == 5);
+            off = off + disp;
+        } else {
+            let disp: u32 = match m.mod {
+                0 => if m.rm == 5 { m.tail.Disp32.value as u32 } else { 0 },
+                1 => (m.tail.Disp8.value as i32) as u32,
+                _ => m.tail.Disp32.value as u32,
+            };
+            if !(m.mod == 0 && m.rm == 5) {
+                off = reg32(m.rm);
+                ss = m.rm == 5;
+            }
+            off = off + disp;
+        }
+        let s = if seg_override != SegOv::None { segment(seg_override) } else if ss { SS } else { DS };
+        return (s, off);
+    }
+
+    fn ea(m: ModRM, size: u8, access: Access) -> u32 {
+        let (s, o) = effective_address(m);
+        return translate(s, o, size, access);
+    }
+
+    // -- operand kinds --------------------------------------------------------------
+
+    operand_kind r<8> : u8 {
+        select(n: u3) => match n { 0 => AL, 1 => CL, 2 => DL, 3 => BL, 4 => AH, 5 => CH, 6 => DH, 7 => BH };
+    }
+    operand_kind r<16> : u16 {
+        select(n: u3) => match n { 0 => AX, 1 => CX, 2 => DX, 3 => BX, 4 => SP, 5 => BP, 6 => SI, 7 => DI };
+    }
+    operand_kind r<32> : u32 {
+        select(n: u3) => match n { 0 => EAX, 1 => ECX, 2 => EDX, 3 => EBX, 4 => ESP, 5 => EBP, 6 => ESI, 7 => EDI };
+    }
+    operand_kind rm<const W: width> in [8, 16, 32] : u<W> from m: ModRM {
+        is_mem => m.mod != 3;
+        read => if m.mod == 3 { r<W>.select(m.rm) } else { mem.read<W>(ea(m, (W / 8) as u8, Access::Read)) };
+        write(v: u<W>) => if m.mod == 3 { r<W>.select(m.rm) = v; } else { mem.write<W>(ea(m, (W / 8) as u8, Access::Write), v); };
+    }
+    operand_kind imm<const W: width> in [8, 16, 32] : u<W> from i: Imm<W> { read => i.value; }
+    /// An 8-bit immediate or displacement, sign-extended.
+    operand_kind simm8<const W: width> in [16, 32] : u<W> from i: Disp8 { read => (i.value as i<W>) as u<W>; }
+    operand_kind alu_op : AluOp { value(n: u3) => n as AluOp; }
+    operand_kind cond : u4 { value(n: u4) => n; }
+    operand_kind seg_ov : SegOv { value(n: u2) => (n as u3) as SegOv; }
+    /// 64 is FS, 65 GS.
+    operand_kind fsgs : SegOv { value(n: u1) => ((n as u3) + 4) as SegOv; }
+    operand_kind rep_kind : Rep { value(n: u1) => ((n as u2) + 1) as Rep; }
+
+    // -- shared semantics ---------------------------------------------------------------
+
+    fn alu_name(op: AluOp) -> str {
+        return match op {
+            AluOp::Add => "add", AluOp::Or => "or", AluOp::Adc => "adc", AluOp::Sbb => "sbb",
+            AluOp::And => "and", AluOp::Sub => "sub", AluOp::Xor => "xor", AluOp::Cmp => "cmp",
+        };
+    }
+
+    fn alu<const W: width> in [8, 16, 32](op: AluOp, a: u<W>, b: u<W>) -> u<W> {
+        let (r, raw) = Alu<W>(op, a, b, CF);
+        EFLAGS.arith = AluFlags<W>(op, a, b, raw);
+        return r;
+    }
+
+    /// Condition `c` (opcode bits 3..0): bit 0 negates.
+    fn condition(c: u4) -> bool {
+        let r = match c >> 1 {
+            0 => OF == 1,
+            1 => CF == 1,
+            2 => ZF == 1,
+            3 => CF == 1 || ZF == 1,
+            4 => SF == 1,
+            5 => PF == 1,
+            6 => SF != OF,
+            _ => SF != OF || ZF == 1,
+        };
+        return if c[0] == 1 { !r } else { r };
+    }
+
+    /// A near transfer's target: at 16-bit operand size it wraps at 64 KB;
+    /// either way it must lie within CS's limit (#GP before anything moves).
+    fn near_target(target: u32) -> u32 {
+        let t = if operand_size() == 16 { target & 0xFFFF } else { target };
+        if t > CS.limit { raise GP(0); }
+        return t;
+    }
+
+    fn jump_near(target: u32) {
+        EIP = near_target(target);
+    }
+
+    // -- prefixes ------------------------------------------------------------------------
+
+    prefix SegOverride {
+        encoding { opcode "001ss110" { s: seg_ov } }
+        operands (s: seg_ov);
+        semantics { seg_override = s; }
+    }
+    prefix SegOverrideFsGs {
+        encoding { opcode "0110010g" { g: fsgs } }
+        operands (g: fsgs);
+        semantics { seg_override = g; }
+    }
+    prefix OperandSize { encoding { opcode 0x66; } semantics { opsize = 1; } }
+    prefix AddressSize { encoding { opcode 0x67; } semantics { adsize = 1; } }
+    prefix Lock { encoding { opcode 0xF0; } semantics { locked = 1; } }
+    prefix Repeat {
+        encoding { opcode "1111001z" { z: rep_kind } }
+        operands (z: rep_kind);
+        semantics { rep = z; }
+    }
+
+    // -- ALU ------------------------------------------------------------------------------
+
+    instruction Alu_rm8_r8 {
+        mnemonic alu_name(op);
+        encoding { opcode "00ooo000" { o: alu_op }; ModRM { reg: r<8> } }
+        operands (op: alu_op, dst: rm<8>, src: r<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        lock if dst.is_mem && op != AluOp::Cmp;
+        semantics { let r = alu<8>(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_rm_r<const W: width> in [16, 32] {
+        mnemonic alu_name(op);
+        encoding { when operand_size() == W; opcode "00ooo001" { o: alu_op }; ModRM { reg: r<W> } }
+        operands (op: alu_op, dst: rm<W>, src: r<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        lock if dst.is_mem && op != AluOp::Cmp;
+        semantics { let r = alu<W>(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_r8_rm8 {
+        mnemonic alu_name(op);
+        encoding { opcode "00ooo010" { o: alu_op }; ModRM { reg: r<8> } }
+        operands (op: alu_op, dst: r<8>, src: rm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics { let r = alu<8>(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_r_rm<const W: width> in [16, 32] {
+        mnemonic alu_name(op);
+        encoding { when operand_size() == W; opcode "00ooo011" { o: alu_op }; ModRM { reg: r<W> } }
+        operands (op: alu_op, dst: r<W>, src: rm<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics { let r = alu<W>(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_al_imm8 {
+        mnemonic alu_name(op);
+        encoding { opcode "00ooo100" { o: alu_op }; Imm<8> }
+        operands (op: alu_op, src: imm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics { let r = alu<8>(op, AL, src); if op != AluOp::Cmp { AL = r; } }
+    }
+    instruction Alu_ax_imm<const W: width> in [16, 32] {
+        mnemonic alu_name(op);
+        encoding { when operand_size() == W; opcode "00ooo101" { o: alu_op }; Imm<W> }
+        operands (op: alu_op, src: imm<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            let a = r<W>.select(0);
+            let r = alu<W>(op, a, src);
+            if op != AluOp::Cmp { r<W>.select(0) = r; }
+        }
+    }
+    /// 80 and 82 are the same instruction.
+    instruction Alu_rm8_imm8 {
+        mnemonic alu_name(op);
+        encoding { opcode "100000-0"; ModRM { reg: alu_op } Imm<8> }
+        operands (op: alu_op, dst: rm<8>, src: imm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        lock if dst.is_mem && op != AluOp::Cmp;
+        semantics { let r = alu<8>(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_rm_imm<const W: width> in [16, 32] {
+        mnemonic alu_name(op);
+        encoding { when operand_size() == W; opcode 0x81; ModRM { reg: alu_op } Imm<W> }
+        operands (op: alu_op, dst: rm<W>, src: imm<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        lock if dst.is_mem && op != AluOp::Cmp;
+        semantics { let r = alu<W>(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+    instruction Alu_rm_simm8<const W: width> in [16, 32] {
+        mnemonic alu_name(op);
+        encoding { when operand_size() == W; opcode 0x83; ModRM { reg: alu_op } Disp8 }
+        operands (op: alu_op, dst: rm<W>, src: simm8<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        lock if dst.is_mem && op != AluOp::Cmp;
+        semantics { let r = alu<W>(op, dst, src); if op != AluOp::Cmp { dst = r; } }
+    }
+
+    /// INC and DEC leave CF alone.
+    instruction Inc_r<const W: width> in [16, 32] {
+        mnemonic "inc";
+        encoding { when operand_size() == W; opcode "01000rrr" { r: r<W> } }
+        operands (dst: r<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        semantics { let c = CF; dst = alu<W>(AluOp::Add, dst, 1); EFLAGS.CF = c; }
+    }
+    instruction Dec_r<const W: width> in [16, 32] {
+        mnemonic "dec";
+        encoding { when operand_size() == W; opcode "01001rrr" { r: r<W> } }
+        operands (dst: r<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        semantics { let c = CF; dst = alu<W>(AluOp::Sub, dst, 1); EFLAGS.CF = c; }
+    }
+
+    // -- MOV ---------------------------------------------------------------------------------
+
+    instruction Mov_rm8_r8 {
+        mnemonic "mov";
+        encoding { opcode 0x88; ModRM { reg: r<8> } }
+        operands (dst: rm<8>, src: r<8>);
+        semantics { dst = src; }
+    }
+    instruction Mov_rm_r<const W: width> in [16, 32] {
+        mnemonic "mov";
+        encoding { when operand_size() == W; opcode 0x89; ModRM { reg: r<W> } }
+        operands (dst: rm<W>, src: r<W>);
+        semantics { dst = src; }
+    }
+    instruction Mov_r8_rm8 {
+        mnemonic "mov";
+        encoding { opcode 0x8A; ModRM { reg: r<8> } }
+        operands (dst: r<8>, src: rm<8>);
+        semantics { dst = src; }
+    }
+    instruction Mov_r_rm<const W: width> in [16, 32] {
+        mnemonic "mov";
+        encoding { when operand_size() == W; opcode 0x8B; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: rm<W>);
+        semantics { dst = src; }
+    }
+    instruction Mov_r8_imm8 {
+        mnemonic "mov";
+        encoding { opcode "10110rrr" { r: r<8> }; Imm<8> }
+        operands (dst: r<8>, src: imm<8>);
+        semantics { dst = src; }
+    }
+    instruction Mov_r_imm<const W: width> in [16, 32] {
+        mnemonic "mov";
+        encoding { when operand_size() == W; opcode "10111rrr" { r: r<W> }; Imm<W> }
+        operands (dst: r<W>, src: imm<W>);
+        semantics { dst = src; }
+    }
+    instruction Mov_rm8_imm8 {
+        mnemonic "mov";
+        encoding { opcode 0xC6; ModRM { reg: 0 } Imm<8> }
+        operands (dst: rm<8>, src: imm<8>);
+        semantics { dst = src; }
+    }
+    instruction Mov_rm_imm<const W: width> in [16, 32] {
+        mnemonic "mov";
+        encoding { when operand_size() == W; opcode 0xC7; ModRM { reg: 0 } Imm<W> }
+        operands (dst: rm<W>, src: imm<W>);
+        semantics { dst = src; }
+    }
+
+    // -- stack ----------------------------------------------------------------------------------
+
+    /// PUSH SP pushes the value SP had before the push.
+    instruction Push_r<const W: width> in [16, 32] {
+        mnemonic "push";
+        encoding { when operand_size() == W; opcode "01010rrr" { r: r<W> } }
+        operands (src: r<W>);
+        semantics { push<W>(src); }
+    }
+    instruction Pop_r<const W: width> in [16, 32] {
+        mnemonic "pop";
+        encoding { when operand_size() == W; opcode "01011rrr" { r: r<W> } }
+        operands (dst: r<W>);
+        semantics { dst = pop<W>(); }
+    }
+    instruction Pushf<const W: width> in [16, 32] {
+        mnemonic "pushf";
+        encoding { when operand_size() == W; opcode 0x9C; }
+        semantics { if W == 32 { push<32>(EFLAGS & 0x0000FFFF); } else { push<16>(FLAGS); } }
+    }
+    instruction Popf<const W: width> in [16, 32] {
+        mnemonic "popf";
+        encoding { when operand_size() == W; opcode 0x9D; }
+        flags { modifies: [OF, DF, IF, TF, SF, ZF, AF, PF, CF]; }
+        semantics { if W == 32 { load_flags32(pop<32>()); } else { load_flags16(pop<16>()); } }
+    }
+
+    // -- near transfers ----------------------------------------------------------------------
+
+    operand_kind rel8 : u32 from d: Disp8 { read => (d.value as i32) as u32; }
+    operand_kind rel<16> : u32 from d: Imm<16> { read => (d.value as i16 as i32) as u32; }
+    operand_kind rel<32> : u32 from d: Imm<32> { read => d.value; }
+
+    instruction Jcc {
+        mnemonic "jcc";
+        encoding { opcode "0111cccc" { c: cond }; Disp8 }
+        operands (c: cond, rel: rel8);
+        semantics { if condition(c) { jump_near(EIP + rel); } }
+    }
+    instruction Jcc_near<const W: width> in [16, 32] {
+        mnemonic "jcc";
+        encoding { when operand_size() == W; opcode [0x0F, "1000cccc"] { c: cond }; Imm<W> }
+        operands (c: cond, rel: rel<W>);
+        semantics { if condition(c) { jump_near(EIP + rel); } }
+    }
+    instruction Jmp_rel8 {
+        mnemonic "jmp";
+        encoding { opcode 0xEB; Disp8 }
+        operands (rel: rel8);
+        semantics { jump_near(EIP + rel); }
+    }
+    instruction Jmp_rel<const W: width> in [16, 32] {
+        mnemonic "jmp";
+        encoding { when operand_size() == W; opcode 0xE9; Imm<W> }
+        operands (rel: rel<W>);
+        semantics { jump_near(EIP + rel); }
+    }
+    instruction Call_rel<const W: width> in [16, 32] {
+        mnemonic "call";
+        encoding { when operand_size() == W; opcode 0xE8; Imm<W> }
+        operands (rel: rel<W>);
+        semantics {
+            let t = near_target(EIP + rel);
+            if W == 32 { push<32>(EIP); } else { push<16>(IP); }
+            EIP = t;
+        }
+    }
+    instruction Ret<const W: width> in [16, 32] {
+        mnemonic "ret";
+        encoding { when operand_size() == W; opcode 0xC3; }
+        semantics {
+            let t = near_target(if W == 32 { peek<32>(0) } else { peek<16>(0) as u32 });
+            SP = SP + ((W / 8) as u16);
+            EIP = t;
+        }
+    }
+    instruction Ret_imm<const W: width> in [16, 32] {
+        mnemonic "ret";
+        encoding { when operand_size() == W; opcode 0xC2; Imm<16> }
+        operands (n: imm<16>);
+        semantics {
+            let t = near_target(if W == 32 { peek<32>(0) } else { peek<16>(0) as u32 });
+            SP = SP + ((W / 8) as u16) + n;
+            EIP = t;
+        }
+    }
+
+    // -- flags and miscellany -----------------------------------------------------------------
+
+    instruction Clc { mnemonic "clc"; encoding { opcode 0xF8; } flags { modifies: [CF]; } semantics { EFLAGS.CF = 0; } }
+    instruction Stc { mnemonic "stc"; encoding { opcode 0xF9; } flags { modifies: [CF]; } semantics { EFLAGS.CF = 1; } }
+    instruction Cmc { mnemonic "cmc"; encoding { opcode 0xF5; } flags { modifies: [CF]; } semantics { EFLAGS.CF = ~CF; } }
+    instruction Cld { mnemonic "cld"; encoding { opcode 0xFC; } flags { modifies: [DF]; } semantics { EFLAGS.DF = 0; } }
+    instruction Std { mnemonic "std"; encoding { opcode 0xFD; } flags { modifies: [DF]; } semantics { EFLAGS.DF = 1; } }
+    instruction Cli { mnemonic "cli"; encoding { opcode 0xFA; } flags { modifies: [IF]; } semantics { EFLAGS.IF = 0; } }
+    instruction Sti { mnemonic "sti"; encoding { opcode 0xFB; } flags { modifies: [IF]; } semantics { if EFLAGS.IF == 0 { INHIBIT = 1; } EFLAGS.IF = 1; } }
+    instruction Hlt { mnemonic "hlt"; encoding { opcode 0xF4; } semantics { halt; } }
+    instruction Nop { mnemonic "nop"; encoding { opcode 0x90; } }
+}
+
+vectors "../../../simulators/test/i386/SingleStepTests/v1_ex_real_mode/*.MOO.gz" on I386 {
+    format moo;
+    memory mem;
+    /// The capture rig has nothing on the I/O bus: reads float high.
+    open io = 0xFF;
+    reg cr0 = CR0;
+    reg cr3 = CR3;
+    reg eax = EAX;
+    reg ebx = EBX;
+    reg ecx = ECX;
+    reg edx = EDX;
+    reg esi = ESI;
+    reg edi = EDI;
+    reg ebp = EBP;
+    reg esp = ESP;
+    reg eip = EIP;
+    reg eflags = EFLAGS;
+    reg dr6 = DR6;
+    reg dr7 = DR7;
+    reg cs { load => CS = load_segment(value); read => CS.selector; }
+    reg ds { load => DS = load_segment(value); read => DS.selector; }
+    reg es { load => ES = load_segment(value); read => ES.selector; }
+    reg fs { load => FS = load_segment(value); read => FS.selector; }
+    reg gs { load => GS = load_segment(value); read => GS.selector; }
+    reg ss { load => SS = load_stack_segment(value); read => SS.selector; }
+}

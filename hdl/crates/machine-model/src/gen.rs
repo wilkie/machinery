@@ -207,7 +207,7 @@ impl<'a> Gen<'a> {
                     .ok_or_else(|| GenError::new("unresolved enum"))?;
                 native(e.width, false).1.to_string()
             }
-            Ty::Bundle(d) => self.prog.item_name(*d),
+            Ty::Bundle(d) => ident(&self.prog.item_name(*d)),
             Ty::Union(_) => {
                 return Err(GenError::new(
                     "unions are not supported by the interpreter backend yet",
@@ -224,8 +224,8 @@ impl<'a> Gen<'a> {
                 }
             }
             Ty::Const(_) => "i128".into(),
-            Ty::Operand(d) => self.prog.item_name(*d),
-            Ty::OperandTail(d) => format!("{}_Tail", self.prog.item_name(*d)),
+            Ty::Operand(d) => ident(&self.prog.item_name(*d)),
+            Ty::OperandTail(d) => format!("{}_Tail", ident(&self.prog.item_name(*d))),
             Ty::Str => "&'static str".into(),
             Ty::Unit => "()".into(),
             Ty::Never => "()".into(),
@@ -2262,6 +2262,15 @@ impl<'a> Gen<'a> {
             ),
             None => String::new(),
         };
+        // A lock prefix before an instruction that may not take one.
+        let lock_check = match (istream.lock, istream.undefined) {
+            (Some(l), Some(u)) => format!(
+                "if self.latch_{} == 1 && !self.lock_ok(&i) {{{{ Err(Fault::{}) }}}} else {{{{ self.exec(i) }}}}",
+                ident(&self.prog.item_name(l)),
+                ident(&self.faults[&u].name)
+            ),
+            _ => "self.exec(i)".to_string(),
+        };
         // How far the stream reaches past where execution continues.
         let room = match istream.limit {
             Some(f) => format!(
@@ -2284,7 +2293,7 @@ impl<'a> Gen<'a> {
             "        let _ = (performed, cur);\n        let k = (sched.steps as usize).min(8);\n        sched.work[k] = sched.work[k].saturating_add(self.cycles.saturating_sub(before) as u16);\n".to_string()
         };
         s.push_str(&format!(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.fetched = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let mut cur: Option<Instr> = None;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); cur = Some(i); sched = self.schedule_of(&i); self.cycles = self.timing_of(&i) + self.prefix_cycles; self.exec(i) }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.fetched = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let mut cur: Option<Instr> = None;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); cur = Some(i); sched = self.schedule_of(&i); self.cycles = self.timing_of(&i) + self.prefix_cycles; {lock_check} }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
         ));
         let _ = write!(
             s,
@@ -2740,6 +2749,30 @@ impl<'a> Gen<'a> {
             let _ = write!(s, "    /// The schedule of delivering fault `{param}`, after the faulting instruction's.\n    pub fn fault_schedule(&mut self, {param}: u8) -> Schedule {{\n        {body}\n    }}\n");
         }
 
+        // lock: whether `i` may follow a lock prefix
+        s.push_str("    /// Whether `i` may follow a lock prefix (its `lock` item).\n    #[allow(unused_variables)]\n    pub fn lock_ok(&mut self, i: &Instr) -> bool {\n        let r: Result<bool, Fault> = (|| Ok(match *i {\n");
+        for i in &instrs {
+            let text = match &i.lock {
+                Some(e) => {
+                    let cx = Cx {
+                        locals: &i.lock_locals,
+                        fallible: true,
+                        recv: "self",
+                        ops: Some(i),
+                        comp: None,
+                        opt: false,
+                    };
+                    self.expr(&cx, e)?
+                }
+                None => "false".into(),
+            };
+            let _ = writeln!(s, "            Instr::{}(ops) => {text},", ident(&i.name));
+        }
+        if instrs.is_empty() {
+            s.push_str("            _ => false,\n");
+        }
+        s.push_str("        }))();\n        r.unwrap_or(false)\n    }\n");
+
         // mnemonic
         s.push_str("    pub fn mnemonic(&mut self, i: &Instr) -> &'static str {\n        let r: Result<&'static str, Fault> = (|| Ok(match *i {\n");
         for i in &instrs {
@@ -3085,10 +3118,12 @@ pub mod vectors {{
         for name in REGS {{
             let Some(expected) = t.final_.reg(name).or_else(|| t.initial.reg(name)) else {{ continue }};
             let actual = match read(&mut m, name) {{ Ok(v) => v, Err(f) => {{ errors.push(format!("{{name}}: fault while reading: {{f:?}}")); continue; }} }};
-            let mask = match (masked_reg(name), &first) {{
+            let mut mask = match (masked_reg(name), &first) {{
                 (Some(r), Some(i)) => pre.undefined_mask(i, r) as u32,
                 _ => 0,
             }};
+            // Bits the corpus itself marks undefined (MOO `RM32`).
+            for (n, u) in &t.final_.undefined {{ if n == name {{ mask |= *u; }} }}
             if actual & !mask != expected & !mask {{
                 errors.push(format!("{{name}}: expected {{expected:#06x}}, got {{actual:#06x}} (undefined bits {{mask:#06x}})"));
             }}

@@ -951,6 +951,12 @@ instruction Add_rm8_r8 {
   derivation. Optional; a 386 model may have an `isa` and no rtl at all.
 - `mode` restrictions: `allowed_in [Mode::Protected]` and privilege
   `requires cpl == 0`.
+- `lock;` or `lock if <cond>;` (a condition over the operands): the
+  instruction may follow a lock prefix, when the condition holds. With
+  `istream { lock <latch>; }` naming the latch the lock prefix sets, any
+  other instruction after a lock prefix raises the istream's `undefined`
+  fault (the 386 accepts LOCK only on read-modify-write forms with a
+  memory destination: `lock if dst.is_mem && op != AluOp::Cmp;`).
 
 ### 11.2a Prefixes and latches
 

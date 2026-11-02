@@ -537,6 +537,10 @@ pub struct Instruction {
     /// latches, registers and pure fns, checked after the bytes match.
     pub when_locals: Vec<Local>,
     pub when: Option<Expr>,
+    /// `lock` / `lock if cond`: when the instruction may follow a lock
+    /// prefix (`None`: never).
+    pub lock_locals: Vec<Local>,
+    pub lock: Option<Expr>,
     /// `fault <Name> =>` in a `schedules` table: delivering a fault this
     /// instruction raises, with `vector` (its first param) in scope.
     pub fault_schedule: Option<TimingExpr>,
@@ -643,6 +647,8 @@ pub struct Istream {
     /// The fault delivered when a contributory fault is raised while one is
     /// delivered; a fault while delivering it shuts the processor down.
     pub double: Option<DefId>,
+    /// The latch a lock prefix sets (`istream { lock locked; }`).
+    pub lock: Option<DefId>,
 }
 
 /// A resolved `enum`/`mode`, exported for backends.

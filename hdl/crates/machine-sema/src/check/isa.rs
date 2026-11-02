@@ -419,6 +419,23 @@ impl Checker<'_> {
                 }
             },
         };
+        // The lock prefix's latch: a `u1`.
+        let lock_latch = match &d.lock {
+            None => None,
+            Some(p) => match self.lookup_item(scope, &p.last().name) {
+                Some(l) if self.prog.item(l).kind == ItemKind::Latch => Some(l),
+                _ => {
+                    self.error(
+                        module,
+                        "E1046",
+                        p.span,
+                        format!("`{}` is not a latch of this isa", p.dotted()),
+                    );
+                    ok = false;
+                    None
+                }
+            },
+        };
         // The double fault takes no arguments (its error code is 0).
         let double = match &d.double {
             None => None,
@@ -482,6 +499,7 @@ impl Checker<'_> {
             boundary,
             limit,
             double,
+            lock: lock_latch,
         })
     }
 
@@ -1671,6 +1689,8 @@ impl Checker<'_> {
         let mut timing_locals = Vec::new();
         let mut when = None;
         let mut when_locals = Vec::new();
+        let mut lock = None;
+        let mut lock_locals = Vec::new();
         let mut implements = None;
         let mut references = Vec::new();
         let mut allowed_in = Vec::new();
@@ -1700,6 +1720,7 @@ impl Checker<'_> {
                 InstructionItem::References(_) => "references",
                 InstructionItem::AllowedIn(_) => "allowed_in",
                 InstructionItem::Requires(_) => "requires",
+                InstructionItem::Lock(_) => "lock",
                 InstructionItem::Other(..) => "other",
             };
             if key != "other" {
@@ -2012,6 +2033,18 @@ impl Checker<'_> {
                     let mut cx = ops_cx(&sig);
                     requires = Some(self.check_expr(&mut cx, e, Some(&Ty::Bool)));
                 }
+                InstructionItem::Lock(cond) => {
+                    let mut cx = ops_cx(&sig);
+                    lock = Some(match cond {
+                        Some(c) => self.check_expr(&mut cx, c, Some(&Ty::Bool)),
+                        None => hir::Expr {
+                            kind: hir::ExprKind::Bool(true),
+                            ty: Ty::Bool,
+                            span: decl.span,
+                        },
+                    });
+                    lock_locals = cx.locals;
+                }
                 InstructionItem::Other(name, _) => {
                     self.error(
                         module,
@@ -2164,6 +2197,8 @@ impl Checker<'_> {
             fault_schedule: None,
             when_locals,
             when,
+            lock_locals,
+            lock,
             implements,
             references,
             allowed_in,

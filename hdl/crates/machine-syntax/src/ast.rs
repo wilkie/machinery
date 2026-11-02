@@ -993,6 +993,9 @@ pub enum InstructionItem {
     References(Vec<StrLit>),
     AllowedIn(Vec<Expr>),
     Requires(Expr),
+    /// `lock;` or `lock if cond;`: the instruction may follow a lock prefix
+    /// (when `cond` holds); otherwise that is the istream's `undefined`.
+    Lock(Option<Expr>),
     Other(Ident, Option<Expr>),
 }
 
@@ -1071,6 +1074,8 @@ pub struct IstreamDecl {
     pub limit: Option<Path>,
     /// `double DF;`: the double-fault fault.
     pub double: Option<Path>,
+    /// `lock locked;`: the latch a lock prefix sets.
+    pub lock: Option<Path>,
     pub span: Span,
 }
 

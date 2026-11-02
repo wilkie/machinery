@@ -29,7 +29,7 @@ pub struct CpuState {
     /// `(linear address, byte)`.
     pub ram: Vec<(u32, u8)>,
     /// `(register name, mask)` of bits the hardware leaves undefined
-    /// (`RMSK`/`RM32`), when the test gives them.
+    /// (`RMSK`/`RM32`, inverted), when the test or its file gives them.
     pub undefined: Vec<(&'static str, u32)>,
 }
 
@@ -218,7 +218,8 @@ fn decode_state(body: &[u8]) -> Result<CpuState, MooError> {
                         if &tag == b"RG32" {
                             st.regs.push((name, v));
                         } else {
-                            st.undefined.push((name, v));
+                            // A mask of the bits to compare.
+                            st.undefined.push((name, !v));
                         }
                     }
                 }
@@ -274,10 +275,17 @@ pub fn parse_moo(data: &[u8]) -> Result<Vec<MooTest>, MooError> {
         return Err(MooError("not a MOO file (missing `MOO ` header)".into()));
     }
     let mut tests = Vec::new();
+    // A file-level `RM32` masks every test's final state (the bits to compare).
+    let mut file_masks: Vec<(&'static str, u32)> = Vec::new();
     while !r.done() {
         let (tag, body) = r.chunk()?;
-        if &tag == b"TEST" {
-            tests.push(decode_test(body)?);
+        if &tag == b"RM32" {
+            let st = decode_state(&[&tag[..], &(body.len() as u32).to_le_bytes(), body].concat())?;
+            file_masks = st.undefined;
+        } else if &tag == b"TEST" {
+            let mut t = decode_test(body)?;
+            t.final_.undefined.extend(file_masks.iter().copied());
+            tests.push(t);
         }
     }
     Ok(tests)

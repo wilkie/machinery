@@ -758,6 +758,7 @@ impl Parser {
             "operand" => {
                 self.advance();
                 let name = self.expect_ident()?;
+                let name = self.fuse_width(name);
                 self.expect_punct(Punct::LBrace)?;
                 let mut size = None;
                 let mut fields = Vec::new();
@@ -811,6 +812,7 @@ impl Parser {
                 let mut boundary = None;
                 let mut limit = None;
                 let mut double = None;
+                let mut lock = None;
                 while !self.at_punct(Punct::RBrace) {
                     if self.at_eof() {
                         return Err(self.error_expected("`}`"));
@@ -825,6 +827,7 @@ impl Parser {
                         "boundary" => boundary = Some(self.parse_path_colons()?),
                         "limit" => limit = Some(self.parse_path_colons()?),
                         "double" => double = Some(self.parse_path_colons()?),
+                        "lock" => lock = Some(self.parse_path_colons()?),
                         other => {
                             return Err(self.error(
                                 "E0106",
@@ -848,6 +851,7 @@ impl Parser {
                     boundary,
                     limit,
                     double,
+                    lock,
                     span: start.to(self.prev_span()),
                 }))
             }
@@ -936,7 +940,13 @@ impl Parser {
         let from = if self.eat_word("from") {
             let binding = self.expect_ident()?;
             self.expect_punct(Punct::Colon)?;
-            Some((binding, self.parse_path_colons()?))
+            let mut p = self.parse_path_colons()?;
+            if let Some(last) = p.segments.pop() {
+                let last = self.fuse_width(last);
+                p.span = p.span.to(last.span);
+                p.segments.push(last);
+            }
+            Some((binding, p))
         } else {
             None
         };
@@ -1029,6 +1039,7 @@ impl Parser {
                 let items =
                     self.parse_delimited(Punct::LBrace, Punct::RBrace, &[Punct::Semi], |p| {
                         let name = p.expect_ident()?;
+                        let name = p.fuse_width(name);
                         let mut arg = None;
                         let mut fields = Vec::new();
                         if p.at_punct(Punct::LBrace) {
@@ -1126,6 +1137,15 @@ impl Parser {
                 let e = self.parse_expr()?;
                 self.expect_semi()?;
                 InstructionItem::Requires(e)
+            }
+            "lock" => {
+                let cond = if self.eat_kw(Keyword::If) {
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
+                self.expect_semi()?;
+                InstructionItem::Lock(cond)
             }
             _ => {
                 let v = if self.at_punct(Punct::Semi) {

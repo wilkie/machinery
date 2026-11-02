@@ -1,7 +1,8 @@
 // Sample 1: units only.
 //
 // Exercises: enums, bundles, const width parameters, unit calls, match
-// expressions, bit indexing, explicit casts, in-language tests.
+// expressions, bit indexing, explicit casts, mutable locals, in-language
+// tests.
 //
 // These units are shared between levels: the ISA semantics for ADD/SUB/...
 // call them from the derived interpreter, and the execute unit's rtl calls
@@ -74,6 +75,22 @@ unit AluFlags<const W: width>(op: AluOp, a: u<W>, b: u<W>, raw: u<W + 1>) -> Ari
         sf: r[msb],
         of,
     };
+}
+
+/// The index of the lowest set bit, or 8 when there is none: a loop with
+/// mutable locals, which a unit may use and stay pure.
+unit LowestSet(v: u8) -> u4 {
+    let mut found: u4 = 8;
+    let mut i: u4 = 7;
+    for k in 0..8 {
+        if v[i] == 1 { found = i; }
+        if i > 0 { i = i - 1; }
+    }
+    return found;
+}
+
+test "lowest set bit" {
+    expect { LowestSet(0x00) == 8; LowestSet(0x01) == 0; LowestSet(0x50) == 4; LowestSet(0x80) == 7; }
 }
 
 test "8-bit add with carry out" {

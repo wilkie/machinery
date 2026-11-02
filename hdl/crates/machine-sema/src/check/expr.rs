@@ -407,7 +407,10 @@ impl Checker<'_> {
                 else_branch,
             } => {
                 let cond = self.check_expr(cx, cond, Some(&Ty::Bool));
+                let before = cx.unassigned.clone();
                 let then_b = self.check_block_expr(cx, then_branch);
+                let after_then = (!matches!(then_b.1, Ty::Never)).then(|| cx.unassigned.clone());
+                cx.unassigned = before;
                 let Some(else_e) = else_branch else {
                     self.error_with(
                         cx.module,
@@ -423,6 +426,8 @@ impl Checker<'_> {
                     .cloned()
                     .or_else(|| (!matches!(then_b.1, Ty::Const(_))).then(|| then_b.1.clone()));
                 let else_e = self.check_expr(cx, else_e, hint.as_ref());
+                let after_else = (!matches!(else_e.ty, Ty::Never)).then(|| cx.unassigned.clone());
+                cx.unassigned = super::stmt::join_unassigned([after_then, after_else]);
                 let ty = self.join(cx, &then_b.1, &else_e.ty, span);
                 let else_e = self.coerce(cx, else_e, &ty);
                 let mut then_block = then_b.0;
@@ -485,6 +490,15 @@ impl Checker<'_> {
             1 => {
                 let name = &p.segments[0].name;
                 if let Some(id) = cx.lookup_local(name) {
+                    if cx.unassigned.contains(&id) {
+                        self.error_with(
+                            cx.module,
+                            Diagnostic::error("E1051", span, format!("`{name}` may be read before it is assigned"))
+                                .with_note("assign it on every path before this read, or give it a value where it is declared"),
+                        );
+                        // Report once per local.
+                        cx.unassigned.remove(&id);
+                    }
                     let ty = cx.locals[id as usize].ty.clone();
                     return match ty {
                         // A const-typed local is a compile-time value.
@@ -2214,7 +2228,10 @@ impl Checker<'_> {
         let mut harms = Vec::new();
         let mut ty: Option<Ty> = expected.cloned();
         let mut had_error = false;
+        let before = cx.unassigned.clone();
+        let mut afters = Vec::new();
         for arm in arms {
+            cx.unassigned = before.clone();
             let pats = self.check_patterns(cx, &arm.patterns, &scrut.ty);
             cx.push_scope();
             let (body, bty) = match &arm.body {
@@ -2230,6 +2247,7 @@ impl Checker<'_> {
                 }
             };
             cx.pop_scope();
+            afters.push((!matches!(bty, Ty::Never)).then(|| cx.unassigned.clone()));
             if bty.is_error() {
                 had_error = true;
             }
@@ -2243,6 +2261,7 @@ impl Checker<'_> {
                 span: arm.span,
             });
         }
+        cx.unassigned = super::stmt::join_unassigned(afters);
         let ty = ty.unwrap_or(Ty::Never);
         if had_error || ty.is_error() {
             return err(span);

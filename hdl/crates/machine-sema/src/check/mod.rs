@@ -127,6 +127,9 @@ pub struct FnCtx {
     pub loop_depth: u32,
     /// In a transaction handler, which may not start transactions.
     pub responding: bool,
+    /// Mutable locals declared without a value and not yet assigned on
+    /// the path being checked (definite assignment, E1051).
+    pub unassigned: std::collections::BTreeSet<LocalId>,
 }
 
 impl FnCtx {
@@ -143,6 +146,7 @@ impl FnCtx {
             component: None,
             loop_depth: 0,
             responding: false,
+            unassigned: std::collections::BTreeSet::new(),
         }
     }
 
@@ -155,11 +159,16 @@ impl FnCtx {
     }
 
     pub fn declare(&mut self, name: &str, ty: Ty, span: Span) -> LocalId {
+        self.declare_local(name, ty, span, false)
+    }
+
+    pub fn declare_local(&mut self, name: &str, ty: Ty, span: Span, mutable: bool) -> LocalId {
         let id = self.locals.len() as LocalId;
         self.locals.push(hir::Local {
             name: name.to_string(),
             ty,
             span,
+            mutable,
         });
         self.scopes
             .last_mut()

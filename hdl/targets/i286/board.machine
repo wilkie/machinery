@@ -253,6 +253,24 @@ unit PicGrant(irr: u8, imr: u8, isr: u8) -> u4 {
     return 0;
 }
 
+/// One 8254 counter channel.
+bundle PitChannel {
+    count: u16,
+    reload: u16,
+    mode: u3,
+    /// 1 low byte, 2 high byte, 3 low then high.
+    access: u2,
+    counting: bool,
+    /// Access mode 3: the low byte of a new count has been written.
+    low_written: bool,
+    low_byte: u8,
+    /// Access mode 3: the next read returns the high byte.
+    read_high: bool,
+    latched: bool,
+    latch: u16,
+    out: bool,
+}
+
 /// The 8254 programmable interval timer: three 16-bit down-counters on one
 /// clock. Port 3 takes control words (channel, access mode, counting mode,
 /// or a counter latch command); ports 0-2 read and write the counters in
@@ -264,30 +282,20 @@ unit PicGrant(irr: u8, imr: u8, isr: u8) -> u4 {
 component Pit8254 {
     ports { bus port: LocalBus::Slave; }
     model {
-        mem count: [u16; 3];
-        mem reload: [u16; 3];
-        mem mode: [u3; 3];
-        mem access: [u2; 3];
-        mem counting: [bool; 3];
-        mem low_written: [bool; 3];
-        mem low_byte: [u8; 3];
-        mem read_high: [bool; 3];
-        mem latched: [bool; 3];
-        mem latch: [u16; 3];
-        mem out: [bool; 3];
+        state ch: [PitChannel; 3];
 
         on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
             let c = addr[1:0];
             if c == 3 {
                 return (data: 0xFF, wait: 1);
             }
-            let v = if latched[c] { latch[c] } else { count[c] };
-            let high = access[c] == 2 || (access[c] == 3 && read_high[c]);
-            if access[c] == 3 {
-                read_high[c] = !read_high[c];
+            let v = if ch[c].latched { ch[c].latch } else { ch[c].count };
+            let high = ch[c].access == 2 || (ch[c].access == 3 && ch[c].read_high);
+            if ch[c].access == 3 {
+                ch[c].read_high = !ch[c].read_high;
             }
-            if access[c] != 3 || !read_high[c] {
-                latched[c] = false;
+            if ch[c].access != 3 || !ch[c].read_high {
+                ch[c].latched = false;
             }
             let b: u8 = if high { (v >> 8) as u8 } else { v as u8 };
             return (data: b as u16, wait: 1);
@@ -296,49 +304,49 @@ component Pit8254 {
             let d = data as u8;
             let c = addr[1:0];
             if c == 3 {
-                let ch = d[7:6];
-                if ch == 3 {
+                let sel = d[7:6];
+                if sel == 3 {
                     return (wait: 1);
                 }
                 if d[5:4] == 0 {
-                    latch[ch] = count[ch];
-                    latched[ch] = true;
+                    ch[sel].latch = ch[sel].count;
+                    ch[sel].latched = true;
                     return (wait: 1);
                 }
-                access[ch] = d[5:4];
-                mode[ch] = if d[3:2] == 3 { d[3:1] & 3 } else { d[3:1] };
-                counting[ch] = false;
-                low_written[ch] = false;
-                read_high[ch] = false;
-                latched[ch] = false;
+                ch[sel].access = d[5:4];
+                ch[sel].mode = if d[3:2] == 3 { d[3:1] & 3 } else { d[3:1] };
+                ch[sel].counting = false;
+                ch[sel].low_written = false;
+                ch[sel].read_high = false;
+                ch[sel].latched = false;
                 // OUT starts low in mode 0, high in the others.
-                out[ch] = mode[ch] != 0;
-                if ch == 0 {
-                    emit port.interrupt(0) = out[0];
+                ch[sel].out = ch[sel].mode != 0;
+                if sel == 0 {
+                    emit port.interrupt(0) = ch[0].out;
                 }
                 return (wait: 1);
             }
             // A count is complete after one byte, or the second of two.
-            let full = access[c] != 3 || low_written[c];
-            if access[c] == 1 {
-                reload[c] = d as u16;
-            } else if access[c] == 2 {
-                reload[c] = (d as u16) << 8;
-            } else if !low_written[c] {
-                low_byte[c] = d;
-                low_written[c] = true;
-                if mode[c] == 0 {
-                    counting[c] = false;
+            let full = ch[c].access != 3 || ch[c].low_written;
+            if ch[c].access == 1 {
+                ch[c].reload = d as u16;
+            } else if ch[c].access == 2 {
+                ch[c].reload = (d as u16) << 8;
+            } else if !ch[c].low_written {
+                ch[c].low_byte = d;
+                ch[c].low_written = true;
+                if ch[c].mode == 0 {
+                    ch[c].counting = false;
                 }
             } else {
-                reload[c] = concat(d, low_byte[c]);
-                low_written[c] = false;
+                ch[c].reload = concat(d, ch[c].low_byte);
+                ch[c].low_written = false;
             }
             if full {
-                count[c] = reload[c];
-                counting[c] = mode[c] == 0 || mode[c] == 2 || mode[c] == 3;
-                if mode[c] == 0 {
-                    out[c] = false;
+                ch[c].count = ch[c].reload;
+                ch[c].counting = ch[c].mode == 0 || ch[c].mode == 2 || ch[c].mode == 3;
+                if ch[c].mode == 0 {
+                    ch[c].out = false;
                     if c == 0 {
                         emit port.interrupt(0) = false;
                     }
@@ -348,21 +356,21 @@ component Pit8254 {
         }
         on tick(n: u32) {
             for c in 0..3 {
-                if counting[c] {
-                    let period: u32 = if reload[c] == 0 { 0x10000 } else { reload[c] as u32 };
-                    let left: u32 = if count[c] == 0 { 0x10000 } else { count[c] as u32 };
+                if ch[c].counting {
+                    let period: u32 = if ch[c].reload == 0 { 0x10000 } else { ch[c].reload as u32 };
+                    let left: u32 = if ch[c].count == 0 { 0x10000 } else { ch[c].count as u32 };
                     if n < left {
-                        count[c] = (left - n) as u16;
-                    } else if mode[c] == 0 {
-                        count[c] = ((left + 0x10000 - n % 0x10000) % 0x10000) as u16;
-                        if !out[c] {
-                            out[c] = true;
+                        ch[c].count = (left - n) as u16;
+                    } else if ch[c].mode == 0 {
+                        ch[c].count = ((left + 0x10000 - n % 0x10000) % 0x10000) as u16;
+                        if !ch[c].out {
+                            ch[c].out = true;
                             if c == 0 {
                                 emit port.interrupt(0) = true;
                             }
                         }
                     } else {
-                        count[c] = (period - (n - left) % period) as u16;
+                        ch[c].count = (period - (n - left) % period) as u16;
                         // OUT pulses low as the count reloads: one edge.
                         if c == 0 {
                             emit port.interrupt(0) = false;

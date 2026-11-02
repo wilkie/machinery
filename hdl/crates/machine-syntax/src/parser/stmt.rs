@@ -116,16 +116,42 @@ impl Parser {
 
     fn parse_let(&mut self, start: Span) -> PResult<Stmt> {
         self.expect_kw(Keyword::Let)?;
+        // `mut` is a contextual word: `let mut x`, but `let mut = 1` binds
+        // a local named `mut`.
+        let mutable =
+            self.at_word("mut") && (self.nth_is_ident(1) || self.nth_is_punct(1, Punct::LParen));
+        if mutable {
+            self.advance();
+        }
         let pattern = self.parse_let_pattern()?;
+        if mutable && !matches!(pattern, LetPattern::Name(_)) {
+            return Err(self.error(
+                "E0108",
+                start,
+                "`let mut` binds one name; destructure with `let` and copy into mutable locals",
+            ));
+        }
         let ty = if self.eat_punct(Punct::Colon) {
             Some(self.parse_type()?)
         } else {
             None
         };
-        self.expect_punct(Punct::Eq)?;
-        let value = self.parse_expr()?;
+        let value = if mutable && ty.is_some() && self.at_punct(Punct::Semi) {
+            None
+        } else {
+            self.expect_punct(Punct::Eq)?;
+            Some(self.parse_expr()?)
+        };
         self.expect_semi()?;
-        Ok(self.mk(StmtKind::Let { pattern, ty, value }, start))
+        Ok(self.mk(
+            StmtKind::Let {
+                pattern,
+                mutable,
+                ty,
+                value,
+            },
+            start,
+        ))
     }
 
     fn parse_let_pattern(&mut self) -> PResult<LetPattern> {

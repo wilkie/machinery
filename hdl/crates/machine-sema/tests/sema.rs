@@ -56,7 +56,8 @@ fn alu_sample_checks_clean() {
     let c = check_files(vec![sample("alu.machine")]);
     assert_clean(&c);
     assert!(c.skipped.is_empty());
-    // Parity8 (non-generic) plus Alu<8>, Alu<16>, AluFlags<8>, AluFlags<16>.
+    // Parity8 and LowestSet (non-generic) plus Alu<8>, Alu<16>, AluFlags<8>,
+    // AluFlags<16>.
     let mut names: Vec<String> = c
         .hir
         .units
@@ -74,10 +75,11 @@ fn alu_sample_checks_clean() {
             "Alu<8>",
             "AluFlags<16>",
             "AluFlags<8>",
+            "LowestSet<>",
             "Parity8<>"
         ]
     );
-    assert_eq!(c.hir.tests.len(), 4);
+    assert_eq!(c.hir.tests.len(), 5);
     // The 16-bit ALU's raw output is 17 bits wide.
     let alu16 = c
         .hir
@@ -209,7 +211,7 @@ fn isa_registers_are_places_and_fields_are_typed() {
     );
     assert_codes(
         &isa("fn f() -> u8 { let x = AL; x = 2; return x; }"),
-        &["E1030"],
+        &["E1050"],
     );
     assert_codes(
         &isa("fn f() -> u8 { mode = Mode::Protected; return (mode == Mode::Real) as u8; }"),
@@ -853,7 +855,8 @@ fn builtins() {
 
 #[test]
 fn units_are_pure() {
-    assert_codes("unit F(a: u8) -> u8 { a = 1; return a; }", &["E1020"]);
+    // Parameters are immutable locals.
+    assert_codes("unit F(a: u8) -> u8 { a = 1; return a; }", &["E1050"]);
     assert_codes("unit F(a: u8) -> u8 { a <- 1; return a; }", &["E1020"]);
     assert_codes("unit F(a: u8) -> u8 { loop { } }", &["E1020", "E1015"]);
     assert_codes(
@@ -1603,4 +1606,116 @@ fn transactions_without_addr_are_not_decoded() {
         "{src}\nsystem S {{ clock a: 1 MHz; component d: Dev @ a; bus x: B @ a {{ slave d.io @ mem 0..=7; }} }}"
     ));
     assert_clean(&c);
+}
+
+// --- mutable locals (SPEC 6.1) and places (SPEC 6.2) ---
+
+fn unit_src(body: &str) -> String {
+    format!("bundle F {{ cf: u1, zf: u1 }}\nunit U(v: u8, c: bool) -> u8 {{ {body} }}")
+}
+
+#[test]
+fn mutable_locals_accumulate_in_units() {
+    assert_codes(
+        &unit_src("let mut n: u8 = 0; for i in 0..8 { if v[i] == 1 { n = n + 1; } } return n;"),
+        &[],
+    );
+    // The type comes from the value when it is not a bare literal.
+    assert_codes(&unit_src("let mut n = v; n = n ^ 0xFF; return n;"), &[]);
+    // Fields and elements of a mutable local are assignable.
+    assert_codes(
+        &unit_src("let mut f: F = F { cf: 0, zf: 0 }; f.cf = 1; let mut a: [u8; 4] = [0_u8; 4]; a[v[1:0]] = 3; return a[0] + f.cf as u8;"),
+        &[],
+    );
+    let c = check_src(&unit_src("let mut n: u8 = 0; n = v; return n;"));
+    assert_clean(&c);
+    let local = c.hir.units[0]
+        .locals
+        .iter()
+        .find(|l| l.name == "n")
+        .unwrap();
+    assert!(local.mutable);
+}
+
+#[test]
+fn mutable_local_errors() {
+    // Assigning an immutable local.
+    assert_codes(&unit_src("let n: u8 = 0; n = 1; return n;"), &["E1050"]);
+    // A bare literal gives no type.
+    assert_codes(&unit_src("let mut n = 0; return v;"), &["E1004"]);
+    // `let mut` binds one name.
+    assert_codes(&unit_src("let mut (a, b) = (v, v); return v;"), &["E0108"]);
+    // Only a mutable local may omit its value.
+    assert!(!codes(&check_src(&unit_src("let n: u8; return v;"))).is_empty());
+}
+
+#[test]
+fn mutable_locals_are_assigned_before_read() {
+    assert_codes(&unit_src("let mut x: u8; return x;"), &["E1051"]);
+    // Both branches assign.
+    assert_codes(
+        &unit_src("let mut x: u8; if c { x = 1; } else { x = 2; } return x;"),
+        &[],
+    );
+    // Only one does.
+    assert_codes(
+        &unit_src("let mut x: u8; if c { x = 1; } return x;"),
+        &["E1051"],
+    );
+    // A branch that returns does not need to assign.
+    assert_codes(
+        &unit_src("let mut x: u8; if c { x = 1; } else { return 0; } return x;"),
+        &[],
+    );
+    // Every match arm assigns.
+    assert_codes(
+        &unit_src("let mut x: u8; match v[1:0] { 0 => { x = 1; } 1 => { x = 2; } _ => { x = 3; } } return x;"),
+        &[],
+    );
+    assert_codes(
+        &unit_src("let mut x: u8; match v[1:0] { 0 => { x = 1; } _ => { } } return x;"),
+        &["E1051"],
+    );
+    // A loop body may run zero times.
+    assert_codes(
+        &unit_src("let mut x: u8; for i in 0..2 { x = 1; } return x;"),
+        &["E1051"],
+    );
+    // `x = x + 1` reads `x` first.
+    assert_codes(&unit_src("let mut x: u8; x = x + 1; return x;"), &["E1051"]);
+    // In an `if` used as a value.
+    assert_codes(
+        &unit_src("let mut x: u8; let y: u8 = if c { x = 1; 5 } else { x = 2; 6 }; return x + y;"),
+        &[],
+    );
+}
+
+#[test]
+fn locals_may_not_shadow_body_places() {
+    // A model state.
+    assert_codes(
+        &dev("state count: u8 = 0; on reset { let count: u8 = 1; }"),
+        &["E1001"],
+    );
+    // A register, a register field, and a `for` variable named like one.
+    assert_codes(&isa("fn f() { let AX: u16 = 1; }"), &["E1001"]);
+    assert_codes(&isa("fn f() { let mut AL: u8 = 1; AL = 2; }"), &["E1001"]);
+    assert_codes(&isa("fn f() { for BX in 0..2 { } }"), &["E1001"]);
+}
+
+#[test]
+fn model_state_arrays_are_places() {
+    let src = format!(
+        "{BUS_PRELUDE}\nbundle Chan {{ count: u16, out: bool }}\ncomponent P {{ ports {{ bus io: B::S; }} model {{
+            state ch: [Chan; 3];
+            state hits: [u8; 4];
+            on io.write(addr: u8, data: u8) -> (wait: u8) {{
+                ch[addr[1:0]].count = data as u16;
+                ch[0].out = true;
+                hits[addr[1:0]] = hits[addr[1:0]] + 1;
+                return (wait: 0);
+            }}
+        }} }}"
+    );
+    assert_codes(&src, &[]);
 }

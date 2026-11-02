@@ -41,9 +41,11 @@ fn cpu_slice_generates_expected_items() {
         "pub fn exec_Add_rm8_r8(",
         "pub fn decode(&mut self)",
         "pub fn step(&mut self)",
-        "fn t4_add_al__bl()",
-        "fn t5_add__bx_si___cl_through_memory()",
-        "fn t2_sub_borrow_is_bit_w_of_the_wide_result()",
+        "fn t5_add_al__bl()",
+        "fn t6_add__bx_si___cl_through_memory()",
+        "fn t3_sub_borrow_is_bit_w_of_the_wide_result()",
+        "fn t0_lowest_set_bit()",
+        "let mut l1_found = 8u8;",
         "pub mod vectors {",
         "pub fn undefined_mask(",
     ] {
@@ -82,8 +84,8 @@ fn cpu_slice_interpreter_compiles_and_passes_its_tests() {
         crate_.lib_rs
     );
     assert!(
-        stdout.contains("6 passed") || stderr.contains("6 passed"),
-        "expected 6 generated tests to pass:\n{stdout}\n{stderr}"
+        stdout.contains("7 passed") || stderr.contains("7 passed"),
+        "expected 7 generated tests to pass:\n{stdout}\n{stderr}"
     );
 }
 

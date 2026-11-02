@@ -2074,10 +2074,38 @@ impl Checker<'_> {
         target: &ast::Expr,
         value: &ast::Expr,
     ) -> Option<(hir::Expr, hir::Expr)> {
+        // Assigning a whole unassigned local is not a read of it.
+        let whole_local = match &target.kind {
+            ast::ExprKind::Path(p) if p.segments.len() == 1 => cx.lookup_local(&p.segments[0].name),
+            _ => None,
+        };
+        let pending = whole_local.filter(|id| cx.unassigned.remove(id));
         let place = self.check_expr(cx, target, None);
+        if let Some(id) = pending {
+            cx.unassigned.insert(id);
+        }
         if place.ty.is_error() {
             self.check_expr(cx, value, None);
             return None;
+        }
+        if let Some(id) = place_local(&place) {
+            let local = &cx.locals[id as usize];
+            if !local.mutable {
+                let name = local.name.clone();
+                self.error_with(
+                    cx.module,
+                    Diagnostic::error("E1050", target.span, format!("`{name}` is not mutable"))
+                        .with_note(format!("declare it `let mut {name}` to assign it; a parameter is copied into a `let mut` local first")),
+                );
+                self.check_expr(cx, value, None);
+                return None;
+            }
+            let ty = place.ty.clone();
+            let v = self.check_expr(cx, value, Some(&ty));
+            if pending.is_some() {
+                cx.unassigned.remove(&id);
+            }
+            return Some((place, v));
         }
         if !hir::is_place(&place) {
             self.error_with(
@@ -2448,5 +2476,14 @@ fn contains_call(e: &hir::Expr) -> bool {
         | H::KindSelect(_, args) => args.iter().any(contains_call),
         H::Match(..) | H::If(..) | H::Block(_) => true,
         _ => false,
+    }
+}
+
+/// The local at the root of a place: `x`, `x.f`, `x[i].f`.
+fn place_local(e: &hir::Expr) -> Option<hir::LocalId> {
+    match &e.kind {
+        hir::ExprKind::Local(id) => Some(*id),
+        hir::ExprKind::Field(b, _) | hir::ExprKind::Index(b, _) => place_local(b),
+        _ => None,
     }
 }

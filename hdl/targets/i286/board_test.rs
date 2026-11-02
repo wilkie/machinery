@@ -182,5 +182,5 @@ fn pit_counter_latch_and_rate_generator() {
     p.edges.clear();
     pit.on_tick(&mut p, 65 + 250);
     assert_eq!(p.edges, [false, true]);
-    assert_eq!(pit.count[0], 100 - 50);
+    assert_eq!(pit.ch[0].count, 100 - 50);
 }

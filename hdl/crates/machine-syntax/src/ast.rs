@@ -374,10 +374,13 @@ pub enum RunSpec {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum StmtKind {
+    /// `let x = e;`, `let mut x: T = e;`, `let mut x: T;`. Only a mutable
+    /// local may omit its value (and then names its type).
     Let {
         pattern: LetPattern,
+        mutable: bool,
         ty: Option<Type>,
-        value: Expr,
+        value: Option<Expr>,
     },
     /// `lhs = rhs;` drive a wire (or an architectural write in `isa` code).
     Assign {

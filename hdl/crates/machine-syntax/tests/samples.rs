@@ -47,7 +47,10 @@ fn alu_sample_parses() {
     let file = parse_clean("alu.machine");
     assert_eq!(
         decl_keywords(&file),
-        vec!["enum", "enum", "bundle", "unit", "unit", "unit", "test", "test", "test", "test"]
+        vec![
+            "enum", "enum", "bundle", "unit", "unit", "unit", "unit", "test", "test", "test",
+            "test", "test"
+        ]
     );
     // Doc comments attach to declarations.
     match &file.decls[0] {

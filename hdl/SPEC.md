@@ -245,8 +245,10 @@ rules hold at every level, so a unit written with one means the same in
 the emulator and in the simulator.
 
 - **Declaration.** `let mut name[: T] = init;` or `let mut name: T;`
-  without an initial value. The type is the initialiser's when omitted.
-  `let mut` with a destructuring pattern is not allowed.
+  without an initial value. The type is the initialiser's when omitted;
+  a bare literal has no runtime width, so `let mut n = 0;` is an error
+  (E1004) and is written `let mut n: u8 = 0;`. `let mut` with a
+  destructuring pattern is not allowed (E0108).
 - **Assignment.** `name = expr;` with `expr` of the local's type (no
   implicit widening, as everywhere). A field or element of a mutable
   local of bundle or array type is assignable too: `ch.count = v;`,
@@ -258,17 +260,19 @@ the emulator and in the simulator.
   without initialiser must therefore be assigned in every branch before
   the first read after the branches join. There is no default value.
 - **Scope.** A local, mutable or not, is visible to the end of the
-  enclosing block. It may not share a name with a port, wire, register,
-  `state`, `mem`, latch or architectural register visible in the body
-  (E1001), so `x = expr;` never has two meanings. Shadowing an outer
-  local of the same body is allowed, as for `let`.
+  enclosing block. A `let` or `for` local may not share a name with a
+  port, wire, `state`, `mem`, register, register field or view, latch,
+  mode or address space visible in the body (E1001), so `x = expr;`
+  never has two meanings. Parameters are named in signatures and are
+  exempt. Shadowing an outer local of the same body is allowed.
 - **Not storage.** A mutable local lives within one evaluation. In a
   routine it may not be read after a `cycle` or `wait until` that follows
   its last assignment (E1052: "use a `reg` to carry a value across a
-  cycle"). In rtl it may not be scheduled with `<-` and is not a clock
-  domain member.
-- **Assigning an immutable local** is an error (E1050), with a note to
-  declare it `let mut`.
+  cycle"; checked once rtl bodies are). In rtl it may not be scheduled
+  with `<-` and is not a clock domain member.
+- **Assigning an immutable local**, parameters included, is an error
+  (E1050), with a note to declare it `let mut` or copy the parameter
+  into one.
 - **Units stay pure.** A mutable local never escapes its unit; a unit
   with mutable locals is still a pure function and still inlinable into
   rtl.

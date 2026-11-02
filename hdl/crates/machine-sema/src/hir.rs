@@ -27,6 +27,8 @@ pub struct Local {
     pub name: String,
     pub ty: Ty,
     pub span: Span,
+    /// Declared `let mut`: assignable.
+    pub mutable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -124,7 +126,11 @@ pub fn is_place(e: &Expr) -> bool {
         | ExprKind::KindSelect(..) => true,
         ExprKind::Port(_, _, out) => *out,
         ExprKind::State(..) => true,
-        ExprKind::Index(b, _) => matches!(b.kind, ExprKind::ModelMem(..)),
+        // An element of a `mem`, or of any array-typed place.
+        ExprKind::Index(b, _) => {
+            matches!(b.kind, ExprKind::ModelMem(..))
+                || (matches!(b.ty, Ty::Array(..)) && is_place(b))
+        }
         ExprKind::Field(b, _) => is_place(b),
         ExprKind::Match(_, arms) => arms.iter().all(|a| match &a.body {
             ArmBody::Expr(e) => is_place(e) || matches!(e.ty, Ty::Never),
@@ -196,7 +202,8 @@ pub struct Stmt {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum StmtKind {
-    Let(LetTarget, Expr),
+    /// `None` for `let mut x: T;` (assigned later, before any read).
+    Let(LetTarget, Option<Expr>),
     Expr(Expr),
     If(Expr, Block, Option<Box<Stmt>>),
     Match(Expr, Vec<Arm>),

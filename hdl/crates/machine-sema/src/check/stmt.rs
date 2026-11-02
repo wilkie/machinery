@@ -57,7 +57,12 @@ impl Checker<'_> {
     fn check_stmt(&mut self, cx: &mut FnCtx, s: &ast::Stmt, is_last: bool) -> Stmt {
         let span = s.span;
         let kind = match &s.kind {
-            A::Let { pattern, ty, value } => {
+            A::Let {
+                pattern,
+                mutable,
+                ty,
+                value,
+            } => {
                 let declared = match ty {
                     Some(t) => {
                         let generics = cx.generics.clone();
@@ -65,12 +70,50 @@ impl Checker<'_> {
                     }
                     None => None,
                 };
-                let value = self.check_expr(cx, value, declared.as_ref());
-                let target = self.bind_pattern(cx, pattern, &value.ty);
-                H::Let(target, value)
+                let value = value
+                    .as_ref()
+                    .map(|v| self.check_expr(cx, v, declared.as_ref()));
+                if *mutable {
+                    let ast::LetPattern::Name(n) = pattern else {
+                        unreachable!("the parser allows `let mut` on one name")
+                    };
+                    // A mutable local has a runtime type: a bare literal
+                    // takes its declared type, or is an error without one.
+                    let ty = match (&declared, &value) {
+                        (Some(t), _) => t.clone(),
+                        (None, Some(v)) if matches!(v.ty, Ty::Const(_)) => {
+                            self.error_with(
+                                cx.module,
+                                Diagnostic::error(
+                                    "E1004",
+                                    n.span,
+                                    "a mutable local needs a type when its value is a bare literal",
+                                )
+                                .with_note("write `let mut x: u8 = 0;`"),
+                            );
+                            Ty::Error
+                        }
+                        (None, Some(v)) => v.ty.clone(),
+                        (None, None) => Ty::Error,
+                    };
+                    let value = value.map(|v| self.coerce(cx, v, &ty));
+                    self.check_local_name(cx, &n.name, n.span);
+                    let id = cx.declare_local(&n.name, ty, n.span, true);
+                    if value.is_none() {
+                        cx.unassigned.insert(id);
+                    }
+                    H::Let(LetTarget::Local(id), value)
+                } else {
+                    let value = value.expect("the parser requires a value for `let`");
+                    let target = self.bind_pattern(cx, pattern, &value.ty);
+                    H::Let(target, Some(value))
+                }
             }
             A::Assign { target, value } => {
-                if cx.scope.isa.is_none() && cx.component.is_none() {
+                if cx.scope.isa.is_none()
+                    && cx.component.is_none()
+                    && !self.assigns_local(cx, target)
+                {
                     let where_ = self.where_(cx);
                     self.error_with(
                         cx.module,
@@ -144,17 +187,35 @@ impl Checker<'_> {
                 else_branch,
             } => {
                 let cond = self.check_expr(cx, cond, Some(&Ty::Bool));
+                let before = cx.unassigned.clone();
                 let then_b = self.check_block(cx, then_branch);
+                let after_then = falls_through(&then_b).then(|| cx.unassigned.clone());
+                cx.unassigned = before.clone();
                 let else_s = else_branch
                     .as_ref()
                     .map(|e| Box::new(self.check_stmt(cx, e, true)));
+                let after_else = match &else_s {
+                    Some(e)
+                        if !falls_through(&Block {
+                            stmts: vec![(**e).clone()],
+                            span: e.span,
+                        }) =>
+                    {
+                        None
+                    }
+                    _ => Some(cx.unassigned.clone()),
+                };
+                cx.unassigned = join_unassigned([after_then, after_else]);
                 H::If(cond, then_b, else_s)
             }
             A::Match { scrutinee, arms } => {
                 let scrut = self.check_expr(cx, scrutinee, None);
                 let scrut = self.settle_scrutinee(cx, scrut);
                 let mut harms = Vec::new();
+                let before = cx.unassigned.clone();
+                let mut afters = Vec::new();
                 for arm in arms {
+                    cx.unassigned = before.clone();
                     let pats = if scrut.ty.is_error() {
                         Vec::new()
                     } else {
@@ -177,12 +238,18 @@ impl Checker<'_> {
                         }
                     };
                     cx.pop_scope();
+                    let diverges = match &body {
+                        hir::ArmBody::Block(b) => !falls_through(b),
+                        hir::ArmBody::Expr(e) => matches!(e.ty, Ty::Never),
+                    };
+                    afters.push((!diverges).then(|| cx.unassigned.clone()));
                     harms.push(hir::Arm {
                         patterns: pats,
                         body,
                         span: arm.span,
                     });
                 }
+                cx.unassigned = join_unassigned(afters);
                 if !scrut.ty.is_error() {
                     self.check_exhaustive(cx, &scrut.ty, &harms, span);
                 }
@@ -230,21 +297,29 @@ impl Checker<'_> {
                 let max = (hi_excl - 1).max(lo_v).max(0);
                 let var_ty = Ty::UInt(bits_for(max as u64));
                 cx.push_scope();
+                self.check_local_name(cx, &var.name, var.span);
                 let id = cx.declare(&var.name, var_ty, var.span);
+                // Assignments in a loop body do not count after the loop.
+                let before = cx.unassigned.clone();
                 let body = self.check_block(cx, body);
+                cx.unassigned = before;
                 cx.pop_scope();
                 H::For(id, lo_v, hi_excl, body)
             }
             A::While { cond, body } if cx.component.is_some() => {
                 let c = self.check_expr(cx, cond, Some(&Ty::Bool));
                 cx.loop_depth += 1;
+                let before = cx.unassigned.clone();
                 let b = self.check_block(cx, body);
+                cx.unassigned = before;
                 cx.loop_depth -= 1;
                 H::While(c, b)
             }
             A::Loop(body) if cx.component.is_some() => {
                 cx.loop_depth += 1;
+                let before = cx.unassigned.clone();
                 let b = self.check_block(cx, body);
+                cx.unassigned = before;
                 cx.loop_depth -= 1;
                 H::Loop(b)
             }
@@ -484,7 +559,10 @@ impl Checker<'_> {
     fn bind_pattern(&mut self, cx: &mut FnCtx, pat: &ast::LetPattern, ty: &Ty) -> LetTarget {
         match pat {
             ast::LetPattern::Wildcard(_) => LetTarget::Discard,
-            ast::LetPattern::Name(n) => LetTarget::Local(cx.declare(&n.name, ty.clone(), n.span)),
+            ast::LetPattern::Name(n) => {
+                self.check_local_name(cx, &n.name, n.span);
+                LetTarget::Local(cx.declare(&n.name, ty.clone(), n.span))
+            }
             ast::LetPattern::Tuple(items) => match ty {
                 Ty::Tuple(elems) => {
                     if elems.len() != items.len() {
@@ -620,5 +698,102 @@ fn stmt_has_break(s: &Stmt) -> bool {
             ..
         }) => block_has_break(b),
         _ => false,
+    }
+}
+
+/// Does control reach the end of this block? Not when it returns, raises,
+/// or ends in `break` or `continue` (for definite assignment).
+fn falls_through(b: &Block) -> bool {
+    if block_diverges(b) {
+        return false;
+    }
+    match b.stmts.last().map(|s| &s.kind) {
+        Some(H::Break | H::Continue) => false,
+        Some(H::If(_, t, Some(e))) => {
+            falls_through(t)
+                || falls_through(&Block {
+                    stmts: vec![(**e).clone()],
+                    span: e.span,
+                })
+        }
+        _ => true,
+    }
+}
+
+/// After branches join, a local is unassigned if it is unassigned at the
+/// end of any branch that falls through. `None` is a branch that diverges.
+pub(super) fn join_unassigned(
+    branches: impl IntoIterator<Item = Option<std::collections::BTreeSet<hir::LocalId>>>,
+) -> std::collections::BTreeSet<hir::LocalId> {
+    let mut out = std::collections::BTreeSet::new();
+    for b in branches.into_iter().flatten() {
+        out.extend(b);
+    }
+    out
+}
+
+impl Checker<'_> {
+    /// A `let` or `for` local may not share its name with a port, state,
+    /// mem, register, register field or view, latch, mode or space visible
+    /// in the body, so that `x = e;` has one meaning (E1001).
+    pub(super) fn check_local_name(
+        &mut self,
+        cx: &FnCtx,
+        name: &str,
+        span: machine_syntax::span::Span,
+    ) {
+        let mut what = None;
+        if let Some(comp) = cx.component {
+            if let Some(cs) = self.comps.get(&comp) {
+                what = cs.names.get(name).map(|e| match e {
+                    super::CompEntry::Port(_) => "a port",
+                    super::CompEntry::State(_) => "a `state`",
+                    super::CompEntry::Mem(_) => "a `mem`",
+                });
+            }
+        }
+        if what.is_none() {
+            if let Some(isa) = cx.scope.isa {
+                what = match self.prog.lookup_in_ns(isa, name) {
+                    Some(crate::program::ScopeEntry::RegField { .. }) => Some("a register field"),
+                    Some(crate::program::ScopeEntry::RegView { .. }) => Some("a register view"),
+                    Some(crate::program::ScopeEntry::Item(d)) => match self.prog.item(d).kind {
+                        crate::program::ItemKind::Register => Some("a register"),
+                        crate::program::ItemKind::Latch => Some("a latch"),
+                        crate::program::ItemKind::Space => Some("an address space"),
+                        crate::program::ItemKind::Mode => Some("the mode register"),
+                        _ => None,
+                    },
+                    Some(_) => Some("the mode register"),
+                    None => None,
+                };
+            }
+        }
+        if let Some(what) = what {
+            self.error_with(
+                cx.module,
+                Diagnostic::error(
+                    "E1001",
+                    span,
+                    format!("`{name}` is {what} of this body; a local may not share its name"),
+                )
+                .with_note("rename the local, so that `name = value;` has one meaning"),
+            );
+        }
+    }
+
+    /// Does `target` name a local (or a field or element of one)? Units
+    /// may assign mutable locals; others get E1050 from `check_assign`.
+    fn assigns_local(&self, cx: &FnCtx, target: &ast::Expr) -> bool {
+        let mut e = target;
+        loop {
+            match &e.kind {
+                ast::ExprKind::Field(b, _) | ast::ExprKind::Index(b, _) => e = b,
+                ast::ExprKind::Path(p) if p.segments.len() == 1 => {
+                    return cx.lookup_local(&p.segments[0].name).is_some();
+                }
+                _ => return false,
+            }
+        }
     }
 }

@@ -284,7 +284,7 @@ const PAL200: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 0x10, 0x11, 0x12, 0x13, 0x14, 
 /// Runs the program to its HLT, then until the EGA has finished `n` more
 /// frames (until the registers are programmed a "frame" can be a few dots).
 fn frames(sys: &mut System, n: u32) {
-    sys.run_until(100_000, |s| s.cpu.halted).unwrap();
+    sys.run_until(20_000_000, |s| s.cpu.halted).unwrap();
     assert!(sys.cpu.halted, "the program ran to its HLT");
     sys.catch_up_all();
     let want = sys.board().ega.frames + n;
@@ -533,4 +533,165 @@ fn bench_ega_modes() {
         &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x0F, 0xFF],
         &graphics,
     );
+}
+
+// --- the EGA's own BIOS ---
+
+/// The IBM EGA's BIOS ROM (6277356) from the ROM images in `~/roms` (or
+/// `PC_ROMS`), which are not in the repository; byte-reversed as archived
+/// (`targets/pc/fonts/README.md`). None when it is not there.
+fn ega_bios() -> Option<Vec<u8>> {
+    let dir = match std::env::var("PC_ROMS") {
+        Ok(d) => std::path::PathBuf::from(d),
+        Err(_) => std::path::PathBuf::from(std::env::var("HOME").ok()?).join("roms"),
+    };
+    let mut rom = std::fs::read(dir.join("ibm_6277356_ega_card_u44_27128.bin")).ok()?;
+    rom.reverse();
+    (rom.len() == 0x4000 && rom[..2] == [0x55, 0xAA]).then_some(rom)
+}
+
+/// A stand-in system BIOS's start, at F000:0000: every interrupt vector at
+/// F000:F065 (where the PC BIOS's video routine is, and where the EGA BIOS
+/// sends the monochrome display's calls; here an IRET), the data area's
+/// equipment word with no video (the EGA brings its own) and 640 KB, then a
+/// far call to the option ROM's initialisation at C000:0003. Each test
+/// appends its INT 10h calls.
+const HOST_PROLOGUE: &[u8] = &[
+    0xFA, // cli
+    0x31, 0xC0, // xor ax, ax
+    0x8E, 0xD8, // mov ds, ax
+    0x8E, 0xC0, // mov es, ax
+    0x8E, 0xD0, // mov ss, ax
+    0xBC, 0x00, 0x7C, // mov sp, 0x7C00
+    0x31, 0xFF, // xor di, di
+    0xB9, 0x00, 0x01, // mov cx, 256
+    0xC7, 0x05, 0x65, 0xF0, // .vec: mov word [di], 0xF065
+    0xC7, 0x45, 0x02, 0x00, 0xF0, // mov word [di + 2], 0xF000
+    0x83, 0xC7, 0x04, // add di, 4
+    0xE2, 0xF2, // loop .vec
+    0xC7, 0x06, 0x10, 0x04, 0x00, 0x00, // mov word [0x410], 0x0000
+    0xC7, 0x06, 0x13, 0x04, 0x80, 0x02, // mov word [0x413], 640
+    0x9A, 0x03, 0x00, 0x00, 0xC0, // call 0xC000:0x0003
+];
+
+/// INT 10h with AX, BX, CX and DX.
+fn int10(ax: u16, bx: u16, cx: u16, dx: u16) -> Vec<u8> {
+    let mut v = Vec::new();
+    for (op, x) in [(0xB8, ax), (0xBB, bx), (0xB9, cx), (0xBA, dx)] {
+        v.extend_from_slice(&[op, x as u8, (x >> 8) as u8]);
+    }
+    v.extend_from_slice(&[0xCD, 0x10]);
+    v
+}
+
+/// `mov [addr], al`
+fn store_al(addr: u16) -> Vec<u8> {
+    vec![0xA2, addr as u8, (addr >> 8) as u8]
+}
+
+/// Boots the stand-in BIOS with `calls` after the option ROM's
+/// initialisation and runs it to its HLT and two more frames; None without
+/// the EGA BIOS image.
+fn run_ega_bios(calls: &[u8]) -> Option<System> {
+    let bios = ega_bios()?;
+    let mut code = HOST_PROLOGUE.to_vec();
+    code.extend_from_slice(calls);
+    code.push(0xF4); // hlt
+    let mut image = rom(&code, &[]);
+    image[0xF065] = 0xCF; // iret
+    let mut sys = boot(image);
+    sys.board().ega.bios = bios;
+    frames(&mut sys, 2);
+    Some(sys)
+}
+
+/// IBM's EGA BIOS on our EGA: its initialisation reads the switches (an
+/// Enhanced Color Display, primary, beside a monochrome display), and INT
+/// 10h sets mode 3 with the ECD's 350-line timing, loads its 8x14 font into
+/// plane 2, and writes text by teletype.
+#[test]
+fn ega_bios_sets_text_mode() {
+    let mut calls = int10(0x0003, 0, 0, 0);
+    calls.extend(int10(0x0E48, 0x0007, 0, 0)); // 'H'
+    calls.extend(int10(0x0E69, 0x0007, 0, 0)); // 'i'
+    let Some(mut sys) = run_ega_bios(&calls) else {
+        eprintln!("the EGA BIOS image is not in ~/roms; skipping");
+        return;
+    };
+    let b = sys.board();
+    let bda = |a: usize| b.ram.cells[a];
+    assert_eq!(bda(0x488) & 15, 9, "the switches, as the BIOS read them");
+    assert_eq!((bda(0x449), bda(0x44A), bda(0x485)), (3, 80, 14), "mode 3: 80 columns, 14 rows a character");
+    assert_eq!((bda(0x463), bda(0x464)), (0xD4, 0x03), "the CRTC at 3D4");
+    assert_eq!(b.ega.misc, 0xA7, "the 16.257 MHz clock");
+    assert_eq!((b.ega.frame_width, b.ega.frame_height), (640, 350));
+    // The BIOS loaded its font into plane 2, 32 bytes a character.
+    let font14 = font("ega_8x14.bin");
+    for c in [b'H', b'i'] {
+        let at = 0x20000 + c as usize * 32;
+        assert_eq!(&b.ega.planes[at..at + 14], &font14[c as usize * 14..c as usize * 14 + 14]);
+    }
+    // "Hi" in light grey (palette[7]) on black.
+    assert_eq!((b.ega.planes[0], b.ega.planes[2]), (b'H', b'i'));
+    for (col, c) in [b'H', b'i'].iter().enumerate() {
+        for r in 0..14 {
+            let row = font14[*c as usize * 14 + r];
+            let want: Vec<u8> = (0..8).map(|d| if row >> (7 - d) & 1 == 1 { 0x07 } else { 0 }).collect();
+            let at = r * 720 + col * 8;
+            assert_eq!(&b.ega.frame[at..at + 8], &want[..], "{} row {r}", *c as char);
+        }
+    }
+}
+
+/// Mode 10h (640x350, 16 colours) by the BIOS: INT 10h write-pixel goes
+/// through the graphics controller (write mode, bit mask, latches) and
+/// read-pixel reads the planes back.
+#[test]
+fn ega_bios_draws_pixels_in_mode_10h() {
+    let mut calls = int10(0x0010, 0, 0, 0);
+    calls.extend(int10(0x0C0E, 0, 0, 0)); // colour 14 at (0, 0)
+    calls.extend(int10(0x0C09, 0, 1, 0)); // colour 9 at (1, 0)
+    calls.extend(int10(0x0C0C, 0, 637, 349)); // colour 12 at (637, 349)
+    calls.extend(int10(0x0D00, 0, 1, 0)); // read (1, 0)
+    calls.extend(store_al(0x0500));
+    calls.extend(int10(0x0D00, 0, 637, 349)); // read (637, 349)
+    calls.extend(store_al(0x0501));
+    let Some(mut sys) = run_ega_bios(&calls) else {
+        eprintln!("the EGA BIOS image is not in ~/roms; skipping");
+        return;
+    };
+    let b = sys.board();
+    assert_eq!(b.ram.cells[0x449], 0x10);
+    assert_eq!((b.ram.cells[0x500], b.ram.cells[0x501]), (9, 12), "read back");
+    assert_eq!((b.ega.frame_width, b.ega.frame_height), (640, 350));
+    let dot = |x: usize, y: usize| b.ega.frame[y * 720 + x];
+    let pal = |c: usize| b.ega.attr[c] & 0x3F;
+    assert_eq!((dot(0, 0), dot(1, 0), dot(2, 0)), (pal(14), pal(9), pal(0)));
+    assert_eq!((dot(636, 349), dot(637, 349), dot(638, 349)), (pal(0), pal(12), pal(0)));
+}
+
+/// Mode 4 (the CGA's 320x200 in 4 colours) by the BIOS: odd/even addressing
+/// at B8000, the shift register's interleave, even and odd dot rows in two
+/// banks, 200-line timing.
+#[test]
+fn ega_bios_draws_pixels_in_cga_mode_4() {
+    let mut calls = int10(0x0004, 0, 0, 0);
+    calls.extend(int10(0x0C03, 0, 1, 0)); // colour 3 at (1, 0)
+    calls.extend(int10(0x0C02, 0, 0, 1)); // colour 2 at (0, 1): the odd bank
+    calls.extend(int10(0x0C01, 0, 5, 0)); // colour 1 at (5, 0): the next byte
+    calls.extend(int10(0x0D00, 0, 0, 1));
+    calls.extend(store_al(0x0500));
+    let Some(mut sys) = run_ega_bios(&calls) else {
+        eprintln!("the EGA BIOS image is not in ~/roms; skipping");
+        return;
+    };
+    let b = sys.board();
+    assert_eq!(b.ram.cells[0x449], 4);
+    assert_eq!(b.ram.cells[0x500], 2, "read back");
+    assert_eq!((b.ega.frame_width, b.ega.frame_height), (640, 200));
+    // 320 dots, each two of the frame's.
+    let dot = |x: usize, y: usize| b.ega.frame[y * 720 + 2 * x];
+    let pal = |c: usize| b.ega.attr[c] & 0x3F;
+    assert_eq!((dot(0, 0), dot(1, 0), dot(5, 0)), (pal(0), pal(3), pal(1)));
+    assert_eq!((dot(0, 1), dot(1, 1)), (pal(2), pal(0)));
 }

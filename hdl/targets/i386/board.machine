@@ -319,7 +319,7 @@ system Board386 {
         slave dma.pages @ io 0x81..=0x87;
         slave link.port;
         slave console.port @ io 0xE9..=0xE9;
-        slave ega.port @ mem 0xA0000..=0xBFFFF, io 0x3B0..=0x3DF;
+        slave ega.port @ mem 0xA0000..=0xBFFFF, mem 0xC0000..=0xC3FFF, io 0x3B0..=0x3DF;
     }
 
     /// IRQ 0-7: the timer on 0, the slave controller on 2.
@@ -338,6 +338,11 @@ system Board386 {
     wire pic2.sp = false;
     wire pic2.cas_in = pic1.cas_out;
     wire cpu.intr_line = pic1.int;
+    /// The EGA's configuration switches (1001 as the BIOS reads them): an
+    /// Enhanced Color Display, primary, with a monochrome display beside it
+    /// (whose mode sets the EGA BIOS hands to the system BIOS's video
+    /// routine at F000:F065).
+    wire ega.switches = 0x9;
 
     profile fast { default: model; }
 }

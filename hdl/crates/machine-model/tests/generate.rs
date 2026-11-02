@@ -545,7 +545,7 @@ fn i386_board_system_boots() {
         output.status.success(),
         "board tests failed:\n{stdout}\n{stderr}"
     );
-    assert!(stdout.contains("9 passed"), "expected 9 tests:\n{stdout}");
+    assert!(stdout.contains("12 passed"), "expected 12 tests:\n{stdout}");
 }
 
 /// The processor model's pipeline (SPEC 11.2c): the conformance rig

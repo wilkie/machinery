@@ -782,6 +782,10 @@ component Console {
 /// Mode bit 2 clear) address bit 0 picks the even or odd plane and the
 /// planes see the address with bit 0 clear.
 ///
+/// The CRTC and Input Status 1 answer at 3D4, 3D5 and 3DA, or at 3B4, 3B5
+/// and 3BA, as the Miscellaneous Output register's I/O address bit says
+/// (set for colour); the other range is left to another card.
+///
 /// The display: the CRTC counts character clocks of 8 or 9 dots (the
 /// sequencer's Clocking Mode), at 14.318 MHz or 16.257 MHz (the
 /// Miscellaneous Output register's clock select), halved for 320-dot
@@ -796,16 +800,26 @@ component Console {
 /// Color Plane Enable mask and the attribute palette to one of the EGA's 64
 /// colours (bits 0-5: B, G, R, b, g, r), which is what `frame` holds, 720
 /// dots wide. The host reads `frame`, `frame_width`, `frame_height` and the
-/// `frames` counter, and fills fonts into plane 2 (`planes`) as the EGA's
-/// BIOS would.
+/// `frames` counter.
+///
+/// The card carries its BIOS: a 16 KB option ROM (`bios`, which the host
+/// fills) answering at C0000-C3FFF, which the system BIOS finds and calls,
+/// and which then loads the fonts into plane 2 and sets modes for INT 10h.
+/// The four configuration switches (`switches`, a strap) tell it the
+/// monitor: Input Status 0 bit 4 reads the switch the Miscellaneous Output
+/// register's clock select bits name (bit n of `switches` for clock select
+/// n; a switch that is on reads 0).
 component Ega {
     ports {
         clock dot14;
         clock dot16;
         bus port: IsaBus::Slave;
+        /// The configuration switches, as read: bit n for clock select n.
+        in switches: u4;
     }
     model {
         mem planes: [u8; 0x40000];
+        mem bios: [u8; 0x4000];
         mem frame: [u8; 252000];
         state frame_width: u32 = 0;
         state frame_height: u32 = 0;
@@ -1045,7 +1059,23 @@ component Ega {
 
         // -- the bus -----------------------------------------------------------------------
 
+        /// Whether the card answers I/O port `r`: 3C0-3CF always, and the
+        /// 3Dx or the 3Bx range by the I/O address bit.
+        fn io_selected(r: u12) -> bool {
+            if r >= 0x3C0 && r <= 0x3CF { return true; }
+            if r >= 0x3D0 && r <= 0x3DF { return misc[0] == 1; }
+            if r >= 0x3B0 && r <= 0x3BF { return misc[0] == 0; }
+            return false;
+        }
+
         on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            if space == Space::Mem && addr >= 0xC0000 && addr <= 0xC3FFF {
+                let a = addr[13:0];
+                if size == BusSize::Word {
+                    return (data: concat(bios[(a + 1) & 0x3FFF], bios[a]), wait: 1);
+                }
+                return (data: bios[a] as u16, wait: 1);
+            }
             if space == Space::Mem {
                 let lo = read_byte(addr);
                 if size == BusSize::Word {
@@ -1054,34 +1084,52 @@ component Ega {
                 return (data: lo as u16, wait: 1);
             }
             let r = addr[11:0];
+            if !io_selected(r) { decline; }
             if r == 0x3C2 {
-                // Input Status 0: the switch sense bit.
-                return (data: 0x10, wait: 1);
+                // Input Status 0: bit 4 senses the configuration switch the
+                // clock select bits name.
+                let sw = switches[((misc >> 2) & 3) as u2];
+                return (data: (sw as u16) << 4, wait: 1);
             }
             if r == 0x3DA || r == 0x3BA {
                 // Input Status 1: bit 0 outside the display area, bit 3
-                // vertical retrace; the read resets the attribute flip-flop.
+                // vertical retrace, bits 4-5 the diagnostic readback of two
+                // of the attribute controller's output bits (chosen by the
+                // Color Plane Enable register's bits 4-5: P2 and P0, P5 and
+                // P4, P3 and P1); the read resets the attribute flip-flop.
+                // The dot under the beam is taken from the last frame drawn,
+                // which is exact for a still picture.
                 attr_flip = false;
                 let ld = line_dots();
                 let line = if ld == 0 { 0 } else { pos / ld };
                 let h = if ld == 0 { 0 } else { pos % ld };
                 let o = EgaCrtcOutputs(t, line, h / char_dots());
-                let v: u8 = (if o.display { 0 } else { 1 }) | (if o.retrace { 8 } else { 0 });
+                let dot = if o.display && line < 350 && h < 720 { frame[line * 720 + h] } else { 0 };
+                let mux = (attr[18] >> 4) & 3;
+                let diag: u8 = if mux == 0 { dot[0] as u8 | ((dot[2] as u8) << 1) }
+                    else if mux == 1 { dot[4] as u8 | ((dot[5] as u8) << 1) }
+                    else if mux == 2 { dot[1] as u8 | ((dot[3] as u8) << 1) }
+                    else { 0 };
+                let v: u8 = (if o.display { 0 } else { 1 }) | (if o.retrace { 8 } else { 0 }) | (diag << 4);
                 return (data: v as u16, wait: 1);
             }
-            if (r == 0x3D5 || r == 0x3B5) && crtc_index >= 12 && crtc_index <= 15 {
+            if (r & 0xF) == 5 && r != 0x3C5 && crtc_index >= 12 && crtc_index <= 15 {
                 return (data: crtc[crtc_index] as u16, wait: 1);
             }
             return (data: 0xFF, wait: 1);
         }
 
         on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            if space == Space::Mem && addr >= 0xC0000 {
+                return (wait: 1);
+            }
             if space == Space::Mem {
                 write_byte(addr, data as u8);
                 if size == BusSize::Word { write_byte(addr + 1, (data >> 8) as u8); }
                 return (wait: 1);
             }
             let r = addr[11:0];
+            if !io_selected(r) { decline; }
             let d = data as u8;
             if r == 0x3C0 {
                 if !attr_flip {
@@ -1100,9 +1148,9 @@ component Ega {
                 gc_index = d & 15;
             } else if r == 0x3CF {
                 if gc_index < 9 { gc[gc_index] = d; }
-            } else if r == 0x3D4 || r == 0x3B4 {
+            } else if (r & 0xF) == 4 && r != 0x3C4 {
                 crtc_index = d & 31;
-            } else if r == 0x3D5 || r == 0x3B5 {
+            } else if (r & 0xF) == 5 && r != 0x3C5 {
                 if crtc_index < 25 {
                     crtc[crtc_index] = d;
                     t = EgaCrtcTiming(crtc);

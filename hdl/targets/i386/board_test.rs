@@ -227,18 +227,208 @@ fn dma_reads_memory_out_to_the_host() {
     assert_eq!(&b.link.outbox[..b.link.out_len as usize], b"Hello, 386!");
 }
 
-/// The CGA's video memory is on the ISA bus: a dword store becomes four
-/// byte cycles (the CGA is an 8-bit device), and every byte arrives.
+/// `out port, value` for each pair: mov dx, port; mov al, value; out dx, al.
+fn outs(regs: &[(u16, u8)]) -> Vec<u8> {
+    let mut code = Vec::new();
+    for &(port, v) in regs {
+        code.extend_from_slice(&[0xBA, port as u8, (port >> 8) as u8, 0xB0, v, 0xEE]);
+    }
+    code
+}
+
+/// An EGA mode's registers: Miscellaneous Output, then the sequencer, CRTC,
+/// graphics controller and attribute controller from index 0.
+fn ega_mode(misc: u8, seq: &[u8], crtc: &[u8], gc: &[u8], attr: &[u8]) -> Vec<u8> {
+    let mut r = vec![(0x3C2, misc)];
+    for (i, &v) in seq.iter().enumerate() {
+        r.push((0x3C4, i as u8));
+        r.push((0x3C5, v));
+    }
+    for (i, &v) in crtc.iter().enumerate() {
+        r.push((0x3D4, i as u8));
+        r.push((0x3D5, v));
+    }
+    for (i, &v) in gc.iter().enumerate() {
+        r.push((0x3CE, i as u8));
+        r.push((0x3CF, v));
+    }
+    // 3DA resets the attribute flip-flop; then index, data pairs.
+    let mut code = vec![0xBA, 0xDA, 0x03, 0xEC]; // mov dx, 0x3DA; in al, dx
+    code.extend(outs(&r));
+    let mut a = Vec::new();
+    for (i, &v) in attr.iter().enumerate() {
+        a.push((0x3C0, i as u8));
+        a.push((0x3C0, v));
+    }
+    a.push((0x3C0, 0x20)); // palette address source: the display has it
+    code.extend(outs(&a));
+    code
+}
+
+/// The palette of the EGA's 200-line modes: the CGA's sixteen colours.
+const PAL200: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17];
+
+/// Runs the program to its HLT, then until the EGA has finished `n` more
+/// frames (until the registers are programmed a "frame" can be a few dots).
+fn frames(sys: &mut System, n: u32) {
+    sys.run_until(100_000, |s| s.cpu.halted).unwrap();
+    assert!(sys.cpu.halted, "the program ran to its HLT");
+    sys.catch_up_all();
+    let want = sys.board().ega.frames + n;
+    sys.run_until(5_000_000, |s| {
+        s.catch_up_all();
+        s.board().ega.frames >= want
+    })
+    .unwrap();
+}
+
+/// 80x25 text on 200-line timing (the BIOS's mode 3 for a colour monitor):
+/// the character from plane 0, its attribute from plane 1 (odd/even mode
+/// puts B8000 and B8001 there), the glyph row from plane 2, the colours
+/// through the attribute palette.
 #[test]
-fn video_memory_through_the_isa_bus() {
-    let code = [
+fn ega_text_mode_draws_characters() {
+    let mut attr = PAL200.to_vec();
+    attr.extend_from_slice(&[0x08, 0x00, 0x0F, 0x00]);
+    let mut code = ega_mode(
+        0x23,
+        &[0x03, 0x01, 0x03, 0x00, 0x03],
+        &[
+            0x70, 0x4F, 0x5C, 0x2F, 0x5F, 0x07, 0x04, 0x11, 0x00, 0x07, 0x06, 0x07, 0x00, 0x00,
+            0x00, 0x00, 0xE1, 0x24, 0xC7, 0x28, 0x08, 0xE0, 0xF0, 0xA3, 0xFF,
+        ],
+        &[0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0E, 0x00, 0xFF],
+        &attr,
+    );
+    code.extend_from_slice(&[
         0xB8, 0x00, 0xB8, // mov ax, 0xB800
         0x8E, 0xC0, // mov es, ax
-        0x66, 0x26, 0xC7, 0x06, 0x00, 0x00, 0x48, 0x07, 0x69, 0x07, // mov dword es:[0], 0x07690748 ("Hi")
+        0x26, 0xC7, 0x06, 0x02, 0x00, 0x48, 0x1E, // mov word es:[2], 0x1E48: 'H', yellow on blue
         0xF4, // hlt
-    ];
+    ]);
     let mut sys = boot(rom(&code, &[]));
-    sys.run(1000).unwrap();
-    assert!(sys.cpu.halted);
-    assert_eq!(&sys.board().cga.vram[0..4], &[0x48, 0x07, 0x69, 0x07]);
+    // The font, as the BIOS would load it: 'H' row 0 is 11000011.
+    sys.board().ega.planes[0x20000 + b'H' as usize * 32] = 0xC3;
+    frames(&mut sys, 2);
+    let b = sys.board();
+    assert_eq!((b.ega.frame_width, b.ega.frame_height), (640, 200));
+    // Odd/even: the character in plane 0, the attribute in plane 1.
+    assert_eq!((b.ega.planes[2], b.ega.planes[0x10002]), (b'H', 0x1E));
+    // The second character cell, scanline 0.
+    let fg = 0x16; // palette[14]
+    let bg = 0x01; // palette[1]
+    assert_eq!(&b.ega.frame[8..16], &[fg, fg, bg, bg, bg, bg, fg, fg]);
+}
+
+/// 320x200 in 16 colours (the BIOS's mode 0Dh): writes through each write
+/// mode, Set/Reset, the XOR function and the latches, a colour compare
+/// (read mode 1), and the dots that come out.
+#[test]
+fn ega_planar_graphics() {
+    let mut attr = PAL200.to_vec();
+    attr.extend_from_slice(&[0x01, 0x00, 0x0F, 0x00]);
+    let mut code = ega_mode(
+        0x23,
+        &[0x03, 0x0B, 0x0F, 0x00, 0x06],
+        &[
+            0x37, 0x27, 0x2D, 0x37, 0x30, 0x14, 0x04, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xE1, 0x24, 0xC7, 0x14, 0x00, 0xE0, 0xF0, 0xE3, 0xFF,
+        ],
+        &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x0F, 0xFF],
+        &attr,
+    );
+    let gc = |i: u8, v: u8| outs(&[(0x3CE, i), (0x3CF, v)]);
+    code.extend_from_slice(&[
+        0xB8, 0x00, 0xA0, // mov ax, 0xA000
+        0x8E, 0xC0, // mov es, ax
+        0x31, 0xC0, // xor ax, ax
+        0x8E, 0xD8, // mov ds, ax
+    ]);
+    // Write mode 2: dot 0 colour 12, then (latches loaded) dot 1 colour 9.
+    code.extend(gc(5, 0x02));
+    code.extend(gc(8, 0x80));
+    code.extend_from_slice(&[0x26, 0xC6, 0x06, 0x00, 0x00, 0x0C]); // mov byte es:[0], 12
+    code.extend(gc(8, 0x40));
+    code.extend_from_slice(&[0x26, 0xA0, 0x00, 0x00]); // mov al, es:[0] (latches)
+    code.extend_from_slice(&[0x26, 0xC6, 0x06, 0x00, 0x00, 0x09]); // mov byte es:[0], 9
+    // Write mode 0 with Set/Reset: dots 8-15 colour 5.
+    code.extend(gc(5, 0x00));
+    code.extend(gc(8, 0xFF));
+    code.extend(gc(1, 0x0F));
+    code.extend(gc(0, 0x05));
+    code.extend_from_slice(&[0x26, 0xC6, 0x06, 0x01, 0x00, 0x00]); // mov byte es:[1], 0
+    // Write mode 1: copy the latches of byte 1 to byte 2 (dots 16-23).
+    code.extend(gc(5, 0x01));
+    code.extend_from_slice(&[0x26, 0xA0, 0x01, 0x00]); // mov al, es:[1]
+    code.extend_from_slice(&[0x26, 0xA2, 0x02, 0x00]); // mov es:[2], al
+    // Write mode 0, XOR with the latches: dots 12-15 of byte 1 become 5 ^ 15.
+    code.extend(gc(5, 0x00));
+    code.extend(gc(1, 0x00));
+    code.extend(gc(3, 0x18));
+    code.extend_from_slice(&[0x26, 0xA0, 0x01, 0x00]); // mov al, es:[1]
+    code.extend_from_slice(&[0x26, 0xC6, 0x06, 0x01, 0x00, 0x0F]); // mov byte es:[1], 0x0F
+    code.extend(gc(3, 0x00));
+    // Read mode 1: which dots of byte 0 are colour 12, stored at 0:0500.
+    code.extend(gc(5, 0x08));
+    code.extend(gc(2, 0x0C));
+    code.extend(gc(7, 0x0F));
+    code.extend_from_slice(&[0x26, 0xA0, 0x00, 0x00]); // mov al, es:[0]
+    code.extend_from_slice(&[0xA2, 0x00, 0x05]); // mov [0x0500], al
+    code.push(0xF4); // hlt
+    let mut sys = boot(rom(&code, &[]));
+    frames(&mut sys, 2);
+    let b = sys.board();
+    assert_eq!(b.ram.cells[0x500], 0x80, "read mode 1 found colour 12 at dot 0");
+    assert_eq!((b.ega.frame_width, b.ega.frame_height), (640, 200));
+    // Each dot of 320 is two of the frame's 640.
+    let dot = |x: usize| b.ega.frame[2 * x];
+    let pal = |c: usize| PAL200[c];
+    assert_eq!((dot(0), dot(1), dot(2)), (pal(12), pal(9), pal(0)));
+    for x in 8..12 {
+        assert_eq!(dot(x), pal(5), "dot {x}");
+    }
+    for x in 12..16 {
+        assert_eq!(dot(x), pal(10), "dot {x}");
+    }
+    for x in 16..24 {
+        assert_eq!(dot(x), pal(5), "dot {x}");
+    }
+}
+
+/// 640x350 in 16 of 64 colours (the BIOS's mode 10h): the 16.257 MHz dot
+/// clock (744 dots a line, 365 lines, so about 59.9 frames a second), and
+/// the 64-colour palette.
+#[test]
+fn ega_350_line_mode_uses_the_fast_clock() {
+    let pal: [u8; 16] = [0, 1, 2, 3, 4, 5, 0x14, 7, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F];
+    let mut attr = pal.to_vec();
+    attr.extend_from_slice(&[0x01, 0x00, 0x0F, 0x00]);
+    let mut code = ega_mode(
+        0xA7,
+        &[0x03, 0x01, 0x0F, 0x00, 0x06],
+        &[
+            0x5B, 0x4F, 0x53, 0x37, 0x52, 0x00, 0x6C, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x5E, 0x2B, 0x5D, 0x28, 0x0F, 0x5F, 0x0A, 0xE3, 0xFF,
+        ],
+        &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x0F, 0xFF],
+        &attr,
+    );
+    // Set/Reset colour 14 into the first byte of line 349 (offset 349 * 80).
+    code.extend(outs(&[(0x3CE, 1), (0x3CF, 0x0F), (0x3CE, 0), (0x3CF, 0x0E)]));
+    code.extend_from_slice(&[
+        0xB8, 0x00, 0xA0, // mov ax, 0xA000
+        0x8E, 0xC0, // mov es, ax
+        0x26, 0xC6, 0x06, 0x10, 0x6D, 0x00, // mov byte es:[0x6D10], 0
+        0xF4, // hlt
+    ]);
+    let mut sys = boot(rom(&code, &[]));
+    frames(&mut sys, 1);
+    let t0 = sys.seconds();
+    frames(&mut sys, 1);
+    let period = sys.seconds() - t0;
+    let b = sys.board();
+    assert_eq!((b.ega.frame_width, b.ega.frame_height), (640, 350));
+    assert_eq!(&b.ega.frame[349 * 720..349 * 720 + 9], &[0x3E, 0x3E, 0x3E, 0x3E, 0x3E, 0x3E, 0x3E, 0x3E, 0]);
+    let expect = 744.0 * 365.0 / 16.257e6;
+    assert!((period - expect).abs() < 1e-4, "a frame took {period} s, expected {expect}");
 }

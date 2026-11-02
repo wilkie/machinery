@@ -2,8 +2,8 @@
 // processor on a 32-bit local bus with RAM and a boot ROM, and behind the
 // AT's bus controller the ISA bus with the PC's devices (`targets/pc`): the
 // two cascaded 8259 interrupt controllers, the 8254 timer, the 8237 DMA
-// controller, a host data link on DMA channel 1 (and IRQ 12), a CGA, and a
-// debugging console port.
+// controller, a host data link on DMA channel 1 (and IRQ 12), an EGA, and
+// a debugging console port.
 //
 // `machine build --system Board386 --out <dir> targets/pc/*.machine
 // targets/i286/alu.machine targets/i386/i386.machine
@@ -14,7 +14,7 @@
 
 use i386::{I386};
 use isabus::{Space, BusSize, IsaBus, IrqLines};
-use pc::{Pic8259, Pit8254, Dma8237, HostLink, Cga, Console};
+use pc::{Pic8259, Pit8254, Dma8237, HostLink, Ega, Console};
 
 /// The 386 local bus at the transaction level: a transfer names an aligned
 /// dword (`addr`, its low two bits clear) and the byte lanes it uses
@@ -284,6 +284,7 @@ system Board386 {
     clock bclk = cpu_clk / 3;                // 8.33 MHz ISA
     clock pit_clk = osc / 12;                // 1.193182 MHz
     clock dma_clk = osc / 3;                 // 4.77 MHz
+    clock ega16: 16.257 MHz;                 // the EGA's 350-line dot clock
 
     component cpu: Cpu386 @ cpu_clk;
     component ram: Ram386;
@@ -294,7 +295,7 @@ system Board386 {
     component pit: Pit8254 @ pit_clk;
     component dma: Dma8237 @ dma_clk;
     component link: HostLink;
-    component cga: Cga @ osc;
+    component ega: Ega @ (dot14: osc, dot16: ega16);
     component console: Console;
 
     bus local: LocalBus386 @ cpu_clk {
@@ -318,7 +319,7 @@ system Board386 {
         slave dma.pages @ io 0x81..=0x87;
         slave link.port;
         slave console.port @ io 0xE9..=0xE9;
-        slave cga.port @ mem 0xB8000..=0xBFFFF, io 0x3D0..=0x3DF;
+        slave ega.port @ mem 0xA0000..=0xBFFFF, io 0x3B0..=0x3DF;
     }
 
     /// IRQ 0-7: the timer on 0, the slave controller on 2.

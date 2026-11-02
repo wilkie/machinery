@@ -517,7 +517,7 @@ fn i386_board_system_boots() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "board tests failed:\n{stdout}\n{stderr}");
-    assert!(stdout.contains("7 passed"), "expected 7 tests:\n{stdout}");
+    assert!(stdout.contains("9 passed"), "expected 9 tests:\n{stdout}");
 }
 
 /// The processor model's pipeline (SPEC 11.2c): the conformance rig

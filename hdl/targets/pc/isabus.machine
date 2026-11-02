@@ -1,0 +1,93 @@
+// The PC's expansion bus, shared by the 286 and 386 boards: the ISA (AT)
+// bus at the transaction level, and the interrupt request lines.
+
+/// Memory or I/O.
+enum Space : u1 { Mem, Io }
+/// A byte or a word transfer.
+enum BusSize : u1 { Byte, Word }
+
+/// The ISA bus at the transaction level: 24 address bits (LA23-17 with
+/// SA19-0) and 16 data bits. A word transfer is aligned and carries both
+/// bytes; a byte transfer carries its data in the low 8 bits whatever the
+/// address (steering it to a byte lane is the bus's business, not the
+/// devices').
+///
+/// A cycle takes two BCLK periods at least; the system board's bus
+/// controller adds the AT's default wait states (`wait_state`), and a
+/// slave stretches a cycle further by holding IOCHRDY (its handler's
+/// `wait`). Before a word transfer the controller asks whether the target
+/// is a 16-bit device (`cs16`): one that does not answer is 8-bit, and the
+/// controller splits the word into two byte cycles.
+bus IsaBus {
+    clock clk;
+    wires {
+        addr:    u24  driven_by Master;
+        data:    u16  shared;
+        ale:     bool driven_by Master;
+        mem:     bool driven_by Master;
+        rd:      bool driven_by Master;
+        wr:      bool driven_by Master;
+        sbhe:    bool driven_by Master;
+        iochrdy: bool wired_and;
+        cs16:    bool wired_and;
+        drq:     [bool; 8] driven_by Slave;
+    }
+    /// The interrupt controllers are responders of their own kind: they
+    /// answer the interrupt acknowledge.
+    roles { Master; Slave; Controller; }
+
+    transaction read(space: Space, addr: u24, size: BusSize) -> (data: u16) {
+        Master {
+            cycle { addr = addr; ale = true; mem = space == Space::Mem; sbhe = size == BusSize::Word; rd = true; }
+            wait until iochrdy;
+            cycle { ale = false; let v = data; rd = false; return v; }
+        }
+    }
+    transaction write(space: Space, addr: u24, size: BusSize, data: u16) {
+        Master {
+            cycle { addr = addr; ale = true; mem = space == Space::Mem; sbhe = size == BusSize::Word; data = data; wr = true; }
+            wait until iochrdy;
+            cycle { ale = false; wr = false; }
+        }
+    }
+
+    /// MEMCS16# or IOCS16#, decoded from the address early in a cycle: a
+    /// 16-bit device pulls it low. Active low, so open bus (nobody, or an
+    /// 8-bit device) reads high. Takes no time of its own.
+    transaction cs16(space: Space, addr: u24) -> (cs16_n: bool) { Master { } }
+
+    /// One BCLK in which nothing is transferred: the bus controller's
+    /// default wait states. Nobody answers it.
+    transaction wait_state() { Master { cycle { } } }
+
+    /// The interrupt acknowledge, answered by the interrupt controller
+    /// with the vector. Not address-decoded.
+    transaction inta() -> (vector: u8) {
+        Master {
+            cycle { } cycle { }
+            wait until iochrdy;
+            cycle { } cycle { }
+        }
+    }
+
+    /// Fly-by DMA: the acknowledge half of a transfer. The device on the
+    /// channel supplies (`dack_read`) or takes (`dack_write`) the byte while
+    /// the DMA controller drives the memory side, which carries the bus
+    /// time; the acknowledge itself costs no cycles. Not address-decoded:
+    /// the device on the channel answers, the others decline.
+    transaction dack_read(channel: u2) -> (data: u8) { Master { } }
+    transaction dack_write(channel: u2, data: u8) { Master { } }
+
+    signal dreq(channel: u2) = drq[channel];
+}
+
+/// The eight interrupt request lines into one 8259. Which device drives
+/// which line is board wiring, so each controller has its own set: on the
+/// AT the master's lines are IRQ 0-7 (IRQ 2 carrying the slave's INT) and
+/// the slave's are IRQ 8-15.
+bus IrqLines {
+    clock clk;
+    wires { ir: [bool; 8] driven_by Device; }
+    roles { Controller; Device; }
+    signal request(line: u3) = ir[line];
+}

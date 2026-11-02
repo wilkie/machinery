@@ -448,9 +448,13 @@ The transaction level. Contents:
 - Ordinary statements plus `while`/`for` with dynamic bounds (models are
   software; they may loop).
 
-A transaction handler runs inside the initiator's transaction, so it may
-`emit` signals but not start a transaction of its own (E1048), directly or
-through a model fn; a device that masters a bus does so from `on tick`.
+A transaction handler runs inside the initiator's transaction. It may
+`emit` signals, and it may start transactions on the component's
+master-role ports, directly or through a model fn: that is a **bridge**,
+whose transaction nests inside the one it answers and takes its time on
+its own bus (the AT's bus controller answers on the processor's local bus
+and runs the cycle on the ISA bus). A device that masters a bus on its own
+account does so from `on tick`.
 
 ### 8.3a Model functions
 
@@ -491,9 +495,7 @@ state or has effects and so cannot be a unit.
   It may not be called from a `unit`, an `rtl` body or another
   component, and not from a `state` initialiser.
 - **Effects are transitive.** The compiler computes, for every model fn,
-  whether it (or any fn it calls) starts a transaction. Calling such a fn
-  from a transaction handler is the E1048 error, reported at the call
-  with a note naming the fn that starts the transaction. Signal `emit`s
+  whether it (or any fn it calls) starts a transaction. Signal `emit`s
   are allowed anywhere.
 - **No recursion**, direct or mutual (E1053), as for units and isa fns.
   Every call graph in the language is finite, which the adapter and
@@ -1469,21 +1471,33 @@ drives), and `system::System`:
   of its clock per step. `run(n)` runs until the processor halts and
   `run_until(n, stop)` until a condition holds.
 
-- A device that masters a bus (a DMA controller) gets a context holding
-  every other device, like the processor's; its `on tick`, `on reset`,
-  signal handlers and fns may start transactions. It is caught up through
-  that context, before a transaction reaches it and after every
-  instruction, so a burst it starts in `on tick` happens between
-  instructions. Other devices' contexts hold only the signals.
+- A device that masters a bus (a DMA controller, a bus controller) gets a
+  context holding what it can reach, like the processor's: the devices on
+  the buses it masters and, through any of those that master buses
+  themselves (bridges), the devices on theirs. Its `on tick`, `on reset`,
+  signal handlers, transaction handlers and fns may start transactions.
+  It is caught up through that context, before a transaction reaches it
+  and after every instruction, so a burst it starts in `on tick` happens
+  between instructions. Other devices' contexts hold only the signals.
+- **Bridges.** A component that answers on one bus and masters another
+  (the AT's bus controller: a slave on the processor's local bus, master
+  of the ISA bus) runs its own transactions inside the one it answers,
+  each charged on its own bus's clock. Before a transaction enters a
+  bridge, the masters behind it are caught up; inside, a master whose
+  transfers would have to cross the bridge again (the DMA controller,
+  reached through the bridge whose transaction is in progress) is left to
+  catch up after the instruction, and a device the context cannot lend
+  answers as open bus. Several masters may share a bus (the bus
+  controller and the DMA controller on the ISA bus).
 - Each component's ports trait gives every method a default (open bus,
   low levels, emits go nowhere), so a test can drive a model directly
   with a context that overrides only what it observes. A transaction
   handler is generated returning `Option`, `None` meaning it declined.
 
 Not generated yet, and reported when a system needs them: more than one
-processor, more than one device master, `bridge`, an rtl level
-in the profile, and processor time between bus transfers (an instruction
-costs only its bus time until timing is derived, section 14).
+processor, the generated `bridge` binding (a bridge is written as a
+component for now, as `targets/i286/board.machine`'s `AtBus286` is), and
+an rtl level in the profile.
 
 ## 13. Verification
 

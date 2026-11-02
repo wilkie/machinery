@@ -5,7 +5,8 @@
 // compares the bus cycles the pipeline recorded with the hardware trace
 // (SPEC 11.2c, section 13).
 
-use board::{Cpu286, LocalBus, Space, BusSize};
+use board::{Cpu286, LocalBus};
+use isabus::{Space, BusSize};
 
 /// 16 MB of zero-wait-state memory, and I/O ports that read as all ones.
 component FlatSpace {

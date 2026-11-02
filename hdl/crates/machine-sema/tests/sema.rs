@@ -1492,7 +1492,8 @@ fn systems_check() {
 }
 
 #[test]
-fn transaction_handlers_cannot_start_transactions() {
+fn transaction_handlers_may_bridge_to_their_master_ports() {
+    // A bridge: the handler for `up` runs a transaction on `down`.
     let src = format!(
         "{SYS_PRELUDE}\ncomponent Bridge {{ ports {{ bus up: B::S; bus down: B::M; }} model {{
             on up.read(space: Sp, addr: u8) -> (data: u8, wait: u8) {{
@@ -1501,7 +1502,7 @@ fn transaction_handlers_cannot_start_transactions() {
             }}
         }} }}"
     );
-    assert_codes(&src, &["E1048"]);
+    assert_codes(&src, &[]);
 }
 
 #[test]
@@ -1569,28 +1570,39 @@ fn isa_reset_fn_takes_nothing() {
 
 #[test]
 fn i286_board_system_checks_clean() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let targets = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("targets")
-        .join("i286");
-    let files = ["alu.machine", "i286.machine", "board.machine"]
-        .iter()
-        .map(|f| SourceFile::new(*f, std::fs::read_to_string(root.join(f)).unwrap()))
-        .collect();
+        .join("targets");
+    let files = [
+        ("pc", "isabus.machine"),
+        ("pc", "pc.machine"),
+        ("i286", "alu.machine"),
+        ("i286", "i286.machine"),
+        ("i286", "board.machine"),
+    ]
+    .iter()
+    .map(|(d, f)| SourceFile::new(*f, std::fs::read_to_string(targets.join(d).join(f)).unwrap()))
+    .collect();
     let c = check_files(files);
     assert_clean(&c);
     let sys = &c.hir.systems[0];
-    assert_eq!(sys.components.len(), 10);
-    // RAM, ROM, both PICs, PIT, the DMA registers and pages, the link, the
-    // console, the CGA.
-    assert_eq!(sys.buses[0].slaves.len(), 10);
+    assert_eq!(sys.components.len(), 11);
+    let local = sys.buses.iter().find(|b| b.name == "local").unwrap();
+    let isa = sys.buses.iter().find(|b| b.name == "isa").unwrap();
+    // RAM, ROM and the bus controller on the local bus, which the processor
+    // and the bus controller (for ISA masters) master.
+    assert_eq!(local.slaves.len(), 3);
+    assert_eq!(local.masters.len(), 2);
+    // The ROM answers at the top of both the 1 MB and the 16 MB space.
+    assert_eq!(local.slaves[1].1.len(), 2);
+    // On the ISA bus: system memory through the bus controller, both PICs,
+    // PIT, the DMA registers and pages, the link, the console, the CGA;
+    // mastered by the bus controller and the DMA controller.
+    assert_eq!(isa.slaves.len(), 9);
+    assert_eq!(isa.masters.len(), 2);
     // SP straps, CAS, and INTR.
     assert_eq!(sys.wires.len(), 4);
-    // The processor and the DMA controller master the local bus.
-    assert_eq!(sys.buses[0].masters.len(), 2);
-    // The ROM answers at the top of both the 1 MB and the 16 MB space.
-    assert_eq!(sys.buses[0].slaves[1].1.len(), 2);
 }
 
 #[test]
@@ -1829,7 +1841,7 @@ fn model_fn_errors() {
 }
 
 #[test]
-fn transaction_handlers_cannot_reach_transactions_through_fns() {
+fn fns_that_start_transactions_are_marked_and_may_serve_a_handler() {
     let src = format!(
         "{SYS_PRELUDE}\ncomponent Bridge {{ ports {{ bus up: B::S; bus down: B::M; }} model {{
             fn fetch(a: u8) -> u8 {{ return down.read(space: Sp::Mem, addr: a).data; }}
@@ -1840,14 +1852,9 @@ fn transaction_handlers_cannot_reach_transactions_through_fns() {
             on tick(n: u32) {{ let v = indirect(0); }}
         }} }}"
     );
+    // A handler may reach a transaction through fns (a bridge), and both
+    // fns are marked as starting one.
     let c = check_src(&src);
-    assert_eq!(codes(&c), ["E1048"], "{}", render(&c));
-    // Through two fns, both marked.
-    let src_ok = src.replace(
-        "return (data: indirect(addr), wait: 1);",
-        "return (data: addr, wait: 1);",
-    );
-    let c = check_src(&src_ok);
     assert_clean(&c);
     let model = c
         .hir

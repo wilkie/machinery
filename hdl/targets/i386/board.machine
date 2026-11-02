@@ -1,0 +1,342 @@
+// An AT-style 80386 board for the model backend: the i386 isa as a
+// processor on a 32-bit local bus with RAM and a boot ROM, and behind the
+// AT's bus controller the ISA bus with the PC's devices (`targets/pc`): the
+// two cascaded 8259 interrupt controllers, the 8254 timer, the 8237 DMA
+// controller, a host data link on DMA channel 1 (and IRQ 12), a CGA, and a
+// debugging console port.
+//
+// `machine build --system Board386 --out <dir> targets/pc/*.machine
+// targets/i286/alu.machine targets/i386/i386.machine
+// targets/i386/timing.machine targets/i386/board.machine` generates the
+// emulator crate. The processor is timed by the tier-1 table
+// (`timing.machine`): an instruction costs its data transfers plus the
+// larger of its code fetches and its execution cycles.
+
+use i386::{I386};
+use isabus::{Space, BusSize, IsaBus, IrqLines};
+use pc::{Pic8259, Pit8254, Dma8237, HostLink, Cga, Console};
+
+/// The 386 local bus at the transaction level: a transfer names an aligned
+/// dword (`addr`, its low two bits clear) and the byte lanes it uses
+/// (`be`, BE0#-BE3# active high); the data sits in its lanes. An access
+/// that crosses a dword boundary is two transfers, as the 386 makes it.
+bus LocalBus386 {
+    clock clk;
+    wires {
+        addr:  u32  driven_by Master;
+        data:  u32  shared;
+        be:    u4   driven_by Master;
+        mio:   bool driven_by Master;
+        wr:    bool driven_by Master;
+        ads:   bool driven_by Master;
+        ready: bool wired_and;
+    }
+    roles { Master; Slave; }
+
+    /// Two clocks (T1, T2) without wait states.
+    transaction read(space: Space, addr: u32, be: u4) -> (data: u32) {
+        Master {
+            cycle { addr = addr; be = be; mio = space == Space::Mem; wr = false; ads = true; }
+            wait until ready;
+            cycle { ads = false; let v = data; return v; }
+        }
+    }
+    transaction write(space: Space, addr: u32, be: u4, data: u32) {
+        Master {
+            cycle { addr = addr; be = be; mio = space == Space::Mem; wr = true; data = data; ads = true; }
+            wait until ready;
+            cycle { ads = false; }
+        }
+    }
+
+    /// The interrupt-acknowledge cycles. Not address-decoded: the bus
+    /// controller takes it to the interrupt controllers on the ISA bus.
+    transaction inta() -> (vector: u8) {
+        Master {
+            cycle { } cycle { }
+            wait until ready;
+            cycle { } cycle { }
+        }
+    }
+}
+
+/// The byte lanes of `n` bytes at `addr` within its dword.
+unit Lanes(addr: u32, n: u3) -> u4 {
+    return (((1_u32 << (n as u32)) - 1) << (addr & 3)) as u4;
+}
+
+/// The processor: the i386 isa, with its memory and I/O spaces bound to the
+/// local bus. Code is fetched a dword at a time into a one-dword buffer;
+/// an access that crosses a dword boundary is two transfers.
+component Cpu386 {
+    isa I386;
+    ports {
+        bus local: LocalBus386::Master;
+        /// INTR, from the master interrupt controller.
+        in intr_line: bool;
+    }
+    model {
+        /// The code dword last fetched, and whether it is still good.
+        state code: u32 = 0;
+        state code_addr: u32 = 0;
+        state code_valid: bool = false;
+
+        on intr() -> bool { return intr_line; }
+        on acknowledge() -> u8 { return local.inta().vector; }
+
+        on mem.fetch_u8(addr: u32) -> u8 {
+            let d = addr & 0xFFFFFFFC;
+            if !code_valid || d != code_addr {
+                code = local.read(space: Space::Mem, addr: d, be: 0xF).data;
+                code_addr = d;
+                code_valid = true;
+            }
+            return (code >> ((addr & 3) * 8)) as u8;
+        }
+
+        /// A store into the buffered dword makes it stale.
+        fn wrote(addr: u32, n: u3) {
+            if (addr & 0xFFFFFFFC) == code_addr || ((addr + (n as u32) - 1) & 0xFFFFFFFC) == code_addr {
+                code_valid = false;
+            }
+        }
+
+        /// `n` bytes at `addr` that lie within one dword.
+        fn read_in(space: Space, addr: u32, n: u3) -> u32 {
+            let v = local.read(space: space, addr: addr & 0xFFFFFFFC, be: Lanes(addr, n)).data;
+            return v >> ((addr & 3) * 8);
+        }
+        fn write_in(space: Space, addr: u32, n: u3, data: u32) {
+            local.write(space: space, addr: addr & 0xFFFFFFFC, be: Lanes(addr, n), data: data << ((addr & 3) * 8));
+        }
+
+        /// `n` bytes at `addr`, as one transfer or, across a dword
+        /// boundary, two (the lower dword first).
+        fn read_n(space: Space, addr: u32, n: u3) -> u32 {
+            let first = 4 - (addr & 3);
+            if (n as u32) <= first { return read_in(space, addr, n); }
+            let lo = read_in(space, addr, first as u3);
+            let hi = read_in(space, (addr & 0xFFFFFFFC) + 4, n - (first as u3));
+            return lo | (hi << (first * 8));
+        }
+        fn write_n(space: Space, addr: u32, n: u3, data: u32) {
+            let first = 4 - (addr & 3);
+            if (n as u32) <= first { write_in(space, addr, n, data); return; }
+            write_in(space, addr, first as u3, data);
+            write_in(space, (addr & 0xFFFFFFFC) + 4, n - (first as u3), data >> (first * 8));
+        }
+
+        on mem.read_u8(addr: u32) -> u8 { return read_n(Space::Mem, addr, 1) as u8; }
+        on mem.read_u16(addr: u32) -> u16 { return read_n(Space::Mem, addr, 2) as u16; }
+        on mem.read_u32(addr: u32) -> u32 { return read_n(Space::Mem, addr, 4); }
+        on mem.write_u8(addr: u32, data: u8) { wrote(addr, 1); write_n(Space::Mem, addr, 1, data as u32); }
+        on mem.write_u16(addr: u32, data: u16) { wrote(addr, 2); write_n(Space::Mem, addr, 2, data as u32); }
+        on mem.write_u32(addr: u32, data: u32) { wrote(addr, 4); write_n(Space::Mem, addr, 4, data); }
+        on io.read_u8(addr: u16) -> u8 { return read_n(Space::Io, addr as u32, 1) as u8; }
+        on io.read_u16(addr: u16) -> u16 { return read_n(Space::Io, addr as u32, 2) as u16; }
+        on io.read_u32(addr: u16) -> u32 { return read_n(Space::Io, addr as u32, 4); }
+        on io.write_u8(addr: u16, data: u8) { write_n(Space::Io, addr as u32, 1, data as u32); }
+        on io.write_u16(addr: u16, data: u16) { write_n(Space::Io, addr as u32, 2, data as u32); }
+        on io.write_u32(addr: u16, data: u32) { write_n(Space::Io, addr as u32, 4, data); }
+    }
+}
+
+/// 4 MB of zero-wait-state RAM: the first 640 KB and, from 1 MB, the
+/// extended memory (the cells between are the ISA bus's).
+component Ram386 {
+    ports { bus port: LocalBus386::Slave; }
+    model {
+        mem cells: [u8; 0x400000];
+        on port.read(space: Space, addr: u32, be: u4) -> (data: u32, wait: u8) {
+            let a = addr & 0x3FFFFC;
+            return (data: concat(cells[a + 3], cells[a + 2], cells[a + 1], cells[a]), wait: 0);
+        }
+        on port.write(space: Space, addr: u32, be: u4, data: u32) -> (wait: u8) {
+            let a = addr & 0x3FFFFC;
+            if be[0] == 1 { cells[a] = data as u8; }
+            if be[1] == 1 { cells[a + 1] = (data >> 8) as u8; }
+            if be[2] == 1 { cells[a + 2] = (data >> 16) as u8; }
+            if be[3] == 1 { cells[a + 3] = (data >> 24) as u8; }
+            return (wait: 0);
+        }
+    }
+}
+
+/// A 64 KB boot ROM with two wait states, answering at the top of the first
+/// megabyte and at the top of the 4 GB space, where the 386 starts. Writes
+/// are not answered.
+component Rom386 {
+    ports { bus port: LocalBus386::Slave; }
+    model {
+        mem cells: [u8; 0x10000];
+        on port.read(space: Space, addr: u32, be: u4) -> (data: u32, wait: u8) {
+            let a = addr & 0xFFFC;
+            return (data: concat(cells[a + 3], cells[a + 2], cells[a + 1], cells[a]), wait: 2);
+        }
+    }
+}
+
+/// The AT bus controller of a 386 board: what nothing on the local bus
+/// answers below 16 MB goes to the ISA bus, at the ISA bus's clock. Each
+/// pair of enabled byte lanes that a 16-bit device (one that pulls
+/// MEMCS16#/IOCS16# low) can take is one word cycle; everything else is a
+/// byte cycle per lane. The AT's default wait states: one in a 16-bit
+/// cycle, four in an 8-bit one. In the other direction, an ISA master's
+/// memory cycle in system memory (the DMA controller's) reaches the local
+/// bus.
+component AtBus386 {
+    ports {
+        /// Everything the local bus does not answer.
+        bus local: LocalBus386::Slave;
+        bus isa: IsaBus::Master;
+        /// System memory (RAM and the boot ROM), as ISA masters see it.
+        bus sysmem: IsaBus::Slave;
+        bus mem: LocalBus386::Master;
+    }
+    model {
+        fn waits(n: u8) {
+            for i in 0..4 {
+                if (i as u8) < n { isa.wait_state(); }
+            }
+        }
+
+        /// Whether the target is a 16-bit device.
+        fn wide(space: Space, addr: u24) -> bool {
+            return !isa.cs16(space: space, addr: addr).cs16_n;
+        }
+
+        /// One byte lane's cycle.
+        fn read_byte(space: Space, addr: u24) -> u8 {
+            let v = isa.read(space: space, addr: addr, size: BusSize::Byte).data as u8;
+            waits(if wide(space, addr) { 1 } else { 4 });
+            return v;
+        }
+
+        /// A pair of lanes (`lo`, `hi` enabled) at the even address `addr`.
+        fn read_pair(space: Space, addr: u24, lo: bool, hi: bool) -> u16 {
+            if lo && hi && wide(space, addr) {
+                let v = isa.read(space: space, addr: addr, size: BusSize::Word).data;
+                waits(1);
+                return v;
+            }
+            let mut v: u16 = 0xFFFF;
+            if lo { v = (v & 0xFF00) | (read_byte(space, addr) as u16); }
+            if hi { v = (v & 0x00FF) | ((read_byte(space, addr + 1) as u16) << 8); }
+            return v;
+        }
+
+        fn write_byte(space: Space, addr: u24, data: u8) {
+            isa.write(space: space, addr: addr, size: BusSize::Byte, data: data as u16);
+            waits(if wide(space, addr) { 1 } else { 4 });
+        }
+
+        fn write_pair(space: Space, addr: u24, lo: bool, hi: bool, data: u16) {
+            if lo && hi && wide(space, addr) {
+                isa.write(space: space, addr: addr, size: BusSize::Word, data: data);
+                waits(1);
+                return;
+            }
+            if lo { write_byte(space, addr, data as u8); }
+            if hi { write_byte(space, addr + 1, (data >> 8) as u8); }
+        }
+
+        on local.read(space: Space, addr: u32, be: u4) -> (data: u32, wait: u8) {
+            if addr > 0xFFFFFF { return (data: 0xFFFFFFFF, wait: 0); }
+            let a = addr as u24;
+            let lo = if be[0] == 1 || be[1] == 1 { read_pair(space, a, be[0] == 1, be[1] == 1) } else { 0xFFFF };
+            let hi = if be[2] == 1 || be[3] == 1 { read_pair(space, a + 2, be[2] == 1, be[3] == 1) } else { 0xFFFF };
+            return (data: concat(hi, lo), wait: 0);
+        }
+
+        on local.write(space: Space, addr: u32, be: u4, data: u32) -> (wait: u8) {
+            if addr > 0xFFFFFF { return (wait: 0); }
+            let a = addr as u24;
+            if be[0] == 1 || be[1] == 1 { write_pair(space, a, be[0] == 1, be[1] == 1, data as u16); }
+            if be[2] == 1 || be[3] == 1 { write_pair(space, a + 2, be[2] == 1, be[3] == 1, (data >> 16) as u16); }
+            return (wait: 0);
+        }
+
+        on local.inta() -> (vector: u8, wait: u8) {
+            return (vector: isa.inta().vector, wait: 0);
+        }
+
+        on sysmem.cs16(space: Space, addr: u24) -> (cs16_n: bool, wait: u8) {
+            return (cs16_n: false, wait: 0);
+        }
+        on sysmem.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            let n: u3 = if size == BusSize::Word { 2 } else { 1 };
+            let a = addr as u32;
+            let v = mem.read(space: space, addr: a & 0xFFFFFFFC, be: Lanes(a, n)).data;
+            return (data: (v >> ((a & 3) * 8)) as u16, wait: 0);
+        }
+        on sysmem.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            let n: u3 = if size == BusSize::Word { 2 } else { 1 };
+            let a = addr as u32;
+            mem.write(space: space, addr: a & 0xFFFFFFFC, be: Lanes(a, n), data: (data as u32) << ((a & 3) * 8));
+            return (wait: 0);
+        }
+    }
+}
+
+system Board386 {
+    clock osc: 14.31818 MHz;                 // the PC crystal
+    clock cpu_clk: 25 MHz;                   // the processor clock
+    clock bclk = cpu_clk / 3;                // 8.33 MHz ISA
+    clock pit_clk = osc / 12;                // 1.193182 MHz
+    clock dma_clk = osc / 3;                 // 4.77 MHz
+
+    component cpu: Cpu386 @ cpu_clk;
+    component ram: Ram386;
+    component rom: Rom386;
+    component atbus: AtBus386;
+    component pic1: Pic8259;
+    component pic2: Pic8259;
+    component pit: Pit8254 @ pit_clk;
+    component dma: Dma8237 @ dma_clk;
+    component link: HostLink;
+    component cga: Cga @ osc;
+    component console: Console;
+
+    bus local: LocalBus386 @ cpu_clk {
+        master cpu.local;
+        master atbus.mem;
+        slave ram.port @ mem 0x000000..=0x09FFFF, mem 0x100000..=0x3FFFFF;
+        slave rom.port @ mem 0xF0000..=0xFFFFF, mem 0xFFFF0000..=0xFFFFFFFF;
+        slave atbus.local;
+    }
+
+    bus isa: IsaBus @ bclk {
+        master atbus.isa;
+        master dma.dma;
+        // System RAM and the boot ROM, as ISA masters see them.
+        slave atbus.sysmem @ mem 0x000000..=0x09FFFF, mem 0x0F0000..=0x3FFFFF;
+        // The master first: it sees the acknowledge before the slave.
+        slave pic1.port @ io 0x20..=0x21;
+        slave pic2.port @ io 0xA0..=0xA1;
+        slave pit.port @ io 0x40..=0x43;
+        slave dma.regs @ io 0x00..=0x0F;
+        slave dma.pages @ io 0x81..=0x87;
+        slave link.port;
+        slave console.port @ io 0xE9..=0xE9;
+        slave cga.port @ mem 0xB8000..=0xBFFFF, io 0x3D0..=0x3DF;
+    }
+
+    /// IRQ 0-7: the timer on 0, the slave controller on 2.
+    bus irq_master: IrqLines @ cpu_clk {
+        master pic1.ir;
+        slave pit.irq;
+        slave pic2.cascade;
+    }
+    /// IRQ 8-15: the host link on 12.
+    bus irq_slave: IrqLines @ cpu_clk {
+        master pic2.ir;
+        slave link.irq;
+    }
+
+    wire pic1.sp = true;
+    wire pic2.sp = false;
+    wire pic2.cas_in = pic1.cas_out;
+    wire cpu.intr_line = pic1.int;
+
+    profile fast { default: model; }
+}

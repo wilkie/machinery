@@ -18,9 +18,10 @@
 //! - `emit` sets a signal level at once and queues an edge; edges are
 //!   delivered to the observing ports after each instruction.
 //!
-//! Only the processor starts transactions in this backend: a device's
-//! handlers may `emit`, and a transaction a device starts finds nothing
-//! attached (open bus).
+//! Devices that master buses (a DMA controller, a bridge such as the AT's
+//! bus controller) get a context holding the devices they can reach, so
+//! their transactions run the responders' handlers too; a transaction on
+//! a port that is not attached finds nothing (open bus).
 
 use std::fmt::Write as _;
 
@@ -601,15 +602,37 @@ impl<'a> Gen<'a> {
         let dev_masters: Vec<usize> = (0..insts.len())
             .filter(|&ii| ii != proc_idx && masters_any(ii))
             .collect();
-        if dev_masters.len() > 1 {
-            let names: Vec<&str> = dev_masters
-                .iter()
-                .map(|&i| insts[i].name.as_str())
-                .collect();
-            return Err(GenError::new(format!(
-                "several devices master buses ({}); the model backend supports one besides the processor",
-                names.join(", ")
-            )));
+        // What a master can reach: the devices on the buses it masters, and
+        // through any of them that master buses themselves (a bridge), the
+        // devices on those, never itself or the processor. Its context
+        // holds those, each `None` when the context is built inside another
+        // one that cannot lend it (a cycle through the bridge).
+        let mut reach: Vec<Vec<usize>> = vec![Vec::new(); insts.len()];
+        for (ii, out) in reach.iter_mut().enumerate() {
+            if ii != proc_idx && !dev_masters.contains(&ii) {
+                continue;
+            }
+            let mut todo = vec![ii];
+            let mut seen = vec![ii];
+            while let Some(m) = todo.pop() {
+                for (b, t) in sys.buses.iter().zip(&has_txns) {
+                    if !*t || !b.masters.iter().any(|(i, _)| *i as usize == m) {
+                        continue;
+                    }
+                    for ((si, _), _) in &b.slaves {
+                        let si = *si as usize;
+                        if si == proc_idx || seen.contains(&si) {
+                            continue;
+                        }
+                        seen.push(si);
+                        out.push(si);
+                        if dev_masters.contains(&si) {
+                            todo.push(si);
+                        }
+                    }
+                }
+            }
+            out.sort();
         }
         if ticks.iter().any(|t| t.0 == proc_idx) {
             return Err(GenError::new(
@@ -626,19 +649,25 @@ impl<'a> Gen<'a> {
                 format!("&mut {src}.{f}")
             }
         };
-        let ctx_for = |ii: usize, src: &str, deref: bool| -> String {
+        // The context for `ii`, built from `src`: the board (`from` None,
+        // owning every device) or the context of master `from`.
+        let ctx_for = |ii: usize, src: &str, from: Option<usize>| -> String {
             let n = ident(&insts[ii].name);
+            let deref = from.is_some();
             if full(ii) {
                 let mut s = format!(
                     "Ctx_{n} {{ sig: {}, marks: {}",
                     field(src, deref, "sig"),
                     field(src, deref, "marks")
                 );
-                for (jj, j) in insts.iter().enumerate() {
-                    if jj != proc_idx && jj != ii {
-                        let jn = ident(&j.name);
-                        let _ = write!(s, ", {jn}: {}", field(src, deref, &jn));
-                    }
+                for &jj in &reach[ii] {
+                    let jn = ident(&insts[jj].name);
+                    let v = match from {
+                        None => format!("Some(&mut {src}.{jn})"),
+                        Some(x) if reach[x].contains(&jj) => format!("{src}.{jn}.as_deref_mut()"),
+                        Some(_) => "None".to_string(),
+                    };
+                    let _ = write!(s, ", {jn}: {v}");
                 }
                 s.push_str(" }");
                 s
@@ -664,25 +693,41 @@ impl<'a> Gen<'a> {
                 })
                 .collect()
         };
-        // Statements that catch device `ii` up, from a source holding it.
-        let catch_from = |ii: usize, src: &str, deref: bool| -> String {
+        // Statements that catch device `ii` up, from the board.
+        let catch_from = |ii: usize, src: &str, _deref: bool| -> String {
             if !ticking(ii) {
                 return String::new();
             }
             let n = ident(&insts[ii].name);
             if full(ii) {
                 format!(
-                    "{{ let mut c = {}; catch_up_{n}({}, &mut c); }} ",
-                    ctx_for(ii, src, deref),
-                    field(src, deref, &n)
+                    "{{ let mut c = {}; catch_up_{n}(&mut {src}.{n}, &mut c); }} ",
+                    ctx_for(ii, src, None)
                 )
             } else {
+                format!("catch_up_{n}(&mut {src}.{n}, &mut {src}.sig, &mut {src}.marks); ")
+            }
+        };
+        // The same inside master `from`'s context, for a device bound to `dev`.
+        // A master whose reach that context cannot lend entirely (it is
+        // inside a bridge the master's transfers would cross) is not caught
+        // up here: it was before the bridge was entered, and is again after
+        // the instruction.
+        let catch_in = |ii: usize, from: usize| -> String {
+            if !ticking(ii) {
+                return String::new();
+            }
+            let n = ident(&insts[ii].name);
+            if full(ii) && reach[ii].iter().any(|j| *j == from || !reach[from].contains(j)) {
+                return String::new();
+            }
+            if full(ii) {
                 format!(
-                    "catch_up_{n}({}, {}, {}); ",
-                    field(src, deref, &n),
-                    field(src, deref, "sig"),
-                    field(src, deref, "marks")
+                    "{{ let mut c = {}; catch_up_{n}(dev, &mut c); }} ",
+                    ctx_for(ii, "self", Some(from))
                 )
+            } else {
+                format!("catch_up_{n}(dev, &mut *self.sig, &mut *self.marks); ")
             }
         };
         // The bus a port is attached to.
@@ -763,15 +808,14 @@ impl<'a> Gen<'a> {
             let mut fields = String::from("        pub sig: &'a mut Signals,\n");
             if full(ii) {
                 fields.push_str("        pub marks: &'a mut Marks,\n");
-                for (jj, j) in insts.iter().enumerate() {
-                    if jj != proc_idx && jj != ii {
-                        let _ = writeln!(
-                            fields,
-                            "        pub {}: &'a mut {},",
-                            ident(&j.name),
-                            ident(&j.comp.name)
-                        );
-                    }
+                for &jj in &reach[ii] {
+                    let j = &insts[jj];
+                    let _ = writeln!(
+                        fields,
+                        "        pub {}: Option<&'a mut {}>,",
+                        ident(&j.name),
+                        ident(&j.comp.name)
+                    );
                 }
             }
             let mut m = String::new();
@@ -843,12 +887,27 @@ impl<'a> Gen<'a> {
                             let dev = &insts[si];
                             let dn = ident(&dev.name);
                             let handler = dev.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Transaction { port, transaction } if port == *sp && transaction == tr.def));
-                            let catch = catch_from(si, "self", true);
+                            // Entering a bridge: first catch up the masters behind
+                            // it, while this context can still lend what their
+                            // transfers reach.
+                            let mut behind = String::new();
+                            if full(si) {
+                                for &m in &reach[si] {
+                                    if m != ii && full(m) && ticking(m) && reach[ii].contains(&m) {
+                                        let c = catch_in(m, ii);
+                                        if !c.is_empty() {
+                                            let mn = ident(&insts[m].name);
+                                            let _ = write!(behind, "if let Some(dev) = self.{mn}.as_deref_mut() {{ {c}}} ");
+                                        }
+                                    }
+                                }
+                            }
+                            let catch = format!("{behind}let Some(dev) = self.{dn}.as_deref_mut() else {{ self.sig.now += {base} * {period}; return {open}; }}; {}", catch_in(si, ii));
                             // The responder may have changed what it schedules:
                             // it is due again after the access.
                             let call = format!(
-                                "{{ let r = {{ let mut c = {}; self.{dn}.on_{}_{}(&mut c, {}) }};{} r }}",
-                                ctx_for(si, "self", true),
+                                "{{ let r = {{ let mut c = {}; dev.on_{}_{}(&mut c, {}) }};{} r }}",
+                                ctx_for(si, "self", Some(ii)),
                                 ident(&dev.comp.ports[*sp as usize].name),
                                 ident(&tr.name),
                                 args.join(", "),
@@ -986,7 +1045,7 @@ impl<'a> Gen<'a> {
             };
             let _ = write!(o, "    /// Run `{n}`'s clocks up to the present.\n    pub fn catch_up_{n}(dev: &mut {cname}, {sig}) {{\n{body}    }}\n");
         }
-        let ctx_cpu = |b: &str| ctx_for(proc_idx, b, false);
+        let ctx_cpu = |b: &str| ctx_for(proc_idx, b, None);
 
         // The board.
         let mut fields = String::from("        pub sig: Signals,\n        pub marks: Marks,\n        /// Time the current instruction spent fetching code (overlapped\n        /// with its execution at retire).\n        pub code_time: u64,\n");
@@ -1147,7 +1206,7 @@ impl<'a> Gen<'a> {
             let _ = writeln!(
                 reset,
                 "        {{ let mut c = {}; b.{n}.on_reset(&mut c); }}",
-                ctx_for(ii, "b", false)
+                ctx_for(ii, "b", None)
             );
         }
         let mut sync = String::new();
@@ -1205,7 +1264,7 @@ impl<'a> Gen<'a> {
             let n = ident(&i.name);
             let cname = ident(&i.comp.name);
             let catch = catch_from(ii, "b", false);
-            let ctx = ctx_for(ii, "b", false);
+            let ctx = ctx_for(ii, "b", None);
             let due = make_due(ii, "b", false);
             let _ = write!(
                 with,
@@ -1237,7 +1296,7 @@ impl<'a> Gen<'a> {
                 let _ = writeln!(
                     calls,
                     "                    {before}{{ let mut c = {}; b.{n}.on_{}_{}(&mut c, {arg}v); }}{after}",
-                    ctx_for(ii as usize, "b", false),
+                    ctx_for(ii as usize, "b", None),
                     ident(&i.comp.ports[pi as usize].name),
                     ident(&self.prog.item_name(*sd))
                 );
@@ -1272,7 +1331,7 @@ impl<'a> Gen<'a> {
                     let _ = writeln!(
                         calls,
                         "                    {before}{{ let v = b.sig.{f}; let mut c = {}; b.{}.on_{}(&mut c, v); }}{after}",
-                        ctx_for(ti as usize, "b", false),
+                        ctx_for(ti as usize, "b", None),
                         ident(&t.name),
                         ident(&t.comp.ports[tp as usize].name)
                     );

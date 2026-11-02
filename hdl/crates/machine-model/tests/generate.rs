@@ -126,6 +126,12 @@ fn target(name: &str) -> SourceFile {
     SourceFile::new(name, std::fs::read_to_string(&path).unwrap())
 }
 
+/// A file of the PC library (`targets/pc`): the ISA bus and its devices.
+fn pc(name: &str) -> SourceFile {
+    let path = hdl_root().join("targets").join("pc").join(name);
+    SourceFile::new(name, std::fs::read_to_string(&path).unwrap())
+}
+
 /// The real i286 description: its own tests pass, and, when the
 /// SingleStepTests corpus is present, a representative subset of hardware
 /// vectors passes too (prefixed ALU forms, the immediate group, a
@@ -431,6 +437,8 @@ fn i286_board_system_boots() {
         target("i286.machine"),
         target("timing.machine"),
         target("schedules.machine"),
+        pc("isabus.machine"),
+        pc("pc.machine"),
         target("board.machine"),
     ]);
     assert!(!checked.has_errors());
@@ -465,6 +473,53 @@ fn i286_board_system_boots() {
     assert!(stdout.contains("13 passed"), "expected 13 tests:\n{stdout}");
 }
 
+/// The 386 board: the i386 on a 32-bit local bus with RAM and a ROM, and
+/// the PC's devices on the ISA bus behind the AT bus controller (a bridge:
+/// its handlers run ISA cycles). Generates, compiles, boots ROM programs
+/// (`targets/i386/board_test.rs`) and charges ISA time.
+#[test]
+fn i386_board_system_boots() {
+    let root = hdl_root();
+    let read = |dir: &str, name: &str| {
+        let path = root.join("targets").join(dir).join(name);
+        SourceFile::new(name, std::fs::read_to_string(&path).unwrap())
+    };
+    let checked = check_files(vec![
+        pc("isabus.machine"),
+        pc("pc.machine"),
+        read("i286", "alu.machine"),
+        read("i386", "i386.machine"),
+        read("i386", "timing.machine"),
+        read("i386", "board.machine"),
+    ]);
+    assert!(!checked.has_errors());
+    let src = generate_system(&checked, "Board386", Some("fast")).unwrap_or_else(|e| panic!("{e}"));
+    let crate_ = package(
+        &crate_name("Board386"),
+        src,
+        &root.join("crates").join("machine-runtime"),
+    );
+    let dir = root.join("target").join("gen-tests").join("board386");
+    write_crate(&dir, &crate_).unwrap();
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::copy(
+        root.join("targets").join("i386").join("board_test.rs"),
+        dir.join("tests").join("board.rs"),
+    )
+    .unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let output = Command::new(&cargo)
+        .args(["test", "--quiet", "--test", "board", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+        .output()
+        .expect("run cargo");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "board tests failed:\n{stdout}\n{stderr}");
+    assert!(stdout.contains("7 passed"), "expected 7 tests:\n{stdout}");
+}
+
 /// The processor model's pipeline (SPEC 11.2c): the conformance rig
 /// (`targets/i286/rig.machine`) runs SingleStepTests vectors through
 /// `Cpu286` and compares its bus cycles with the hardware traces
@@ -477,6 +532,8 @@ fn i286_pipeline_reproduces_bus_traces() {
         target("i286.machine"),
         target("timing.machine"),
         target("schedules.machine"),
+        pc("isabus.machine"),
+        pc("pc.machine"),
         target("board.machine"),
         target("rig.machine"),
     ]);

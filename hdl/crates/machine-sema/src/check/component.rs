@@ -809,8 +809,8 @@ impl Checker<'_> {
     }
 
     /// The model fn call graph: no recursion (E1053), which fns start a
-    /// transaction (directly or through a call), no such call from a
-    /// transaction handler (E1048), and fns that could be units (W1005).
+    /// transaction (directly or through a call), and fns that could be
+    /// units (W1005).
     fn check_model_fn_graph(
         &mut self,
         module: crate::program::ModuleId,
@@ -911,32 +911,10 @@ impl Checker<'_> {
             f.starts_transaction = *t;
         }
 
-        // A transaction handler may not reach a transaction through a fn.
-        for h in handlers {
-            if !matches!(h.kind, HandlerKind::Transaction { .. }) {
-                continue;
-            }
-            let mut bad: Vec<(u32, Span)> = Vec::new();
-            hir::visit_block(&h.body, &mut |_| {}, &mut |e| {
-                if let H::ModelFnCall(i, _) = &e.kind {
-                    if tx[*i as usize] {
-                        bad.push((*i, e.span));
-                    }
-                }
-            });
-            for (i, span) in bad {
-                let msg = format!(
-                    "this calls `{}`, which starts a transaction",
-                    fns[i as usize].name
-                );
-                self.error_with(
-                    module,
-                    Diagnostic::error("E1048", span, msg)
-                        .with_note("a transaction handler runs inside the initiator's transaction; it may `emit` signals, and a device that masters a bus does so from `on tick`"),
-                );
-                ok = false;
-            }
-        }
+        // A transaction handler may start transactions (directly or through
+        // a fn) on the component's master-role ports: that is a bridge, whose
+        // transaction nests inside the one it answers.
+        let _ = handlers;
 
         // Fns that could be units.
         for (f, t) in fns.iter().zip(&touch) {
@@ -1198,18 +1176,6 @@ impl Checker<'_> {
             }
             return err;
         };
-        if cx.responding {
-            self.error_with(
-                cx.module,
-                Diagnostic::error(
-                    "E1048",
-                    span,
-                    "a transaction handler cannot start a transaction",
-                )
-                .with_note("it runs inside the initiator's transaction; it may `emit` signals, and a device that masters a bus does so from `on tick`"),
-            );
-            return err;
-        }
         if role != 0 {
             let msg = format!(
                 "only the initiating role `{}` calls `{}`; this port is a `{}` and handles it with `on {}.{}(...)`",

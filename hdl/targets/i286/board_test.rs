@@ -266,7 +266,7 @@ fn dma_writes_host_bytes_to_memory() {
     assert_eq!(b.dma.ch[1].addr, 0x0706);
     assert_eq!(b.dma.ch[1].count, 0xFFFF);
     // Nothing is left requesting.
-    assert!(!b.sig.local_dreq[1]);
+    assert!(!b.sig.isa_dreq[1]);
 }
 
 /// The host expects eleven bytes; the guest has the 8237 read them out of

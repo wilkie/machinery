@@ -1,23 +1,23 @@
 // A small 80286 board for the model backend: the i286 isa as a processor
-// on a 16-bit local bus, with RAM, a boot ROM, the AT's two cascaded 8259
-// interrupt controllers, an 8254 timer, an 8237 DMA controller, a host data
-// link on DMA channel 1 (and IRQ 12), a CGA, and a debugging console port.
+// on a 16-bit local bus with RAM and a boot ROM, and behind the AT's bus
+// controller the ISA bus with the PC's devices (`targets/pc`): the two
+// cascaded 8259 interrupt controllers, the 8254 timer, the 8237 DMA
+// controller, a host data link on DMA channel 1 (and IRQ 12), a CGA, and a
+// debugging console port.
 //
-// `machine build --system Board286 --out <dir> targets/i286/*.machine`
-// generates the emulator crate: the interpreter, one struct per component
-// model, and `system::System`, which runs the processor and charges every
-// bus transaction to the system clock.
+// `machine build --system Board286 --out <dir> targets/pc/*.machine
+// targets/i286/*.machine` generates the emulator crate: the interpreter,
+// one struct per component model, and `system::System`, which runs the
+// processor and charges every bus transaction to the system clock.
 
 use i286::{I286};
-
-enum Space : u1 { Mem, Io }
-enum BusSize : u1 { Byte, Word }
+use isabus::{Space, BusSize, IsaBus, IrqLines};
+use pc::{Pic8259, Pit8254, Dma8237, HostLink, Cga, Console};
 
 /// The 286 local bus at the transaction level. A word transfer is aligned;
 /// the processor splits an odd-address word into two byte transfers, as
 /// the 286 does. A byte transfer carries its data in the low 8 bits
-/// whatever the address: steering it to the right byte lane is the bus's
-/// business, not the devices'.
+/// whatever the address.
 bus LocalBus {
     clock clk;
     wires {
@@ -28,11 +28,8 @@ bus LocalBus {
         wr:    bool driven_by Master;
         bhe:   bool driven_by Master;
         ready: bool wired_and;
-        drq:   [bool; 4] driven_by Slave;
     }
-    /// The interrupt controllers are responders of their own kind: they
-    /// answer the interrupt acknowledge.
-    roles { Master; Slave; Controller; }
+    roles { Master; Slave; }
 
     /// Two bus cycles (Ts, Tc) without wait states.
     transaction read(space: Space, addr: u24, size: BusSize) -> (data: u16) {
@@ -50,8 +47,8 @@ bus LocalBus {
         }
     }
 
-    /// The two interrupt-acknowledge cycles. Not address-decoded: the
-    /// interrupt controller answers with the vector.
+    /// The two interrupt-acknowledge cycles. Not address-decoded: the bus
+    /// controller takes it to the interrupt controllers on the ISA bus.
     transaction inta() -> (vector: u8) {
         Master {
             cycle { } cycle { }
@@ -59,27 +56,6 @@ bus LocalBus {
             cycle { } cycle { }
         }
     }
-
-    /// Fly-by DMA: the acknowledge half of a transfer. The device on the
-    /// channel supplies (`dack_read`) or takes (`dack_write`) the byte while
-    /// the DMA controller drives the memory side, which carries the bus
-    /// time; the acknowledge itself costs no cycles. Not address-decoded:
-    /// the device on the channel answers, the others decline.
-    transaction dack_read(channel: u2) -> (data: u8) { Master { } }
-    transaction dack_write(channel: u2, data: u8) { Master { } }
-
-    signal dreq(channel: u2) = drq[channel];
-}
-
-/// The eight interrupt request lines into one 8259. Which device drives
-/// which line is board wiring, so each controller has its own set: on the
-/// AT the master's lines are IRQ 0-7 (IRQ 2 carrying the slave's INT) and
-/// the slave's are IRQ 8-15.
-bus IrqLines {
-    clock clk;
-    wires { ir: [bool; 8] driven_by Device; }
-    roles { Controller; Device; }
-    signal request(line: u3) = ir[line];
 }
 
 /// The later of two clocks.
@@ -744,760 +720,75 @@ component Rom {
     }
 }
 
-/// The 8259 programmable interrupt controller in fixed-priority,
-/// edge-triggered mode: a rising edge on an IR line sets its request bit,
-/// and INT is high while an unmasked request outranks every line in
-/// service. Port 0 takes ICW1, OCW2 (EOI) and OCW3 (which register a read
-/// returns); port 1 takes ICW2-4 during initialisation and the mask (OCW1)
-/// after.
-///
-/// Cascading: the SP/EN pin, strapped on the board, says which chip is the
-/// master. The master's INT goes to the processor; a slave drives its INT
-/// onto the master's IR line given by its ICW3 (its ID). When the master
-/// grants a line that ICW3 marks as having a slave, it names the slave on
-/// CAS0-2 and declines the acknowledge, and the slave whose ID matches
-/// answers with its vector.
-component Pic8259 {
+/// The AT's bus controller: what nothing on the local bus answers goes to
+/// the ISA bus, at the ISA bus's clock. A word for an 8-bit device (one
+/// that does not pull MEMCS16#/IOCS16# low) becomes two byte cycles, low
+/// byte first. The AT inserts its default wait states: one in a 16-bit
+/// cycle, four in an 8-bit one. In the other direction, an ISA master's
+/// memory cycle in system memory (the DMA controller's) reaches the local
+/// bus.
+component AtBus286 {
     ports {
-        bus port: LocalBus::Controller;
-        /// IR0-7.
-        bus ir: IrqLines::Controller;
-        /// As a slave: INT onto the master's IR line.
-        bus cascade: IrqLines::Device;
-        /// SP/EN: high for the master.
-        in sp: bool;
-        out int: bool;
-        /// CAS0-2, driven by the master and read by the slaves.
-        out cas_out: u3;
-        in cas_in: u3;
+        /// Everything the local bus does not answer.
+        bus local: LocalBus::Slave;
+        bus isa: IsaBus::Master;
+        /// System memory (RAM and the boot ROM), as ISA masters see it.
+        bus sysmem: IsaBus::Slave;
+        bus mem: LocalBus::Master;
     }
     model {
-        state irr: u8 = 0;
-        state isr: u8 = 0;
-        state imr: u8 = 0xFF;
-        state base: u8 = 0;
-        /// The master's slave lines, or a slave's ID.
-        state icw3: u8 = 0;
-        /// The ICW expected next on port 1: 2, 3, 4, or 0 when initialised.
-        state icw: u8 = 0;
-        state icw4_needed: bool = false;
-        state single: bool = true;
-        state auto_eoi: bool = false;
-        state read_isr: bool = false;
-        state lines: u8 = 0;
-
-        /// INT follows the request the controller would grant.
-        fn update_int() {
-            let req = PicGrant(irr, imr, isr) != 0;
-            int = req;
-            if !sp && !single {
-                emit cascade.request(icw3[2:0]) = req;
+        fn waits(n: u8) {
+            for i in 0..4 {
+                if (i as u8) < n { isa.wait_state(); }
             }
         }
 
-        /// Grant the highest-priority request: requested to in service.
-        /// Returns the line, or 7 when nothing is requested (spurious).
-        fn grant() -> u3 {
-            let g = PicGrant(irr, imr, isr);
-            if g == 0 {
-                return 7;
-            }
-            let line = (g - 1) as u3;
-            let bit = (1 as u8) << line;
-            irr = irr & ~bit;
-            if !auto_eoi {
-                isr = isr | bit;
-            }
-            update_int();
-            return line;
+        /// Whether the target is a 16-bit device.
+        fn wide(space: Space, addr: u24) -> bool {
+            return !isa.cs16(space: space, addr: addr).cs16_n;
         }
 
-        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
-            let v: u8 = if addr[0] == 1 { imr } else if read_isr { isr } else { irr };
-            return (data: v as u16, wait: 1);
-        }
-        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
-            let d = data as u8;
-            if addr[0] == 0 {
-                if d[4] == 1 {
-                    // ICW1: start initialisation; the mask clears.
-                    icw = 2;
-                    icw4_needed = d[0] == 1;
-                    single = d[1] == 1;
-                    imr = 0;
-                    isr = 0;
-                    read_isr = false;
-                    auto_eoi = false;
-                } else if d[3] == 0 {
-                    // OCW2: non-specific EOI ends the highest-priority
-                    // line in service, specific EOI the line named.
-                    let cmd = d[7:5];
-                    if cmd == 1 {
-                        isr = isr & ~(isr & (~isr + 1));
-                    } else if cmd == 3 {
-                        isr = isr & ~((1 as u8) << d[2:0]);
-                    }
-                } else if d[1] == 1 {
-                    // OCW3: select the register port 0 reads.
-                    read_isr = d[0] == 1;
-                }
-            } else if icw == 2 {
-                base = d & 0xF8;
-                icw = if !single { 3 } else if icw4_needed { 4 } else { 0 };
-            } else if icw == 3 {
-                icw3 = d;
-                icw = if icw4_needed { 4 } else { 0 };
-            } else if icw == 4 {
-                auto_eoi = d[1] == 1;
-                icw = 0;
-            } else {
-                imr = d;
+        on local.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            if wide(space, addr) {
+                let v = isa.read(space: space, addr: addr, size: size).data;
+                waits(1);
+                return (data: v, wait: 0);
             }
-            update_int();
-            return (wait: 1);
-        }
-        on ir.request(line: u3, value: bool) {
-            let bit = (1 as u8) << line;
-            if value && (lines & bit) == 0 {
-                irr = irr | bit;
-            }
-            lines = if value { lines | bit } else { lines & ~bit };
-            update_int();
-        }
-        /// The acknowledge: the master grants, and either answers or names
-        /// the slave on CAS and declines; a slave answers only when named.
-        on port.inta() -> (vector: u8, wait: u8) {
-            if sp || single {
-                let line = grant();
-                if !single && icw3[line] == 1 {
-                    cas_out = line;
-                    decline;
-                }
-                return (vector: base | line as u8, wait: 0);
-            }
-            if cas_in != icw3[2:0] {
-                decline;
-            }
-            let line = grant();
-            return (vector: base | line as u8, wait: 0);
-        }
-    }
-}
-
-/// The request the 8259 grants under fixed priority (IR0 highest): its
-/// line plus one, or 0 when no unmasked request outranks the lines in
-/// service.
-unit PicGrant(irr: u8, imr: u8, isr: u8) -> u4 {
-    for i in 0..8 {
-        if isr[i] == 1 {
-            return 0;
-        }
-        if irr[i] == 1 && imr[i] == 0 {
-            return (i + 1) as u4;
-        }
-    }
-    return 0;
-}
-
-/// One 8254 counter channel.
-bundle PitChannel {
-    count: u16,
-    reload: u16,
-    mode: u3,
-    /// 1 low byte, 2 high byte, 3 low then high.
-    access: u2,
-    counting: bool,
-    /// Access mode 3: the low byte of a new count has been written.
-    low_written: bool,
-    low_byte: u8,
-    /// Access mode 3: the next read returns the high byte.
-    read_high: bool,
-    latched: bool,
-    latch: u16,
-    out: bool,
-}
-
-/// The 8254 programmable interval timer: three 16-bit down-counters on one
-/// clock. Port 3 takes control words (channel, access mode, counting mode,
-/// or a counter latch command); ports 0-2 read and write the counters in
-/// the programmed access mode (low byte, high byte, or low then high).
-/// Modes 0 (interrupt on terminal count), 2 (rate generator) and 3 (square
-/// wave, counted like mode 2) count; the gated modes 1 and 5 wait. Channel
-/// 0's output drives interrupt line 0. The model catches up in one step
-/// per `tick`, raising one edge however many periods passed.
-component Pit8254 {
-    ports {
-        bus port: LocalBus::Slave;
-        /// OUT0 drives IRQ 0.
-        bus irq: IrqLines::Device;
-    }
-    model {
-        state ch: [PitChannel; 3];
-
-        /// Set a channel's OUT pin; channel 0's drives interrupt line 0.
-        fn set_out(c: u2, level: bool) {
-            ch[c].out = level;
-            if c == 0 {
-                emit irq.request(0) = level;
-            }
+            let lo = isa.read(space: space, addr: addr, size: BusSize::Byte).data as u8;
+            waits(4);
+            if size == BusSize::Byte { return (data: lo as u16, wait: 0); }
+            let hi = isa.read(space: space, addr: addr + 1, size: BusSize::Byte).data as u8;
+            waits(4);
+            return (data: concat(hi, lo), wait: 0);
         }
 
-        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
-            let c = addr[1:0];
-            if c == 3 {
-                return (data: 0xFF, wait: 1);
+        on local.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            if wide(space, addr) {
+                isa.write(space: space, addr: addr, size: size, data: data);
+                waits(1);
+                return (wait: 0);
             }
-            let v = if ch[c].latched { ch[c].latch } else { ch[c].count };
-            let high = ch[c].access == 2 || (ch[c].access == 3 && ch[c].read_high);
-            if ch[c].access == 3 {
-                ch[c].read_high = !ch[c].read_high;
+            isa.write(space: space, addr: addr, size: BusSize::Byte, data: data & 0xFF);
+            waits(4);
+            if size == BusSize::Word {
+                isa.write(space: space, addr: addr + 1, size: BusSize::Byte, data: data >> 8);
+                waits(4);
             }
-            if ch[c].access != 3 || !ch[c].read_high {
-                ch[c].latched = false;
-            }
-            let b: u8 = if high { (v >> 8) as u8 } else { v as u8 };
-            return (data: b as u16, wait: 1);
-        }
-        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
-            let d = data as u8;
-            let c = addr[1:0];
-            if c == 3 {
-                let sel = d[7:6];
-                if sel == 3 {
-                    return (wait: 1);
-                }
-                if d[5:4] == 0 {
-                    ch[sel].latch = ch[sel].count;
-                    ch[sel].latched = true;
-                    return (wait: 1);
-                }
-                ch[sel].access = d[5:4];
-                ch[sel].mode = if d[3:2] == 3 { d[3:1] & 3 } else { d[3:1] };
-                ch[sel].counting = false;
-                ch[sel].low_written = false;
-                ch[sel].read_high = false;
-                ch[sel].latched = false;
-                // OUT starts low in mode 0, high in the others.
-                set_out(sel, ch[sel].mode != 0);
-                return (wait: 1);
-            }
-            // A count is complete after one byte, or the second of two.
-            let full = ch[c].access != 3 || ch[c].low_written;
-            if ch[c].access == 1 {
-                ch[c].reload = d as u16;
-            } else if ch[c].access == 2 {
-                ch[c].reload = (d as u16) << 8;
-            } else if !ch[c].low_written {
-                ch[c].low_byte = d;
-                ch[c].low_written = true;
-                if ch[c].mode == 0 {
-                    ch[c].counting = false;
-                }
-            } else {
-                ch[c].reload = concat(d, ch[c].low_byte);
-                ch[c].low_written = false;
-            }
-            if full {
-                ch[c].count = ch[c].reload;
-                ch[c].counting = ch[c].mode == 0 || ch[c].mode == 2 || ch[c].mode == 3;
-                if ch[c].mode == 0 {
-                    set_out(c, false);
-                }
-            }
-            return (wait: 1);
-        }
-        /// Returns the cycles until channel 0's OUT next changes: nothing
-        /// else here is visible without a bus access, which catches the
-        /// timer up first.
-        on tick(n: u32) -> u32 {
-            for c in 0..3 {
-                if ch[c].counting {
-                    let period: u32 = if ch[c].reload == 0 { 0x10000 } else { ch[c].reload as u32 };
-                    let left: u32 = if ch[c].count == 0 { 0x10000 } else { ch[c].count as u32 };
-                    if n < left {
-                        ch[c].count = (left - n) as u16;
-                    } else if ch[c].mode == 0 {
-                        ch[c].count = ((left + 0x10000 - n % 0x10000) % 0x10000) as u16;
-                        if !ch[c].out {
-                            set_out(c, true);
-                        }
-                    } else {
-                        ch[c].count = (period - (n - left) % period) as u16;
-                        // OUT pulses low as the count reloads: one edge.
-                        set_out(c, false);
-                        set_out(c, true);
-                    }
-                }
-            }
-            if !ch[0].counting || (ch[0].mode == 0 && ch[0].out) {
-                return 0xFFFFFFFF;
-            }
-            return if ch[0].count == 0 { 0x10000 } else { ch[0].count as u32 };
-        }
-    }
-}
-
-/// One 8237 channel.
-bundle DmaChannel {
-    base_addr: u16,
-    base_count: u16,
-    addr: u16,
-    count: u16,
-    /// bits 0-1 channel, 2-3 transfer (1 write to memory, 2 read from
-    /// memory), 4 autoinitialise, 5 address decrement, 6-7 mode
-    mode: u8,
-    masked: bool,
-    /// Terminal count reached since the status register was last read.
-    tc: bool,
-    /// The address bits above 16, from the page register.
-    page: u8,
-}
-
-/// The 8237 DMA controller with the AT's page registers. Registers 0-7
-/// are each channel's address and count (low then high byte, through the
-/// flip-flop), 8 status (read; clears the TC bits) and command (write), 10
-/// a single mask bit, 11 the mode, 12 clears the flip-flop, 13 is a master
-/// clear, 14 clears every mask and 15 writes them all. The page registers
-/// at 81-87 give each channel's address bits 16-23. A channel transfers
-/// while it is unmasked and its device holds DREQ, single-cycle mode, about
-/// one byte per four DMA clocks; at terminal count it masks itself unless
-/// it autoinitialises.
-component Dma8237 {
-    ports {
-        bus regs: LocalBus::Slave;
-        bus pages: LocalBus::Slave;
-        bus dma: LocalBus::Master;
-    }
-    model {
-        state ch: [DmaChannel; 4];
-        state command: u8 = 0;
-        state flip: bool = false;
-
-        on reset { master_clear(); }
-
-        fn master_clear() {
-            for c in 0..4 {
-                ch[c].masked = true;
-                ch[c].tc = false;
-            }
-            command = 0;
-            flip = false;
-        }
-
-        /// One fly-by transfer on channel `c`, then the address and count step.
-        fn transfer(c: u2) {
-            let a = concat(ch[c].page, ch[c].addr);
-            let kind = ch[c].mode[3:2];
-            if kind == 1 {
-                let b = dma.dack_read(channel: c).data;
-                dma.write(space: Space::Mem, addr: a, size: BusSize::Byte, data: b as u16);
-            } else if kind == 2 {
-                let b = dma.read(space: Space::Mem, addr: a, size: BusSize::Byte).data as u8;
-                dma.dack_write(channel: c, data: b);
-            }
-            ch[c].addr = if ch[c].mode[5] == 1 { ch[c].addr - 1 } else { ch[c].addr + 1 };
-            // Terminal count is the count rolling over from 0 to FFFF.
-            let last = ch[c].count == 0;
-            ch[c].count = ch[c].count - 1;
-            if last {
-                ch[c].tc = true;
-                if ch[c].mode[4] == 1 {
-                    ch[c].addr = ch[c].base_addr;
-                    ch[c].count = ch[c].base_count;
-                } else {
-                    ch[c].masked = true;
-                }
-            }
-        }
-
-        /// Returns four clocks (one transfer) while a channel is active,
-        /// else never: a rising DREQ wakes the controller, through the
-        /// handler below, and programming it is a bus access.
-        on tick(n: u32) -> u32 {
-            if command[2] == 1 {
-                return 0xFFFFFFFF;
-            }
-            let mut budget: u32 = n / 4;
-            for c in 0..4 {
-                while budget > 0 && !ch[c].masked && dma.dreq(c) {
-                    transfer(c);
-                    budget = budget - 1;
-                }
-            }
-            for c in 0..4 {
-                if !ch[c].masked && dma.dreq(c) {
-                    return 4;
-                }
-            }
-            return 0xFFFFFFFF;
-        }
-
-        /// A request edge: nothing to do but be woken.
-        on dma.dreq(channel: u2, value: bool) { }
-
-        on regs.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
-            let r = addr[3:0];
-            if r < 8 {
-                let c = addr[2:1];
-                let v = if r[0] == 0 { ch[c].addr } else { ch[c].count };
-                let b: u8 = if flip { (v >> 8) as u8 } else { v as u8 };
-                flip = !flip;
-                return (data: b as u16, wait: 1);
-            }
-            if r == 8 {
-                let mut status: u8 = 0;
-                for c in 0..4 {
-                    if ch[c].tc {
-                        status = status | ((1 as u8) << c);
-                        ch[c].tc = false;
-                    }
-                    if dma.dreq(c) {
-                        status = status | ((0x10 as u8) << c);
-                    }
-                }
-                return (data: status as u16, wait: 1);
-            }
-            return (data: 0xFF, wait: 1);
-        }
-
-        on regs.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
-            let d = data as u8;
-            let r = addr[3:0];
-            if r < 8 {
-                let c = addr[2:1];
-                if r[0] == 0 {
-                    let v = if flip { concat(d, ch[c].base_addr as u8) } else { (ch[c].base_addr & 0xFF00) | d as u16 };
-                    ch[c].base_addr = v;
-                    ch[c].addr = v;
-                } else {
-                    let v = if flip { concat(d, ch[c].base_count as u8) } else { (ch[c].base_count & 0xFF00) | d as u16 };
-                    ch[c].base_count = v;
-                    ch[c].count = v;
-                }
-                flip = !flip;
-            } else if r == 8 {
-                command = d;
-            } else if r == 10 {
-                ch[d[1:0]].masked = d[2] == 1;
-            } else if r == 11 {
-                ch[d[1:0]].mode = d;
-            } else if r == 12 {
-                flip = false;
-            } else if r == 13 {
-                master_clear();
-            } else if r == 14 {
-                for c in 0..4 {
-                    ch[c].masked = false;
-                }
-            } else if r == 15 {
-                for c in 0..4 {
-                    ch[c].masked = d[c] == 1;
-                }
-            }
-            return (wait: 1);
-        }
-
-        /// The AT page registers: 87 channel 0, 83 channel 1, 81 channel 2,
-        /// 82 channel 3.
-        on pages.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
-            let r = addr[2:0];
-            if r == 7 {
-                ch[0].page = data as u8;
-            } else if r == 3 {
-                ch[1].page = data as u8;
-            } else if r == 1 {
-                ch[2].page = data as u8;
-            } else if r == 2 {
-                ch[3].page = data as u8;
-            }
-            return (wait: 1);
-        }
-        on pages.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
-            let r = addr[2:0];
-            let v: u8 = if r == 7 { ch[0].page } else if r == 3 { ch[1].page } else if r == 1 { ch[2].page } else if r == 2 { ch[3].page } else { 0xFF };
-            return (data: v as u16, wait: 1);
-        }
-    }
-}
-
-/// A data link to the embedding program over DMA channel 1. Bytes the host
-/// pushes are requested on DREQ 1 and written to memory by the DMA
-/// controller; when the host expects bytes, the device requests them and
-/// collects what the controller reads out of memory.
-component HostLink {
-    ports {
-        bus port: LocalBus::Slave;
-        /// IRQ 12, on the slave controller's IR4.
-        bus irq: IrqLines::Device;
-    }
-    model {
-        mem inbox: [u8; 256];
-        state head: u8 = 0;
-        state tail: u8 = 0;
-        mem outbox: [u8; 256];
-        state out_len: u8 = 0;
-        state wanted: u8 = 0;
-
-        fn update_dreq() {
-            emit port.dreq(1) = head != tail || wanted != 0;
-        }
-
-        /// Host side: queue a byte for the guest.
-        fn push(b: u8) {
-            inbox[tail] = b;
-            tail = tail + 1;
-            update_dreq();
-        }
-
-        /// Host side: raise or drop the link's interrupt.
-        fn interrupt(level: bool) {
-            emit irq.request(4) = level;
-        }
-
-        /// Host side: ask for `n` bytes from the guest.
-        fn expect(n: u8) {
-            wanted = n;
-            update_dreq();
-        }
-
-        on port.dack_read(channel: u2) -> (data: u8, wait: u8) {
-            if channel != 1 || head == tail {
-                decline;
-            }
-            let b = inbox[head];
-            head = head + 1;
-            update_dreq();
-            return (data: b, wait: 0);
-        }
-
-        on port.dack_write(channel: u2, data: u8) -> (wait: u8) {
-            if channel != 1 || wanted == 0 {
-                decline;
-            }
-            outbox[out_len] = data;
-            out_len = out_len + 1;
-            wanted = wanted - 1;
-            update_dreq();
             return (wait: 0);
         }
-    }
-}
 
-/// The IBM Color Graphics Adapter: 16 KB of video RAM at B8000 (mirrored
-/// to BFFFF), an MC6845 CRTC at 3D4/3D5, the mode control register at 3D8,
-/// colour select at 3D9 and status at 3DA. It counts its 14.318 MHz dot
-/// clock; as the beam finishes each scanline of the display area it renders
-/// that line into `frame`, 640 dots wide, one colour index (0-15, IRGB)
-/// per dot, so low-resolution modes draw every pixel twice. The host reads
-/// `frame`, `frame_width`, `frame_height` and the `frames` counter. The
-/// character generator's 8x8 font is in `font` (eight rows per character,
-/// most significant bit leftmost), which the host fills, as it fills the
-/// boot ROM.
-component Cga {
-    ports { bus port: LocalBus::Slave; }
-    model {
-        mem vram: [u8; 0x4000];
-        mem font: [u8; 2048];
-        mem frame: [u8; 163840];
-        state frame_width: u32 = 0;
-        state frame_height: u32 = 0;
-        /// Completed frames.
-        state frames: u32 = 0;
-        state crtc: [u8; 18];
-        state index: u8 = 0;
-        /// 3D8: bit 0 80-column text, 1 graphics, 2 monochrome, 3 video
-        /// enable, 4 640-dot graphics, 5 blink.
-        state mode: u8 = 0;
-        /// 3D9: bits 0-3 background (or 640-dot foreground), 4 intensity,
-        /// 5 palette.
-        state color: u8 = 0;
-        /// The beam, in dots from the top left of the frame.
-        state pos: u32 = 0;
-
-        /// Dots per character: 8 in 80-column text, else 16.
-        fn char_dots() -> u32 {
-            return if mode[0] == 1 && mode[1] == 0 { 8 } else { 16 };
-        }
-        fn line_dots() -> u32 {
-            return (crtc[0] as u32 + 1) * char_dots();
-        }
-        fn rows() -> u32 {
-            return crtc[9] as u32 % 32 + 1;
-        }
-        fn frame_lines() -> u32 {
-            return (crtc[4] as u32 % 128 + 1) * rows() + crtc[5] as u32 % 32;
-        }
-        fn display_lines() -> u32 {
-            return crtc[6] as u32 % 128 * rows();
+        on local.inta() -> (vector: u8, wait: u8) {
+            return (vector: isa.inta().vector, wait: 0);
         }
 
-        /// Draw scanline `line` of the display area into `frame`.
-        fn render(line: u32) {
-            let ra = line % rows();
-            let row = line / rows();
-            let cd = char_dots();
-            let cols = crtc[1] as u32;
-            let start = concat(crtc[12] & 0x3F, crtc[13]) as u32;
-            let cursor = concat(crtc[14] & 0x3F, crtc[15]) as u32;
-            let base = line * 640;
-            for col in 0..80 {
-                if (col as u32) < cols && (col as u32 + 1) * cd <= 640 {
-                    let ma = (start + row * cols + col as u32) & 0x3FFF;
-                    let x0 = base + col as u32 * cd;
-                    if mode[3] == 0 {
-                        for d in 0..16 {
-                            if (d as u32) < cd { frame[x0 + d as u32] = 0; }
-                        }
-                    } else if mode[1] == 1 {
-                        // Graphics: even scanlines in the first 8 KB, odd in
-                        // the second; two bytes per character.
-                        let a = ((ma * 2) & 0x1FFF) | ((ra & 1) << 13);
-                        let bits = concat(vram[a], vram[a + 1]);
-                        for d in 0..16 {
-                            let mut c: u8 = 0;
-                            if mode[4] == 1 {
-                                if bits[15 - d] == 1 { c = color & 15; }
-                            } else {
-                                let px = d / 2;
-                                let v = (bits >> (14 - px * 2)) & 3;
-                                c = if v == 0 { color & 15 } else { (v as u8) * 2 + color[5] as u8 + (color[4] as u8) * 8 };
-                            }
-                            frame[x0 + d as u32] = c;
-                        }
-                    } else {
-                        // Text: a character and its attribute.
-                        let a = (ma * 2) & 0x3FFF;
-                        let ch = vram[a];
-                        let attr = vram[a + 1];
-                        let mut glyph = font[ch as u32 * 8 + (ra & 7)];
-                        let mut fg = attr & 15;
-                        let bg = if mode[5] == 1 { (attr >> 4) & 7 } else { attr >> 4 };
-                        if mode[5] == 1 && attr[7] == 1 && frames[4] == 1 {
-                            fg = bg;
-                        }
-                        let cur_start = crtc[10] & 31;
-                        let cur_on = crtc[10][6:5] != 1 && (crtc[10][6:5] == 0 || frames[3] == 1);
-                        if ma == cursor && cur_on && ra as u8 >= cur_start && ra as u8 <= (crtc[11] & 31) {
-                            glyph = 0xFF;
-                            fg = attr & 15;
-                        }
-                        for d in 0..16 {
-                            if (d as u32) < cd {
-                                let px = if cd == 16 { d / 2 } else { d };
-                                frame[x0 + d as u32] = if glyph[7 - px[2:0]] == 1 { fg } else { bg };
-                            }
-                        }
-                    }
-                }
-            }
-            frame_width = if cols * cd < 640 { cols * cd } else { 640 };
+        on sysmem.cs16(space: Space, addr: u24) -> (cs16_n: bool, wait: u8) {
+            return (cs16_n: false, wait: 0);
         }
-
-        /// Returns the dots left in the frame: a raster write or a status
-        /// read is a bus access and catches the card up first, so drawing a
-        /// frame's lines in one go at its end looks the same; the host
-        /// calls `catch_up_all` before reading `frame` mid-frame.
-        on tick(n: u32) -> u32 {
-            let ld = line_dots();
-            let total = ld * frame_lines();
-            if total == 0 {
-                return 0xFFFFFFFF;
-            }
-            let mut left = n;
-            while left > 0 {
-                let line = pos / ld;
-                let end = (line + 1) * ld;
-                if pos + left < end {
-                    pos = pos + left;
-                    left = 0;
-                } else {
-                    left = left - (end - pos);
-                    if line < display_lines() && line < 256 {
-                        render(line);
-                    }
-                    pos = end;
-                    if pos >= total {
-                        pos = 0;
-                        frames = frames + 1;
-                        frame_height = if display_lines() < 256 { display_lines() } else { 256 };
-                    }
-                }
-            }
-            return total - pos;
+        on sysmem.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            return (data: mem.read(space: space, addr: addr, size: size).data, wait: 0);
         }
-
-        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
-            if space == Space::Mem {
-                let a = addr[13:0];
-                if size == BusSize::Word {
-                    return (data: concat(vram[a + 1], vram[a]), wait: 1);
-                }
-                return (data: vram[a] as u16, wait: 1);
-            }
-            let r = addr[3:0];
-            if r == 10 {
-                // Status: bit 0 outside the display area, bit 3 vertical
-                // retrace (16 lines from the sync row).
-                let ld = line_dots();
-                let line = if ld == 0 { 0 } else { pos / ld };
-                let h = if ld == 0 { 0 } else { pos % ld };
-                let shown = h < crtc[1] as u32 * char_dots() && line < display_lines();
-                let vs = crtc[7] as u32 % 128 * rows();
-                let retrace = line >= vs && line < vs + 16;
-                let v: u8 = (if shown { 0 } else { 1 }) | (if retrace { 8 } else { 0 });
-                return (data: v as u16, wait: 1);
-            }
-            if r[2:0] == 5 || r[2:0] == 1 || r[2:0] == 3 || r[2:0] == 7 {
-                if r < 8 {
-                    let v: u8 = if index >= 12 && index < 18 { crtc[index] } else { 0 };
-                    return (data: v as u16, wait: 1);
-                }
-            }
-            return (data: 0xFF, wait: 1);
-        }
-
-        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
-            if space == Space::Mem {
-                let a = addr[13:0];
-                vram[a] = data as u8;
-                if size == BusSize::Word {
-                    vram[(a + 1) & 0x3FFF] = (data >> 8) as u8;
-                }
-                return (wait: 1);
-            }
-            let r = addr[3:0];
-            let d = data as u8;
-            if r < 8 {
-                if r[0] == 0 {
-                    index = d & 31;
-                } else if index < 18 {
-                    crtc[index] = d;
-                }
-            } else if r == 8 {
-                mode = d;
-            } else if r == 9 {
-                color = d;
-            }
-            return (wait: 1);
-        }
-    }
-}
-
-/// Collects the bytes written to its port (like the Bochs port E9 hack).
-component Console {
-    ports { bus port: LocalBus::Slave; }
-    model {
-        mem text: [u8; 256];
-        state len: u8 = 0;
-
-        /// Host side: forget what has been printed.
-        fn clear() {
-            len = 0;
-        }
-
-        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
-            text[len] = data as u8;
-            len = len + 1;
+        on sysmem.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            mem.write(space: space, addr: addr, size: size, data: data);
             return (wait: 0);
         }
     }
@@ -1512,6 +803,7 @@ system Board286 {
     component cpu: Cpu286 @ cpu_clk;
     component ram: Ram;
     component rom: Rom;
+    component atbus: AtBus286;
     component pic1: Pic8259;
     component pic2: Pic8259;
     component pit: Pit8254 @ pit_clk;
@@ -1522,15 +814,24 @@ system Board286 {
 
     bus local: LocalBus @ cpu_clk {
         master cpu.local;
+        master atbus.mem;
         slave ram.port @ mem 0x00000..=0x9FFFF;
         slave rom.port @ mem 0xF0000..=0xFFFFF, mem 0xFF0000..=0xFFFFFF;
+        slave atbus.local;
+    }
+
+    /// The ISA bus, clocked with the processor as on an 8 MHz AT.
+    bus isa: IsaBus @ cpu_clk {
+        master atbus.isa;
+        master dma.dma;
+        // System RAM and the boot ROM, as ISA masters see them.
+        slave atbus.sysmem @ mem 0x00000..=0x9FFFF, mem 0xF0000..=0xFFFFF, mem 0xFF0000..=0xFFFFFF;
         // The master first: it sees the acknowledge before the slave.
         slave pic1.port @ io 0x20..=0x21;
         slave pic2.port @ io 0xA0..=0xA1;
         slave pit.port @ io 0x40..=0x43;
         slave dma.regs @ io 0x00..=0x0F;
         slave dma.pages @ io 0x81..=0x87;
-        master dma.dma;
         slave link.port;
         slave console.port @ io 0xE9..=0xE9;
         slave cga.port @ mem 0xB8000..=0xBFFFF, io 0x3D0..=0x3DF;

@@ -1188,6 +1188,93 @@ conformance at transaction boundaries (section 13). Over the whole
 corpus (130,000 vectors, repeated strings and exceptions included), 98%
 match every bus cycle.
 
+### 11.2d Instruction families and decode conditions
+
+The 386 runs most of its instructions at two operand widths and two
+address widths, chosen per instruction by prefixes (66, 67) and, in
+protected mode, by the code segment's default size. One description
+covers both with **families**: instructions, operand kinds and isa fns
+with a `const W: width` parameter, instantiated at a list of widths.
+
+```
+latch opsize: u1 = 0;                  // 66 toggles it
+prefix OperandSize { encoding { opcode 0x66; } semantics { opsize = 1; } }
+fn operand_size() -> u6 { return if (opsize ^ CS.big) == 1 { 32 } else { 16 }; }
+
+instruction Alu_rm_r<const W: width> in [16, 32] {
+    mnemonic alu_name(op);
+    encoding { when operand_size() == W; opcode "00ooo001" { o: alu_op }; ModRM { reg: r<W> } }
+    operands (op: alu_op, dst: rm<W>, src: r<W>);
+    flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+    semantics {
+        let a = dst;
+        let (result, raw) = Alu<W>(op, a, src, 0);
+        if op != AluOp::Cmp { dst = result; }
+        FLAGS.arith = AluFlags<W>(op, a, src, raw);
+    }
+}
+```
+
+- **Instances.** `instruction Name<const W: width> in [16, 32] { ... }`
+  declares one instruction per listed width, named `Name<16>` and
+  `Name<32>` (in tables, the assembler and diagnostics). `W` is a
+  compile-time constant inside: in types (`u<W>`), unit instantiations
+  (`Alu<W>`), fn instantiations (`push<W>(v)`), kind references
+  (`rm<W>`) and expressions; `if W == 32 { ... }` is resolved per
+  instance and only the taken branch is checked against that instance's
+  types. A timing or schedules entry may name one instance (`Alu_rm_r<32>
+  => ...`) or the family (`Alu_rm_r => ...`, with `W` in scope); an
+  instance's own entry wins.
+- **Kind families.** An operand kind is declared per width with the width
+  in its name, `operand_kind r<16> : u16 { ... }` and `operand_kind r<32>
+  : u32 { ... }`, or once with a parameter when its rules are uniform,
+  `operand_kind rm<const W: width> : u<W> from m: ModRM { ... }`. `r<W>`
+  in an instance resolves to the kind for that width.
+- **Fn families.** `fn push<const W: width>(v: u<W>) { ... }` is an isa
+  fn instantiated at each width it is called with, `push<W>(v)` or
+  `push<32>(v)`.
+- **Width-generic access.** `mem.read<W>(addr)` and `mem.write<W>(addr,
+  v)` are `mem.read_u16` and friends with the width a parameter.
+- **Decode conditions.** `when <expr>;` in an encoding is a condition the
+  decoder checks after matching the instruction's bytes: an expression
+  over latches, registers and pure isa fns (no memory, no faults), read at
+  that point of decoding (after the prefixes). Instructions whose
+  encodings overlap must differ in a field constraint (E1045) or in a
+  `when` of the form `E == c` with the same `E` and different constants;
+  the decoder tries them in declaration order and takes the first whose
+  condition holds. The usual conditions are the operand and address
+  sizes.
+- **Decode-time tails.** An operand format's `tail` may read latches and
+  call pure isa fns as well as its fields, so the ModRM can depend on the
+  address size:
+
+```
+operand ModRM {
+    size 1;
+    fields { mod: u2 @ 6; reg: u3 @ 3; rm: u3 @ 0; }
+    tail {
+        if address_size() == 32 {
+            if mod != 3 && rm == 4 { Sib }
+            else if mod == 1 { Disp8 }
+            else if mod == 2 || (mod == 0 && rm == 5) { Disp32 }
+        } else if mod == 1 { Disp8 }
+        else if mod == 2 || (mod == 0 && rm == 6) { Disp16 }
+    }
+}
+operand Sib {
+    size 1;
+    fields { scale: u2 @ 6; index: u3 @ 3; base: u3 @ 0; }
+    tail { ... }    // its displacement, which depends on the ModRM's mod
+}
+```
+
+  A tail may also name its parent's fields (`parent.mod`), since the
+  SIB's displacement depends on the ModRM it follows.
+
+A family is a convenience, not a new kind of instruction: each instance is
+an ordinary instruction to the interpreter, the rig, the timing tables and
+the conformance tests.
+
 ### 11.3 Operand kinds and `fetch`
 
 ```

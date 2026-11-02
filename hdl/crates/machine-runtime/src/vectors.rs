@@ -15,16 +15,26 @@ pub const MOO_REGS: [&str; 14] = [
     "ax", "bx", "cx", "dx", "cs", "ss", "ds", "es", "sp", "bp", "si", "di", "ip", "flags",
 ];
 
+/// The 386 register file order used by MOO `RG32` (and `RM32`) chunks.
+/// Segment registers hold their selector in the low 16 bits.
+pub const MOO_REGS32: [&str; 20] = [
+    "cr0", "cr3", "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "cs", "ds", "es", "fs",
+    "gs", "ss", "eip", "eflags", "dr6", "dr7",
+];
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CpuState {
     /// `(register name, value)` for the registers present.
-    pub regs: Vec<(&'static str, u16)>,
+    pub regs: Vec<(&'static str, u32)>,
     /// `(linear address, byte)`.
     pub ram: Vec<(u32, u8)>,
+    /// `(register name, mask)` of bits the hardware leaves undefined
+    /// (`RMSK`/`RM32`), when the test gives them.
+    pub undefined: Vec<(&'static str, u32)>,
 }
 
 impl CpuState {
-    pub fn reg(&self, name: &str) -> Option<u16> {
+    pub fn reg(&self, name: &str) -> Option<u32> {
         self.regs.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
     }
 }
@@ -196,7 +206,20 @@ fn decode_state(body: &[u8]) -> Result<CpuState, MooError> {
                 let mask = c.u16()?;
                 for (i, name) in MOO_REGS.iter().enumerate() {
                     if mask & (1 << i) != 0 {
-                        st.regs.push((name, c.u16()?));
+                        st.regs.push((name, c.u16()? as u32));
+                    }
+                }
+            }
+            b"RG32" | b"RM32" => {
+                let mask = c.u32()?;
+                for (i, name) in MOO_REGS32.iter().enumerate() {
+                    if mask & (1 << i) != 0 {
+                        let v = c.u32()?;
+                        if &tag == b"RG32" {
+                            st.regs.push((name, v));
+                        } else {
+                            st.undefined.push((name, v));
+                        }
                     }
                 }
             }

@@ -2986,13 +2986,15 @@ impl<'a> Gen<'a> {
             let value_name = self.local_name(&cx, r.value);
             let _ = writeln!(
                 load,
-                "            {:?} => {{ let {value_name}: u16 = *v; {}}}",
+                "            {:?} => {{ let {value_name}: u{} = *v as u{}; {}}}",
                 r.name,
+                r.bits,
+                r.bits,
                 self.block_stmts(&cx, &r.load)?
             );
             let _ = writeln!(
                 read,
-                "            {:?} => {},",
+                "            {:?} => ({}) as u32,",
                 r.name,
                 self.expr(&cx, &r.read)?
             );
@@ -3028,7 +3030,7 @@ pub mod vectors {{
         Ok(())
     }}
 
-    fn read(m: &mut {isa_name}, name: &str) -> Result<u16, Fault> {{
+    fn read(m: &mut {isa_name}, name: &str) -> Result<u32, Fault> {{
         Ok(match name {{
 {read}            _ => 0,
         }})
@@ -3084,7 +3086,7 @@ pub mod vectors {{
             let Some(expected) = t.final_.reg(name).or_else(|| t.initial.reg(name)) else {{ continue }};
             let actual = match read(&mut m, name) {{ Ok(v) => v, Err(f) => {{ errors.push(format!("{{name}}: fault while reading: {{f:?}}")); continue; }} }};
             let mask = match (masked_reg(name), &first) {{
-                (Some(r), Some(i)) => pre.undefined_mask(i, r) as u16,
+                (Some(r), Some(i)) => pre.undefined_mask(i, r) as u32,
                 _ => 0,
             }};
             if actual & !mask != expected & !mask {{
@@ -3094,10 +3096,10 @@ pub mod vectors {{
         let regs_ok = errors.is_empty();
         // Flag bits the executed instruction leaves undefined, for recognising
         // a stored copy of them (a fault frame) in memory.
-        let mut leak_mask: u16 = 0;
+        let mut leak_mask: u32 = 0;
         if let Some(i) = &first {{
             for name in REGS {{
-                if let Some(r) = masked_reg(name) {{ leak_mask |= pre.undefined_mask(i, r) as u16; }}
+                if let Some(r) = masked_reg(name) {{ leak_mask |= pre.undefined_mask(i, r) as u32; }}
             }}
         }}
         let mut leaks = 0usize;

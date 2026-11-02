@@ -51,7 +51,7 @@ fn run(sys: &mut System, t: &MooTest) -> Vec<(u32, BusKind)> {
     {
         let r = &mut sys.cpu.r;
         for (name, v) in &t.initial.regs {
-            let v = *v;
+            let v = *v as u16;
             match *name {
                 "ax" => r.AX = v,
                 "bx" => r.BX = v,

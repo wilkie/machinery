@@ -2392,8 +2392,16 @@ impl Checker<'_> {
         let mut regs: Vec<hir::VectorReg> = Vec::new();
         let mut open: Vec<(DefId, i128)> = Vec::new();
         let mut harness_cycles: u32 = 0;
+        // The 8086/286 file (`REGS`, 16-bit) and the 386 file (`RG32`, 32-bit;
+        // its segment registers hold 16-bit selectors).
         const MOO_REGS: &[&str] = &[
             "ax", "bx", "cx", "dx", "cs", "ss", "ds", "es", "sp", "bp", "si", "di", "ip", "flags",
+            "cr0", "cr3", "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "fs", "gs",
+            "eip", "eflags", "dr6", "dr7",
+        ];
+        const MOO_REGS_32: &[&str] = &[
+            "cr0", "cr3", "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "eip", "eflags",
+            "dr6", "dr7",
         ];
         for item in &d.items {
             match item {
@@ -2497,8 +2505,13 @@ impl Checker<'_> {
                         ok = false;
                         continue;
                     }
+                    let bits = if MOO_REGS_32.contains(&name.name.as_str()) {
+                        32
+                    } else {
+                        16
+                    };
                     let mut cx = FnCtx::new(scope, HashMap::new(), None);
-                    let value = cx.declare("value", Ty::UInt(16), *span);
+                    let value = cx.declare("value", Ty::UInt(bits), *span);
                     let load = match item {
                         ast::VectorsItem::Reg { place, .. } => {
                             let assign = ast::Stmt {
@@ -2531,7 +2544,7 @@ impl Checker<'_> {
                         ok = false;
                         continue;
                     }
-                    let read = self.check_expr(&mut cx, place, Some(&Ty::UInt(16)));
+                    let read = self.check_expr(&mut cx, place, Some(&Ty::UInt(bits)));
                     if read.ty.is_error() {
                         ok = false;
                         continue;
@@ -2541,6 +2554,7 @@ impl Checker<'_> {
                         _ => None,
                     };
                     regs.push(hir::VectorReg {
+                        bits,
                         name: name.name.clone(),
                         locals: cx.locals,
                         value,

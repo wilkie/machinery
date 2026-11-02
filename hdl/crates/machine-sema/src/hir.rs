@@ -592,6 +592,8 @@ pub struct Latch {
 /// How one register of a vector format maps onto the isa.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VectorReg {
+    /// The value's width: 16 for the 286 file, 32 for the 386's.
+    pub bits: u32,
     pub name: String,
     pub locals: Vec<Local>,
     /// The local holding the vector's value during `load`.

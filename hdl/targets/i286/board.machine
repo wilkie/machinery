@@ -168,6 +168,11 @@ component Pic8259 {
         state read_isr: bool = false;
         state lines: u8 = 0;
 
+        /// INTR follows the request the controller would grant.
+        fn update_intr() {
+            emit port.intr() = PicGrant(irr, imr, isr) != 0;
+        }
+
         on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
             let v: u8 = if addr[0] == 1 { imr } else if read_isr { isr } else { irr };
             return (data: v as u16, wait: 1);
@@ -208,7 +213,7 @@ component Pic8259 {
             } else {
                 imr = d;
             }
-            emit port.intr() = PicGrant(irr, imr, isr) != 0;
+            update_intr();
             return (wait: 1);
         }
         on port.interrupt(line: u3, value: bool) {
@@ -217,7 +222,7 @@ component Pic8259 {
                 irr = irr | bit;
             }
             lines = if value { lines | bit } else { lines & ~bit };
-            emit port.intr() = PicGrant(irr, imr, isr) != 0;
+            update_intr();
         }
         /// The vector of the highest-priority request, which moves from
         /// requested to in service; with no request left, IR7 (spurious).
@@ -232,7 +237,7 @@ component Pic8259 {
             if !auto_eoi {
                 isr = isr | bit;
             }
-            emit port.intr() = PicGrant(irr, imr, isr) != 0;
+            update_intr();
             return (vector: base | line as u8, wait: 0);
         }
     }
@@ -284,6 +289,14 @@ component Pit8254 {
     model {
         state ch: [PitChannel; 3];
 
+        /// Set a channel's OUT pin; channel 0's drives interrupt line 0.
+        fn set_out(c: u2, level: bool) {
+            ch[c].out = level;
+            if c == 0 {
+                emit port.interrupt(0) = level;
+            }
+        }
+
         on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
             let c = addr[1:0];
             if c == 3 {
@@ -320,10 +333,7 @@ component Pit8254 {
                 ch[sel].read_high = false;
                 ch[sel].latched = false;
                 // OUT starts low in mode 0, high in the others.
-                ch[sel].out = ch[sel].mode != 0;
-                if sel == 0 {
-                    emit port.interrupt(0) = ch[0].out;
-                }
+                set_out(sel, ch[sel].mode != 0);
                 return (wait: 1);
             }
             // A count is complete after one byte, or the second of two.
@@ -346,10 +356,7 @@ component Pit8254 {
                 ch[c].count = ch[c].reload;
                 ch[c].counting = ch[c].mode == 0 || ch[c].mode == 2 || ch[c].mode == 3;
                 if ch[c].mode == 0 {
-                    ch[c].out = false;
-                    if c == 0 {
-                        emit port.interrupt(0) = false;
-                    }
+                    set_out(c, false);
                 }
             }
             return (wait: 1);
@@ -364,18 +371,13 @@ component Pit8254 {
                     } else if ch[c].mode == 0 {
                         ch[c].count = ((left + 0x10000 - n % 0x10000) % 0x10000) as u16;
                         if !ch[c].out {
-                            ch[c].out = true;
-                            if c == 0 {
-                                emit port.interrupt(0) = true;
-                            }
+                            set_out(c, true);
                         }
                     } else {
                         ch[c].count = (period - (n - left) % period) as u16;
                         // OUT pulses low as the count reloads: one edge.
-                        if c == 0 {
-                            emit port.interrupt(0) = false;
-                            emit port.interrupt(0) = true;
-                        }
+                        set_out(c, false);
+                        set_out(c, true);
                     }
                 }
             }
@@ -389,6 +391,12 @@ component Console {
     model {
         mem text: [u8; 256];
         state len: u8 = 0;
+
+        /// Host side: forget what has been printed.
+        fn clear() {
+            len = 0;
+        }
+
         on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
             text[len] = data as u8;
             len = len + 1;

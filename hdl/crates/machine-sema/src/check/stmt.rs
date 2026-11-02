@@ -622,6 +622,7 @@ fn stmt_name(k: &ast::StmtKind) -> &'static str {
     match k {
         A::Default(_) => "default",
         A::On { .. } => "on",
+        A::Fn(_) => "fn",
         A::Cycle(_) => "cycle",
         A::WaitUntil(_) => "wait until",
         A::Retire => "retire",

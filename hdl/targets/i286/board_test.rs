@@ -90,6 +90,9 @@ fn boots_prints_and_stores() {
     let text = String::from_utf8_lossy(&b.console.text[..b.console.len as usize]).into_owned();
     assert_eq!(text, "Hello, 286!");
     assert_eq!(&b.ram.cells[0x500..0x502], &[0x34, 0x12]);
+    // The host reaches a model fn through the system with a live context.
+    sys.with_console(|console, ctx| console.fn_clear(ctx));
+    assert_eq!(sys.board().console.len, 0);
 }
 
 /// Program the 8259 and the 8254, enable interrupts and wait in HLT until

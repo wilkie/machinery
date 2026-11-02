@@ -418,6 +418,9 @@ pub enum StmtKind {
     Return(Option<Expr>),
     /// `default { ... }`
     Default(Block),
+    /// `fn name(params) -> R { ... }` in a model body: a helper over the
+    /// component's state (checked only in model bodies).
+    Fn(Box<FnDecl>),
     /// `on <target> (@ clock)? (params)? (-> ret)? { ... }`: an rtl clock
     /// block (`on tick { }`), or a model handler (`on io.read(addr: u8) ->
     /// (...)`, `on tick @ pixel (n: u32)`).

@@ -1405,6 +1405,9 @@ impl Checker<'_> {
                     );
                     return err(span);
                 }
+                if let Some(call) = self.model_fn_call(cx, name, generics, args, span) {
+                    return call;
+                }
                 match self.lookup_item(cx.scope, name) {
                     Some(d) => d,
                     None => {
@@ -1492,6 +1495,49 @@ impl Checker<'_> {
                 err(span)
             }
         }
+    }
+
+    /// A call of a model fn of the enclosing component, or `None` when
+    /// `name` is not one.
+    fn model_fn_call(
+        &mut self,
+        cx: &mut FnCtx,
+        name: &str,
+        generics: &[ast::GenericArg],
+        args: &[ast::Arg],
+        span: Span,
+    ) -> Option<Expr> {
+        let comp = cx.component?;
+        let cs = self.comps.get(&comp).cloned()?;
+        let idx = *cs.fn_names.get(name)?;
+        if !generics.is_empty() {
+            self.error(
+                cx.module,
+                "E1016",
+                span,
+                "model fns take no generic arguments",
+            );
+            return Some(err(span));
+        }
+        if cx.ret.is_none() {
+            self.error(
+                cx.module,
+                "E1020",
+                span,
+                format!("fn `{name}` cannot be called from a `state` initialiser"),
+            );
+            return Some(err(span));
+        }
+        let (fname, params, ret) = cs.fns[idx as usize].clone();
+        let Some(ordered) = self.order_args(cx, &format!("fn `{fname}`"), &params, args, span)
+        else {
+            return Some(err(span));
+        };
+        let mut hargs = Vec::new();
+        for (a, (_, t)) in ordered.iter().zip(&params) {
+            hargs.push(self.check_expr(cx, &a.value, Some(t)));
+        }
+        Some(mk(H::ModelFnCall(idx, hargs), ret, span))
     }
 
     /// Match call arguments to parameters: all positional or all named.

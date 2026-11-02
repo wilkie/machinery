@@ -604,6 +604,27 @@ impl<'a> Gen<'a> {
                     a?.join(", ")
                 )
             }
+            H::ModelFnCall(i, args) => {
+                let c = cx
+                    .comp
+                    .ok_or_else(|| GenError::new("model fn call outside a component"))?;
+                let f = &c.model.as_ref().unwrap().fns[*i as usize];
+                // Arguments first, so they may read the component.
+                let mut s = String::from("{ ");
+                let mut names = Vec::new();
+                for (k, a) in args.iter().enumerate() {
+                    let _ = write!(s, "let a{k} = {}; ", self.expr(cx, a)?);
+                    names.push(format!(", a{k}"));
+                }
+                let _ = write!(
+                    s,
+                    "{}.fn_{}(&mut *ctx{}) }}",
+                    cx.recv,
+                    ident(&f.name),
+                    names.concat()
+                );
+                s
+            }
             H::Port(..) => {
                 return Err(GenError::new(
                     "wire ports are not readable in the model backend yet",

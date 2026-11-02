@@ -478,18 +478,24 @@ state or has effects and so cannot be a unit.
   warns, because a unit is shared with the rtl level and a model fn is
   not. The warning names the fn and is silenced by making it a unit.
 - **Generated form.** Each fn becomes a public method of the component's
-  struct, taking the same ports context its handlers take:
-  `pub fn set_out<P: Pit8254Ports>(&mut self, ctx: &mut P, c: u8,
-  level: bool)`. Calls inside the body pass the context through. The
-  generated `System` offers `with_<instance>(|dev, ctx| ...)` so the
-  embedding program can call a device's fns with a live context, which
-  is how a host injects input. There is no visibility keyword yet: every
-  model fn is public in the generated crate.
+  struct, prefixed like isa fns so it cannot collide with the
+  constructor or the handlers, taking the same ports context its
+  handlers take: `pub fn fn_set_out<P: Pit8254Ports>(&mut self, ctx:
+  &mut P, c: u8, level: bool)`. Calls inside the body pass the context
+  through. The generated `System` offers `with_<instance>(|dev, ctx|
+  ...)`, which catches the device up, runs the closure with a live
+  context and delivers the signal edges it raised, so the embedding
+  program can call a device's fns: `sys.with_console(|c, ctx|
+  c.fn_clear(ctx))`. This is how a host injects input. There is no
+  visibility keyword yet: every model fn is public in the generated
+  crate.
 - **Processor models** (section 8.4) have model fns too, for example a
   byte-lane helper shared by the space handlers.
 
 In an `rtl` body a `fn` would be inlined, as a Verilog function is. It is
-left out until the rtl slice and is a parse error there for now.
+left out until the rtl slice. A `fn` inside a handler, a unit or isa
+semantics is an error; in an rtl body it is unchecked like the rest of
+the body.
 
 A model's observable behaviour is its **transaction trace** (the
 transactions it initiates and the data and `wait` it returns) and the levels

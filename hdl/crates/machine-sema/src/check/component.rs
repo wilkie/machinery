@@ -22,6 +22,9 @@ pub enum CompEntry {
     Mem(u32),
 }
 
+/// A model fn's `(name, parameters, return type)`.
+pub type ModelFnSig = (String, Vec<(String, Ty)>, Ty);
+
 /// The names a component's bodies can see, plus what the checker needs to
 /// type them.
 #[derive(Debug)]
@@ -32,6 +35,9 @@ pub struct CompScope {
     pub names: HashMap<String, CompEntry>,
     /// The processor's isa, whose spaces a model body binds.
     pub isa: Option<DefId>,
+    /// Model fns: `(name, parameters, return type)`, by declaration order.
+    pub fns: Vec<ModelFnSig>,
+    pub fn_names: HashMap<String, u32>,
 }
 
 impl Checker<'_> {
@@ -126,6 +132,8 @@ impl Checker<'_> {
         let mut states: Vec<(String, Ty)> = Vec::new();
         let mut mems: Vec<(String, Ty, u64)> = Vec::new();
         let mut state_decls: Vec<(&ast::Stmt, Ty)> = Vec::new();
+        let mut fns: Vec<ModelFnSig> = Vec::new();
+        let mut fn_names: HashMap<String, u32> = HashMap::new();
         if let Some(model) = &decl.model {
             for s in &model.stmts {
                 match &s.kind {
@@ -195,6 +203,33 @@ impl Checker<'_> {
                         }
                         mems.push((n.name.clone(), elem, len));
                     }
+                    S::Fn(d) => {
+                        let mut ps = Vec::new();
+                        for p in &d.params {
+                            let t = self.resolve_type(scope, &empty, &p.ty);
+                            ok &= !t.is_error();
+                            ps.push((p.name.name.clone(), t));
+                        }
+                        let ret = match &d.ret {
+                            Some(r) => self.resolve_type(scope, &empty, r),
+                            None => Ty::Unit,
+                        };
+                        if names.contains_key(&d.name.name) || fn_names.contains_key(&d.name.name) {
+                            self.error(
+                                module,
+                                "E1001",
+                                d.name.span,
+                                format!(
+                                    "`{}` is already a port, state, mem or fn of `{name}`",
+                                    d.name.name
+                                ),
+                            );
+                            ok = false;
+                        } else {
+                            fn_names.insert(d.name.name.clone(), fns.len() as u32);
+                        }
+                        fns.push((d.name.name.clone(), ps, ret));
+                    }
                     _ => {}
                 }
             }
@@ -208,6 +243,8 @@ impl Checker<'_> {
                 mems: mems.clone(),
                 names,
                 isa,
+                fns: fns.clone(),
+                fn_names,
             }),
         );
 
@@ -239,9 +276,14 @@ impl Checker<'_> {
                 })
                 .collect();
             let mut handlers = Vec::new();
+            let mut hfns = Vec::new();
             for s in &body.stmts {
                 match &s.kind {
                     S::State { .. } | S::Mem { .. } | S::Error => {}
+                    S::Fn(d) => {
+                        let idx = hfns.len();
+                        hfns.push(self.check_model_fn(comp, scope, idx, d));
+                    }
                     S::On {
                         target,
                         clock,
@@ -267,7 +309,7 @@ impl Checker<'_> {
                     _ => {
                         self.error_with(
                             module,
-                            Diagnostic::error("E1043", s.span, "a `model` body contains `state`, `mem` and `on` handlers")
+                            Diagnostic::error("E1043", s.span, "a `model` body contains `state`, `mem`, `fn` and `on` handlers")
                                 .with_note("put logic inside a handler: `on reset { ... }`, `on tick(n: u32) { ... }`, `on port.txn(...) -> (...) { ... }`"),
                         );
                         ok = false;
@@ -277,11 +319,13 @@ impl Checker<'_> {
             if let Some(isa) = isa {
                 ok &= self.check_space_bindings(module, isa, &handlers, decl.name.span);
             }
+            ok &= self.check_model_fn_graph(module, &mut hfns, &handlers);
             model = Some(hir::ModelBody {
                 init_locals: init_cx.locals,
                 states: hstates,
                 mems: hmems,
                 handlers,
+                fns: hfns,
             });
         }
 
@@ -633,6 +677,192 @@ impl Checker<'_> {
             body: hbody,
             span,
         })
+    }
+
+    /// The body of model fn `idx`: the component's state, ports and effects
+    /// are in scope, as in a handler.
+    fn check_model_fn(
+        &mut self,
+        comp: DefId,
+        scope: Scope,
+        idx: usize,
+        d: &ast::FnDecl,
+    ) -> hir::ModelFn {
+        let cs = self.comps.get(&comp).cloned().expect("component scope");
+        let (_, params, ret) = cs.fns[idx].clone();
+        let mut cx = FnCtx::new(scope, HashMap::new(), Some(ret.clone()));
+        cx.component = Some(comp);
+        let mut ids = Vec::new();
+        for (p, (n, t)) in d.params.iter().zip(&params) {
+            if cx.lookup_local(n).is_some() {
+                self.error(
+                    scope.module,
+                    "E1001",
+                    p.name.span,
+                    format!("duplicate parameter `{n}`"),
+                );
+            }
+            ids.push(cx.declare(n, t.clone(), p.name.span));
+        }
+        let body = self.check_block(&mut cx, &d.body);
+        if !matches!(ret, Ty::Unit | Ty::Error) && !super::stmt::block_diverges(&body) {
+            let msg = format!("fn `{}` does not return a value on every path", d.name.name);
+            self.error(scope.module, "E1015", d.name.span, msg);
+        }
+        hir::ModelFn {
+            name: d.name.name.clone(),
+            locals: cx.locals,
+            params: ids,
+            ret,
+            body,
+            span: d.name.span,
+            starts_transaction: false,
+        }
+    }
+
+    /// The model fn call graph: no recursion (E1053), which fns start a
+    /// transaction (directly or through a call), no such call from a
+    /// transaction handler (E1048), and fns that could be units (W1005).
+    fn check_model_fn_graph(
+        &mut self,
+        module: crate::program::ModuleId,
+        fns: &mut [hir::ModelFn],
+        handlers: &[hir::Handler],
+    ) -> bool {
+        let mut ok = true;
+        // Per fn: the fns it calls, whether it starts a transaction itself,
+        // and whether it touches state or has an effect itself.
+        let mut calls: Vec<Vec<u32>> = Vec::new();
+        let mut direct_tx = Vec::new();
+        let mut direct_touch = Vec::new();
+        for f in fns.iter() {
+            let (mut c, mut tx, mut touch, mut emits) = (Vec::new(), false, false, false);
+            hir::visit_block(
+                &f.body,
+                &mut |s| {
+                    if matches!(s.kind, hir::StmtKind::Emit { .. }) {
+                        emits = true;
+                    }
+                },
+                &mut |e| match &e.kind {
+                    H::ModelFnCall(i, _) => c.push(*i),
+                    H::BusCall(..) => {
+                        tx = true;
+                        touch = true;
+                    }
+                    H::State(..) | H::ModelMem(..) | H::Port(..) => touch = true,
+                    _ => {}
+                },
+            );
+            calls.push(c);
+            direct_tx.push(tx);
+            direct_touch.push(touch || emits);
+        }
+
+        // Recursion: a depth-first search for a cycle through each fn.
+        let n = fns.len();
+        let mut reported = vec![false; n];
+        for start in 0..n {
+            let mut stack = vec![(start, 0usize)];
+            let mut on_path = vec![false; n];
+            on_path[start] = true;
+            while let Some((f, next)) = stack.pop() {
+                if next < calls[f].len() {
+                    stack.push((f, next + 1));
+                    let g = calls[f][next] as usize;
+                    if g == start {
+                        if !reported[start] {
+                            reported[start] = true;
+                            let msg = format!(
+                                "fn `{}` calls itself (directly or through other fns)",
+                                fns[start].name
+                            );
+                            self.error_with(
+                                module,
+                                Diagnostic::error("E1053", fns[start].span, msg)
+                                    .with_note("recursion is not allowed; every call graph in the language is finite"),
+                            );
+                            ok = false;
+                        }
+                    } else if !on_path[g] {
+                        on_path[g] = true;
+                        stack.push((g, 0));
+                    }
+                } else {
+                    on_path[f] = false;
+                }
+            }
+        }
+
+        // Transitive effects, to a fixed point (the graph may have cycles
+        // that were reported above).
+        let mut tx = direct_tx;
+        let mut touch = direct_touch;
+        loop {
+            let mut changed = false;
+            for f in 0..n {
+                for &g in &calls[f] {
+                    let g = g as usize;
+                    if tx[g] && !tx[f] {
+                        tx[f] = true;
+                        changed = true;
+                    }
+                    if touch[g] && !touch[f] {
+                        touch[f] = true;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        for (f, t) in fns.iter_mut().zip(&tx) {
+            f.starts_transaction = *t;
+        }
+
+        // A transaction handler may not reach a transaction through a fn.
+        for h in handlers {
+            if !matches!(h.kind, HandlerKind::Transaction { .. }) {
+                continue;
+            }
+            let mut bad: Vec<(u32, Span)> = Vec::new();
+            hir::visit_block(&h.body, &mut |_| {}, &mut |e| {
+                if let H::ModelFnCall(i, _) = &e.kind {
+                    if tx[*i as usize] {
+                        bad.push((*i, e.span));
+                    }
+                }
+            });
+            for (i, span) in bad {
+                let msg = format!(
+                    "this calls `{}`, which starts a transaction",
+                    fns[i as usize].name
+                );
+                self.error_with(
+                    module,
+                    Diagnostic::error("E1048", span, msg)
+                        .with_note("a transaction handler runs inside the initiator's transaction; it may `emit` signals, and a device that masters a bus does so from `on tick`"),
+                );
+                ok = false;
+            }
+        }
+
+        // Fns that could be units.
+        for (f, t) in fns.iter().zip(&touch) {
+            if !*t {
+                let msg = format!(
+                    "fn `{}` touches no state and has no effect; it could be a `unit`",
+                    f.name
+                );
+                self.error_with(
+                    module,
+                    Diagnostic::warning("W1005", f.span, msg)
+                        .with_note("a unit is shared with the rtl level; a model fn is not"),
+                );
+            }
+        }
+        ok
     }
 
     /// An `extern fn` of the component's isa, by name.

@@ -111,6 +111,9 @@ pub enum ExprKind {
     ModelMem(DefId, u32),
     /// `port.transaction(args)` initiated by a model.
     BusCall(u32, DefId, Vec<Expr>),
+    /// Call of a model fn of the enclosing component, by index into
+    /// [`ModelBody::fns`].
+    ModelFnCall(u32, Vec<Expr>),
     Error,
 }
 
@@ -752,6 +755,19 @@ pub struct Handler {
     pub span: Span,
 }
 
+/// A `fn` in a model body (SPEC 8.3a).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelFn {
+    pub name: String,
+    pub locals: Vec<Local>,
+    pub params: Vec<LocalId>,
+    pub ret: Ty,
+    pub body: Block,
+    pub span: Span,
+    /// It, or a fn it calls, starts a bus transaction.
+    pub starts_transaction: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelBody {
     /// Locals used by state initialisers.
@@ -759,6 +775,7 @@ pub struct ModelBody {
     pub states: Vec<ModelState>,
     pub mems: Vec<ModelMem>,
     pub handlers: Vec<Handler>,
+    pub fns: Vec<ModelFn>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -867,4 +884,159 @@ pub struct Hir {
     pub bundles: Vec<BundleDef>,
     pub vectors: Vec<VectorsInfo>,
     pub systems: Vec<SystemInfo>,
+}
+
+// ---------------------------------------------------------------------------
+// Traversal
+// ---------------------------------------------------------------------------
+
+/// Visit every statement and expression of a block, outermost first.
+pub fn visit_block(b: &Block, on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn FnMut(&Expr)) {
+    for s in &b.stmts {
+        visit_stmt(s, on_stmt, on_expr);
+    }
+}
+
+pub fn visit_stmt(s: &Stmt, on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn FnMut(&Expr)) {
+    on_stmt(s);
+    let e = |x: &Expr, on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn FnMut(&Expr)| {
+        visit_expr(x, on_stmt, on_expr)
+    };
+    match &s.kind {
+        StmtKind::Let(_, v) => {
+            if let Some(v) = v {
+                e(v, on_stmt, on_expr);
+            }
+        }
+        StmtKind::Expr(x) | StmtKind::OperandWrite(_, x) => e(x, on_stmt, on_expr),
+        StmtKind::If(c, t, el) => {
+            e(c, on_stmt, on_expr);
+            visit_block(t, on_stmt, on_expr);
+            if let Some(el) = el {
+                visit_stmt(el, on_stmt, on_expr);
+            }
+        }
+        StmtKind::Match(x, arms) => {
+            e(x, on_stmt, on_expr);
+            for a in arms {
+                visit_arm(a, on_stmt, on_expr);
+            }
+        }
+        StmtKind::For(_, _, _, b) | StmtKind::Loop(b) => visit_block(b, on_stmt, on_expr),
+        StmtKind::While(c, b) => {
+            e(c, on_stmt, on_expr);
+            visit_block(b, on_stmt, on_expr);
+        }
+        StmtKind::Return(v) => {
+            if let Some(v) = v {
+                e(v, on_stmt, on_expr);
+            }
+        }
+        StmtKind::Assert(c, _) => e(c, on_stmt, on_expr),
+        StmtKind::Expect(xs) | StmtKind::Raise(_, xs) | StmtKind::RunInstruction(_, xs) => {
+            for x in xs {
+                e(x, on_stmt, on_expr);
+            }
+        }
+        StmtKind::Assign(a, b) | StmtKind::SpaceWrite(_, _, a, b) => {
+            e(a, on_stmt, on_expr);
+            e(b, on_stmt, on_expr);
+        }
+        StmtKind::Given(pairs) => {
+            for (a, b) in pairs {
+                e(a, on_stmt, on_expr);
+                e(b, on_stmt, on_expr);
+            }
+        }
+        StmtKind::Emit { args, value, .. } => {
+            for x in args {
+                e(x, on_stmt, on_expr);
+            }
+            e(value, on_stmt, on_expr);
+        }
+        StmtKind::Unreachable(_)
+        | StmtKind::RunBytes(_)
+        | StmtKind::Halt
+        | StmtKind::Break
+        | StmtKind::Continue
+        | StmtKind::Error => {}
+    }
+}
+
+fn visit_arm(a: &Arm, on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn FnMut(&Expr)) {
+    match &a.body {
+        ArmBody::Expr(x) => visit_expr(x, on_stmt, on_expr),
+        ArmBody::Block(b) => visit_block(b, on_stmt, on_expr),
+    }
+}
+
+pub fn visit_expr(x: &Expr, on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn FnMut(&Expr)) {
+    on_expr(x);
+    let all = |xs: &[Expr], on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn FnMut(&Expr)| {
+        for c in xs {
+            visit_expr(c, on_stmt, on_expr);
+        }
+    };
+    match &x.kind {
+        ExprKind::Unary(_, a)
+        | ExprKind::Cast(a)
+        | ExprKind::Field(a, _)
+        | ExprKind::TupleField(a, _)
+        | ExprKind::Slice(a, _, _)
+        | ExprKind::ArrayRepeat(a, _)
+        | ExprKind::OperandField(a, _)
+        | ExprKind::OperandTail(a)
+        | ExprKind::TailOperand(a, _)
+        | ExprKind::SpaceRead(_, _, a)
+        | ExprKind::SpaceCell(_, a) => visit_expr(a, on_stmt, on_expr),
+        ExprKind::Binary(_, a, b) | ExprKind::Index(a, b) | ExprKind::SpaceWrite(_, _, a, b) => {
+            visit_expr(a, on_stmt, on_expr);
+            visit_expr(b, on_stmt, on_expr);
+        }
+        ExprKind::Ternary(a, b, c) => {
+            visit_expr(a, on_stmt, on_expr);
+            visit_expr(b, on_stmt, on_expr);
+            visit_expr(c, on_stmt, on_expr);
+        }
+        ExprKind::Call(_, xs)
+        | ExprKind::Builtin(_, xs)
+        | ExprKind::BundleLit(_, xs)
+        | ExprKind::Tuple(xs)
+        | ExprKind::Array(xs)
+        | ExprKind::KindSelect(_, xs)
+        | ExprKind::FnCall(_, xs)
+        | ExprKind::BusCall(_, _, xs)
+        | ExprKind::ModelFnCall(_, xs) => all(xs, on_stmt, on_expr),
+        ExprKind::Match(s, arms) => {
+            visit_expr(s, on_stmt, on_expr);
+            for a in arms {
+                visit_arm(a, on_stmt, on_expr);
+            }
+        }
+        ExprKind::If(c, t, el) => {
+            visit_expr(c, on_stmt, on_expr);
+            visit_block(t, on_stmt, on_expr);
+            if let Some(el) = el {
+                visit_expr(el, on_stmt, on_expr);
+            }
+        }
+        ExprKind::Block(b) => visit_block(b, on_stmt, on_expr),
+        ExprKind::Int(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Str(_)
+        | ExprKind::Local(_)
+        | ExprKind::Const(_)
+        | ExprKind::Variant(..)
+        | ExprKind::Register(_)
+        | ExprKind::RegField(..)
+        | ExprKind::RegView(..)
+        | ExprKind::Mode(_)
+        | ExprKind::OperandRead(_)
+        | ExprKind::OperandRule(..)
+        | ExprKind::Latch(_)
+        | ExprKind::Port(..)
+        | ExprKind::State(..)
+        | ExprKind::ModelMem(..)
+        | ExprKind::Error => {}
+    }
 }

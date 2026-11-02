@@ -250,6 +250,35 @@ impl<'a> Gen<'a> {
         }
         st.push_str("        s\n    }\n");
 
+        for f in &model.fns {
+            let cx = Cx {
+                locals: &f.locals,
+                fallible: false,
+                recv: "self",
+                ops: None,
+                comp: Some(comp),
+            };
+            let mut ps = String::new();
+            for p in &f.params {
+                let _ = write!(
+                    ps,
+                    ", {}: {}",
+                    self.local_name(&cx, *p),
+                    self.rty(&f.locals[*p as usize].ty)?
+                );
+            }
+            let body = self.block_stmts(&cx, &f.body)?;
+            let (ret, tail) = match f.ret {
+                Ty::Unit => (String::new(), ""),
+                ref t => (format!(" -> {}", self.rty(t)?), "        #[allow(unreachable_code)]\n        { unreachable!(\"fn fell off its end\") }\n"),
+            };
+            let _ = write!(
+                st,
+                "    /// `fn {}` of the model.\n    pub fn fn_{}<P: {name}Ports>(&mut self, ctx: &mut P{ps}){ret} {{\n{body}{tail}    }}\n",
+                f.name,
+                ident(&f.name)
+            );
+        }
         for h in &model.handlers {
             let cx = Cx {
                 locals: &h.locals,
@@ -856,6 +885,26 @@ impl<'a> Gen<'a> {
                 );
             }
         }
+        // Host entry points: a model's fns with a live context.
+        let mut with = String::new();
+        for (ii, i) in insts.iter().enumerate() {
+            let n = ident(&i.name);
+            let cname = ident(&i.comp.name);
+            let (catch, ctx) = if ii == proc_idx {
+                (String::new(), ctx_cpu("b"))
+            } else {
+                let catch = if ticks.iter().any(|t| t.0 == ii) {
+                    format!("                catch_up_{n}(&mut b.{n}, &mut b.sig, &mut b.marks);\n")
+                } else {
+                    String::new()
+                };
+                (catch, format!("Ctx_{n} {{ sig: &mut b.sig }}"))
+            };
+            let _ = write!(
+                with,
+                "        /// Call into `{n}` with a live context: how the embedding program\n        /// reaches its model fns (host input). The device is caught up first,\n        /// and signal edges it raises are delivered after.\n        pub fn with_{n}<R>(&mut self, f: impl FnOnce(&mut {cname}, &mut Ctx_{n}<'_>) -> R) -> R {{\n            let r = {{\n                let b = &mut self.{cpu_name}.bus;\n{catch}                let mut c = {ctx};\n                f(&mut b.{n}, &mut c)\n            }};\n            self.deliver();\n            r\n        }}\n"
+            );
+        }
         let mut deliver = String::new();
         for (bi, sd, f, pty) in &sig_names {
             let b = &sys.buses[*bi];
@@ -955,7 +1004,7 @@ impl<'a> Gen<'a> {
             }}
             Ok(max)
         }}
-        /// Catch every device up to the present and deliver signal edges.
+{with}        /// Catch every device up to the present and deliver signal edges.
         pub fn sync(&mut self) {{
             let b = &mut self.{cpu_name}.bus;
 {sync}            self.deliver();

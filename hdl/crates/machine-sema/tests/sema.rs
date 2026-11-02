@@ -1719,3 +1719,78 @@ fn model_state_arrays_are_places() {
     );
     assert_codes(&src, &[]);
 }
+
+// --- model fns (SPEC 8.3a) ---
+
+#[test]
+fn model_fns_check() {
+    let c = check_src(&dev(
+        "state n: u8 = 0;
+         fn bump(by: u8) -> u8 { n = n + by; return n; }
+         fn raise() { emit io.interrupt(0) = bump(1) > 2; }
+         on reset { raise(); let v = bump(by: 2); }
+         on io.read(addr: u8) -> (data: u8, wait: u8) { raise(); return (data: n, wait: 0); }",
+    ));
+    assert_clean(&c);
+    let model = c.hir.components[0].model.as_ref().unwrap();
+    assert_eq!(model.fns.len(), 2);
+    assert_eq!(model.fns[0].ret, Ty::UInt(8));
+    assert!(!model.fns[0].starts_transaction);
+}
+
+#[test]
+fn model_fn_errors() {
+    // Recursion, direct and mutual.
+    assert_codes(&dev("state n: u8 = 0; fn f() { n = 1; f(); }"), &["E1053"]);
+    assert_codes(
+        &dev("state n: u8 = 0; fn f() { n = 1; g(); } fn g() { f(); }"),
+        &["E1053", "E1053"],
+    );
+    // A value-returning fn must return on every path.
+    assert_codes(&dev("state n: u8 = 0; fn f() -> u8 { n = 1; }"), &["E1015"]);
+    // The name is already a state.
+    assert_codes(&dev("state f: u8 = 0; fn f() { f = 1; }"), &["E1001"]);
+    // Not callable from a state initialiser.
+    assert_codes(
+        &dev("state n: u8 = f(); fn f() -> u8 { return n; }"),
+        &["E1020"],
+    );
+    // A fn that touches nothing could be a unit.
+    assert_codes(
+        &dev("fn double(v: u8) -> u8 { return v + v; } on reset { let x = double(1); }"),
+        &["W1005"],
+    );
+}
+
+#[test]
+fn transaction_handlers_cannot_reach_transactions_through_fns() {
+    let src = format!(
+        "{SYS_PRELUDE}\ncomponent Bridge {{ ports {{ bus up: B::S; bus down: B::M; }} model {{
+            fn fetch(a: u8) -> u8 {{ return down.read(space: Sp::Mem, addr: a).data; }}
+            fn indirect(a: u8) -> u8 {{ return fetch(a); }}
+            on up.read(space: Sp, addr: u8) -> (data: u8, wait: u8) {{
+                return (data: indirect(addr), wait: 1);
+            }}
+            on tick(n: u32) {{ let v = indirect(0); }}
+        }} }}"
+    );
+    let c = check_src(&src);
+    assert_eq!(codes(&c), ["E1048"], "{}", render(&c));
+    // Through two fns, both marked.
+    let src_ok = src.replace(
+        "return (data: indirect(addr), wait: 1);",
+        "return (data: addr, wait: 1);",
+    );
+    let c = check_src(&src_ok);
+    assert_clean(&c);
+    let model = c
+        .hir
+        .components
+        .iter()
+        .find(|c| c.name == "Bridge")
+        .unwrap()
+        .model
+        .as_ref()
+        .unwrap();
+    assert!(model.fns.iter().all(|f| f.starts_transaction));
+}

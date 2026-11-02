@@ -405,6 +405,30 @@ impl Parser {
                 self.expect_semi()?;
                 Ok(self.mk(StmtKind::Wire { name, ty, init }, start))
             }
+            "fn" if next_is_ident && self.nth_is_punct(2, Punct::LParen) => {
+                self.advance();
+                let name = self.expect_ident()?;
+                let params = self.parse_params()?;
+                let ret = if self.eat_punct(Punct::RArrow) {
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+                let body = self.parse_block()?;
+                let span = start.to(self.prev_span());
+                Ok(self.mk(
+                    StmtKind::Fn(Box::new(FnDecl {
+                        docs,
+                        name,
+                        params,
+                        ret,
+                        body,
+                        external: false,
+                        span,
+                    })),
+                    start,
+                ))
+            }
             "state" if decl_like => {
                 self.advance();
                 let name = self.expect_ident()?;

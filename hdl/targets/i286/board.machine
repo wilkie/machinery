@@ -1,7 +1,7 @@
 // A small 80286 board for the model backend: the i286 isa as a processor
-// on a 16-bit local bus, with RAM, a boot ROM, an 8259 interrupt
-// controller, an 8254 timer, an 8237 DMA controller, a host data link on
-// DMA channel 1, and a debugging console port.
+// on a 16-bit local bus, with RAM, a boot ROM, the AT's two cascaded 8259
+// interrupt controllers, an 8254 timer, an 8237 DMA controller, a host data
+// link on DMA channel 1 (and IRQ 12), and a debugging console port.
 //
 // `machine build --system Board286 --out <dir> targets/i286/*.machine`
 // generates the emulator crate: the interpreter, one struct per component
@@ -28,12 +28,10 @@ bus LocalBus {
         wr:    bool driven_by Master;
         bhe:   bool driven_by Master;
         ready: bool wired_and;
-        irq:   [bool; 8] driven_by Slave;
-        intr:  bool driven_by Controller;
         drq:   [bool; 4] driven_by Slave;
     }
-    /// The interrupt controller is a responder of its own kind: it watches
-    /// the devices' interrupt lines and drives the processor's INTR.
+    /// The interrupt controllers are responders of their own kind: they
+    /// answer the interrupt acknowledge.
     roles { Master; Slave; Controller; }
 
     /// Two bus cycles (Ts, Tc) without wait states.
@@ -70,9 +68,18 @@ bus LocalBus {
     transaction dack_read(channel: u2) -> (data: u8) { Master { } }
     transaction dack_write(channel: u2, data: u8) { Master { } }
 
-    signal interrupt(line: u3) = irq[line];
-    signal intr() = intr;
     signal dreq(channel: u2) = drq[channel];
+}
+
+/// The eight interrupt request lines into one 8259. Which device drives
+/// which line is board wiring, so each controller has its own set: on the
+/// AT the master's lines are IRQ 0-7 (IRQ 2 carrying the slave's INT) and
+/// the slave's are IRQ 8-15.
+bus IrqLines {
+    clock clk;
+    wires { ir: [bool; 8] driven_by Device; }
+    roles { Controller; Device; }
+    signal request(line: u3) = ir[line];
 }
 
 /// The processor: the i286 isa, with its two address spaces bound to the
@@ -80,12 +87,13 @@ bus LocalBus {
 /// prefetch queue yet).
 component Cpu286 {
     isa I286;
-    ports { bus local: LocalBus::Master; }
+    ports {
+        bus local: LocalBus::Master;
+        /// INTR, from the master interrupt controller.
+        in intr_line: bool;
+    }
     model {
-        state intr_level: bool = false;
-
-        on local.intr(value: bool) { intr_level = value; }
-        on intr() -> bool { return intr_level; }
+        on intr() -> bool { return intr_line; }
         on acknowledge() -> u8 { return local.inta().vector; }
 
         on mem.read_u8(addr: u24) -> u8 {
@@ -158,19 +166,40 @@ component Rom {
     }
 }
 
-/// The 8259 programmable interrupt controller, as a single (unchained)
-/// controller in fixed-priority, edge-triggered mode: a rising edge on an
-/// IR line sets its request bit, and INTR is high while an unmasked
-/// request outranks every line in service. Port 0 takes ICW1, OCW2 (EOI)
-/// and OCW3 (which register a read returns); port 1 takes ICW2-4 during
-/// initialisation and the mask (OCW1) after.
+/// The 8259 programmable interrupt controller in fixed-priority,
+/// edge-triggered mode: a rising edge on an IR line sets its request bit,
+/// and INT is high while an unmasked request outranks every line in
+/// service. Port 0 takes ICW1, OCW2 (EOI) and OCW3 (which register a read
+/// returns); port 1 takes ICW2-4 during initialisation and the mask (OCW1)
+/// after.
+///
+/// Cascading: the SP/EN pin, strapped on the board, says which chip is the
+/// master. The master's INT goes to the processor; a slave drives its INT
+/// onto the master's IR line given by its ICW3 (its ID). When the master
+/// grants a line that ICW3 marks as having a slave, it names the slave on
+/// CAS0-2 and declines the acknowledge, and the slave whose ID matches
+/// answers with its vector.
 component Pic8259 {
-    ports { bus port: LocalBus::Controller; }
+    ports {
+        bus port: LocalBus::Controller;
+        /// IR0-7.
+        bus ir: IrqLines::Controller;
+        /// As a slave: INT onto the master's IR line.
+        bus cascade: IrqLines::Device;
+        /// SP/EN: high for the master.
+        in sp: bool;
+        out int: bool;
+        /// CAS0-2, driven by the master and read by the slaves.
+        out cas_out: u3;
+        in cas_in: u3;
+    }
     model {
         state irr: u8 = 0;
         state isr: u8 = 0;
         state imr: u8 = 0xFF;
         state base: u8 = 0;
+        /// The master's slave lines, or a slave's ID.
+        state icw3: u8 = 0;
         /// The ICW expected next on port 1: 2, 3, 4, or 0 when initialised.
         state icw: u8 = 0;
         state icw4_needed: bool = false;
@@ -179,9 +208,30 @@ component Pic8259 {
         state read_isr: bool = false;
         state lines: u8 = 0;
 
-        /// INTR follows the request the controller would grant.
-        fn update_intr() {
-            emit port.intr() = PicGrant(irr, imr, isr) != 0;
+        /// INT follows the request the controller would grant.
+        fn update_int() {
+            let req = PicGrant(irr, imr, isr) != 0;
+            int = req;
+            if !sp && !single {
+                emit cascade.request(icw3[2:0]) = req;
+            }
+        }
+
+        /// Grant the highest-priority request: requested to in service.
+        /// Returns the line, or 7 when nothing is requested (spurious).
+        fn grant() -> u3 {
+            let g = PicGrant(irr, imr, isr);
+            if g == 0 {
+                return 7;
+            }
+            let line = (g - 1) as u3;
+            let bit = (1 as u8) << line;
+            irr = irr & ~bit;
+            if !auto_eoi {
+                isr = isr | bit;
+            }
+            update_int();
+            return line;
         }
 
         on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
@@ -217,6 +267,7 @@ component Pic8259 {
                 base = d & 0xF8;
                 icw = if !single { 3 } else if icw4_needed { 4 } else { 0 };
             } else if icw == 3 {
+                icw3 = d;
                 icw = if icw4_needed { 4 } else { 0 };
             } else if icw == 4 {
                 auto_eoi = d[1] == 1;
@@ -224,31 +275,32 @@ component Pic8259 {
             } else {
                 imr = d;
             }
-            update_intr();
+            update_int();
             return (wait: 1);
         }
-        on port.interrupt(line: u3, value: bool) {
+        on ir.request(line: u3, value: bool) {
             let bit = (1 as u8) << line;
             if value && (lines & bit) == 0 {
                 irr = irr | bit;
             }
             lines = if value { lines | bit } else { lines & ~bit };
-            update_intr();
+            update_int();
         }
-        /// The vector of the highest-priority request, which moves from
-        /// requested to in service; with no request left, IR7 (spurious).
+        /// The acknowledge: the master grants, and either answers or names
+        /// the slave on CAS and declines; a slave answers only when named.
         on port.inta() -> (vector: u8, wait: u8) {
-            let g = PicGrant(irr, imr, isr);
-            if g == 0 {
-                return (vector: base | 7, wait: 0);
+            if sp || single {
+                let line = grant();
+                if !single && icw3[line] == 1 {
+                    cas_out = line;
+                    decline;
+                }
+                return (vector: base | line as u8, wait: 0);
             }
-            let line = (g - 1) as u3;
-            let bit = (1 as u8) << line;
-            irr = irr & ~bit;
-            if !auto_eoi {
-                isr = isr | bit;
+            if cas_in != icw3[2:0] {
+                decline;
             }
-            update_intr();
+            let line = grant();
             return (vector: base | line as u8, wait: 0);
         }
     }
@@ -296,7 +348,11 @@ bundle PitChannel {
 /// 0's output drives interrupt line 0. The model catches up in one step
 /// per `tick`, raising one edge however many periods passed.
 component Pit8254 {
-    ports { bus port: LocalBus::Slave; }
+    ports {
+        bus port: LocalBus::Slave;
+        /// OUT0 drives IRQ 0.
+        bus irq: IrqLines::Device;
+    }
     model {
         state ch: [PitChannel; 3];
 
@@ -304,7 +360,7 @@ component Pit8254 {
         fn set_out(c: u2, level: bool) {
             ch[c].out = level;
             if c == 0 {
-                emit port.interrupt(0) = level;
+                emit irq.request(0) = level;
             }
         }
 
@@ -572,7 +628,11 @@ component Dma8237 {
 /// controller; when the host expects bytes, the device requests them and
 /// collects what the controller reads out of memory.
 component HostLink {
-    ports { bus port: LocalBus::Slave; }
+    ports {
+        bus port: LocalBus::Slave;
+        /// IRQ 12, on the slave controller's IR4.
+        bus irq: IrqLines::Device;
+    }
     model {
         mem inbox: [u8; 256];
         state head: u8 = 0;
@@ -590,6 +650,11 @@ component HostLink {
             inbox[tail] = b;
             tail = tail + 1;
             update_dreq();
+        }
+
+        /// Host side: raise or drop the link's interrupt.
+        fn interrupt(level: bool) {
+            emit irq.request(4) = level;
         }
 
         /// Host side: ask for `n` bytes from the guest.
@@ -650,7 +715,8 @@ system Board286 {
     component cpu: Cpu286 @ cpu_clk;
     component ram: Ram;
     component rom: Rom;
-    component pic: Pic8259;
+    component pic1: Pic8259;
+    component pic2: Pic8259;
     component pit: Pit8254 @ pit_clk;
     component dma: Dma8237 @ dma_clk;
     component link: HostLink;
@@ -660,7 +726,9 @@ system Board286 {
         master cpu.local;
         slave ram.port @ mem 0x00000..=0x9FFFF;
         slave rom.port @ mem 0xF0000..=0xFFFFF, mem 0xFF0000..=0xFFFFFF;
-        slave pic.port @ io 0x20..=0x21;
+        // The master first: it sees the acknowledge before the slave.
+        slave pic1.port @ io 0x20..=0x21;
+        slave pic2.port @ io 0xA0..=0xA1;
         slave pit.port @ io 0x40..=0x43;
         slave dma.regs @ io 0x00..=0x0F;
         slave dma.pages @ io 0x81..=0x87;
@@ -668,6 +736,23 @@ system Board286 {
         slave link.port;
         slave console.port @ io 0xE9..=0xE9;
     }
+
+    /// IRQ 0-7: the timer on 0, the slave controller on 2.
+    bus irq_master: IrqLines @ cpu_clk {
+        master pic1.ir;
+        slave pit.irq;
+        slave pic2.cascade;
+    }
+    /// IRQ 8-15: the host link on 12.
+    bus irq_slave: IrqLines @ cpu_clk {
+        master pic2.ir;
+        slave link.irq;
+    }
+
+    wire pic1.sp = true;
+    wire pic2.sp = false;
+    wire pic2.cas_in = pic1.cas_out;
+    wire cpu.intr_line = pic1.int;
 
     profile fast { default: model; }
 }

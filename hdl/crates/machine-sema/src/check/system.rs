@@ -278,11 +278,18 @@ impl Checker<'_> {
         }
 
         // Wires and profiles.
-        let mut wires = 0;
+        let mut wires: Vec<hir::SystemWire> = Vec::new();
         let mut profiles = Vec::new();
         for item in &decl.items {
             match item {
-                SystemItem::Wire { .. } => wires += 1,
+                SystemItem::Wire {
+                    target,
+                    source,
+                    span,
+                } => match self.check_wire(scope, &sys, target, source, *span, &wires) {
+                    Some(w) => wires.push(w),
+                    None => ok = false,
+                },
                 SystemItem::Profile(p) => {
                     let mut default = Level::Model;
                     let mut overrides = Vec::new();
@@ -458,6 +465,159 @@ impl Checker<'_> {
         }
         sys.clocks.push((name, f));
         Some(sys.clocks.len() as u32 - 1)
+    }
+
+    /// `inst.port` naming a wire port of an instance: its index and type,
+    /// and whether it is an output.
+    fn inst_wire_port(&mut self, sys: &Sys, p: &ast::Path) -> Option<(hir::InstPort, Ty, bool)> {
+        let [inst, port] = p.segments.as_slice() else {
+            self.error(sys.module, "E1049", p.span, "expected `<component>.<port>`");
+            return None;
+        };
+        let Some(&ii) = sys.inst_names.get(&inst.name) else {
+            self.error(
+                sys.module,
+                "E1049",
+                inst.span,
+                format!("`{}` is not a component of this system", inst.name),
+            );
+            return None;
+        };
+        let comp = sys.insts[ii as usize].component;
+        let cs = self.comps.get(&comp).cloned()?;
+        let Some(pi) = cs.ports.iter().position(|q| q.name == port.name) else {
+            self.error(
+                sys.module,
+                "E1049",
+                port.span,
+                format!(
+                    "`{}` has no port `{}`",
+                    self.prog.item_name(comp),
+                    port.name
+                ),
+            );
+            return None;
+        };
+        match &cs.ports[pi].kind {
+            PortKind::In(t) | PortKind::AsyncIn(t) => Some(((ii, pi as u32), t.clone(), false)),
+            PortKind::Out(t) => Some(((ii, pi as u32), t.clone(), true)),
+            _ => {
+                self.error(
+                    sys.module,
+                    "E1049",
+                    port.span,
+                    format!(
+                        "`{}.{}` is not a wire port (`in` or `out`)",
+                        inst.name, port.name
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// `wire inst.in_port = other.out_port;` or `= <constant>;`.
+    fn check_wire(
+        &mut self,
+        scope: Scope,
+        sys: &Sys,
+        target: &ast::Path,
+        source: &ast::Expr,
+        span: Span,
+        done: &[hir::SystemWire],
+    ) -> Option<hir::SystemWire> {
+        let module = sys.module;
+        let (tp, tty, t_out) = self.inst_wire_port(sys, target)?;
+        if t_out {
+            self.error(
+                module,
+                "E1049",
+                target.span,
+                format!(
+                    "`{}` is an output; a wire drives an input port",
+                    target.dotted()
+                ),
+            );
+            return None;
+        }
+        if done.iter().any(|w| w.target == tp) {
+            self.error(
+                module,
+                "E1049",
+                span,
+                format!("`{}` is already driven by another wire", target.dotted()),
+            );
+            return None;
+        }
+        // An output port of another instance: `inst.port`, which parses as a
+        // field of a path.
+        let as_path = match &source.kind {
+            A::Path(p) => Some(p.clone()),
+            A::Field(base, f) => match &base.kind {
+                A::Path(b) if b.segments.len() == 1 => Some(ast::Path {
+                    segments: vec![b.segments[0].clone(), f.clone()],
+                    span: source.span,
+                }),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(p) = &as_path {
+            if p.segments.len() == 2 {
+                let (sp, sty, s_out) = self.inst_wire_port(sys, p)?;
+                if !s_out {
+                    self.error(
+                        module,
+                        "E1049",
+                        source.span,
+                        format!(
+                            "`{}` is an input; a wire is driven by an output port",
+                            p.dotted()
+                        ),
+                    );
+                    return None;
+                }
+                if sty != tty {
+                    let msg = format!(
+                        "`{}` is `{}` but `{}` is `{}`",
+                        p.dotted(),
+                        self.display(&sty),
+                        target.dotted(),
+                        self.display(&tty)
+                    );
+                    self.error(module, "E1049", source.span, msg);
+                    return None;
+                }
+                return Some(hir::SystemWire {
+                    target: tp,
+                    source: hir::WireSource::Port(sp),
+                });
+            }
+        }
+        // A constant strap.
+        let empty = HashMap::new();
+        let v = self.eval_const(scope, &empty, source)?;
+        let value = match (v, &tty) {
+            (crate::consteval::ConstVal::Bool(b), Ty::Bool) => b as i128,
+            (crate::consteval::ConstVal::Int(n), Ty::UInt(w))
+                if n >= 0 && (*w >= 127 || n < (1i128 << w)) =>
+            {
+                n
+            }
+            _ => {
+                let msg = format!(
+                    "this constant does not fit `{}` (`{}`)",
+                    target.dotted(),
+                    self.display(&tty)
+                );
+                self.error(module, "E1049", source.span, msg);
+                return None;
+            }
+        };
+        Some(hir::SystemWire {
+            target: tp,
+            source: hir::WireSource::Const(value),
+        })
     }
 
     /// `inst.port` naming a bus port of an instance.

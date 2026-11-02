@@ -126,7 +126,7 @@ fn timer_interrupts_wake_halt() {
     assert_eq!(b.ram.cells[0x600], 3, "ticks counted after {n} steps");
     assert_eq!(b.console.text[0], b'!');
     // Every interrupt was acknowledged and ended.
-    assert_eq!(b.pic.isr, 0);
+    assert_eq!(b.pic1.isr, 0);
     // Writing the mode-2 control word raises OUT, an edge the 8259
     // records, so the first interrupt comes as soon as STI allows; the next
     // two come 1000 timer clocks apart. Setup and the handlers' latency add
@@ -145,7 +145,7 @@ fn masked_timer_does_not_interrupt() {
     let b = sys.board();
     assert_eq!(b.ram.cells[0x600], 0);
     assert!(sys.cpu.halted);
-    assert_eq!(sys.board().pic.irr & 1, 1, "the request is pending");
+    assert_eq!(sys.board().pic1.irr & 1, 1, "the request is pending");
 }
 
 /// A device model driven directly: what it emits goes to this context.
@@ -155,7 +155,7 @@ struct Probe {
 }
 
 impl Pit8254Ports for Probe {
-    fn emit_port_interrupt(&mut self, line: u8, value: bool) {
+    fn emit_irq_request(&mut self, line: u8, value: bool) {
         assert_eq!(line, 0);
         self.edges.push(value);
     }
@@ -261,4 +261,60 @@ fn host_link_declines_other_channels() {
     link.fn_push(&mut p, 0x42);
     assert_eq!(link.on_port_dack_read(&mut p, 2), None, "not its channel");
     assert_eq!(link.on_port_dack_read(&mut p, 1), Some((0x42, 0)));
+}
+
+/// The AT cascade: the host raises IRQ 12 (the slave controller's IR4). The
+/// slave drives its INT onto the master's IR2; the master grants IR2, names
+/// the slave on CAS and declines the acknowledge; the slave answers with
+/// vector 0x74. The handler counts the interrupt and ends it on both chips.
+#[test]
+fn slave_controller_interrupts_through_the_master() {
+    let mut code = SETUP.to_vec();
+    code.extend_from_slice(&[
+        0xC7, 0x06, 0xD0, 0x01, 0x00, 0x02, // mov word [0x01D0], 0x0200 (IVT 0x74)
+        0xC7, 0x06, 0xD2, 0x01, 0x00, 0xF0, // mov word [0x01D2], 0xF000
+        0xB0, 0x11, 0xE6, 0x20, // master ICW1: edge, cascade, ICW4
+        0xB0, 0x08, 0xE6, 0x21, // ICW2: vectors 08-0F
+        0xB0, 0x04, 0xE6, 0x21, // ICW3: a slave on IR2
+        0xB0, 0x01, 0xE6, 0x21, // ICW4: 8086 mode
+        0xB0, 0x11, 0xE6, 0xA0, // slave ICW1
+        0xB0, 0x70, 0xE6, 0xA1, // ICW2: vectors 70-77
+        0xB0, 0x02, 0xE6, 0xA1, // ICW3: ID 2
+        0xB0, 0x01, 0xE6, 0xA1, // ICW4
+        0xB0, 0xFB, 0xE6, 0x21, // master mask: only IR2
+        0xB0, 0xEF, 0xE6, 0xA1, // slave mask: only IR4 (IRQ 12)
+        0xFB, // sti
+        0xF4, // hlt
+        0x80, 0x3E, 0x01, 0x06, 0x01, // cmp byte [0x0601], 1
+        0x72, 0xF8, // jb hlt
+        0xFA, // cli
+        0xF4, // hlt
+    ]);
+    let mut image = rom(&code, &[]);
+    image[0x200..0x20D].copy_from_slice(&[
+        0x50, // push ax
+        0xFE, 0x06, 0x01, 0x06, // inc byte [0x0601]
+        0xB0, 0x20, 0xE6, 0xA0, // EOI to the slave
+        0xE6, 0x20, // EOI to the master
+        0x58, // pop ax
+        0xCF, // iret
+    ]);
+    let mut sys = boot(image);
+    // Run to the first HLT: interrupts are on and nothing is pending.
+    sys.run_until(10_000, |s| s.cpu.halted).unwrap();
+    assert!(sys.cpu.halted);
+    assert_eq!(sys.board().ram.cells[0x601], 0);
+    // The host raises IRQ 12.
+    sys.with_link(|link, ctx| link.fn_interrupt(ctx, true));
+    let n = sys
+        .run_until(10_000, |s| s.cpu.halted && s.cpu.r.FLAGS & 0x0200 == 0)
+        .unwrap();
+    let b = sys.board();
+    assert_eq!(b.ram.cells[0x601], 1, "the handler ran once ({n} steps)");
+    // The slave's ID was on CAS during the acknowledge.
+    assert_eq!(b.sig.w_pic1_cas_out, 2);
+    assert_eq!((b.pic1.isr, b.pic2.isr), (0, 0), "both chips ended the interrupt");
+    // The request was taken: nothing is pending on either chip.
+    assert_eq!(b.pic2.irr & 0x10, 0);
+    assert_eq!(b.pic1.irr & 0x04, 0);
 }

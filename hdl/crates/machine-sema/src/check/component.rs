@@ -450,6 +450,31 @@ impl Checker<'_> {
                         Ty::Unit,
                     )
                 }
+                [single]
+                    if matches!(
+                        cs.names.get(&single.name),
+                        Some(CompEntry::Port(i))
+                            if matches!(cs.ports[*i as usize].kind, PortKind::In(_) | PortKind::AsyncIn(_))
+                    ) =>
+                {
+                    let Some(CompEntry::Port(pi)) = cs.names.get(&single.name).copied() else {
+                        unreachable!()
+                    };
+                    let (PortKind::In(ty) | PortKind::AsyncIn(ty)) =
+                        cs.ports[pi as usize].kind.clone()
+                    else {
+                        unreachable!()
+                    };
+                    if clock.is_some() || ret.is_some() {
+                        self.error(module, "E1041", span, "an input handler is `on <in port>(value: T) { ... }`: no clock, no return type");
+                        return None;
+                    }
+                    (
+                        HandlerKind::Input { port: pi },
+                        Some(vec![("value".into(), ty)]),
+                        Ty::Unit,
+                    )
+                }
                 [single] if self.isa_extern(cs.isa, &single.name).is_some() => {
                     let f = self.isa_extern(cs.isa, &single.name).unwrap();
                     if clock.is_some() {

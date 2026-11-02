@@ -418,6 +418,14 @@ The transaction level. Contents:
   - `on reset { ... }`
   - `on bus_port.signal(name, value) { ... }` for non-transaction wires (IRQ
     acknowledges, DMA requests, reset).
+  - `on in_port(value: T) { ... }` when the level driven into an `in` port
+    changes (delivered after the instruction, like signal edges).
+- Wire ports at the model level: an `in` port reads as the current level
+  of whatever the system wires to it (the type's zero when nothing is);
+  an `out` port is assigned like state (`int = req;`), takes the new
+  level at once, and queues an edge for the ports it drives when the
+  value changes. A pin that belongs to a chip rather than to a bus (an
+  8259's INT, SP/EN and CAS lines, a processor's INTR) is a wire port.
 - `emit bus_port.irq(n);` and other transaction initiations, including
   `let v = bus_port.read(addr, size);` from a master.
 - `bus_port.signal(args)` as an expression reads the signal's **current
@@ -1038,6 +1046,12 @@ system PcAt386 {
   `default` applies to everything not named. The compiler reports, for a
   profile, which components run adapted and which run rtl inside a `model`
   build.
+- `wire inst.in_port = other.out_port;` connects an output to an input of
+  the same type; `wire inst.in_port = <constant>;` straps a pin (`wire
+  pic1.sp = true;`). Each input is driven at most once; an output may
+  drive any number of inputs (E1049 otherwise). A reader sees a new level
+  at once, within the same transaction, which is how a slave 8259 reads
+  the CAS lines the master set while acknowledging.
 - The system also binds bus roles, address ranges and interrupt lines, and
   the compiler generates address decoders for both levels.
 
@@ -1076,7 +1090,7 @@ drives), and `system::System`:
   handler is generated returning `Option`, `None` meaning it declined.
 
 Not generated yet, and reported when a system needs them: more than one
-processor, more than one device master, `bridge`, `wire`, an rtl level
+processor, more than one device master, `bridge`, an rtl level
 in the profile, and processor time between bus transfers (an instruction
 costs only its bus time until timing is derived, section 14).
 
@@ -1219,11 +1233,15 @@ with stable error codes, so agents and editors can act on them.
    other in its context while the other is mid-transaction; the likely
    answer is to give every master a context assembled per call. Needed
    for bus-mastering cards, not for the PC/AT.
-11. **Wires and the AT interrupt cascade.** Two 8259s: the slave's INT
-   drives the master's IR2, a `wire` between components, which the
-   backend does not generate yet. The interrupt lines (16 on an AT) also
-   outgrow the local bus declaration and should become their own small
-   bus. Needed for any 386-class system.
+11. **Wires and the AT interrupt cascade.** Resolved: wire ports and
+   `wire` items (section 12), and one small request-line bus per 8259 so
+   the board decides which device feeds which controller line. The slave
+   drives its INT onto the master's line named by its ICW3; the master
+   names the slave on CAS and declines the acknowledge, which the slave
+   answers (`targets/i286/board.machine`). Open: a bus whose first role
+   only observes (an interrupt controller on its request lines) is not a
+   master; the language could say so with a role attribute instead of
+   the backend inferring it from the absence of transactions.
 12. **Tick granularity.** Devices are caught up after every instruction.
    For a CGA that is a handful of pixels per call. Proposal: `on tick`
    may return the number of its cycles until it next needs to run, and

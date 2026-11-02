@@ -160,6 +160,28 @@ impl<'a> Gen<'a> {
             "/// What a `{name}` model reaches through its ports. Every method has a\n/// default (nothing attached: open bus, low levels, emits go nowhere), so a\n/// hand-written context overrides only what it observes.\npub trait {name}Ports {{\n"
         );
         for p in &comp.ports {
+            let wire = match &p.kind {
+                PortKind::In(ty) | PortKind::AsyncIn(ty) => Some((ty, false)),
+                PortKind::Out(ty) => Some((ty, true)),
+                _ => None,
+            };
+            if let Some((ty, out)) = wire {
+                let rt = self.rty(ty)?;
+                let _ = writeln!(
+                    t,
+                    "    /// The level on wire port `{0}`.\n    fn read_{1}(&mut self) -> {rt} {{ Default::default() }}",
+                    p.name,
+                    ident(&p.name)
+                );
+                if out {
+                    let _ = writeln!(
+                        t,
+                        "    /// Drive output `{0}`.\n    #[allow(unused_variables)]\n    fn write_{1}(&mut self, value: {rt}) {{}}",
+                        p.name,
+                        ident(&p.name)
+                    );
+                }
+            }
             let PortKind::Bus { bus, role } = p.kind else {
                 continue;
             };
@@ -326,6 +348,9 @@ impl<'a> Gen<'a> {
                     format!("{}_write_u{bits}", ident(&self.spaces[space].name))
                 }
                 HandlerKind::Extern { def } => format!("ext_{}", ident(&self.prog.item_name(*def))),
+                HandlerKind::Input { port } => {
+                    format!("on_{}", ident(&comp.ports[*port as usize].name))
+                }
             };
             let mut ps = String::new();
             for p in &h.params {
@@ -360,12 +385,6 @@ impl<'a> Gen<'a> {
     ) -> R<()> {
         let hir = self.hir;
         // What this backend generates.
-        if sys.wires > 0 {
-            return Err(GenError::new(format!(
-                "system `{}`: `wire` connections are not generated yet",
-                sys.name
-            )));
-        }
         let prof = match profile {
             None => None,
             Some(p) => Some(sys.profiles.iter().find(|q| q.name == p).ok_or_else(|| {
@@ -422,7 +441,12 @@ impl<'a> Gen<'a> {
                     b.name
                 )));
             }
-            if b.slaves.iter().filter(|(_, r)| r.is_empty()).count() > 1 {
+            let decodes = self
+                .bus(b.bus)?
+                .transactions
+                .iter()
+                .any(|t| t.params.iter().any(|(n, _)| n == "addr"));
+            if decodes && b.slaves.iter().filter(|(_, r)| r.is_empty()).count() > 1 {
                 return Err(GenError::new(format!(
                     "bus `{}` has several slaves without address ranges",
                     b.name
@@ -483,6 +507,17 @@ impl<'a> Gen<'a> {
                 sig_names.push((bi, s.def, f, pty));
             }
         }
+        // Wires: one level per output port; an edge when it changes.
+        for i in &insts {
+            for p in &i.comp.ports {
+                if let PortKind::Out(t) = &p.kind {
+                    let f = format!("w_{}_{}", ident(&i.name), ident(&p.name));
+                    let _ = writeln!(sig_fields, "        pub {f}: {},", self.rty(t)?);
+                    let _ = writeln!(sig_init, "                {f}: {},", self.default_value(t)?);
+                    let _ = writeln!(events, "        {f},");
+                }
+            }
+        }
         let _ = write!(
             o,
             "    #[allow(non_camel_case_types)]\n    #[derive(Clone, Copy, Debug, PartialEq)]\n    pub enum Event {{\n{events}    }}\n    /// Time and signal levels.\n    #[derive(Clone, Debug)]\n    pub struct Signals {{\n        /// Time in units of `BASE_NUM / BASE_DEN` seconds.\n        pub now: u64,\n{sig_fields}        /// Edges not yet delivered.\n        pub events: Vec<Event>,\n    }}\n    impl Signals {{\n        pub fn new() -> Signals {{\n            Signals {{\n                now: 0,\n{sig_init}                events: Vec::new(),\n            }}\n        }}\n    }}\n"
@@ -526,10 +561,18 @@ impl<'a> Gen<'a> {
         );
 
         // Who masters a bus: the processor, and at most one device.
+        // Only a bus with transactions has anything to initiate: the
+        // first role of a signals-only bus (an interrupt controller on its
+        // request lines) is not a master in this sense.
+        let mut has_txns = Vec::new();
+        for b in &sys.buses {
+            has_txns.push(!self.bus(b.bus)?.transactions.is_empty());
+        }
         let masters_any = |ii: usize| -> bool {
             sys.buses
                 .iter()
-                .any(|b| b.masters.iter().any(|(i, _)| *i as usize == ii))
+                .zip(&has_txns)
+                .any(|(b, t)| *t && b.masters.iter().any(|(i, _)| *i as usize == ii))
         };
         let dev_masters: Vec<usize> = (0..insts.len())
             .filter(|&ii| ii != proc_idx && masters_any(ii))
@@ -811,6 +854,44 @@ impl<'a> Gen<'a> {
                 }
             }
             m.push_str(&signal_methods(self, ii)?);
+            for (pi, p) in i.comp.ports.iter().enumerate() {
+                let pn = ident(&p.name);
+                match &p.kind {
+                    PortKind::Out(t) => {
+                        let f = format!("w_{n}_{pn}");
+                        let rt = self.rty(t)?;
+                        let _ = writeln!(
+                            m,
+                            "        fn read_{pn}(&mut self) -> {rt} {{ self.sig.{f} }}"
+                        );
+                        let _ = writeln!(m, "        fn write_{pn}(&mut self, value: {rt}) {{ if self.sig.{f} != value {{ self.sig.{f} = value; self.sig.events.push(Event::{f}); }} }}");
+                    }
+                    PortKind::In(t) | PortKind::AsyncIn(t) => {
+                        let rt = self.rty(t)?;
+                        let src = sys
+                            .wires
+                            .iter()
+                            .find(|w| w.target == (ii as u32, pi as u32))
+                            .map(|w| &w.source);
+                        let body = match src {
+                            Some(hir::WireSource::Port((si, sp))) => {
+                                format!(
+                                    "self.sig.w_{}_{}",
+                                    ident(&insts[*si as usize].name),
+                                    ident(&insts[*si as usize].comp.ports[*sp as usize].name)
+                                )
+                            }
+                            Some(hir::WireSource::Const(v)) => match t {
+                                Ty::Bool => format!("{}", *v != 0),
+                                _ => format!("{v} as {rt}"),
+                            },
+                            None => self.default_value(t)?,
+                        };
+                        let _ = writeln!(m, "        fn read_{pn}(&mut self) -> {rt} {{ {body} }}");
+                    }
+                    _ => {}
+                }
+            }
             let _ = write!(o, "    pub struct Ctx_{n}<'a> {{\n{fields}    }}\n    impl {cname}Ports for Ctx_{n}<'_> {{\n{m}    }}\n");
         }
 
@@ -1009,6 +1090,41 @@ impl<'a> Gen<'a> {
                 deliver,
                 "                Event::{f}(i, v) => {{\n{calls}                }}"
             );
+        }
+        for (si, src) in insts.iter().enumerate() {
+            for (sp, p) in src.comp.ports.iter().enumerate() {
+                if !matches!(p.kind, PortKind::Out(_)) {
+                    continue;
+                }
+                let f = format!("w_{}_{}", ident(&src.name), ident(&p.name));
+                let mut calls = String::new();
+                for w in &sys.wires {
+                    if w.source != hir::WireSource::Port((si as u32, sp as u32)) {
+                        continue;
+                    }
+                    let (ti, tp) = w.target;
+                    let t = &insts[ti as usize];
+                    if !t
+                        .model
+                        .handlers
+                        .iter()
+                        .any(|h| h.kind == HandlerKind::Input { port: tp })
+                    {
+                        continue;
+                    }
+                    let _ = writeln!(
+                        calls,
+                        "                    {{ let v = b.sig.{f}; let mut c = {}; b.{}.on_{}(&mut c, v); }}",
+                        ctx_for(ti as usize, "b", false),
+                        ident(&t.name),
+                        ident(&t.comp.ports[tp as usize].name)
+                    );
+                }
+                let _ = writeln!(
+                    deliver,
+                    "                Event::{f} => {{\n{calls}                }}"
+                );
+            }
         }
         let _ = write!(
             o,

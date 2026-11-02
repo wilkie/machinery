@@ -1546,9 +1546,12 @@ fn i286_board_system_checks_clean() {
     let c = check_files(files);
     assert_clean(&c);
     let sys = &c.hir.systems[0];
-    assert_eq!(sys.components.len(), 8);
-    // RAM, ROM, PIC, PIT, the DMA registers and pages, the link, the console.
-    assert_eq!(sys.buses[0].slaves.len(), 8);
+    assert_eq!(sys.components.len(), 9);
+    // RAM, ROM, both PICs, PIT, the DMA registers and pages, the link, the
+    // console.
+    assert_eq!(sys.buses[0].slaves.len(), 9);
+    // SP straps, CAS, and INTR.
+    assert_eq!(sys.wires.len(), 4);
     // The processor and the DMA controller master the local bus.
     assert_eq!(sys.buses[0].masters.len(), 2);
     // The ROM answers at the top of both the 1 MB and the 16 MB space.
@@ -1841,4 +1844,64 @@ fn a_bus_may_have_several_masters() {
     let c = check_src(&src);
     assert_clean(&c);
     assert_eq!(c.hir.systems[0].buses[0].masters, [(0, 0), (1, 0)]);
+}
+
+// --- wires (model-level `in`/`out` ports and system `wire`) ---
+
+const WIRE_PRELUDE: &str = r#"
+component Src { ports { out level: bool; out code: u3; } model {
+    state n: u8 = 0;
+    on reset { level = true; code = 5; n = code as u8; }
+} }
+component Dst { ports { in level: bool; in code: u3; in strap: bool; } model {
+    state seen: u8 = 0;
+    on level(value: bool) { if value && strap { seen = code as u8; } }
+} }
+"#;
+
+fn wired(body: &str) -> String {
+    format!("{WIRE_PRELUDE}\nsystem S {{ component s: Src; component d: Dst; {body} }}")
+}
+
+#[test]
+fn wires_connect_outputs_to_inputs() {
+    let c = check_src(&wired(
+        "wire d.level = s.level; wire d.code = s.code; wire d.strap = true;",
+    ));
+    assert_clean(&c);
+    let w = &c.hir.systems[0].wires;
+    assert_eq!(w.len(), 3);
+    assert_eq!(w[0].source, machine_sema::hir::WireSource::Port((0, 0)));
+    assert_eq!(w[2].source, machine_sema::hir::WireSource::Const(1));
+    let dst = c.hir.components.iter().find(|c| c.name == "Dst").unwrap();
+    assert!(matches!(
+        dst.model.as_ref().unwrap().handlers[0].kind,
+        machine_sema::hir::HandlerKind::Input { port: 0 }
+    ));
+}
+
+#[test]
+fn wire_errors() {
+    // An output as the target, an input as the source.
+    assert_codes(&wired("wire s.level = d.level;"), &["E1049"]);
+    assert_codes(&wired("wire d.level = d.strap;"), &["E1049"]);
+    // Types differ.
+    assert_codes(&wired("wire d.level = s.code;"), &["E1049"]);
+    // Driven twice.
+    assert_codes(
+        &wired("wire d.strap = true; wire d.strap = false;"),
+        &["E1049"],
+    );
+    // A constant that does not fit.
+    assert_codes(&wired("wire d.code = 9;"), &["E1049"]);
+    // Inputs are not assignable; outputs are.
+    assert_codes(
+        "component C { ports { in a: bool; } model { on reset { a = true; } } }",
+        &["E1030"],
+    );
+    // An input handler takes the port's type.
+    assert_codes(
+        "component C { ports { in a: u4; } model { state n: u4 = 0; on a(value: bool) { } } }",
+        &["E1041"],
+    );
 }

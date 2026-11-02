@@ -213,7 +213,7 @@ fn i286_board_system_boots() {
         output.status.success(),
         "board tests failed:\n{stdout}\n{stderr}"
     );
-    assert!(stdout.contains("8 passed"), "expected 8 tests:\n{stdout}");
+    assert!(stdout.contains("9 passed"), "expected 9 tests:\n{stdout}");
 }
 
 /// The sample timer board has no processor (its master is an rtl script),

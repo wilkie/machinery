@@ -640,10 +640,11 @@ impl<'a> Gen<'a> {
                     a?.join(", ")
                 )
             }
-            H::Port(..) => {
-                return Err(GenError::new(
-                    "wire ports are not readable in the model backend yet",
-                ))
+            H::Port(_, i, _) => {
+                let c = cx
+                    .comp
+                    .ok_or_else(|| GenError::new("port outside a component"))?;
+                format!("ctx.read_{}()", ident(&c.ports[*i as usize].name))
             }
             H::Error => return Err(GenError::new("error expression")),
         })
@@ -1056,6 +1057,15 @@ impl<'a> Gen<'a> {
     /// Statements that store `rhs` (an expression text) into `place`.
     fn assign(&self, cx: &Cx, place: &Expr, rhs: &str) -> R<String> {
         Ok(match &place.kind {
+            H::Port(_, i, true) => {
+                let c = cx
+                    .comp
+                    .ok_or_else(|| GenError::new("port outside a component"))?;
+                format!(
+                    "{{ let v = {rhs}; ctx.write_{}(v); }}\n",
+                    ident(&c.ports[*i as usize].name)
+                )
+            }
             H::Index(b, idx) if matches!(b.ty, Ty::Array(..)) && Self::is_lvalue(place) => {
                 format!(
                     "{{ let v = {rhs}; let i = ({}) as usize; {}[i] = v; }}\n",

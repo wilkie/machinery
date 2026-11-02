@@ -747,6 +747,10 @@ pub enum HandlerKind {
     Extern {
         def: DefId,
     },
+    /// The level driven into an input port changed.
+    Input {
+        port: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -846,6 +850,22 @@ pub struct SystemBus {
     pub bridges: Vec<String>,
 }
 
+/// What drives a wire into an input port.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WireSource {
+    /// An output port of an instance.
+    Port(InstPort),
+    /// A constant strap (`wire pic1.sp = true;`).
+    Const(i128),
+}
+
+/// `wire target = source;`: an input port and what drives it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SystemWire {
+    pub target: InstPort,
+    pub source: WireSource,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     Model,
@@ -871,8 +891,8 @@ pub struct SystemInfo {
     pub clocks: Vec<SystemClock>,
     pub components: Vec<SystemComponent>,
     pub buses: Vec<SystemBus>,
-    /// `wire` items (not generated yet).
-    pub wires: usize,
+    /// `wire` items: what drives each connected input port.
+    pub wires: Vec<SystemWire>,
     pub profiles: Vec<Profile>,
 }
 

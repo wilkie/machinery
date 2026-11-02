@@ -428,7 +428,10 @@ component Pit8254 {
             }
             return (wait: 1);
         }
-        on tick(n: u32) {
+        /// Returns the cycles until channel 0's OUT next changes: nothing
+        /// else here is visible without a bus access, which catches the
+        /// timer up first.
+        on tick(n: u32) -> u32 {
             for c in 0..3 {
                 if ch[c].counting {
                     let period: u32 = if ch[c].reload == 0 { 0x10000 } else { ch[c].reload as u32 };
@@ -448,6 +451,10 @@ component Pit8254 {
                     }
                 }
             }
+            if !ch[0].counting || (ch[0].mode == 0 && ch[0].out) {
+                return 0xFFFFFFFF;
+            }
+            return if ch[0].count == 0 { 0x10000 } else { ch[0].count as u32 };
         }
     }
 }
@@ -525,9 +532,12 @@ component Dma8237 {
             }
         }
 
-        on tick(n: u32) {
+        /// Returns four clocks (one transfer) while a channel is active,
+        /// else never: a rising DREQ wakes the controller, through the
+        /// handler below, and programming it is a bus access.
+        on tick(n: u32) -> u32 {
             if command[2] == 1 {
-                return;
+                return 0xFFFFFFFF;
             }
             let mut budget: u32 = n / 4;
             for c in 0..4 {
@@ -536,7 +546,16 @@ component Dma8237 {
                     budget = budget - 1;
                 }
             }
+            for c in 0..4 {
+                if !ch[c].masked && dma.dreq(c) {
+                    return 4;
+                }
+            }
+            return 0xFFFFFFFF;
         }
+
+        /// A request edge: nothing to do but be woken.
+        on dma.dreq(channel: u2, value: bool) { }
 
         on regs.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
             let r = addr[3:0];
@@ -796,11 +815,15 @@ component Cga {
             frame_width = if cols * cd < 640 { cols * cd } else { 640 };
         }
 
-        on tick(n: u32) {
+        /// Returns the dots left in the frame: a raster write or a status
+        /// read is a bus access and catches the card up first, so drawing a
+        /// frame's lines in one go at its end looks the same; the host
+        /// calls `catch_up_all` before reading `frame` mid-frame.
+        on tick(n: u32) -> u32 {
             let ld = line_dots();
             let total = ld * frame_lines();
             if total == 0 {
-                return;
+                return 0xFFFFFFFF;
             }
             let mut left = n;
             while left > 0 {
@@ -822,6 +845,7 @@ component Cga {
                     }
                 }
             }
+            return total - pos;
         }
 
         on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {

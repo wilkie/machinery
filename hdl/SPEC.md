@@ -414,7 +414,11 @@ The transaction level. Contents:
   - `on tick @ clock_name (n: u32) { ... }` called with the number of cycles
     of that clock that elapsed since the last call; the emulator chooses the
     granularity (often "once per instruction" or "once per scanline"). The
-    `@ clock_name` is omitted in a single-clock component.
+    `@ clock_name` is omitted in a single-clock component. With `-> u32`
+    it returns the most cycles that may pass before it must run again
+    (tick scheduling, section 12): the timer's cycles to its next output
+    edge, a video card's dots to the end of the frame, `0xFFFFFFFF` for
+    nothing pending.
   - `on reset { ... }`
   - `on bus_port.signal(name, value) { ... }` for non-transaction wires (IRQ
     acknowledges, DMA requests, reset).
@@ -1073,6 +1077,18 @@ drives), and `system::System`:
   take shortcuts).
 - `emit` sets a signal level at once; the edges are delivered to the
   observing ports' `on port.signal(...)` handlers after each instruction.
+- **Tick scheduling.** A device whose `on tick` returns `u32` is skipped
+  by the after-instruction catch-up until that many cycles of its clock
+  have passed. Anything that reaches it still catches it up first and
+  then makes it due again, so skipping never changes behaviour: a
+  transaction it answers, a signal or wire edge delivered to one of its
+  handlers, and a host `with_<instance>` call. A device that must notice
+  an edge it has no other use for declares an empty handler for it (the
+  8237 wakes on `on dma.dreq(...) { }`). `catch_up_all()` catches every
+  device up regardless, for a host about to read a device's state, such
+  as a framebuffer mid-frame. A tick that returns nothing runs at every
+  catch-up, as before. On the i286 board this took a halted processor
+  from 34 to 120 million steps a second, with identical results.
 - `step()` runs one instruction, or an interrupt the isa's `boundary` fn
   took, and catches the devices up; a halted processor waits one cycle
   of its clock per step. `run(n)` runs until the processor halts and
@@ -1248,7 +1264,7 @@ with stable error codes, so agents and editors can act on them.
    only observes (an interrupt controller on its request lines) is not a
    master; the language could say so with a role attribute instead of
    the backend inferring it from the absence of transactions.
-12. **Tick granularity.** Devices are caught up after every instruction.
-   For a CGA that is a handful of pixels per call. Proposal: `on tick`
-   may return the number of its cycles until it next needs to run, and
-   the scheduler skips it until then or until a transaction reaches it.
+12. **Tick granularity.** Resolved: `on tick` may return its next
+   deadline (section 12). Open: a device that renders (the CGA) could
+   also say when it is safe to batch more than a frame, and the
+   processor could report when it next needs its own time.

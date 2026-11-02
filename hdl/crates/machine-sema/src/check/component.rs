@@ -436,10 +436,20 @@ impl Checker<'_> {
                             }
                         },
                     };
-                    if ret.is_some() {
-                        self.error(module, "E1041", span, "`on tick` returns nothing");
-                        return None;
-                    }
+                    // `-> u32`: the most cycles that may pass before the
+                    // device must run again (tick scheduling).
+                    let want_ret = match &decl_ret {
+                        None => Ty::Unit,
+                        Some(Ty::UInt(32)) | Some(Ty::Error) => Ty::UInt(32),
+                        Some(_) => {
+                            self.error_with(
+                                module,
+                                Diagnostic::error("E1041", span, "`on tick` returns nothing, or `u32`: the most cycles before it must run again")
+                                    .with_note("write `on tick(n: u32) -> u32 { ...; return cycles_until_next_event; }`"),
+                            );
+                            return None;
+                        }
+                    };
                     let pname = decl_params
                         .first()
                         .map(|p| p.0.clone())
@@ -447,7 +457,7 @@ impl Checker<'_> {
                     (
                         HandlerKind::Tick { clock: clock_port },
                         Some(vec![(pname, Ty::UInt(32))]),
-                        Ty::Unit,
+                        want_ret,
                     )
                 }
                 [single]

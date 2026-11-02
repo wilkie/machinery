@@ -1905,3 +1905,22 @@ fn wire_errors() {
         &["E1041"],
     );
 }
+
+// --- tick scheduling ---
+
+#[test]
+fn tick_may_return_its_next_deadline() {
+    let c = check_src(&dev(
+        "state n: u32 = 0; on tick(k: u32) -> u32 { n = n + k; return 100; }",
+    ));
+    assert_clean(&c);
+    let h = &c.hir.components[0].model.as_ref().unwrap().handlers[0];
+    assert_eq!(h.ret, Ty::UInt(32));
+    // Any other return type is an error, and a deadline must be returned on
+    // every path.
+    assert_codes(&dev("on tick(k: u32) -> u8 { return 1; }"), &["E1041"]);
+    assert_codes(
+        &dev("state n: u32 = 0; on tick(k: u32) -> u32 { n = k; }"),
+        &["E1015"],
+    );
+}

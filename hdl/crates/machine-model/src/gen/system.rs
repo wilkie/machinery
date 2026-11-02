@@ -527,6 +527,8 @@ impl<'a> Gen<'a> {
         let mut marks = String::new();
         // (inst, handler clock port, system clock)
         let mut ticks: Vec<(usize, Option<u32>, u32)> = Vec::new();
+        // Tick handlers that return their next deadline.
+        let mut scheduled: Vec<(usize, Option<u32>)> = Vec::new();
         for (ii, i) in insts.iter().enumerate() {
             for h in &i.model.handlers {
                 let HandlerKind::Tick { clock } = h.kind else {
@@ -552,6 +554,17 @@ impl<'a> Gen<'a> {
                     ident(&i.name),
                     method_tick(i.comp, clock)
                 );
+                if h.ret == Ty::UInt(32) {
+                    let _ = writeln!(
+                        marks,
+                        "        /// When `{}`'s `{}` must next run.\n        pub due_{}_{}: u64,",
+                        i.name,
+                        method_tick(i.comp, clock),
+                        ident(&i.name),
+                        method_tick(i.comp, clock)
+                    );
+                    scheduled.push((ii, clock));
+                }
                 ticks.push((ii, clock, bound));
             }
         }
@@ -623,6 +636,23 @@ impl<'a> Gen<'a> {
             }
         };
         let ticking = |ii: usize| ticks.iter().any(|t| t.0 == ii);
+        // Statements that make device `ii` due (its scheduled ticks run at
+        // the next sync), from a source holding the marks.
+        let make_due = |ii: usize, src: &str, deref: bool| -> String {
+            let n = ident(&insts[ii].name);
+            let m = if deref {
+                format!("(*{src}.marks)")
+            } else {
+                format!("{src}.marks")
+            };
+            scheduled
+                .iter()
+                .filter(|(i, _)| *i == ii)
+                .map(|(_, clock)| {
+                    format!(" {m}.due_{n}_{} = 0;", method_tick(insts[ii].comp, *clock))
+                })
+                .collect()
+        };
         // Statements that catch device `ii` up, from a source holding it.
         let catch_from = |ii: usize, src: &str, deref: bool| -> String {
             if !ticking(ii) {
@@ -798,12 +828,15 @@ impl<'a> Gen<'a> {
                             let dn = ident(&dev.name);
                             let handler = dev.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Transaction { port, transaction } if port == *sp && transaction == tr.def));
                             let catch = catch_from(si, "self", true);
+                            // The responder may have changed what it schedules:
+                            // it is due again after the access.
                             let call = format!(
-                                "{{ let mut c = {}; self.{dn}.on_{}_{}(&mut c, {}) }}",
+                                "{{ let r = {{ let mut c = {}; self.{dn}.on_{}_{}(&mut c, {}) }};{} r }}",
                                 ctx_for(si, "self", true),
                                 ident(&dev.comp.ports[*sp as usize].name),
                                 ident(&tr.name),
-                                args.join(", ")
+                                args.join(", "),
+                                make_due(si, "self", true)
                             );
                             let Some(a) = addr.clone() else {
                                 // Not decoded: offered to each responder that
@@ -907,15 +940,26 @@ impl<'a> Gen<'a> {
             let mut body = String::new();
             for (_, clock, sc) in mine {
                 let mt = method_tick(i.comp, *clock);
+                let sched = scheduled.contains(&(ii, *clock));
+                let (call_pre, after) = if sched {
+                    (
+                        "let r = ",
+                        format!("\n                {{m}}.due_{n}_{mt} = {{m}}.{n}_{mt}.saturating_add((r as u64).saturating_mul(p));"),
+                    )
+                } else {
+                    ("", String::new())
+                };
                 if full(ii) {
+                    let after = after.replace("{m}", "c.marks");
                     let _ = write!(
                         body,
-                        "        {{\n            let p = clock::C{sc};\n            let mut k = (c.sig.now - c.marks.{n}_{mt}) / p;\n            c.marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as u64);\n                k -= s;\n                dev.{mt}(&mut *c, s as u32);\n            }}\n        }}\n"
+                        "        {{\n            let p = clock::C{sc};\n            let mut k = (c.sig.now - c.marks.{n}_{mt}) / p;\n            c.marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as u64);\n                k -= s;\n                {call_pre}dev.{mt}(&mut *c, s as u32);{after}\n            }}\n        }}\n"
                     );
                 } else {
+                    let after = after.replace("{m}", "marks");
                     let _ = write!(
                         body,
-                        "        {{\n            let p = clock::C{sc};\n            let mut k = (sig.now - marks.{n}_{mt}) / p;\n            marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as u64);\n                k -= s;\n                let mut c = Ctx_{n} {{ sig: &mut *sig }};\n                dev.{mt}(&mut c, s as u32);\n            }}\n        }}\n"
+                        "        {{\n            let p = clock::C{sc};\n            let mut k = (sig.now - marks.{n}_{mt}) / p;\n            marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as u64);\n                k -= s;\n                let mut c = Ctx_{n} {{ sig: &mut *sig }};\n                {call_pre}dev.{mt}(&mut c, s as u32);{after}\n            }}\n        }}\n"
                     );
                 }
             }
@@ -1039,12 +1083,54 @@ impl<'a> Gen<'a> {
             );
         }
         let mut sync = String::new();
-        for ii in 0..insts.len() {
+        for (ii, inst) in insts.iter().enumerate() {
             let c = catch_from(ii, "b", false);
-            if !c.is_empty() {
+            if c.is_empty() {
+                continue;
+            }
+            let mine: Vec<&(usize, Option<u32>, u32)> =
+                ticks.iter().filter(|t| t.0 == ii).collect();
+            let all_scheduled = mine.iter().all(|t| scheduled.contains(&(ii, t.1)));
+            if all_scheduled {
+                let n = ident(&inst.name);
+                let dues: Vec<String> = mine
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "b.sig.now >= b.marks.due_{n}_{}",
+                            method_tick(inst.comp, t.1)
+                        )
+                    })
+                    .collect();
+                let _ = writeln!(sync, "            if {} {{ {c}}}", dues.join(" || "));
+            } else {
                 let _ = writeln!(sync, "            {c}");
             }
         }
+        let mut all = String::new();
+        for ii in 0..insts.len() {
+            let c = catch_from(ii, "b", false);
+            if !c.is_empty() {
+                let _ = writeln!(all, "            {c}");
+            }
+        }
+        // Waking a device: catch it up before an edge reaches it, and make
+        // it due after, so it recomputes its deadline.
+        let wake = |ii: usize| -> (String, String) {
+            let before = catch_from(ii, "b", false);
+            let n = ident(&insts[ii].name);
+            let after: String = scheduled
+                .iter()
+                .filter(|(i, _)| *i == ii)
+                .map(|(_, clock)| {
+                    format!(
+                        " b.marks.due_{n}_{} = 0;",
+                        method_tick(insts[ii].comp, *clock)
+                    )
+                })
+                .collect();
+            (before, after)
+        };
         // Host entry points: a model's fns with a live context.
         let mut with = String::new();
         for (ii, i) in insts.iter().enumerate() {
@@ -1052,9 +1138,10 @@ impl<'a> Gen<'a> {
             let cname = ident(&i.comp.name);
             let catch = catch_from(ii, "b", false);
             let ctx = ctx_for(ii, "b", false);
+            let due = make_due(ii, "b", false);
             let _ = write!(
                 with,
-                "        /// Call into `{n}` with a live context: how the embedding program\n        /// reaches its model fns (host input). The device is caught up first,\n        /// and signal edges it raises are delivered after.\n        pub fn with_{n}<R>(&mut self, f: impl FnOnce(&mut {cname}, &mut Ctx_{n}<'_>) -> R) -> R {{\n            let r = {{\n                let b = &mut self.{cpu_name}.bus;\n                {catch}\n                let mut c = {ctx};\n                f(&mut b.{n}, &mut c)\n            }};\n            self.deliver();\n            r\n        }}\n"
+                "        /// Call into `{n}` with a live context: how the embedding program\n        /// reaches its model fns (host input). The device is caught up first,\n        /// made due after, and the signal edges it raises are delivered.\n        pub fn with_{n}<R>(&mut self, f: impl FnOnce(&mut {cname}, &mut Ctx_{n}<'_>) -> R) -> R {{\n            let r = {{\n                let b = &mut self.{cpu_name}.bus;\n                {catch}\n                let r = {{ let mut c = {ctx}; f(&mut b.{n}, &mut c) }};\n               {due}\n                r\n            }};\n            self.deliver();\n            r\n        }}\n"
             );
         }
         let mut deliver = String::new();
@@ -1078,9 +1165,10 @@ impl<'a> Gen<'a> {
                     Some(t) => format!("i as {t}, "),
                     None => String::new(),
                 };
+                let (before, after) = wake(ii as usize);
                 let _ = writeln!(
                     calls,
-                    "                    {{ let mut c = {}; b.{n}.on_{}_{}(&mut c, {arg}v); }}",
+                    "                    {before}{{ let mut c = {}; b.{n}.on_{}_{}(&mut c, {arg}v); }}{after}",
                     ctx_for(ii as usize, "b", false),
                     ident(&i.comp.ports[pi as usize].name),
                     ident(&self.prog.item_name(*sd))
@@ -1112,9 +1200,10 @@ impl<'a> Gen<'a> {
                     {
                         continue;
                     }
+                    let (before, after) = wake(ti as usize);
                     let _ = writeln!(
                         calls,
-                        "                    {{ let v = b.sig.{f}; let mut c = {}; b.{}.on_{}(&mut c, v); }}",
+                        "                    {before}{{ let v = b.sig.{f}; let mut c = {}; b.{}.on_{}(&mut c, v); }}{after}",
                         ctx_for(ti as usize, "b", false),
                         ident(&t.name),
                         ident(&t.comp.ports[tp as usize].name)
@@ -1184,7 +1273,14 @@ impl<'a> Gen<'a> {
             }}
             Ok(max)
         }}
-{with}        /// Catch every device up to the present and deliver signal edges.
+{with}        /// Catch every device up to the present, scheduled or not (before
+        /// the host reads a device's state directly), and deliver edges.
+        pub fn catch_up_all(&mut self) {{
+            let b = &mut self.{cpu_name}.bus;
+{all}            self.deliver();
+        }}
+        /// Catch up every device that is due (a scheduled `on tick` runs
+        /// only when its deadline has passed) and deliver signal edges.
         pub fn sync(&mut self) {{
             let b = &mut self.{cpu_name}.bus;
 {sync}            self.deliver();

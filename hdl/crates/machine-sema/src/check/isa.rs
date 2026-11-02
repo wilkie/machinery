@@ -343,12 +343,17 @@ impl Checker<'_> {
             Some(p) => match fn_item(self, p) {
                 Some(f) => {
                     if let Some(sig) = self.fn_sig(f) {
-                        let good = sig.params.len() == 2
+                        // Optionally `(.., has_error: bool, error: u16)`:
+                        // the error code a fault with `pushes_error_code` carries.
+                        let good = (sig.params.len() == 2
+                            || (sig.params.len() == 4
+                                && sig.params[2].1 == Ty::Bool
+                                && sig.params[3].1 == Ty::UInt(16)))
                             && sig.params[0].1 == Ty::UInt(8)
                             && sig.params[1].1 == Ty::Bool
                             && sig.ret == Ty::Unit;
                         if !good {
-                            self.error(module, "E1046", p.span, "`fault` is a `fn (vector: u8, restart: bool)` that delivers the fault");
+                            self.error(module, "E1046", p.span, "`fault` is a `fn (vector: u8, restart: bool)` that delivers the fault, or `fn (vector: u8, restart: bool, has_error: bool, error: u16)` to be given its error code");
                             ok = false;
                         }
                     }

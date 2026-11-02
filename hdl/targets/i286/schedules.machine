@@ -134,7 +134,9 @@ schedules on I286 {
     Push_rm16 => if src.is_mem { schedule(src.ea, access, 2, access, 0) } else { schedule(3, access, 0) };
     Pusha => schedule(3, access, 0, access, 0, access, 0, access, 0, access, 0, access, 0, access, 14, access, 0);
     Pop_r16 => schedule(3, access, 0);
-    Pop_sreg => schedule(3, access, 0);
+    Pop_es => schedule(3, access, 0);
+    Pop_ss => schedule(3, access, 0);
+    Pop_ds => schedule(3, access, 0);
     Popf => schedule(3, access, 1);
     Popa => schedule(3);
     /// The stack read comes first; the address is worked out after it.

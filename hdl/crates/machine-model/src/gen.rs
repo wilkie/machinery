@@ -1428,6 +1428,27 @@ impl<'a> Gen<'a> {
         if self.isa.faults.is_empty() {
             s.push_str("            _ => rt::FaultClass::Fault,\n");
         }
+        // The error code a fault pushes (`pushes_error_code`): its first
+        // parameter, or 0 without one.
+        s.push_str("        }\n    }\n    /// The error code this fault pushes, if it pushes one.\n    pub fn error_code(&self) -> Option<u16> {\n        match self {\n");
+        for f in &self.isa.faults {
+            let arm = match (f.pushes_error_code, f.params.is_empty()) {
+                (false, true) => format!("            Fault::{} => None,", ident(&f.name)),
+                (false, false) => format!("            Fault::{}(..) => None,", ident(&f.name)),
+                (true, true) => format!("            Fault::{} => Some(0),", ident(&f.name)),
+                (true, false) => {
+                    let rest = if f.params.len() > 1 { ", .." } else { "" };
+                    format!(
+                        "            Fault::{}(e{rest}) => Some(*e as u16),",
+                        ident(&f.name)
+                    )
+                }
+            };
+            let _ = writeln!(s, "{arm}");
+        }
+        if self.isa.faults.is_empty() {
+            s.push_str("            _ => None,\n");
+        }
         s.push_str("        }\n    }\n    /// The interrupt vector the isa assigns to this fault.\n    pub fn vector(&self) -> Option<u8> {\n        match self {\n");
         for f in &self.isa.faults {
             let pat = if f.params.is_empty() {
@@ -2123,7 +2144,14 @@ impl<'a> Gen<'a> {
         }
         s.push_str("        }\n    }\n");
         let deliver = match istream.fault {
-            Some(f) => format!("if let Some(v) = f.vector() {{ let restart = f.class() == rt::FaultClass::Fault; self.fn_{}(v, restart)?; self.cycles += self.fault_cycles(v); self.last_fault = Some(f); return Ok(()); }}", ident(&self.fns[&f].name)),
+            Some(f) => {
+                let args = if self.fns[&f].params.len() == 4 {
+                    "v, restart, f.error_code().is_some(), f.error_code().unwrap_or(0)"
+                } else {
+                    "v, restart"
+                };
+                format!("if let Some(v) = f.vector() {{ let restart = f.class() == rt::FaultClass::Fault; self.fn_{}({args})?; self.cycles += self.fault_cycles(v); self.last_fault = Some(f); return Ok(()); }}", ident(&self.fns[&f].name))
+            }
             None => String::new(),
         };
         let _ = write!(

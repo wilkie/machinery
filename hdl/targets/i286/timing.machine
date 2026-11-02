@@ -118,7 +118,9 @@ timing on I286 {
     Outsw => if !repeating() { 1 } else if restarted() { 0 } else if CX == 0 { 8 } else { 7 };
     Pop_r16 => 3;
     Pop_rm16 => 4;
-    Pop_sreg => 3;
+    Pop_es => 3;
+    Pop_ss => 3;
+    Pop_ds => 3;
     Popa => 3;
     Popf => 4;
     Push_imm16 => 1;

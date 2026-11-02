@@ -43,7 +43,7 @@ fn kind(k: u8) -> BusKind {
 }
 
 fn seg(v: u16) -> Segment {
-    Segment { selector: v, base: (v as u32) << 4 }
+    Segment { selector: v, base: (v as u32) << 4, limit: 0xFFFF, rights: 0x93 }
 }
 
 /// Runs one vector; returns the pipeline's bus cycles.

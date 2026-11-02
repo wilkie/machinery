@@ -1353,7 +1353,7 @@ fn i286_target_checks_clean() {
     assert_clean(&c);
     let isa = &c.hir.isas[0];
     assert_eq!(isa.instructions.iter().filter(|i| i.prefix).count(), 3);
-    assert_eq!(isa.instructions.iter().filter(|i| !i.prefix).count(), 144);
+    assert_eq!(isa.instructions.iter().filter(|i| !i.prefix).count(), 162);
     assert_eq!(isa.latches.len(), 4);
     assert_eq!(c.hir.vectors.len(), 1);
     assert_eq!(c.hir.vectors[0].regs.len(), 14);
@@ -1608,6 +1608,17 @@ fn extern_fns_and_the_boundary_hook() {
     let bad = DEC_PRELUDE.replace(
         "undefined UD; }",
         "undefined UD; boundary take; }\n    fn take() { }",
+    );
+    assert_codes(&format!("{bad}\n}}"), &["E1046"]);
+    // The fault hook may take the fault's error code (SPEC 11.1a).
+    let src = DEC_PRELUDE.replace(
+        "undefined UD; }",
+        "undefined UD; fault deliver; }\n    fn deliver(v: u8, restart: bool, has_error: bool, error: u16) { IP = error; }",
+    );
+    assert_clean(&check_src(&format!("{src}\n}}")));
+    let bad = DEC_PRELUDE.replace(
+        "undefined UD; }",
+        "undefined UD; fault deliver; }\n    fn deliver(v: u8, restart: bool, error: u16) { }",
     );
     assert_codes(&format!("{bad}\n}}"), &["E1046"]);
     // The limit fn says how far the stream reaches (SPEC 11.1a).

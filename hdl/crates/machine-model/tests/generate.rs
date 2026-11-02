@@ -134,6 +134,37 @@ fn i286_target_passes_its_tests_and_hardware_vectors() {
     );
     assert!(stdout.contains("16 passed"), "expected 16 tests:\n{stdout}");
 
+    // The self-checking test programs (`simulators/test/i286`, assembled
+    // with `assemble-tests.sh`): real mode and protected mode. Skipped
+    // without them.
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::copy(
+        root.join("targets").join("i286").join("programs_test.rs"),
+        dir.join("tests").join("programs.rs"),
+    )
+    .unwrap();
+    let output = Command::new(&cargo)
+        .args([
+            "test",
+            "--quiet",
+            "--release",
+            "--test",
+            "programs",
+            "--manifest-path",
+        ])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .arg("--")
+        .arg("--nocapture")
+        .output()
+        .expect("run programs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "programs failed:\n{stdout}\n{stderr}"
+    );
+
     let vectors = root
         .join("..")
         .join("simulators")

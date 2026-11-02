@@ -825,15 +825,19 @@ the next byte, a `fn` that consumes one byte, the fault raised for an
 opcode that decodes to nothing, and (`fault deliver;`) the `fn (vector:
 u8, restart: bool)` that **delivers** a fault. After an instruction raises,
 the delivery fn runs with the fault's declared `vector`; `restart` is true
-for `Fault`-class faults. State is never rolled back implicitly: the ISA
+for `Fault`-class faults. Declared as `fn (vector: u8, restart: bool,
+has_error: bool, error: u16)`, it is also given the error code of a fault
+declared with `pushes_error_code` (its first parameter, or 0): the 286's
+protected mode pushes it, real mode does not. State is never rolled back implicitly: the ISA
 says what restarting means. On the 286 only IP restarts, from a latch
 (`latch start_ip: u16 = IP;` snapshots the instruction start, prefixes
 included); registers the instruction already changed stay changed, as the
 hardware does (a faulting `movsw` keeps SI advanced). Software
-interrupts are ordinary instructions that call the same fn. Delivery is
-described once, in the ISA, because it is architecture: on the 286 in real
-mode it pushes FLAGS, CS and IP, clears IF and TF, and loads CS:IP from the
-IVT at `vector * 4`. Multi-byte operands are assembled from
+interrupts are ordinary instructions that call the same delivery. Delivery
+is described once, in the ISA, because it is architecture: on the 286 in
+real mode it pushes FLAGS, CS and IP, clears IF and TF, and loads CS:IP
+from the IVT at `vector * 4`; in protected mode it goes through the IDT's
+interrupt, trap or task gate, switching stacks for an inner level. Multi-byte operands are assembled from
 consecutive bytes least-significant first. Architectural registers reset to
 zero, then the isa's `fn reset()` runs if it declares one (it takes no
 parameters and returns nothing, E1046): on the 286 it loads CS:IP with

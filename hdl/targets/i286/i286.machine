@@ -14,14 +14,29 @@
 // ENTER/LEAVE, LOOP/JCXZ, XLAT, LAHF/SAHF, the BCD adjusts, I/O, ESC, WAIT,
 // the flag instructions, HLT, segment-override, LOCK and repeat prefixes,
 // and real-mode interrupt delivery through the IVT. That is every real-mode
-// opcode in the SingleStepTests corpus. Not yet: protected mode and the 0F
-// two-byte opcodes.
+// opcode in the SingleStepTests corpus.
+//
+// Protected mode (entered with LMSW): descriptor tables and the descriptor
+// cache, checked segment loads and accesses, privilege levels, call gates
+// with the stack switch, interrupt, trap and task gates, task switches,
+// IOPL, and the 0F instructions (LGDT, LIDT, SGDT, SIDT, LLDT, SLDT, LTR,
+// STR, LMSW, SMSW, CLTS, LAR, LSL, VERR, VERW) and ARPL. Checked against
+// the self-checking programs of `simulators/test/i286/protected`.
 
 use alu::{AluOp, ArithFlags, Alu, AluFlags, Parity8};
 
-/// A segment register: the selector and, in real mode, `selector << 4` as
-/// the base (the 286's descriptor cache).
-bundle Segment { selector: u16, base: u24 }
+/// A segment register: the selector and its descriptor cache (base, limit
+/// and access rights). Real mode loads only the selector and the base
+/// (`selector << 4`).
+bundle Segment { selector: u16, base: u24, limit: u16, rights: u8 }
+
+/// A descriptor-table register (GDTR, IDTR).
+bundle TableReg { base: u24, limit: u16 }
+
+/// A descriptor as read from a table. For a gate, `limit` is the target
+/// offset, `base[15:0]` the target selector and `base[20:16]` the word
+/// count. `rights`: P (7), DPL (6:5), S (4), type (3:0).
+bundle Descriptor { base: u24, limit: u16, rights: u8 }
 
 /// The execution unit's address work before an instruction's first memory
 /// access through a ModRM (SPEC 11.2c), fitted to the SingleStepTests
@@ -58,8 +73,19 @@ isa I286 {
     register FLAGS: u16 {
         CF: u1 @ 0; PF: u1 @ 2; AF: u1 @ 4; ZF: u1 @ 6; SF: u1 @ 7;
         TF: u1 @ 8; IF: u1 @ 9; DF: u1 @ 10; OF: u1 @ 11;
+        IOPL: u2 @ 12; NT: u1 @ 14;
         view arith: ArithFlags { cf: CF, pf: PF, af: AF, zf: ZF, sf: SF, of: OF }
     }
+
+    /// The machine status word: protection enable (set by LMSW, cleared
+    /// only by reset), monitor and emulate coprocessor, task switched.
+    register MSW: u16 { PE: u1 @ 0; MP: u1 @ 1; EM: u1 @ 2; TS: u1 @ 3; }
+    register GDTR: TableReg;
+    register IDTR: TableReg;
+    /// The local descriptor table and the task register: a selector and
+    /// the cached descriptor, as for the segment registers.
+    register LDTR: Segment;
+    register TR: Segment;
 
     mode Mode : u1 { Real, Protected }
 
@@ -87,6 +113,11 @@ isa I286 {
     /// faulting DIV/IDIV pushes data-dependent flags the description does not
     /// model (the vector runner reports those as undefined-flag leaks).
     fault UD { vector: 6, class: Fault }
+    /// A fault while delivering a fault.
+    fault DoubleFault { vector: 8, class: Fault, pushes_error_code: true }
+    fault InvalidTss(error: u16) { vector: 10, class: Fault, pushes_error_code: true }
+    fault NP(error: u16) { vector: 11, class: Fault, pushes_error_code: true }
+    fault StackFault(error: u16) { vector: 12, class: Fault, pushes_error_code: true }
     fault GP(error: u16) { vector: 13, class: Fault, pushes_error_code: true }
 
     // -- addressing ------------------------------------------------------------
@@ -94,61 +125,596 @@ isa I286 {
     /// Real mode: base plus offset, 24 bits wide. The 286 does not wrap at
     /// 1 MB (A20 is a system-board fact). Every real-mode segment has limit
     /// 0xFFFF: an access that runs past it is #GP(0).
+    ///
+    /// Protected mode checks the cached descriptor: a null selector, a
+    /// write to code or to read-only data, or a read of execute-only code
+    /// is #GP(0), and so is an access outside the limit (for expand-down
+    /// data, the offsets above it).
     fn translate(seg: Segment, off: u16, size: u8, access: Access) -> u24 {
-        if (off as u32) + (size as u32) - 1 > 0xFFFF { raise GP(0); }
+        let last = (off as u32) + (size as u32) - 1;
+        if MSW.PE == 1 {
+            if !in_segment(seg, off, size, access) { raise GP(0); }
+        } else if last > 0xFFFF {
+            raise GP(0);
+        }
         return seg.base + (off as u24);
     }
 
+    /// Whether a protected-mode access to `seg` is allowed.
+    fn in_segment(seg: Segment, off: u16, size: u8, access: Access) -> bool {
+        let r = seg.rights;
+        if r == 0 { return false; }
+        let code = r[3] == 1;
+        if access == Access::Write && (code || r[1] == 0) { return false; }
+        if access == Access::Read && code && r[1] == 0 { return false; }
+        let last = (off as u32) + (size as u32) - 1;
+        if !code && r[2] == 1 {
+            // Expand-down: the valid offsets are above the limit.
+            return (off as u32) > (seg.limit as u32) && last <= 0xFFFF;
+        }
+        return last <= (seg.limit as u32);
+    }
+
+    /// A stack access: as `translate`, but #SS(0) in protected mode.
+    fn translate_stack(off: u16, access: Access) -> u24 {
+        if MSW.PE == 1 {
+            if !in_segment(SS, off, 2, access) { raise StackFault(0); }
+            return SS.base + (off as u24);
+        }
+        return translate(SS, off, 2, access);
+    }
+
+    /// A real-mode segment: the selector and `selector << 4`.
     fn load_segment(sel: u16) -> Segment {
-        return Segment { selector: sel, base: (sel as u24) << 4 };
+        return Segment { selector: sel, base: (sel as u24) << 4, limit: 0xFFFF, rights: 0x93 };
     }
 
     /// Processor reset, after the registers clear: execution starts at
     /// F000:FFF0 with the code segment's cached base at FF0000, so the
     /// first fetch is from FFFFF0 at the top of the 16 MB space until the
-    /// first far jump reloads CS. FLAGS reads 0002.
+    /// first far jump reloads CS. FLAGS reads 0002, the MSW FFF0; the IDT
+    /// is the real-mode vector table at 0.
     fn reset() {
-        CS = Segment { selector: 0xF000, base: 0xFF0000 };
+        CS = Segment { selector: 0xF000, base: 0xFF0000, limit: 0xFFFF, rights: 0x9B };
+        DS = load_segment(0);
+        ES = load_segment(0);
+        SS = load_segment(0);
         IP = 0xFFF0;
         FLAGS = 0x0002;
+        MSW = 0xFFF0;
+        IDTR = TableReg { base: 0, limit: 0x03FF };
+        GDTR = TableReg { base: 0, limit: 0xFFFF };
     }
 
     fn push16(v: u16) {
         SP = SP - 2;
-        mem.write_u16(translate(SS, SP, 2, Access::Write), v);
+        mem.write_u16(translate_stack(SP, Access::Write), v);
     }
 
     fn pop16() -> u16 {
-        let v = mem.read_u16(translate(SS, SP, 2, Access::Read));
+        let v = mem.read_u16(translate_stack(SP, Access::Read));
         SP = SP + 2;
         return v;
     }
 
-    /// Real mode cannot set IOPL or NT; bits 1, 3 and 5 are fixed.
+    /// FLAGS from a POPF or IRET. Real mode cannot set IOPL or NT; bits 1,
+    /// 3 and 5 are fixed. In protected mode IOPL changes only at CPL 0 and
+    /// IF only at CPL <= IOPL.
     fn load_flags(v: u16) {
-        FLAGS = (v & 0x0FD5) | 0x0002;
+        if MSW.PE == 0 {
+            FLAGS = (v & 0x0FD5) | 0x0002;
+            return;
+        }
+        let mut keep: u16 = 0;
+        if cpl() != 0 { keep = keep | 0x3000; }
+        if (cpl() as u3) > (FLAGS.IOPL as u3) { keep = keep | 0x0200; }
+        FLAGS = (((v & 0x7FD5) & ~keep) | (FLAGS & keep)) | 0x0002;
     }
 
-    /// Real-mode interrupt delivery through the IVT. A restarting fault
-    /// pushes the instruction's start; INT n, INT3 and INTO call this with
-    /// `restart = false` and push the next IP. Nothing else is undone: the
-    /// 286 keeps registers an instruction changed before it faulted.
-    fn deliver(vector: u8, restart: bool) {
-        if restart { IP = start_ip; }
-        push16(FLAGS);
+    // -- protection ------------------------------------------------------------
+
+    /// The current privilege level: CS's RPL in protected mode.
+    fn cpl() -> u2 {
+        return if MSW.PE == 1 { CS.selector[1:0] } else { 0 };
+    }
+
+    fn dpl(r: u8) -> u2 { return r[6:5]; }
+    fn is_code(r: u8) -> bool { return r[4] == 1 && r[3] == 1; }
+    fn is_data(r: u8) -> bool { return r[4] == 1 && r[3] == 0; }
+    fn is_conforming(r: u8) -> bool { return is_code(r) && r[2] == 1; }
+    fn system_type(r: u8) -> u4 { return if r[4] == 0 { r[3:0] } else { 0 }; }
+
+    /// The error code naming a selector.
+    fn sel_error(sel: u16) -> u16 { return sel & 0xFFFC; }
+
+    /// Where `sel`'s descriptor is: in the LDT when its TI bit is set, else
+    /// in the GDT. False past the table's limit (or with no LDT).
+    fn descriptor_at(sel: u16) -> bool {
+        let index = (sel & 0xFFF8) as u32;
+        if sel[2] == 1 {
+            return LDTR.rights != 0 && index + 7 <= (LDTR.limit as u32);
+        }
+        return index + 7 <= (GDTR.limit as u32);
+    }
+
+    fn descriptor_address(sel: u16) -> u24 {
+        let base = if sel[2] == 1 { LDTR.base } else { GDTR.base };
+        return base + ((sel & 0xFFF8) as u24);
+    }
+
+    fn read_descriptor_at(a: u24) -> Descriptor {
+        let w0 = mem.read_u16(a);
+        let w1 = mem.read_u16(a + 2);
+        let w2 = mem.read_u16(a + 4);
+        return Descriptor { base: concat(w2[7:0], w1), limit: w0, rights: w2[15:8] as u8 };
+    }
+
+    /// The descriptor `sel` names; #GP(sel) when it is outside its table.
+    fn descriptor(sel: u16) -> Descriptor {
+        if !descriptor_at(sel) { raise GP(sel_error(sel)); }
+        return read_descriptor_at(descriptor_address(sel));
+    }
+
+    /// Loading a segment descriptor marks it accessed.
+    fn mark_accessed(sel: u16, r: u8) {
+        if r[0] == 0 { mem.write_u8(descriptor_address(sel) + 5, r | 1); }
+    }
+
+    fn cached(sel: u16, d: Descriptor) -> Segment {
+        return Segment { selector: sel, base: d.base, limit: d.limit, rights: d.rights | 1 };
+    }
+
+    /// DS or ES: a null selector loads a null segment (any access through
+    /// it is #GP); otherwise data or readable code, at a privilege the
+    /// selector and CPL may use (conforming code at any), and present.
+    fn load_data_segment(sel: u16) -> Segment {
+        if MSW.PE == 0 { return load_segment(sel); }
+        if (sel & 0xFFFC) == 0 { return Segment { selector: sel, base: 0, limit: 0, rights: 0 }; }
+        let d = descriptor(sel);
+        let r = d.rights;
+        if r[4] == 0 || (r[3] == 1 && r[1] == 0) { raise GP(sel_error(sel)); }
+        if !is_conforming(r) && ((dpl(r) as u3) < (cpl() as u3) || (dpl(r) as u3) < (sel[1:0] as u3)) {
+            raise GP(sel_error(sel));
+        }
+        if r[7] == 0 { raise NP(sel_error(sel)); }
+        mark_accessed(sel, r);
+        return cached(sel, d);
+    }
+
+    /// SS: a writable data segment at exactly CPL, present (#SS if not).
+    fn load_stack_segment(sel: u16) -> Segment {
+        if MSW.PE == 0 { return load_segment(sel); }
+        if (sel & 0xFFFC) == 0 { raise GP(0); }
+        let d = descriptor(sel);
+        let r = d.rights;
+        if sel[1:0] != cpl() || dpl(r) != cpl() || !is_data(r) || r[1] == 0 { raise GP(sel_error(sel)); }
+        if r[7] == 0 { raise StackFault(sel_error(sel)); }
+        mark_accessed(sel, r);
+        return cached(sel, d);
+    }
+
+    /// A code segment for a transfer to it at privilege `level`; the
+    /// caller has checked the privilege. Not present is #NP, and the
+    /// target offset must be within the limit.
+    fn code_segment(sel: u16, d: Descriptor, level: u2, off: u16) -> Segment {
+        if d.rights[7] == 0 { raise NP(sel_error(sel)); }
+        if (off as u32) > (d.limit as u32) { raise GP(0); }
+        mark_accessed(sel, d.rights);
+        return cached((sel & 0xFFFC) | (level as u16), d);
+    }
+
+    /// A transfer within a privilege level to `sel`'s code segment
+    /// (conforming code at or above CPL keeps CPL).
+    fn same_level_code(sel: u16, d: Descriptor, off: u16) -> Segment {
+        let r = d.rights;
+        if !is_code(r) { raise GP(sel_error(sel)); }
+        if is_conforming(r) {
+            if (dpl(r) as u3) > (cpl() as u3) { raise GP(sel_error(sel)); }
+        } else if (sel[1:0] as u3) > (cpl() as u3) || dpl(r) != cpl() {
+            raise GP(sel_error(sel));
+        }
+        return code_segment(sel, d, cpl(), off);
+    }
+
+    /// The far JMP: real mode loads CS; protected mode goes to a code
+    /// segment, through a call gate (at the same level), or to a task.
+    fn jump_far(sel: u16, off: u16) {
+        if MSW.PE == 0 { CS = load_segment(sel); IP = off; return; }
+        if (sel & 0xFFFC) == 0 { raise GP(0); }
+        let d = descriptor(sel);
+        if d.rights[4] == 1 { CS = same_level_code(sel, d, off); IP = off; return; }
+        let t = system_type(d.rights);
+        if t == 1 || t == 5 { enter_task(sel, d, 0); return; }
+        if t != 4 { raise GP(sel_error(sel)); }
+        // A call gate: a JMP through it stays at CPL.
+        if (dpl(d.rights) as u3) < (cpl() as u3) || (dpl(d.rights) as u3) < (sel[1:0] as u3) { raise GP(sel_error(sel)); }
+        if d.rights[7] == 0 { raise NP(sel_error(sel)); }
+        let tsel = d.base[15:0];
+        if (tsel & 0xFFFC) == 0 { raise GP(0); }
+        let td = descriptor(tsel);
+        if !is_code(td.rights) { raise GP(sel_error(tsel)); }
+        if is_conforming(td.rights) {
+            if (dpl(td.rights) as u3) > (cpl() as u3) { raise GP(sel_error(tsel)); }
+        } else if dpl(td.rights) != cpl() {
+            raise GP(sel_error(tsel));
+        }
+        CS = code_segment(tsel, td, cpl(), d.limit);
+        IP = d.limit;
+    }
+
+    /// The far CALL: as the JMP, pushing the return CS:IP; a call gate to
+    /// a more privileged nonconforming segment switches to that level's
+    /// stack from the TSS and copies the gate's word count of parameters.
+    fn call_far(sel: u16, off: u16) {
+        if MSW.PE == 0 {
+            push16(CS.selector);
+            push16(IP);
+            CS = load_segment(sel);
+            IP = off;
+            return;
+        }
+        if (sel & 0xFFFC) == 0 { raise GP(0); }
+        let d = descriptor(sel);
+        if d.rights[4] == 1 {
+            let cs = same_level_code(sel, d, off);
+            push16(CS.selector);
+            push16(IP);
+            CS = cs;
+            IP = off;
+            return;
+        }
+        let t = system_type(d.rights);
+        if t == 1 || t == 5 { enter_task(sel, d, 1); return; }
+        if t != 4 { raise GP(sel_error(sel)); }
+        if (dpl(d.rights) as u3) < (cpl() as u3) || (dpl(d.rights) as u3) < (sel[1:0] as u3) { raise GP(sel_error(sel)); }
+        if d.rights[7] == 0 { raise NP(sel_error(sel)); }
+        let tsel = d.base[15:0];
+        if (tsel & 0xFFFC) == 0 { raise GP(0); }
+        let td = descriptor(tsel);
+        if !is_code(td.rights) || (dpl(td.rights) as u3) > (cpl() as u3) { raise GP(sel_error(tsel)); }
+        let level = dpl(td.rights);
+        if !is_conforming(td.rights) && (level as u3) < (cpl() as u3) {
+            // Inner level: the new stack, then the old SS:SP, the
+            // parameters, and the return address.
+            let count = (d.base[20:16]) as u16;
+            let old_ss = SS.selector;
+            let old_sp = SP;
+            let old_base = SS.base;
+            let cs = code_segment(tsel, td, level, d.limit);
+            stack_for(level);
+            push16(old_ss);
+            push16(old_sp);
+            for i in 0..31 {
+                if (i as u16) < count {
+                    let k = count - 1 - (i as u16);
+                    push16(mem.read_u16(old_base + ((old_sp + k * 2) as u24)));
+                }
+            }
+            push16(CS.selector);
+            push16(IP);
+            CS = cs;
+            IP = d.limit;
+            return;
+        }
+        let cs = code_segment(tsel, td, cpl(), d.limit);
         push16(CS.selector);
         push16(IP);
-        FLAGS.IF = 0;
+        CS = cs;
+        IP = d.limit;
+    }
+
+    /// SS:SP for privilege `level` from the current TSS.
+    fn stack_for(level: u2) {
+        let at = TR.base + ((level as u24) * 4) + 2;
+        let sp = mem.read_u16(at);
+        let ss = mem.read_u16(at + 2);
+        if (ss & 0xFFFC) == 0 || !descriptor_at(ss) { raise InvalidTss(sel_error(ss)); }
+        let d = descriptor(ss);
+        if ss[1:0] != level || dpl(d.rights) != level || !is_data(d.rights) || d.rights[1] == 0 { raise InvalidTss(sel_error(ss)); }
+        if d.rights[7] == 0 { raise StackFault(sel_error(ss)); }
+        mark_accessed(ss, d.rights);
+        SS = cached(ss, d);
+        SP = sp;
+    }
+
+    /// The far RET, releasing `n` more bytes of parameters. To an outer
+    /// level it also pops the caller's SS:SP and releases them there, and
+    /// nulls the data segments the outer level may not use.
+    fn return_far(n: u16) {
+        let ip = mem.read_u16(translate_stack(SP, Access::Read));
+        let cs = mem.read_u16(translate_stack(SP + 2, Access::Read));
+        if MSW.PE == 0 {
+            SP = SP + 4 + n;
+            IP = ip;
+            CS = load_segment(cs);
+            return;
+        }
+        if (cs & 0xFFFC) == 0 { raise GP(0); }
+        let d = descriptor(cs);
+        let rpl = cs[1:0];
+        if !is_code(d.rights) || (rpl as u3) < (cpl() as u3) { raise GP(sel_error(cs)); }
+        if is_conforming(d.rights) {
+            if (dpl(d.rights) as u3) > (rpl as u3) { raise GP(sel_error(cs)); }
+        } else if dpl(d.rights) != rpl {
+            raise GP(sel_error(cs));
+        }
+        if rpl == cpl() {
+            CS = code_segment(cs, d, rpl, ip);
+            SP = SP + 4 + n;
+            IP = ip;
+            return;
+        }
+        let sp = mem.read_u16(translate_stack(SP + 4 + n, Access::Read));
+        let ss = mem.read_u16(translate_stack(SP + 6 + n, Access::Read));
+        CS = code_segment(cs, d, rpl, ip);
+        IP = ip;
+        SS = load_stack_segment(ss);
+        SP = sp + n;
+        leave_outward();
+    }
+
+    /// After a return to an outer level: DS and ES are nulled when the new
+    /// CPL may not use them.
+    fn leave_outward() {
+        DS = outward(DS);
+        ES = outward(ES);
+    }
+
+    fn outward(s: Segment) -> Segment {
+        let r = s.rights;
+        if r == 0 || is_conforming(r) { return s; }
+        if (dpl(r) as u3) < (cpl() as u3) { return Segment { selector: 0, base: 0, limit: 0, rights: 0 }; }
+        return s;
+    }
+
+    /// IRET: real mode pops IP, CS and FLAGS; protected mode returns from a
+    /// nested task when NT is set, else as a far RET that also restores
+    /// FLAGS.
+    fn interrupt_return() {
+        if MSW.PE == 1 && FLAGS.NT == 1 {
+            let back = mem.read_u16(TR.base);
+            if (back & 0xFFFC) == 0 || back[2] == 1 { raise InvalidTss(sel_error(back)); }
+            let d = descriptor(back);
+            if system_type(d.rights) != 3 { raise InvalidTss(sel_error(back)); }
+            enter_task(back, d, 2);
+            return;
+        }
+        let ip = mem.read_u16(translate_stack(SP, Access::Read));
+        let cs = mem.read_u16(translate_stack(SP + 2, Access::Read));
+        let fl = mem.read_u16(translate_stack(SP + 4, Access::Read));
+        if MSW.PE == 0 {
+            SP = SP + 6;
+            IP = ip;
+            CS = load_segment(cs);
+            load_flags(fl);
+            return;
+        }
+        if (cs & 0xFFFC) == 0 { raise GP(0); }
+        let d = descriptor(cs);
+        let rpl = cs[1:0];
+        if !is_code(d.rights) || (rpl as u3) < (cpl() as u3) { raise GP(sel_error(cs)); }
+        if is_conforming(d.rights) {
+            if (dpl(d.rights) as u3) > (rpl as u3) { raise GP(sel_error(cs)); }
+        } else if dpl(d.rights) != rpl {
+            raise GP(sel_error(cs));
+        }
+        // FLAGS are restored under the old CPL's rules.
+        load_flags(fl);
+        if rpl == cpl() {
+            CS = code_segment(cs, d, rpl, ip);
+            SP = SP + 6;
+            IP = ip;
+            return;
+        }
+        let sp = mem.read_u16(translate_stack(SP + 6, Access::Read));
+        let ss = mem.read_u16(translate_stack(SP + 8, Access::Read));
+        CS = code_segment(cs, d, rpl, ip);
+        IP = ip;
+        SS = load_stack_segment(ss);
+        SP = sp;
+        leave_outward();
+    }
+
+    // -- interrupts and tasks ----------------------------------------------------
+
+    /// The fault hook: delivery of a fault (`restart` puts IP back at the
+    /// instruction), with its error code in protected mode. Real mode
+    /// pushes none. Nothing else is undone: the 286 keeps registers an
+    /// instruction changed before it faulted.
+    fn deliver(vector: u8, restart: bool, has_error: bool, error: u16) {
+        if restart { IP = start_ip; }
+        interrupt(vector, false, has_error, error);
+    }
+
+    /// Delivering interrupt `vector`. Real mode: FLAGS, CS and IP through
+    /// the vector table at IDTR's base. Protected mode: through the IDT's
+    /// gate: an interrupt or trap gate to a code segment (to an inner
+    /// level on that level's stack, with the old SS:SP pushed first) or a
+    /// task gate. A software INT needs the gate's DPL at or above CPL.
+    fn interrupt(vector: u8, soft: bool, has_error: bool, error: u16) {
+        if MSW.PE == 0 {
+            push16(FLAGS);
+            push16(CS.selector);
+            push16(IP);
+            FLAGS.IF = 0;
+            FLAGS.TF = 0;
+            let entry = IDTR.base + (vector as u24) * 4;
+            IP = mem.read_u16(entry);
+            CS = load_segment(mem.read_u16(entry + 2));
+            return;
+        }
+        let at = (vector as u16) * 8;
+        let gate_error = at + 2;
+        if (at as u32) + 7 > (IDTR.limit as u32) { raise GP(gate_error); }
+        let g = read_descriptor_at(IDTR.base + (at as u24));
+        let t = system_type(g.rights);
+        if g.rights[4] == 1 || (t != 5 && t != 6 && t != 7) { raise GP(gate_error); }
+        if soft && (dpl(g.rights) as u3) < (cpl() as u3) { raise GP(gate_error); }
+        if g.rights[7] == 0 { raise NP(gate_error); }
+        let tsel = g.base[15:0];
+        if t == 5 {
+            if (tsel & 0xFFFC) == 0 || tsel[2] == 1 { raise InvalidTss(sel_error(tsel)); }
+            let td = descriptor(tsel);
+            enter_task(tsel, td, 1);
+            if has_error { push16(error); }
+            return;
+        }
+        if (tsel & 0xFFFC) == 0 { raise GP(0); }
+        let td = descriptor(tsel);
+        if !is_code(td.rights) || (dpl(td.rights) as u3) > (cpl() as u3) { raise GP(sel_error(tsel)); }
+        let level = if is_conforming(td.rights) { cpl() } else { dpl(td.rights) };
+        let fl = FLAGS;
+        let old_cs = CS.selector;
+        let old_ip = IP;
+        let cs = code_segment(tsel, td, level, g.limit);
+        if (level as u3) < (cpl() as u3) {
+            let old_ss = SS.selector;
+            let old_sp = SP;
+            stack_for(level);
+            push16(old_ss);
+            push16(old_sp);
+        }
+        push16(fl);
+        push16(old_cs);
+        push16(old_ip);
+        if has_error { push16(error); }
+        CS = cs;
+        IP = g.limit;
         FLAGS.TF = 0;
-        let entry = (vector as u24) * 4;
-        IP = mem.read_u16(entry);
-        CS = load_segment(mem.read_u16(entry + 2));
+        FLAGS.NT = 0;
+        if t == 6 { FLAGS.IF = 0; }
+    }
+
+    /// A task switch to the TSS `sel` (descriptor `d`, or a task gate to
+    /// one) by a JMP (0), a CALL or interrupt (1, nesting: the new task's
+    /// back link names the old, and NT is set), or an IRET (2, back to a
+    /// busy task). The old task's state is saved into its TSS; the new
+    /// one's is loaded, its LDT and segments checked (#TS).
+    fn enter_task(sel: u16, d: Descriptor, how: u2) {
+        let mut tsel = sel;
+        let mut td = d;
+        if system_type(d.rights) == 5 {
+            // A task gate: its DPL was checked like a call gate's.
+            if (dpl(d.rights) as u3) < (cpl() as u3) || (dpl(d.rights) as u3) < (sel[1:0] as u3) { raise GP(sel_error(sel)); }
+            if d.rights[7] == 0 { raise NP(sel_error(sel)); }
+            tsel = d.base[15:0];
+            if (tsel & 0xFFFC) == 0 || tsel[2] == 1 { raise GP(sel_error(tsel)); }
+            td = descriptor(tsel);
+        } else if how != 2 && ((dpl(d.rights) as u3) < (cpl() as u3) || (dpl(d.rights) as u3) < (sel[1:0] as u3)) {
+            raise GP(sel_error(sel));
+        }
+        let want: u4 = if how == 2 { 3 } else { 1 };
+        if system_type(td.rights) != want { raise GP(sel_error(tsel)); }
+        if td.rights[7] == 0 { raise NP(sel_error(tsel)); }
+        if (td.limit as u32) < 0x2B { raise InvalidTss(sel_error(tsel)); }
+        // Save the outgoing task.
+        let old = TR;
+        let b = old.base;
+        let mut fl = FLAGS;
+        if how == 2 { fl = fl & 0xBFFF; }
+        mem.write_u16(b + 14, IP);
+        mem.write_u16(b + 16, fl);
+        mem.write_u16(b + 18, AX);
+        mem.write_u16(b + 20, CX);
+        mem.write_u16(b + 22, DX);
+        mem.write_u16(b + 24, BX);
+        mem.write_u16(b + 26, SP);
+        mem.write_u16(b + 28, BP);
+        mem.write_u16(b + 30, SI);
+        mem.write_u16(b + 32, DI);
+        mem.write_u16(b + 34, ES.selector);
+        mem.write_u16(b + 36, CS.selector);
+        mem.write_u16(b + 38, SS.selector);
+        mem.write_u16(b + 40, DS.selector);
+        // A JMP or IRET leaves the old task; a CALL keeps it busy.
+        if how != 1 && old.rights != 0 {
+            mem.write_u8(descriptor_address(old.selector) + 5, (old.rights & 0xFD));
+        }
+        // The new task becomes busy.
+        let nb = td.base;
+        if how != 2 {
+            mem.write_u8(descriptor_address(tsel) + 5, td.rights | 0x02);
+        }
+        if how == 1 { mem.write_u16(nb, old.selector); }
+        TR = Segment { selector: tsel, base: nb, limit: td.limit, rights: td.rights | 0x02 };
+        MSW.TS = 1;
+        IP = mem.read_u16(nb + 14);
+        let nfl = mem.read_u16(nb + 16);
+        FLAGS = (nfl & 0x7FD5) | 0x0002;
+        if how == 1 { FLAGS.NT = 1; }
+        AX = mem.read_u16(nb + 18);
+        CX = mem.read_u16(nb + 20);
+        DX = mem.read_u16(nb + 22);
+        BX = mem.read_u16(nb + 24);
+        SP = mem.read_u16(nb + 26);
+        BP = mem.read_u16(nb + 28);
+        SI = mem.read_u16(nb + 30);
+        DI = mem.read_u16(nb + 32);
+        let es = mem.read_u16(nb + 34);
+        let cs = mem.read_u16(nb + 36);
+        let ss = mem.read_u16(nb + 38);
+        let ds = mem.read_u16(nb + 40);
+        let ldt = mem.read_u16(nb + 42);
+        // The new task's LDT, then its segments, checked as #TS.
+        LDTR = task_ldt(ldt);
+        if (cs & 0xFFFC) == 0 || !descriptor_at(cs) { raise InvalidTss(sel_error(cs)); }
+        let cd = descriptor(cs);
+        if !is_code(cd.rights) { raise InvalidTss(sel_error(cs)); }
+        if cd.rights[7] == 0 { raise NP(sel_error(cs)); }
+        mark_accessed(cs, cd.rights);
+        CS = cached(cs, cd);
+        if (ss & 0xFFFC) == 0 || !descriptor_at(ss) { raise InvalidTss(sel_error(ss)); }
+        let sd = descriptor(ss);
+        if !is_data(sd.rights) || sd.rights[1] == 0 || dpl(sd.rights) != cs[1:0] { raise InvalidTss(sel_error(ss)); }
+        if sd.rights[7] == 0 { raise StackFault(sel_error(ss)); }
+        mark_accessed(ss, sd.rights);
+        SS = cached(ss, sd);
+        DS = task_data(ds);
+        ES = task_data(es);
+    }
+
+    fn task_ldt(sel: u16) -> Segment {
+        if (sel & 0xFFFC) == 0 { return Segment { selector: sel, base: 0, limit: 0, rights: 0 }; }
+        if sel[2] == 1 || !(((sel & 0xFFF8) as u32) + 7 <= (GDTR.limit as u32)) { raise InvalidTss(sel_error(sel)); }
+        let d = read_descriptor_at(GDTR.base + ((sel & 0xFFF8) as u24));
+        if system_type(d.rights) != 2 { raise InvalidTss(sel_error(sel)); }
+        if d.rights[7] == 0 { raise InvalidTss(sel_error(sel)); }
+        return Segment { selector: sel, base: d.base, limit: d.limit, rights: d.rights };
+    }
+
+    fn task_data(sel: u16) -> Segment {
+        if (sel & 0xFFFC) == 0 { return Segment { selector: sel, base: 0, limit: 0, rights: 0 }; }
+        if !descriptor_at(sel) { raise InvalidTss(sel_error(sel)); }
+        let d = descriptor(sel);
+        let r = d.rights;
+        if r[4] == 0 || (r[3] == 1 && r[1] == 0) { raise InvalidTss(sel_error(sel)); }
+        if r[7] == 0 { raise NP(sel_error(sel)); }
+        mark_accessed(sel, r);
+        return cached(sel, d);
+    }
+
+    /// I/O and the interrupt flag at CPL <= IOPL only (protected mode).
+    fn io_allowed() {
+        if MSW.PE == 1 && (cpl() as u3) > (FLAGS.IOPL as u3) { raise GP(0); }
+    }
+
+    /// The system instructions: CPL 0 only.
+    fn privileged() {
+        if MSW.PE == 1 && cpl() != 0 { raise GP(0); }
+    }
+
+    /// The descriptor instructions exist only in protected mode.
+    fn protected_only() {
+        if MSW.PE == 0 { raise UD; }
     }
 
     fn code_address() -> u24 { return translate(CS, IP, 1, Access::Execute); }
     /// The bytes of code from IP to the end of CS (offset FFFF in real
     /// mode): the bus unit does not prefetch past them.
-    fn code_room() -> u32 { return 0x10000 - (IP as u32); }
+    fn code_room() -> u32 {
+        let limit = if MSW.PE == 1 { CS.limit as u32 } else { 0xFFFF };
+        return if (IP as u32) > limit { 0 } else { limit + 1 - (IP as u32) };
+    }
 
     fn next_byte() -> u8 {
         if fetched == 10 { raise GP(0); }
@@ -178,7 +744,7 @@ isa I286 {
         }
         if FLAGS.IF == 1 && intr() {
             let v = acknowledge();
-            deliver(v, false);
+            interrupt(v, false, false, 0);
             return true;
         }
         return false;
@@ -286,6 +852,13 @@ isa I286 {
                 (modrm: b, seg: s.selector, off: o)
             }
         };
+    }
+
+    /// The ModRM itself, for instructions that address a memory operand
+    /// of their own shape (LGDT's 6-byte table pointer).
+    operand_kind table_ref : ModRM from m: ModRM {
+        is_mem => m.mod != 3;
+        read => m;
     }
 
     /// The effective offset of a ModRM memory form (LEA).
@@ -576,16 +1149,16 @@ isa I286 {
         mnemonic "iret";
         encoding { opcode 0xCF; }
         flags { modifies: [OF, DF, IF, TF, SF, ZF, AF, PF, CF]; }
-        semantics { IP = pop16(); CS = load_segment(pop16()); load_flags(pop16()); }
+        semantics { interrupt_return(); }
     }
-    instruction Int3 { mnemonic "int3"; encoding { opcode 0xCC; } semantics { deliver(3, false); } }
+    instruction Int3 { mnemonic "int3"; encoding { opcode 0xCC; } semantics { interrupt(3, true, false, 0); } }
     instruction Int_imm8 {
         mnemonic "int";
         encoding { opcode 0xCD; Imm8 }
         operands (n: imm8);
-        semantics { deliver(n, false); }
+        semantics { interrupt(n, true, false, 0); }
     }
-    instruction Into { mnemonic "into"; encoding { opcode 0xCE; } semantics { if OF == 1 { deliver(4, false); } } }
+    instruction Into { mnemonic "into"; encoding { opcode 0xCE; } semantics { if OF == 1 { interrupt(4, true, false, 0); } } }
     /// `bound r16, m16&16`: #BR when the index is outside the signed pair;
     /// the register form is #UD.
     instruction Bound {
@@ -982,9 +1555,9 @@ isa I286 {
     /// Loading CS this way is #UD; so are the nonexistent registers 4-7.
     fn write_sreg(n: u3, v: u16) {
         match n {
-            0 => { ES = load_segment(v); }
-            2 => { SS = load_segment(v); INHIBIT = 1; }
-            3 => { DS = load_segment(v); }
+            0 => { ES = load_data_segment(v); }
+            2 => { SS = load_stack_segment(v); INHIBIT = 1; }
+            3 => { DS = load_data_segment(v); }
             _ => { raise UD; }
         }
     }
@@ -1007,16 +1580,227 @@ isa I286 {
         operands (s: seg_ov);
         semantics { push16(segment(s).selector); }
     }
-    /// 0F is not POP CS on the 286 (it escapes to two-byte opcodes).
-    instruction Pop_sreg {
-        mnemonic "pop";
-        encoding { opcode "000ss111" { s: seg_ov } }
-        operands (s: seg_ov);
+    /// POP ES, SS, DS: the register is loaded before SP moves. (0F is not
+    /// POP CS on the 286: it escapes to two-byte opcodes.)
+    fn pop_sreg(n: u3) {
+        let v = mem.read_u16(translate_stack(SP, Access::Read));
+        write_sreg(n, v);
+        SP = SP + 2;
+    }
+    instruction Pop_es { mnemonic "pop"; encoding { opcode 0x07; } semantics { pop_sreg(0); } }
+    instruction Pop_ss { mnemonic "pop"; encoding { opcode 0x17; } semantics { pop_sreg(2); } }
+    instruction Pop_ds { mnemonic "pop"; encoding { opcode 0x1F; } semantics { pop_sreg(3); } }
+
+    // -- protected mode: the system instructions -------------------------------------------------
+    //
+    // The 0F group: descriptor-table registers, the machine status word,
+    // the LDT and task registers, and the descriptor queries; and ARPL.
+    // LGDT, LIDT, LLDT, LTR, LMSW and CLTS are CPL 0 only; SLDT, STR, LLDT,
+    // LTR, VERR, VERW, LAR, LSL and ARPL are #UD in real mode.
+
+    /// SGDT/SIDT store the limit and the 24-bit base; the sixth byte reads
+    /// FF on the 286.
+    fn store_table(m: ModRM, t: TableReg) {
+        let (s, o) = effective_address(m);
+        mem.write_u16(translate(s, o, 2, Access::Write), t.limit);
+        mem.write_u16(translate(s, o + 2, 2, Access::Write), t.base[15:0]);
+        mem.write_u8(translate(s, o + 4, 1, Access::Write), t.base[23:16]);
+        mem.write_u8(translate(s, o + 5, 1, Access::Write), 0xFF);
+    }
+
+    fn load_table(m: ModRM) -> TableReg {
+        let (s, o) = effective_address(m);
+        let limit = mem.read_u16(translate(s, o, 2, Access::Read));
+        let lo = mem.read_u16(translate(s, o + 2, 2, Access::Read));
+        let hi = mem.read_u8(translate(s, o + 4, 1, Access::Read));
+        return TableReg { base: concat(hi, lo), limit: limit };
+    }
+
+    instruction Sgdt {
+        mnemonic "sgdt";
+        encoding { opcode [0x0F, 0x01]; ModRM { reg: 0 } }
+        operands (m: table_ref);
+        semantics { if !m.is_mem { raise UD; } store_table(m, GDTR); }
+    }
+    instruction Sidt {
+        mnemonic "sidt";
+        encoding { opcode [0x0F, 0x01]; ModRM { reg: 1 } }
+        operands (m: table_ref);
+        semantics { if !m.is_mem { raise UD; } store_table(m, IDTR); }
+    }
+    instruction Lgdt {
+        mnemonic "lgdt";
+        encoding { opcode [0x0F, 0x01]; ModRM { reg: 2 } }
+        operands (m: table_ref);
+        semantics { if !m.is_mem { raise UD; } privileged(); GDTR = load_table(m); }
+    }
+    instruction Lidt {
+        mnemonic "lidt";
+        encoding { opcode [0x0F, 0x01]; ModRM { reg: 3 } }
+        operands (m: table_ref);
+        semantics { if !m.is_mem { raise UD; } privileged(); IDTR = load_table(m); }
+    }
+    instruction Smsw {
+        mnemonic "smsw";
+        encoding { opcode [0x0F, 0x01]; ModRM { reg: 4 } }
+        operands (dst: rm16);
+        semantics { dst = MSW; }
+    }
+    /// LMSW sets the low four bits; once set, PE stays set until reset.
+    instruction Lmsw {
+        mnemonic "lmsw";
+        encoding { opcode [0x0F, 0x01]; ModRM { reg: 6 } }
+        operands (src: rm16);
         semantics {
-            if s == SegOv::CS { raise UD; }
-            let v = mem.read_u16(translate(SS, SP, 2, Access::Read));
-            write_sreg((s as u3), v);
-            SP = SP + 2;
+            privileged();
+            let v = src;
+            MSW = (MSW & 0xFFF0) | (v & 0x000F) | (MSW & 0x0001);
+            if MSW.PE == 1 { mode = Mode::Protected; }
+        }
+    }
+    instruction Clts {
+        mnemonic "clts";
+        encoding { opcode [0x0F, 0x06]; }
+        semantics { privileged(); MSW.TS = 0; }
+    }
+
+    instruction Sldt {
+        mnemonic "sldt";
+        encoding { opcode [0x0F, 0x00]; ModRM { reg: 0 } }
+        operands (dst: rm16);
+        semantics { protected_only(); dst = LDTR.selector; }
+    }
+    instruction Str {
+        mnemonic "str";
+        encoding { opcode [0x0F, 0x00]; ModRM { reg: 1 } }
+        operands (dst: rm16);
+        semantics { protected_only(); dst = TR.selector; }
+    }
+    /// LLDT: an LDT descriptor in the GDT, or null for no LDT.
+    instruction Lldt {
+        mnemonic "lldt";
+        encoding { opcode [0x0F, 0x00]; ModRM { reg: 2 } }
+        operands (src: rm16);
+        semantics {
+            protected_only();
+            privileged();
+            let sel = src;
+            if (sel & 0xFFFC) == 0 {
+                LDTR = Segment { selector: sel, base: 0, limit: 0, rights: 0 };
+            } else {
+                if sel[2] == 1 { raise GP(sel_error(sel)); }
+                let d = descriptor(sel);
+                if system_type(d.rights) != 2 { raise GP(sel_error(sel)); }
+                if d.rights[7] == 0 { raise NP(sel_error(sel)); }
+                LDTR = Segment { selector: sel, base: d.base, limit: d.limit, rights: d.rights };
+            }
+        }
+    }
+    /// LTR: an available TSS in the GDT, which becomes busy.
+    instruction Ltr {
+        mnemonic "ltr";
+        encoding { opcode [0x0F, 0x00]; ModRM { reg: 3 } }
+        operands (src: rm16);
+        semantics {
+            protected_only();
+            privileged();
+            let sel = src;
+            if (sel & 0xFFFC) == 0 || sel[2] == 1 { raise GP(sel_error(sel)); }
+            let d = descriptor(sel);
+            if system_type(d.rights) != 1 { raise GP(sel_error(sel)); }
+            if d.rights[7] == 0 { raise NP(sel_error(sel)); }
+            mem.write_u8(descriptor_address(sel) + 5, d.rights | 0x02);
+            TR = Segment { selector: sel, base: d.base, limit: d.limit, rights: d.rights | 0x02 };
+        }
+    }
+
+    /// The descriptor queries' privilege rule: a segment the selector and
+    /// CPL may see (conforming code always).
+    fn visible(sel: u16, r: u8) -> bool {
+        if is_conforming(r) { return true; }
+        return (dpl(r) as u3) >= (cpl() as u3) && (dpl(r) as u3) >= (sel[1:0] as u3);
+    }
+
+    /// VERR/VERW: ZF says whether the segment can be read (written) at CPL.
+    fn verify(sel: u16, write: bool) {
+        FLAGS.ZF = 0;
+        if (sel & 0xFFFC) == 0 || !descriptor_at(sel) { return; }
+        let r = descriptor(sel).rights;
+        if r[4] == 0 || !visible(sel, r) { return; }
+        let ok = if write { is_data(r) && r[1] == 1 } else { is_data(r) || r[1] == 1 };
+        if ok { FLAGS.ZF = 1; }
+    }
+
+    instruction Verr {
+        mnemonic "verr";
+        encoding { opcode [0x0F, 0x00]; ModRM { reg: 4 } }
+        operands (src: rm16);
+        flags { modifies: [ZF]; }
+        semantics { protected_only(); verify(src, false); }
+    }
+    instruction Verw {
+        mnemonic "verw";
+        encoding { opcode [0x0F, 0x00]; ModRM { reg: 5 } }
+        operands (src: rm16);
+        flags { modifies: [ZF]; }
+        semantics { protected_only(); verify(src, true); }
+    }
+    /// LAR: the access-rights byte, in the high byte, of a segment, TSS,
+    /// LDT, call gate or task gate the selector may see.
+    instruction Lar {
+        mnemonic "lar";
+        encoding { opcode [0x0F, 0x02]; ModRM { reg: r16 } }
+        operands (dst: r16, src: rm16);
+        flags { modifies: [ZF]; }
+        semantics {
+            protected_only();
+            let sel = src;
+            FLAGS.ZF = 0;
+            if (sel & 0xFFFC) != 0 && descriptor_at(sel) {
+                let r = descriptor(sel).rights;
+                let t = system_type(r);
+                if (r[4] == 1 || (t >= 1 && t <= 5)) && visible(sel, r) {
+                    dst = (r as u16) << 8;
+                    FLAGS.ZF = 1;
+                }
+            }
+        }
+    }
+    /// LSL: the limit of a segment, TSS or LDT the selector may see.
+    instruction Lsl {
+        mnemonic "lsl";
+        encoding { opcode [0x0F, 0x03]; ModRM { reg: r16 } }
+        operands (dst: r16, src: rm16);
+        flags { modifies: [ZF]; }
+        semantics {
+            protected_only();
+            let sel = src;
+            FLAGS.ZF = 0;
+            if (sel & 0xFFFC) != 0 && descriptor_at(sel) {
+                let d = descriptor(sel);
+                let t = system_type(d.rights);
+                if (d.rights[4] == 1 || (t >= 1 && t <= 3)) && visible(sel, d.rights) {
+                    dst = d.limit;
+                    FLAGS.ZF = 1;
+                }
+            }
+        }
+    }
+    /// ARPL: raises the destination selector's RPL to the source's.
+    instruction Arpl {
+        mnemonic "arpl";
+        encoding { opcode 0x63; ModRM { reg: r16 } }
+        operands (dst: rm16, src: r16);
+        flags { modifies: [ZF]; }
+        semantics {
+            protected_only();
+            let d = dst;
+            if (d[1:0] as u3) < (src[1:0] as u3) {
+                dst = (d & 0xFFFC) | (src & 0x0003);
+                FLAGS.ZF = 1;
+            } else {
+                FLAGS.ZF = 0;
+            }
         }
     }
 
@@ -1026,33 +1810,25 @@ isa I286 {
         mnemonic "call";
         encoding { opcode 0x9A; FarPtr }
         operands (target: far_ptr);
-        semantics { let t = target; push16(CS.selector); push16(IP); CS = load_segment(t.seg); IP = t.off; }
+        semantics { let t = target; call_far(t.seg, t.off); }
     }
     instruction Jmp_far {
         mnemonic "jmp";
         encoding { opcode 0xEA; FarPtr }
         operands (target: far_ptr);
-        semantics { let t = target; CS = load_segment(t.seg); IP = t.off; }
+        semantics { let t = target; jump_far(t.seg, t.off); }
     }
     /// Reads both words before releasing the stack.
     instruction Retf {
         mnemonic "retf";
         encoding { opcode 0xCB; }
-        semantics {
-            let ip = mem.read_u16(translate(SS, SP, 2, Access::Read));
-            let cs = mem.read_u16(translate(SS, SP + 2, 2, Access::Read));
-            SP = SP + 4; IP = ip; CS = load_segment(cs);
-        }
+        semantics { return_far(0); }
     }
     instruction Retf_imm16 {
         mnemonic "retf";
         encoding { opcode 0xCA; Imm16 }
         operands (n: imm16);
-        semantics {
-            let ip = mem.read_u16(translate(SS, SP, 2, Access::Read));
-            let cs = mem.read_u16(translate(SS, SP + 2, 2, Access::Read));
-            SP = SP + 4 + n; IP = ip; CS = load_segment(cs);
-        }
+        semantics { return_far(n); }
     }
 
     // -- FE/FF groups, 8F -----------------------------------------------------------------------
@@ -1098,7 +1874,7 @@ isa I286 {
         semantics {
             if !target.is_mem { raise UD; }
             let t = target;
-            push16(CS.selector); push16(IP); CS = load_segment(t.seg); IP = t.off;
+            call_far(t.seg, t.off);
         }
     }
     instruction Jmp_rm16 {
@@ -1111,7 +1887,7 @@ isa I286 {
         mnemonic "jmp";
         encoding { opcode 0xFF; ModRM { reg: 5 } }
         operands (target: far_mem);
-        semantics { if !target.is_mem { raise UD; } let t = target; CS = load_segment(t.seg); IP = t.off; }
+        semantics { if !target.is_mem { raise UD; } let t = target; jump_far(t.seg, t.off); }
     }
     instruction Push_rm16 {
         mnemonic "push";
@@ -1231,13 +2007,13 @@ isa I286 {
         mnemonic "les";
         encoding { opcode 0xC4; ModRM { reg: r16 } }
         operands (dst: r16, src: far_mem);
-        semantics { if !src.is_mem { raise UD; } let p = src; dst = p.off; ES = load_segment(p.seg); }
+        semantics { if !src.is_mem { raise UD; } let p = src; dst = p.off; ES = load_data_segment(p.seg); }
     }
     instruction Lds {
         mnemonic "lds";
         encoding { opcode 0xC5; ModRM { reg: r16 } }
         operands (dst: r16, src: far_mem);
-        semantics { if !src.is_mem { raise UD; } let p = src; dst = p.off; DS = load_segment(p.seg); }
+        semantics { if !src.is_mem { raise UD; } let p = src; dst = p.off; DS = load_data_segment(p.seg); }
     }
     instruction Mov_al_moffs { mnemonic "mov"; encoding { opcode 0xA0; Moffs } operands (src: moffs8); semantics { AL = src; } }
     instruction Mov_ax_moffs { mnemonic "mov"; encoding { opcode 0xA1; Moffs } operands (src: moffs16); semantics { AX = src; } }
@@ -1391,18 +2167,19 @@ isa I286 {
 
     // -- I/O ------------------------------------------------------------------------------------------
 
-    instruction In_al_imm8  { mnemonic "in";  encoding { opcode 0xE4; Imm8 } operands (p: imm8); semantics { AL = io.read_u8(p as u16); } }
-    instruction In_ax_imm8  { mnemonic "in";  encoding { opcode 0xE5; Imm8 } operands (p: imm8); semantics { AX = io.read_u16(p as u16); } }
-    instruction Out_imm8_al { mnemonic "out"; encoding { opcode 0xE6; Imm8 } operands (p: imm8); semantics { io.write_u8(p as u16, AL); } }
-    instruction Out_imm8_ax { mnemonic "out"; encoding { opcode 0xE7; Imm8 } operands (p: imm8); semantics { io.write_u16(p as u16, AX); } }
-    instruction In_al_dx  { mnemonic "in";  encoding { opcode 0xEC; } semantics { AL = io.read_u8(DX); } }
-    instruction In_ax_dx  { mnemonic "in";  encoding { opcode 0xED; } semantics { AX = io.read_u16(DX); } }
-    instruction Out_dx_al { mnemonic "out"; encoding { opcode 0xEE; } semantics { io.write_u8(DX, AL); } }
-    instruction Out_dx_ax { mnemonic "out"; encoding { opcode 0xEF; } semantics { io.write_u16(DX, AX); } }
+    instruction In_al_imm8  { mnemonic "in";  encoding { opcode 0xE4; Imm8 } operands (p: imm8); semantics { io_allowed(); AL = io.read_u8(p as u16); } }
+    instruction In_ax_imm8  { mnemonic "in";  encoding { opcode 0xE5; Imm8 } operands (p: imm8); semantics { io_allowed(); AX = io.read_u16(p as u16); } }
+    instruction Out_imm8_al { mnemonic "out"; encoding { opcode 0xE6; Imm8 } operands (p: imm8); semantics { io_allowed(); io.write_u8(p as u16, AL); } }
+    instruction Out_imm8_ax { mnemonic "out"; encoding { opcode 0xE7; Imm8 } operands (p: imm8); semantics { io_allowed(); io.write_u16(p as u16, AX); } }
+    instruction In_al_dx  { mnemonic "in";  encoding { opcode 0xEC; } semantics { io_allowed(); AL = io.read_u8(DX); } }
+    instruction In_ax_dx  { mnemonic "in";  encoding { opcode 0xED; } semantics { io_allowed(); AX = io.read_u16(DX); } }
+    instruction Out_dx_al { mnemonic "out"; encoding { opcode 0xEE; } semantics { io_allowed(); io.write_u8(DX, AL); } }
+    instruction Out_dx_ax { mnemonic "out"; encoding { opcode 0xEF; } semantics { io_allowed(); io.write_u16(DX, AX); } }
     instruction Insb {
         mnemonic "insb";
         encoding { opcode 0x6C; }
         semantics {
+            io_allowed();
             if repeating() && CX == 0 { return; }
             let v = io.read_u8(DX);
             let d = DI; DI = DI + delta(1);
@@ -1415,6 +2192,7 @@ isa I286 {
         mnemonic "insw";
         encoding { opcode 0x6D; }
         semantics {
+            io_allowed();
             if repeating() && CX == 0 { return; }
             let v = io.read_u16(DX);
             let d = DI; DI = DI + delta(2);
@@ -1427,6 +2205,7 @@ isa I286 {
         mnemonic "outsb";
         encoding { opcode 0x6E; }
         semantics {
+            io_allowed();
             if repeating() && CX == 0 { return; }
             let s = SI; SI = SI + delta(1);
             if repeating() { CX = CX - 1; }
@@ -1438,6 +2217,7 @@ isa I286 {
         mnemonic "outsw";
         encoding { opcode 0x6F; }
         semantics {
+            io_allowed();
             if repeating() && CX == 0 { return; }
             let s = SI; SI = SI + delta(2);
             if repeating() { CX = CX - 1; }
@@ -1619,12 +2399,12 @@ isa I286 {
 
     // -- flags and miscellany ---------------------------------------------------------------------
 
-    instruction Hlt { mnemonic "hlt"; encoding { opcode 0xF4; } semantics { halt; } }
+    instruction Hlt { mnemonic "hlt"; encoding { opcode 0xF4; } semantics { privileged(); halt; } }
     instruction Cmc { mnemonic "cmc"; encoding { opcode 0xF5; } flags { modifies: [CF]; } semantics { FLAGS.CF = ~CF; } }
     instruction Clc { mnemonic "clc"; encoding { opcode 0xF8; } flags { modifies: [CF]; } semantics { FLAGS.CF = 0; } }
     instruction Stc { mnemonic "stc"; encoding { opcode 0xF9; } flags { modifies: [CF]; } semantics { FLAGS.CF = 1; } }
-    instruction Cli { mnemonic "cli"; encoding { opcode 0xFA; } flags { modifies: [IF]; } semantics { FLAGS.IF = 0; } }
-    instruction Sti { mnemonic "sti"; encoding { opcode 0xFB; } flags { modifies: [IF]; } semantics { if FLAGS.IF == 0 { INHIBIT = 1; } FLAGS.IF = 1; } }
+    instruction Cli { mnemonic "cli"; encoding { opcode 0xFA; } flags { modifies: [IF]; } semantics { io_allowed(); FLAGS.IF = 0; } }
+    instruction Sti { mnemonic "sti"; encoding { opcode 0xFB; } flags { modifies: [IF]; } semantics { io_allowed(); if FLAGS.IF == 0 { INHIBIT = 1; } FLAGS.IF = 1; } }
     instruction Cld { mnemonic "cld"; encoding { opcode 0xFC; } flags { modifies: [DF]; } semantics { FLAGS.DF = 0; } }
     instruction Std { mnemonic "std"; encoding { opcode 0xFD; } flags { modifies: [DF]; } semantics { FLAGS.DF = 1; } }
 }
@@ -1657,17 +2437,17 @@ test "cmp does not write back" on I286 {
 
 test "segment override and memory destination" on I286 {
     given {
-        ES = Segment { selector: 0x2000, base: 0x20000 };
-        DS = Segment { selector: 0x1000, base: 0x10000 };
+        ES = Segment { selector: 0x2000, base: 0x20000, limit: 0xFFFF, rights: 0x93 };
+        DS = Segment { selector: 0x1000, base: 0x10000, limit: 0xFFFF, rights: 0x93 };
         BX = 0x0010; CL = 0x01; mem[0x20010] = 0xFF;
-        CS = Segment { selector: 0, base: 0 }; IP = 0x0100;
+        CS = Segment { selector: 0, base: 0, limit: 0xFFFF, rights: 0x93 }; IP = 0x0100;
     }
     run bytes [0x26, 0x00, 0x0F];            // ES: add [bx], cl
     expect { mem[0x20010] == 0x00; mem[0x10010] == 0x00; FLAGS.CF == 1; FLAGS.ZF == 1; IP == 0x0103; }
 }
 
 test "jcc taken and not taken" on I286 {
-    given { FLAGS.ZF = 1; CS = Segment { selector: 0, base: 0 }; IP = 0x0100; }
+    given { FLAGS.ZF = 1; CS = Segment { selector: 0, base: 0, limit: 0xFFFF, rights: 0x93 }; IP = 0x0100; }
     run bytes [0x74, 0x10];                  // je +0x10
     expect { IP == 0x0112; }
 }
@@ -1680,8 +2460,8 @@ test "inc keeps the carry" on I286 {
 
 test "int 3 vectors through the ivt" on I286 {
     given {
-        CS = Segment { selector: 0x1000, base: 0x10000 }; IP = 0x0200;
-        SS = Segment { selector: 0x2000, base: 0x20000 }; SP = 0x0100;
+        CS = Segment { selector: 0x1000, base: 0x10000, limit: 0xFFFF, rights: 0x93 }; IP = 0x0200;
+        SS = Segment { selector: 0x2000, base: 0x20000, limit: 0xFFFF, rights: 0x93 }; SP = 0x0100;
         FLAGS = 0x0246;
         mem[0x0C] = 0x34; mem[0x0D] = 0x12; mem[0x0E] = 0x00; mem[0x0F] = 0x30;   // ivt[3] = 3000:1234
     }
@@ -1697,9 +2477,9 @@ test "int 3 vectors through the ivt" on I286 {
 
 test "a fault delivers with the instruction's start ip" on I286 {
     given {
-        CS = Segment { selector: 0, base: 0 }; IP = 0x0100;
-        SS = Segment { selector: 0x2000, base: 0x20000 }; SP = 0x0100;
-        DS = Segment { selector: 0, base: 0 }; SI = 0xFFFF;
+        CS = Segment { selector: 0, base: 0, limit: 0xFFFF, rights: 0x93 }; IP = 0x0100;
+        SS = Segment { selector: 0x2000, base: 0x20000, limit: 0xFFFF, rights: 0x93 }; SP = 0x0100;
+        DS = Segment { selector: 0, base: 0, limit: 0xFFFF, rights: 0x93 }; SI = 0xFFFF;
         mem[0x34] = 0x00; mem[0x35] = 0x40; mem[0x36] = 0x00; mem[0x37] = 0x50;   // ivt[13] = 5000:4000
     }
     run bytes [0x3E, 0x01, 0x04];        // ds: add [si], ax, wrapping the segment: #GP
@@ -1708,8 +2488,8 @@ test "a fault delivers with the instruction's start ip" on I286 {
 
 test "rep movsb copies cx bytes, one step per element" on I286 {
     given {
-        CS = Segment { selector: 0, base: 0 }; IP = 0x0100;
-        DS = Segment { selector: 0x1000, base: 0x10000 }; ES = Segment { selector: 0x2000, base: 0x20000 };
+        CS = Segment { selector: 0, base: 0, limit: 0xFFFF, rights: 0x93 }; IP = 0x0100;
+        DS = Segment { selector: 0x1000, base: 0x10000, limit: 0xFFFF, rights: 0x93 }; ES = Segment { selector: 0x2000, base: 0x20000, limit: 0xFFFF, rights: 0x93 };
         SI = 0x0000; DI = 0x0010; CX = 3;
         mem[0x10000] = 0x11; mem[0x10001] = 0x22; mem[0x10002] = 0x33;
         mem[0x0100] = 0xF3; mem[0x0101] = 0xA4;
@@ -1719,7 +2499,7 @@ test "rep movsb copies cx bytes, one step per element" on I286 {
 }
 
 test "push and pop round trip" on I286 {
-    given { SS = Segment { selector: 0x2000, base: 0x20000 }; SP = 0x0010; AX = 0xBEEF; }
+    given { SS = Segment { selector: 0x2000, base: 0x20000, limit: 0xFFFF, rights: 0x93 }; SP = 0x0010; AX = 0xBEEF; }
     run instruction Push_r16 { src: AX };
     expect { SP == 0x000E; mem[0x2000E] == 0xEF; mem[0x2000F] == 0xBE; }
 }
@@ -1747,8 +2527,8 @@ vectors "../../../simulators/test/i286/SingleStepTests/v1_real_mode/*.MOO.gz" on
     reg di = DI;
     reg ip = IP;
     reg flags = FLAGS;
-    reg cs { load => CS = Segment { selector: value, base: (value as u24) << 4 }; read => CS.selector; }
-    reg ds { load => DS = Segment { selector: value, base: (value as u24) << 4 }; read => DS.selector; }
-    reg es { load => ES = Segment { selector: value, base: (value as u24) << 4 }; read => ES.selector; }
-    reg ss { load => SS = Segment { selector: value, base: (value as u24) << 4 }; read => SS.selector; }
+    reg cs { load => CS = Segment { selector: value, base: (value as u24) << 4, limit: 0xFFFF, rights: 0x93 }; read => CS.selector; }
+    reg ds { load => DS = Segment { selector: value, base: (value as u24) << 4, limit: 0xFFFF, rights: 0x93 }; read => DS.selector; }
+    reg es { load => ES = Segment { selector: value, base: (value as u24) << 4, limit: 0xFFFF, rights: 0x93 }; read => ES.selector; }
+    reg ss { load => SS = Segment { selector: value, base: (value as u24) << 4, limit: 0xFFFF, rights: 0x93 }; read => SS.selector; }
 }

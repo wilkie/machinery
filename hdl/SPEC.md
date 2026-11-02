@@ -876,7 +876,10 @@ during a delivery is delivered in its place, and a fault while the
 double fault is delivered **shuts the processor down**: it halts, an
 interrupt does not wake it, only reset does, and the bus is told
 (`Bus::shutdown`; a PC board resets the processor, which is how AT
-software leaves protected mode).
+software leaves protected mode). A fault declared `page_fault: true` (the 386's #PF)
+makes a third class: a page fault or a contributory fault raised while
+it is delivered becomes the double fault, but a page fault raised while
+a contributory fault is delivered is delivered in its place.
 
 `limit` names a `fn () -> u32`: how many bytes the stream holds from the
 current address before its segment ends. It is timing information only:

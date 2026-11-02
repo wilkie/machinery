@@ -727,6 +727,7 @@ impl Checker<'_> {
         let mut class = hir::FaultClass::Fault;
         let mut pushes_error_code = false;
         let mut contributory = false;
+        let mut page_fault = false;
         let mut seen_class = false;
         for a in &decl.attrs {
             let Some(value) = &a.value else {
@@ -788,14 +789,20 @@ impl Checker<'_> {
                     }
                     None => ok = false,
                 },
-                "contributory" => match self.eval_const(scope, &empty, value) {
-                    Some(ConstVal::Bool(b)) => contributory = b,
+                "contributory" | "page_fault" => match self.eval_const(scope, &empty, value) {
+                    Some(ConstVal::Bool(b)) => {
+                        if a.name.name == "contributory" {
+                            contributory = b;
+                        } else {
+                            page_fault = b;
+                        }
+                    }
                     Some(_) => {
                         self.error(
                             module,
                             "E1038",
                             value.span,
-                            "`contributory` is `true` or `false`",
+                            format!("`{}` is `true` or `false`", a.name.name),
                         );
                         ok = false;
                     }
@@ -834,6 +841,7 @@ impl Checker<'_> {
             class,
             pushes_error_code,
             contributory,
+            page_fault,
         })
     }
 

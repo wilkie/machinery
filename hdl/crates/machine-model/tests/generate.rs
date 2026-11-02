@@ -288,9 +288,11 @@ fn i286_target_passes_its_tests_and_hardware_vectors() {
     assert!(pct("within 1") >= 90.0, "{line}");
 }
 
-/// The i386 description (real mode): it generates and compiles, and, when
-/// the SingleStepTests 80386 corpus is present, a subset of hardware vectors
-/// across the operand- and address-size prefixes passes.
+/// The i386 description: it generates and compiles; the self-checking
+/// programs pass (the 286's, and the 386's protected-mode, paging and
+/// virtual-8086 ones); and, when the SingleStepTests 80386 corpus is
+/// present, a subset of real-mode hardware vectors across the operand- and
+/// address-size prefixes passes.
 #[test]
 fn i386_target_passes_hardware_vectors() {
     let root = hdl_root();
@@ -319,6 +321,27 @@ fn i386_target_passes_hardware_vectors() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "i386 tests failed:\n{stdout}\n{stderr}");
+
+    // The self-checking programs: the 286's suites, and the 386's own
+    // (protected mode, paging, virtual-8086 mode). Each suite is skipped
+    // when it has not been assembled.
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::copy(
+        root.join("targets").join("i386").join("programs_test.rs"),
+        dir.join("tests").join("programs.rs"),
+    )
+    .unwrap();
+    let output = Command::new(&cargo)
+        .args(["test", "--quiet", "--release", "--test", "programs", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .arg("--")
+        .arg("--nocapture")
+        .output()
+        .expect("run programs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "programs failed:\n{stdout}\n{stderr}");
 
     let vectors = root
         .join("..")

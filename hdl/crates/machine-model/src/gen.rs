@@ -1449,6 +1449,24 @@ impl<'a> Gen<'a> {
         if self.isa.faults.is_empty() {
             s.push_str("            _ => false,\n");
         }
+        // Whether a fault is the page fault (`page_fault: true`).
+        s.push_str("        }\n    }\n    /// The page fault: it or a contributory fault while delivering it makes a double fault.\n    pub fn page_fault(&self) -> bool {\n        match self {\n");
+        for f in &self.isa.faults {
+            let pat = if f.params.is_empty() {
+                String::new()
+            } else {
+                "(..)".into()
+            };
+            let _ = writeln!(
+                s,
+                "            Fault::{}{pat} => {},",
+                ident(&f.name),
+                f.page_fault
+            );
+        }
+        if self.isa.faults.is_empty() {
+            s.push_str("            _ => false,\n");
+        }
         // The error code a fault pushes (`pushes_error_code`): its first
         // parameter, or 0 without one.
         s.push_str("        }\n    }\n    /// The error code this fault pushes, if it pushes one.\n    pub fn error_code(&self) -> Option<u16> {\n        match self {\n");
@@ -2239,7 +2257,7 @@ impl<'a> Gen<'a> {
                     "v, restart"
                 };
                 let dfn = ident(&self.faults[&df].name);
-                format!("if let Some(v0) = f.vector() {{\n                    let mut cur = f;\n                    let mut v = v0;\n                    let mut tries = 0;\n                    loop {{\n                        let restart = cur.class() == rt::FaultClass::Fault;\n                        match self.fn_{}({args}) {{\n                            Ok(()) => {{ self.cycles += self.fault_cycles(v); self.last_fault = Some(cur); return Ok(()); }}\n                            Err(g) => {{\n                                tries += 1;\n                                if matches!(cur, Fault::{dfn}) || tries >= 3 {{\n                                    self.shutdown = true;\n                                    self.halted = true;\n                                    self.bus.shutdown();\n                                    self.last_fault = Some(cur);\n                                    return Ok(());\n                                }}\n                                cur = if cur.contributory() && g.contributory() {{ Fault::{dfn} }} else {{ g }};\n                                v = match cur.vector() {{ Some(v) => v, None => return Err(cur) }};\n                            }}\n                        }}\n                    }}\n                }}", ident(&self.fns[&f].name))
+                format!("if let Some(v0) = f.vector() {{\n                    let mut cur = f;\n                    let mut v = v0;\n                    let mut tries = 0;\n                    loop {{\n                        let restart = cur.class() == rt::FaultClass::Fault;\n                        match self.fn_{}({args}) {{\n                            Ok(()) => {{ self.cycles += self.fault_cycles(v); self.last_fault = Some(cur); return Ok(()); }}\n                            Err(g) => {{\n                                tries += 1;\n                                if matches!(cur, Fault::{dfn}) || tries >= 3 {{\n                                    self.shutdown = true;\n                                    self.halted = true;\n                                    self.bus.shutdown();\n                                    self.last_fault = Some(cur);\n                                    return Ok(());\n                                }}\n                                cur = if (cur.contributory() && g.contributory()) || (cur.page_fault() && (g.contributory() || g.page_fault())) {{ Fault::{dfn} }} else {{ g }};\n                                v = match cur.vector() {{ Some(v) => v, None => return Err(cur) }};\n                            }}\n                        }}\n                    }}\n                }}", ident(&self.fns[&f].name))
             }
             _ => String::new(),
         };

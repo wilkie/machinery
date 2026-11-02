@@ -341,6 +341,10 @@ pub struct Fault {
     /// A fault raised while delivering another contributory one is a
     /// double fault (`istream { double ...; }`).
     pub contributory: bool,
+    /// The 386's page fault: a page fault or a contributory fault raised
+    /// while delivering it is a double fault (a page fault raised while
+    /// delivering a contributory one is not).
+    pub page_fault: bool,
 }
 
 /// An isa `fn`: imperative over architectural state.

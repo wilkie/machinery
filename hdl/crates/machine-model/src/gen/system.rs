@@ -354,6 +354,7 @@ impl<'a> Gen<'a> {
                 HandlerKind::Input { port } => {
                     format!("on_{}", ident(&comp.ports[*port as usize].name))
                 }
+                HandlerKind::Retire => "on_retire".to_string(),
             };
             let mut ps = String::new();
             for p in &h.params {
@@ -458,6 +459,13 @@ impl<'a> Gen<'a> {
         }
         let cpu = &insts[proc_idx];
         let cpu_name = ident(&cpu.name);
+        // A processor model with `on retire` owns its timing (SPEC 11.2c):
+        // its own transactions are charged only their wait states.
+        let cpu_retire = cpu
+            .model
+            .handlers
+            .iter()
+            .any(|h| h.kind == HandlerKind::Retire);
         let cpu_clock = match cpu.sys.clocks.first() {
             Some((_, c)) => *c,
             None => {
@@ -800,6 +808,11 @@ impl<'a> Gen<'a> {
                                 info.name, tr.name
                             ))
                         })?;
+                        let base = if ii == proc_idx && cpu_retire {
+                            0
+                        } else {
+                            base
+                        };
                         let period = format!("clock::C{}", b.clock);
                         let addr = tr
                             .params
@@ -1077,10 +1090,18 @@ impl<'a> Gen<'a> {
                 "    fn {n}_fetch(&mut self, addr: u64, bits: u32) -> u128 {{\n        let t0 = self.sig.now;\n        let v = {{\n            let mut ctx = {};\n            let addr = addr & {amask};\n            match bits {{\n{arms}                _ => {{\n                    let n = bits / {cell};\n                    let mut v: u128 = 0;\n                    for i in 0..n {{\n                        let a = (addr + i as u64) & {amask};\n                        v |= ({cell_fetch} as u128) << ({shift});\n                    }}\n                    v\n                }}\n            }}\n        }};\n        self.code_time += self.sig.now - t0;\n        v\n    }}\n",
                 ctx_cpu("self")
             );
-            let _ = write!(
+            if cpu_retire {
+                let _ = write!(
+                    bus_impl,
+                    "    /// The processor model times the instruction from its schedule.\n    fn retire(&mut self, _cycles: u32, schedule: Schedule) {{\n        let c = {{\n            let mut ctx = {};\n            self.{cpu_name}.on_retire(&mut ctx, schedule)\n        }};\n        self.sig.now += c as u64 * clock::C{cpu_clock};\n        self.code_time = 0;\n    }}\n",
+                    ctx_cpu("self")
+                );
+            } else {
+                let _ = write!(
                 bus_impl,
-                "    /// The instruction's execution overlaps its code fetches: charge what\n    /// exceeds them.\n    fn retire(&mut self, cycles: u32) {{\n        let x = cycles as u64 * clock::C{cpu_clock};\n        if x > self.code_time {{\n            self.sig.now += x - self.code_time;\n        }}\n        self.code_time = 0;\n    }}\n"
+                "    /// The instruction's execution overlaps its code fetches: charge what\n    /// exceeds them.\n    fn retire(&mut self, cycles: u32, _schedule: Schedule) {{\n        let x = cycles as u64 * clock::C{cpu_clock};\n        if x > self.code_time {{\n            self.sig.now += x - self.code_time;\n        }}\n        self.code_time = 0;\n    }}\n"
             );
+            }
         }
         for f in self.isa.fns.iter().filter(|f| f.external) {
             let cx = Cx {

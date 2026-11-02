@@ -379,6 +379,9 @@ pub struct Operand {
     pub tail: Option<TailExpr>,
     /// Every operand that can appear in the tail.
     pub tail_set: Vec<DefId>,
+    /// Extra decoder clocks on this operand's first byte (`decode <Name>
+    /// => n;` in a timing table, SPEC 11.2c).
+    pub decode: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -395,6 +398,8 @@ pub enum RuleKind {
     /// `value(n) => expr`: the operand is a value carried by an encoding
     /// field (an ALU operation, a condition code).
     Value,
+    /// `name => expr`: a pure query over the fetched operand (`disp8`).
+    Query,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -406,6 +411,8 @@ pub struct KindRule {
     /// parameters.
     pub params: Vec<LocalId>,
     pub body: ArmBody,
+    /// What the rule yields.
+    pub ty: Ty,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -519,6 +526,10 @@ pub struct Instruction {
     pub semantics: Option<Block>,
     pub timing_locals: Vec<Local>,
     pub timing: Option<Expr>,
+    /// Its `schedules` table entry (SPEC 11.2c): a `Schedule`, or `u32`
+    /// cycles meaning `schedule(n)`.
+    pub schedule_locals: Vec<Local>,
+    pub schedule: Option<Expr>,
     pub implements: Option<String>,
     pub references: Vec<String>,
     /// Variant indices of the isa's mode enum.
@@ -545,6 +556,8 @@ pub struct IsaInfo {
     /// instruction boundary (`fault =>`, `interrupt =>` in a timing table).
     pub fault_cycles: Option<TimingExpr>,
     pub interrupt_cycles: Option<TimingExpr>,
+    /// `interrupt =>` in a `schedules` table.
+    pub interrupt_schedule: Option<TimingExpr>,
 }
 
 /// A timing expression with its locals.
@@ -772,6 +785,10 @@ pub enum HandlerKind {
     Input {
         port: u32,
     },
+    /// `on retire(s: Schedule) -> u32`: a processor model's instruction
+    /// timing. Called after each instruction with its schedule; returns the
+    /// clocks it took (SPEC 11.2c).
+    Retire,
 }
 
 #[derive(Clone, Debug, PartialEq)]

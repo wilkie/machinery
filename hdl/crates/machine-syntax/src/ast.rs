@@ -1242,6 +1242,8 @@ pub enum VectorsItem {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimingDecl {
     pub docs: Docs,
+    /// `schedules on Isa { ... }` (SPEC 11.2c) rather than `timing on`.
+    pub schedules: bool,
     pub target: Path,
     pub entries: Vec<TimingEntry>,
     pub span: Span,
@@ -1252,6 +1254,8 @@ pub struct TimingDecl {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimingEntry {
     pub docs: Docs,
+    /// `decode <Operand> => n;`: an operand format's decoding cost.
+    pub decode: bool,
     pub name: Ident,
     pub value: Expr,
     pub span: Span,

@@ -1,0 +1,165 @@
+// The 80286's instruction schedules (SPEC 11.2c): the execution unit's
+// work before and after each data access and control transfer, which the
+// processor model's pipeline (`Cpu286` in board.machine) runs to place
+// every bus cycle where the hardware does.
+//
+// Fitted to the SingleStepTests cycle traces with the research model in
+// `research/i286-pipeline` (`fit.py`), which shares the pipeline's rules.
+// A ModRM operand's address work is its `ea` query; the numbers after it
+// are the instruction's own. Prefixes are bytes the decoder takes, with no
+// work of their own. Instructions
+// without an entry run their `timing` entry as work before their accesses.
+//
+// Not fitted yet: repeated string instructions, INT and exceptions, INTO
+// (its decoder waits for the outcome without a transfer), ENTER above
+// level 0 (work after a variable number of accesses), ESC (the hardware
+// writes the instruction to the coprocessor's ports, which the isa does not).
+
+use alu::{AluOp};
+use i286::{I286};
+
+schedules on I286 {
+    /// A sign-extended byte (an 8-bit displacement, a short branch, an
+    /// `83 /r` or PUSH immediate) costs the decoder a clock.
+    decode Disp8 => 1;
+
+    Aaa => 3;
+    Aad => 14;
+    Aam => 16;
+    Aas => 3;
+    Daa => 3;
+    Das => 3;
+    Cbw => 2;
+    Cwd => 2;
+    Clc => 2;
+    Cld => 2;
+    Cli => 3;
+    Cmc => 2;
+    Stc => 2;
+    Std => 2;
+    Sti => 2;
+    Lahf => 2;
+    Sahf => 2;
+    Salc => if CF == 1 { 3 } else { 4 };
+    Wait => 7;
+
+    Alu_al_imm8 => 3;
+    Alu_ax_imm16 => 3;
+    Test_al_imm8 => 3;
+    Test_ax_imm16 => 3;
+    Inc_r16 => 2;
+    Dec_r16 => 2;
+    Mov_r8_imm8 => 2;
+    Mov_r16_imm16 => 2;
+    Xchg_ax_r16 => 3;
+
+    // Read, compute, write back; CMP only reads, and takes a clock less.
+    Alu_rm8_r8 => if dst.is_mem { schedule(dst.ea, access, if op == AluOp::Cmp { 1 } else { 2 }, access, 0) } else { schedule(2) };
+    Alu_rm16_r16 => if dst.is_mem { schedule(dst.ea, access, if op == AluOp::Cmp { 1 } else { 2 }, access, 0) } else { schedule(2) };
+    Alu_r8_rm8 => if src.is_mem { schedule(src.ea, access, 2) } else { schedule(2) };
+    Alu_r16_rm16 => if src.is_mem { schedule(src.ea, access, 2) } else { schedule(2) };
+    Alu_rm8_imm8 => if dst.is_mem { schedule(dst.ea, access, if op == AluOp::Cmp { 1 } else { 2 }, access, 0) } else { schedule(3) };
+    Alu_rm16_imm16 => if dst.is_mem { schedule(dst.ea, access, if op == AluOp::Cmp { 1 } else { 2 }, access, 0) } else { schedule(3) };
+    Alu_rm16_simm8 => if dst.is_mem { schedule(dst.ea, access, if op == AluOp::Cmp { 1 } else { 2 }, access, 0) } else { schedule(3) };
+    Inc_rm8 => if dst.is_mem { schedule(dst.ea, access, 2, access, 0) } else { schedule(2) };
+    Inc_rm16 => if dst.is_mem { schedule(dst.ea, access, 2, access, 0) } else { schedule(2) };
+    Dec_rm8 => if dst.is_mem { schedule(dst.ea, access, 2, access, 0) } else { schedule(2) };
+    Dec_rm16 => if dst.is_mem { schedule(dst.ea, access, 2, access, 0) } else { schedule(2) };
+    Neg_rm8 => if dst.is_mem { schedule(dst.ea, access, 2, access, 0) } else { schedule(2) };
+    Neg_rm16 => if dst.is_mem { schedule(dst.ea, access, 2, access, 0) } else { schedule(2) };
+    Not_rm8 => if dst.is_mem { schedule(dst.ea, access, 2, access, 0) } else { schedule(2) };
+    Not_rm16 => if dst.is_mem { schedule(dst.ea, access, 2, access, 0) } else { schedule(2) };
+    Shift_rm8_1 => if dst.is_mem { schedule(dst.ea, access, 2, access, 0) } else { schedule(2) };
+    Shift_rm16_1 => if dst.is_mem { schedule(dst.ea, access, 2, access, 0) } else { schedule(2) };
+    /// A shift by a count works a clock per bit; a count of 0 writes nothing.
+    Shift_rm8_cl => if dst.is_mem { schedule(dst.ea, access, if (CL & 0x1F) == 0 { 1 } else { 3 + (CL & 0x1F) as u32 }, access, 0) } else { schedule(5 + (CL & 0x1F) as u32) };
+    Shift_rm16_cl => if dst.is_mem { schedule(dst.ea, access, if (CL & 0x1F) == 0 { 1 } else { 3 + (CL & 0x1F) as u32 }, access, 0) } else { schedule(5 + (CL & 0x1F) as u32) };
+    Shift_rm8_imm8 => if dst.is_mem { schedule(dst.ea, access, if (n & 0x1F) == 0 { 1 } else { 3 + (n & 0x1F) as u32 }, access, 0) } else { schedule(5 + (n & 0x1F) as u32) };
+    Shift_rm16_imm8 => if dst.is_mem { schedule(dst.ea, access, if (n & 0x1F) == 0 { 1 } else { 3 + (n & 0x1F) as u32 }, access, 0) } else { schedule(5 + (n & 0x1F) as u32) };
+    Test_rm8_r8 => if a.is_mem { schedule(a.ea, access, 1) } else { schedule(2) };
+    Test_rm16_r16 => if a.is_mem { schedule(a.ea, access, 1) } else { schedule(2) };
+    Test_rm8_imm8 => if a.is_mem { schedule(a.ea, access, 1) } else { schedule(3) };
+    Test_rm8_imm8_alias => if a.is_mem { schedule(a.ea, access, 1) } else { schedule(3) };
+    Test_rm16_imm16 => if a.is_mem { schedule(a.ea, access, 1) } else { schedule(3) };
+    Test_rm16_imm16_alias => if a.is_mem { schedule(a.ea, access, 1) } else { schedule(3) };
+    Xchg_rm8_r8 => if a.is_mem { schedule(a.ea, access, 0, access, 0) } else { schedule(3) };
+    Xchg_rm16_r16 => if a.is_mem { schedule(a.ea, access, 0, access, 0) } else { schedule(3) };
+
+    Mul_rm8 => if src.is_mem { schedule(src.ea, access, 12) } else { schedule(13) };
+    Mul_rm16 => if src.is_mem { schedule(src.ea, access, 20) } else { schedule(21) };
+    Imul_rm8 => if src.is_mem { schedule(src.ea, access, 12) } else { schedule(13) };
+    Imul_rm16 => if src.is_mem { schedule(src.ea, access, 20) } else { schedule(21) };
+    Imul_r16_rm16_imm16 => if src.is_mem { schedule(src.ea, access, 19) } else { schedule(21) };
+    Imul_r16_rm16_simm8 => if src.is_mem { schedule(src.ea, access, 19) } else { schedule(21) };
+    Div_rm8 => if src.is_mem { schedule(src.ea, access, 12) } else { schedule(14) };
+    Div_rm16 => if src.is_mem { schedule(src.ea, access, 20) } else { schedule(22) };
+    Idiv_rm8 => if src.is_mem { schedule(src.ea, access, 15) } else { schedule(17) };
+    Idiv_rm16 => if src.is_mem { schedule(src.ea, access, 23) } else { schedule(25) };
+
+    Mov_r8_rm8 => if src.is_mem { schedule(src.ea, access, 0) } else { schedule(2) };
+    Mov_r16_rm16 => if src.is_mem { schedule(src.ea, access, 0) } else { schedule(2) };
+    Mov_sreg_rm16 => if src.is_mem { schedule(src.ea, access, 0) } else { schedule(2) };
+    Mov_rm8_r8 => if dst.is_mem { schedule(dst.ea, access, 0) } else { schedule(2) };
+    Mov_rm16_r16 => if dst.is_mem { schedule(dst.ea, access, 0) } else { schedule(2) };
+    Mov_rm16_sreg => if dst.is_mem { schedule(dst.ea, access, 0) } else { schedule(2) };
+    Mov_rm8_imm8 => if dst.is_mem { schedule(dst.ea, access, 0) } else { schedule(2) };
+    Mov_rm16_imm16 => if dst.is_mem { schedule(dst.ea, access, 0) } else { schedule(2) };
+    Mov_al_moffs => schedule(3, access, 0);
+    Mov_ax_moffs => schedule(3, access, 0);
+    Mov_moffs_al => schedule(3, access, 0);
+    Mov_moffs_ax => schedule(3, access, 0);
+    Xlat => schedule(3, access, 0);
+    Lea => schedule(src.ea);
+    Lds => schedule(src.ea, access, 0, access, 0);
+    Les => schedule(src.ea, access, 0, access, 0);
+    Bound => schedule(lim.ea, access, 0, access, 6);
+
+    In_al_dx => schedule(3, access, 0);
+    In_ax_dx => schedule(3, access, 0);
+    In_al_imm8 => schedule(3, access, 0);
+    In_ax_imm8 => schedule(3, access, 0);
+    Out_dx_al => schedule(3, access, 0);
+    Out_dx_ax => schedule(3, access, 0);
+    Out_imm8_al => schedule(3, access, 0);
+    Out_imm8_ax => schedule(3, access, 0);
+
+    // The stack. A store is posted, so PUSH's successor starts before it.
+    Push_r16 => schedule(3, access, 0);
+    Push_sreg => schedule(3, access, 0);
+    Push_imm16 => schedule(3, access, 0);
+    Push_simm8 => schedule(3, access, 0);
+    Pushf => schedule(3, access, 0);
+    Push_rm16 => if src.is_mem { schedule(src.ea, access, 2, access, 0) } else { schedule(3, access, 0) };
+    Pusha => schedule(3, access, 0, access, 0, access, 0, access, 0, access, 0, access, 0, access, 14, access, 0);
+    Pop_r16 => schedule(3, access, 0);
+    Pop_sreg => schedule(3, access, 0);
+    Popf => schedule(3, access, 1);
+    Popa => schedule(3);
+    /// The stack read comes first; the address is worked out after it.
+    Pop_rm16 => if dst.is_mem { schedule(3, access, 2, access, 0) } else { schedule(3, access, 0) };
+    Leave => schedule(3, access, 0);
+    Enter => if (level & 0x1F) == 0 { schedule(4, access, 4, access, 5) } else { schedule(4, access, 4) };
+
+    // Transfers: `jump` flushes the queue and stops the decoder at the
+    // instruction's end; `branch` is a conditional one taken.
+    Jmp_rel8 => schedule(4, jump, 0);
+    Jmp_rel16 => schedule(4, jump, 0);
+    Jmp_far => schedule(8, jump, 0);
+    Jmp_rm16 => if target.is_mem { schedule(target.ea, access, 3, jump, 0) } else { schedule(4, jump, 0) };
+    Jmp_far_mem => schedule(target.ea, access, 0, access, 5, jump, 0);
+    Call_rel16 => schedule(4, access, 0, jump, 0);
+    Call_rm16 => if target.is_mem { schedule(target.ea, access, 0, access, 4, jump, 0) } else { schedule(4, access, 0, jump, 0) };
+    /// A far CALL pushes CS, transfers, then pushes IP.
+    Call_far => schedule(5, access, 5, jump, 0, access, 0);
+    Call_far_mem => schedule(target.ea, access, 0, access, 0, access, 5, jump, 0, access, 0);
+    Ret => schedule(3, access, 4, jump, 0);
+    Ret_imm16 => schedule(3, access, 4, jump, 0);
+    Retf => schedule(3, access, 0, access, 5, jump, 0);
+    Retf_imm16 => schedule(3, access, 0, access, 5, jump, 0);
+    Iret => schedule(4, access, 0, access, 0, access, 5, jump, 0);
+    Jcc => if condition(c) { schedule(4, branch, 0) } else { schedule(3) };
+    Jcxz => if CX == 0 { schedule(5, branch, 0) } else { schedule(4) };
+    Loop => if CX != 1 { schedule(5, branch, 0) } else { schedule(4) };
+    Loope => if CX != 1 && ZF == 1 { schedule(5, branch, 0) } else { schedule(4) };
+    Loopne => if CX != 1 && ZF == 0 { schedule(5, branch, 0) } else { schedule(4) };
+}

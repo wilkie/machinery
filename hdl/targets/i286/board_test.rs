@@ -57,33 +57,51 @@ const TICK_HANDLER: &[u8] = &[
     0xCF, // iret
 ];
 
-/// The first instruction after reset is the far jump at FFFFF0: its five
-/// bytes are three word fetches from the ROM, each two bus cycles plus the
-/// ROM's wait state, and they cover its 8 execution cycles.
-#[test]
-fn reset_jump_costs_its_rom_fetches() {
-    let mut sys = boot(rom(&[], &[]));
-    sys.step().unwrap();
-    assert_eq!(sys.cpu.r.IP, 0x0000);
-    assert_eq!(sys.cpu.r.CS.selector, 0xF000);
-    assert_eq!(sys.cpu.cycles, 8);
-    assert_eq!(sys.now(), 3 * (2 + 1) * clock::C1);
-}
-
-/// A multiply's 22 execution cycles exceed its code fetch: the instruction
-/// costs its execution, which is what tier 1 timing adds.
-#[test]
-fn mul_costs_its_execution_cycles() {
-    // mov ax, 3; mov bx, 5; mul bx; hlt
-    let mut sys = boot(rom(&[0xB8, 0x03, 0x00, 0xBB, 0x05, 0x00, 0xF7, 0xE3], &[]));
-    for _ in 0..3 {
+/// Boots into `code` at 0000:0100 in RAM (no wait states): the ROM holds
+/// only the reset vector's far jump, three word fetches with a wait state
+/// each. Runs until HLT.
+fn run_from_ram(code: &[u8]) -> System {
+    let mut r = vec![0xF4u8; 0x10000];
+    r[0xFFF0..0xFFF5].copy_from_slice(&[0xEA, 0x00, 0x01, 0x00, 0x00]); // jmp far 0000:0100
+    let mut sys = boot(r);
+    sys.board().ram.cells[0x100..0x100 + code.len()].copy_from_slice(code);
+    for _ in 0..100 {
+        if sys.cpu.halted {
+            break;
+        }
         sys.step().unwrap();
     }
-    let t0 = sys.now();
-    sys.step().unwrap();
+    assert!(sys.cpu.halted);
+    sys
+}
+
+/// The processor model owns its timing (`on retire`): the board's time is
+/// the pipeline's clocks plus the wait states of the processor's own
+/// transactions (the ROM's, for the reset jump), and the pipeline's last
+/// bus cycle is the HALT.
+#[test]
+fn time_is_the_pipelines_clocks() {
+    // mov ax, 3; mov bx, 5; mul bx; hlt
+    let mut sys = run_from_ram(&[0xB8, 0x03, 0x00, 0xBB, 0x05, 0x00, 0xF7, 0xE3, 0xF4]);
     assert_eq!(sys.cpu.r.AX, 15);
-    assert_eq!(sys.cpu.cycles, 22);
-    assert_eq!(sys.now() - t0, 22 * clock::C1);
+    let cpu = &sys.board().cpu;
+    let clocks = cpu.last_done;
+    assert_eq!(cpu.trace_kind[cpu.trace_n as usize - 1], 5);
+    assert_eq!(sys.now(), (3 + clocks) * clock::C1);
+}
+
+/// MUL r16 works 21 clocks to a register move's 2: with the queue full
+/// behind it, each starts as the one before finishes, so the HALT comes 19
+/// clocks later.
+#[test]
+fn mul_works_its_schedule() {
+    // mov bx, 5; mul bx (fills the queue); then `x`; hlt
+    let halt = |x: [u8; 2]| {
+        let mut sys = run_from_ram(&[0xBB, 0x05, 0x00, 0xF7, 0xE3, x[0], x[1], 0xF4]);
+        let cpu = &sys.board().cpu;
+        cpu.trace_at[cpu.trace_n as usize - 1]
+    };
+    assert_eq!(halt([0xF7, 0xE3]) - halt([0x8B, 0xCA]), 19);
 }
 
 #[test]

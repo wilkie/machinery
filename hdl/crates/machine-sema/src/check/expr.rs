@@ -772,9 +772,16 @@ impl Checker<'_> {
         match ksig
             .rules
             .iter()
-            .position(|(n, k, _)| *n == rule.name && *k == RuleKind::IsMem)
+            .position(|(n, k, _)| *n == rule.name && matches!(k, RuleKind::IsMem | RuleKind::Query))
         {
-            Some(ri) => mk(H::OperandRule(idx, ri as u32), Ty::Bool, span),
+            Some(ri) => {
+                let ty = self
+                    .kind_queries
+                    .get(&(kind, rule.name.clone()))
+                    .cloned()
+                    .unwrap_or(Ty::Bool);
+                mk(H::OperandRule(idx, ri as u32), ty, span)
+            }
             None => {
                 let msg = format!(
                     "operand `{oname}` of kind `{}` has no query `{}`",
@@ -783,7 +790,8 @@ impl Checker<'_> {
                 );
                 self.error_with(
                     cx.module,
-                    Diagnostic::error("E1037", rule.span, msg).with_note("queries are `is_mem`"),
+                    Diagnostic::error("E1037", rule.span, msg)
+                        .with_note("queries are `is_mem` and the kind's own parameterless rules"),
                 );
                 err(span)
             }
@@ -1454,6 +1462,9 @@ impl Checker<'_> {
                                 );
                                 return err(span);
                             }
+                            if b == Builtin::Schedule {
+                                return self.check_schedule(cx, args, span);
+                            }
                             return self.check_builtin(cx, b, args, expected, span);
                         }
                         self.error(
@@ -1996,6 +2007,7 @@ impl Checker<'_> {
                 );
                 err(span)
             }
+            Builtin::Schedule => self.check_schedule(cx, args, span),
             Builtin::Restarted => {
                 if !cx.in_timing {
                     self.error(
@@ -2470,5 +2482,140 @@ fn stmt_as_value(s: &ast::Stmt) -> Option<ast::Expr> {
             span: s.span,
         }),
         _ => None,
+    }
+}
+
+impl Checker<'_> {
+    /// `schedule(w0, step1, w1, ..., stepN, wN, decode: n)`: a value of the
+    /// prelude bundle `Schedule` with the interpreter's fields zero.
+    fn check_schedule(&mut self, cx: &mut FnCtx, args: &[ast::Arg], span: Span) -> Expr {
+        if !cx.in_timing {
+            self.error(
+                cx.module,
+                "E1020",
+                span,
+                "`schedule(...)` is only meaningful in a timing expression",
+            );
+            return err(span);
+        }
+        let Some(def) = self
+            .prog
+            .lookup(cx.module, "Schedule")
+            .filter(|d| self.prog.item(*d).kind == ItemKind::Bundle)
+        else {
+            self.error(
+                cx.module,
+                "E1056",
+                span,
+                "the prelude bundle `Schedule` is not visible here",
+            );
+            return err(span);
+        };
+        let mut works: Vec<Expr> = Vec::new();
+        let mut steps: Vec<i128> = Vec::new();
+        let mut expect_work = true;
+        for a in args {
+            if let Some(n) = &a.name {
+                self.error(
+                    cx.module,
+                    "E1056",
+                    n.span,
+                    format!("`schedule` takes cycles and steps, not `{}:`", n.name),
+                );
+                return err(span);
+            }
+            let step = match &a.value.kind {
+                A::Path(p) if p.segments.len() == 1 => match p.segments[0].name.as_str() {
+                    "access" => Some(1),
+                    "jump" => Some(2),
+                    "branch" => Some(3),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match (step, expect_work) {
+                (None, true) => {
+                    let e = self.check_expr(cx, &a.value, Some(&Ty::UInt(32)));
+                    works.push(e);
+                    expect_work = false;
+                }
+                (Some(k), false) => {
+                    steps.push(k);
+                    expect_work = true;
+                }
+                (Some(_), true) => {
+                    self.error(cx.module, "E1056", a.value.span, "a schedule alternates cycles and steps, starting with cycles: `schedule(3, access, 0)`");
+                    return err(span);
+                }
+                (None, false) => {
+                    self.error(
+                        cx.module,
+                        "E1056",
+                        a.value.span,
+                        "expected a step here: `access`, `jump` or `branch`",
+                    );
+                    return err(span);
+                }
+            }
+        }
+        if works.is_empty() || expect_work {
+            self.error(
+                cx.module,
+                "E1056",
+                span,
+                "a schedule ends with cycles: `schedule(3, access, 0)`",
+            );
+            return err(span);
+        }
+        if steps.len() > 8 {
+            self.error(cx.module, "E1056", span, "a schedule has at most 8 steps");
+            return err(span);
+        }
+        let int = |v: i128, ty: Ty| Expr {
+            kind: H::Int(v),
+            ty,
+            span,
+        };
+        let cast = |e: Expr, ty: Ty| Expr {
+            kind: H::Cast(Box::new(e)),
+            ty,
+            span,
+        };
+        let mut work_items: Vec<Expr> = works.into_iter().map(|e| cast(e, Ty::UInt(16))).collect();
+        while work_items.len() < 9 {
+            work_items.push(int(0, Ty::UInt(16)));
+        }
+        let mut step_items: Vec<Expr> = steps.iter().map(|k| int(*k, Ty::UInt(2))).collect();
+        let nsteps = step_items.len() as i128;
+        while step_items.len() < 8 {
+            step_items.push(int(0, Ty::UInt(2)));
+        }
+        let fields = vec![
+            Expr {
+                kind: H::Array(work_items),
+                ty: Ty::Array(Box::new(Ty::UInt(16)), 9),
+                span,
+            },
+            Expr {
+                kind: H::Array(step_items),
+                ty: Ty::Array(Box::new(Ty::UInt(2)), 8),
+                span,
+            },
+            int(nsteps, Ty::UInt(4)),
+            int(0, Ty::UInt(8)),
+            Expr {
+                kind: H::Array(vec![int(0, Ty::UInt(4)); 16]),
+                ty: Ty::Array(Box::new(Ty::UInt(4)), 16),
+                span,
+            },
+            int(0, Ty::UInt(64)),
+            int(0, Ty::UInt(64)),
+            Expr {
+                kind: H::Bool(false),
+                ty: Ty::Bool,
+                span,
+            },
+        ];
+        mk(H::BundleLit(def, fields), Ty::Bundle(def), span)
     }
 }

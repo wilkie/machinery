@@ -369,9 +369,23 @@ fn isa_operands_tails_and_kinds() {
         &isa("operand_kind bad : u8 from m: ModRM { read => 1; write(v: u16) => { AL = 1; }; }"),
         &["E1037"],
     );
+    // Any other rule without parameters is a query; with them it is unknown.
     assert_codes(
-        &isa("operand_kind bad : u8 from m: ModRM { read => 1; frob => 2; }"),
+        &isa("operand_kind q : u8 from m: ModRM { read => 1; frob => 2; mode => m.mod; }"),
+        &[],
+    );
+    assert_codes(
+        &isa("operand_kind bad : u8 from m: ModRM { read => 1; frob(x: u8) => 2; }"),
         &["E1037"],
+    );
+    // A query is pure, and named once.
+    assert_codes(
+        &isa("operand_kind bad : u8 from m: ModRM { read => 1; frob => mem.read_u8(0); }"),
+        &["E1037"],
+    );
+    assert_codes(
+        &isa("operand_kind bad : u8 from m: ModRM { read => 1; frob => 1; frob => 2; }"),
+        &["E1001"],
     );
     assert_codes(
         &isa("operand_kind bad : u8 { select(n: u3) => AL + 1; }"),
@@ -1524,6 +1538,27 @@ fn processor_models_bind_isa_spaces() {
         )),
         &["E1041", "E1041"],
     );
+    // A processor model may own its timing (SPEC 11.2c).
+    assert_codes(
+        &cpu(&format!(
+            "{read} {write} state n: u32 = 0; on retire(s: Schedule) -> u32 {{ n = s.work[0] as u32 + s.length as u32; return n; }}"
+        )),
+        &[],
+    );
+    assert_codes(
+        &cpu(&format!(
+            "{read} {write} on retire @ clk (s: Schedule) -> u32 {{ return 0; }}"
+        )),
+        &["E1041"],
+    );
+}
+
+#[test]
+fn only_a_processor_model_retires() {
+    assert_codes(
+        &dev("on retire(s: Schedule) -> u32 { return 0; }"),
+        &["E1041"],
+    );
 }
 
 #[test]
@@ -1958,6 +1993,60 @@ fn timing_tables_check() {
     // `restarted()` belongs to timing expressions.
     assert_codes(&table("Nop => if restarted() { 0 } else { 3 };"), &[]);
     assert_codes(&isa("fn f() -> bool { return restarted(); }"), &["E1020"]);
+    // A schedule belongs in a `schedules` table, as do `decode` entries.
+    assert_codes(&table("Nop => schedule(3);"), &["E1055"]);
+    assert_codes(&table("decode Imm8 => 1;"), &["E1055"]);
+}
+
+#[test]
+fn schedule_tables_check() {
+    let tables = |schedules: &str| {
+        let src = DEC_PRELUDE.replace(
+            "undefined UD; }",
+            "undefined UD; fault deliver; }\n    fn deliver(v: u8, restart: bool) { IP = v as u16; }\n    instruction Nop { mnemonic \"nop\"; encoding { opcode 0x90; } }",
+        );
+        format!("{src}\n}}\ntiming on T {{ Nop => 3; }}\nschedules on T {{ {schedules} }}")
+    };
+    let good = tables(
+        "decode Imm8 => 1; Nop => if AL == 0 { schedule(2, access, 1, jump, 0) } else { schedule(4) }; interrupt => schedule(4, access, 0, jump, 0);",
+    );
+    let c = check_src(&good);
+    assert_clean(&c);
+    let info = &c.hir.isas[0];
+    let nop = info.instructions.iter().find(|i| i.name == "Nop").unwrap();
+    assert!(nop.timing.is_some() && nop.schedule.is_some());
+    assert!(info.interrupt_schedule.is_some());
+    assert_eq!(
+        info.operands
+            .iter()
+            .find(|o| o.name == "Imm8")
+            .unwrap()
+            .decode,
+        1
+    );
+    // A plain number is `schedule(n)`.
+    assert_codes(&tables("Nop => 3; interrupt => 9;"), &[]);
+    // A fault's delivery stays in the timing table.
+    assert_codes(&tables("fault => 9;"), &["E1055"]);
+    // `decode` names an operand format and a constant.
+    assert_codes(&tables("decode Nope => 1;"), &["E1055"]);
+    assert_codes(&tables("decode Imm8 => AL;"), &["E1055"]);
+    assert_codes(&tables("decode Imm8 => 1; decode Imm8 => 2;"), &["E1055"]);
+    // The shape of a schedule: cycles and steps alternate, cycles at both
+    // ends, at most 8 steps, no named arguments.
+    assert_codes(&tables("Nop => schedule(access, 0);"), &["E1056"]);
+    assert_codes(&tables("Nop => schedule(3, access);"), &["E1056"]);
+    assert_codes(&tables("Nop => schedule(3, 4);"), &["E1056"]);
+    assert_codes(
+        &tables("Nop => schedule(3, access, 0, decode: 1);"),
+        &["E1056"],
+    );
+    assert_codes(
+        &tables("Nop => schedule(0, access, 0, access, 0, access, 0, access, 0, access, 0, access, 0, access, 0, access, 0, access, 0);"),
+        &["E1056"],
+    );
+    // Only timing expressions build schedules.
+    assert_codes(&isa("fn f() { let s = schedule(3); }"), &["E1020"]);
 }
 
 #[test]

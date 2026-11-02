@@ -149,6 +149,8 @@ pub struct Module {
 
 pub struct Program {
     pub modules: Vec<Module>,
+    /// The prelude module, seen by every module (section 11.2c).
+    pub prelude: Option<ModuleId>,
     pub items: Vec<Item>,
     /// Scope of each namespace item (`isa` or `bus`).
     pub ns_scopes: HashMap<DefId, HashMap<String, ScopeEntry>>,
@@ -257,7 +259,11 @@ impl Program {
                         d.glob.span,
                     ),
                     Decl::Timing(d) => (
-                        format!("timing on {}", d.target.dotted()),
+                        format!(
+                            "{} on {}",
+                            if d.schedules { "schedules" } else { "timing" },
+                            d.target.dotted()
+                        ),
                         ItemKind::Timing,
                         d.target.span,
                     ),
@@ -484,9 +490,11 @@ impl Program {
             }
         }
 
+        let prelude = modules.iter().position(|m| m.file.name == PRELUDE_NAME);
         (
             Program {
                 modules,
+                prelude,
                 items,
                 ns_scopes,
             },
@@ -690,7 +698,11 @@ impl Program {
     /// Look a single name up in a module: own items first, then imports.
     pub fn lookup(&self, module: ModuleId, name: &str) -> Option<DefId> {
         let m = &self.modules[module];
-        m.scope.get(name).or_else(|| m.imports.get(name)).copied()
+        m.scope
+            .get(name)
+            .or_else(|| m.imports.get(name))
+            .or_else(|| self.prelude.and_then(|p| self.modules[p].scope.get(name)))
+            .copied()
     }
 
     /// Look a name up inside a namespace (isa or bus) scope.
@@ -743,3 +755,28 @@ pub fn module_name(file_name: &str) -> String {
         .unwrap_or(file_name);
     stem.to_string()
 }
+
+/// The file name of the prelude module.
+pub const PRELUDE_NAME: &str = "<prelude>";
+
+/// What every program sees without a `use` (SPEC 11.2c).
+pub const PRELUDE: &str = r#"
+/// A processor's execution-unit schedule for one instruction (SPEC 11.2c).
+bundle Schedule {
+    /// work[0] before the first step, work[i] after step i.
+    work: [u16; 9],
+    /// 1 access, 2 jump, 3 branch; 0 past the last step.
+    step: [u2; 8],
+    steps: u4,
+    // Filled by the interpreter:
+    /// Bytes decoded, prefixes included.
+    length: u8,
+    /// Extra decoder clocks on each byte, from the timing table's
+    /// `decode` entries for the operand formats the bytes belong to.
+    decode: [u4; 16],
+    /// Where the instruction started and where execution continues.
+    start: u64,
+    next: u64,
+    halted: bool,
+}
+"#;

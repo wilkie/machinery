@@ -1000,26 +1000,41 @@ share it explains), the author writes the data-dependent entries
 `machine vectors --timing` compares every vector with the table. A trace
 there starts with an empty prefetch queue, so the memory forms vary by a
 cycle or two around their entry with how operand transfers overlap the
-refill; modelling the queue (cycle-accurate bus timing, tier 2) would
-remove that, and is the processor model's business, not the table's.
+refill; modelling the queue (cycle-accurate bus timing, tier 2) removes
+that, and is the processor model's business with a `schedules` table
+(section 11.2c), not this table's.
 
 ### 11.2c Schedules: cycle-accurate timing
 
 A timing-table number (section 11.2b) is enough for an emulator's sense
-of time. To reproduce a processor's bus activity cycle for cycle, an entry
-can instead be a **schedule**: the execution unit's work between the
-instruction's steps.
+of time. To reproduce a processor's bus activity cycle for cycle, a second
+table gives each instruction a **schedule**: the execution unit's work
+between the instruction's steps.
 
 ```
-timing on I286 {
-    Mov_rm16_r16 => if dst.is_mem { schedule(3 + dst.ea_extra, access, 0, decode: dst.disp8 as u4) } else { schedule(2) };
-    Alu_rm16_r16 => if dst.is_mem { schedule(3 + dst.ea_extra, access, 2, access, 0, decode: dst.disp8 as u4) } else { schedule(2) };
-    Mul_rm16     => if src.is_mem { schedule(3 + src.ea_extra, access, 20, decode: src.disp8 as u4) } else { schedule(21) };
-    Call_rel16   => schedule(4, jump, 0, access, 0);
+schedules on I286 {
+    /// A sign-extended byte costs the decoder a clock.
+    decode Disp8 => 1;
+
+    Mov_rm16_r16 => if dst.is_mem { schedule(dst.ea, access, 0) } else { schedule(2) };
+    Alu_rm16_r16 => if dst.is_mem { schedule(dst.ea, access, if op == AluOp::Cmp { 1 } else { 2 }, access, 0) } else { schedule(2) };
+    Mul_rm16     => if src.is_mem { schedule(src.ea, access, 20) } else { schedule(21) };
+    Call_rel16   => schedule(4, access, 0, jump, 0);
+    Call_far     => schedule(5, access, 5, jump, 0, access, 0);
     Ret          => schedule(3, access, 4, jump, 0);
-    Jcc          => if condition(c) { schedule(5, branch, 0) } else { schedule(4) };
+    Jcc          => if condition(c) { schedule(4, branch, 0) } else { schedule(3) };
+    Pop_r16      => 3;
 }
 ```
+
+The `timing` table stays the emulator's (tier 1); a build whose processor
+model runs schedules uses this one. Entries are evaluated like timing
+entries (on the state before the instruction runs, with its operands in
+scope). An instruction without a schedule runs its timing entry as work
+before its accesses, and a plain number `n` in this table is
+`schedule(n)`. `interrupt =>` gives the schedule of an interrupt taken at
+a boundary. A fault's delivery is the timing table's `fault` entry, added
+as work after the last step.
 
 `schedule(w0, step1, w1, ..., stepN, wN)` alternates execution cycles
 (`u32` expressions) and steps, starting and ending with cycles; at most 8
@@ -1028,17 +1043,23 @@ steps. The steps are:
 - `access`: the instruction's next data access, in the order its semantics
   perform them (a read, a write, an I/O transfer; a word split into two
   bus cycles is one access). If the instruction performs more accesses than
-  the schedule names, the rest follow with no work between them; if fewer,
-  the unmatched `access` steps are skipped.
-- `jump`: an unconditional control transfer (JMP, CALL, RET, INT). The
-  queue is flushed and refilled from where execution continues, and a
-  decoder that knows the instruction transfers stops decoding past it.
+  the schedule names, the rest follow the last step with no work between
+  them (`Popa => schedule(3)`: eight reads after 3 clocks); if fewer, the
+  unmatched `access` steps are skipped and their work joins the step
+  before (CMP shares ADD's entry and only reads).
+- `jump`: an unconditional control transfer (JMP, CALL, RET). The queue
+  is flushed and refilled from where execution continues, and a decoder
+  that knows the instruction transfers stops decoding past it.
 - `branch`: a conditional transfer that was taken. The same flush, but the
   decoder had carried on past the instruction, not knowing the outcome.
 
-`decode: n` attaches `n` clocks of decoding to the instruction's operand
-tail (the 286's 8-bit displacement); what they do is the processor
-model's rule. A plain number `n` in a table is the schedule `schedule(n)`.
+An instruction that transfers control without a `jump` or `branch` step
+(an unscheduled one, a fault, an interrupt) is given a `jump` after its
+last step.
+
+`decode <Operand> => n;` says the decoder spends `n` more clocks on an
+operand format's first byte. What those clocks do is the processor
+model's rule.
 
 A schedule is a value of the prelude bundle `Schedule`:
 
@@ -1049,12 +1070,11 @@ bundle Schedule {
     /// 1 access, 2 jump, 3 branch; 0 past the last step.
     step: [u2; 8],
     steps: u4,
-    decode: u4,
     // Filled by the interpreter for each instruction:
-    /// Bytes decoded, prefixes included, and the index of the first
-    /// operand-tail byte (`length` when there is none).
+    /// Bytes decoded, prefixes included.
     length: u8,
-    tail: u8,
+    /// Extra decoder clocks on each byte (from `decode` entries).
+    decode: [u4; 16],
     /// Where the instruction started and where execution continues
     /// (istream addresses), and whether it halted.
     start: u64,
@@ -1073,28 +1093,40 @@ on retire(s: Schedule) -> u32 { ... }
 ```
 
 owns its instruction timing. After every instruction (and every interrupt
-taken at a boundary, with the `interrupt` entry's schedule) the interpreter
-calls it with the instruction's schedule, and the handler returns the
-clocks the instruction took; the model build advances time by that, and
-charges the processor's own bus transactions only their wait states. The
-handler sees the instruction's data accesses through its own space
-handlers, which it can log. The bus unit, the decoder and the execution
-unit are model code in the processor description; the language provides
-the schedule and the hook, not a pipeline.
+taken at a boundary) the interpreter calls it with the instruction's
+schedule, and the handler returns the clocks that have passed; the model
+build advances time by that, and charges the processor's own bus
+transactions only their wait states. The handler sees the instruction's
+data accesses through its own space handlers, which it can log. The bus
+unit, the decoder and the execution unit are model code in the processor
+description; the language provides the schedule and the hook, not a
+pipeline. A model may time an instruction late: the 286's runs one
+instruction behind the interpreter, because its decoder needs to know
+where the following instruction ends, and HLT completes it.
 
-The i286 description's processor model (`targets/i286/board.machine`)
-implements the rules found in the SingleStepTests traces
-(`research/i286-pipeline`): a 6-byte queue refilled a word at a time when
-a word fits; a decoder taking one byte per clock, each the clock after it
-arrives; execution starting when the last byte is decoded; requests
-reaching the bus two clocks after the execution unit makes them, ahead of
-prefetch; reads waiting for their last bus cycle to start, writes posted;
-an 8-bit displacement starting the instruction a clock late and, when it
-starts a word, stalling the decoder that clock; an odd jump target's word
-slot holding a dead byte until the next flush; no prefetch once HLT runs.
-It records its bus cycles, and the rig system `targets/i286/rig.machine`
-runs each vector through it to compare that record with the trace: the
-processor's conformance at transaction boundaries (section 13).
+The i286 description's processor model (`Cpu286` in
+`targets/i286/board.machine`) implements the rules found in the
+SingleStepTests traces (`research/i286-pipeline`):
+- a 6-byte queue refilled a word at a time when a word fits;
+- a decoder taking one byte per clock, each the clock after it arrives,
+  and decoding at most one instruction ahead;
+- execution starting when an instruction's last byte is decoded;
+- requests reaching the bus two clocks after the execution unit makes
+  them, ahead of prefetch;
+- reads waiting for their last bus cycle to start, and writes posted;
+- a sign-extended byte (`decode Disp8`) stalling the decoder a clock when
+  it starts a word, and otherwise starting the instruction a clock late;
+- an odd jump target's word slot holding a dead byte until the next flush;
+- no prefetch once HLT runs, and HLT's HALT cycle requested three clocks
+  after it starts.
+
+Address work before a ModRM access is the operand kinds' `ea` query: 4
+clocks for base+index with a displacement, otherwise 3. The model records
+its bus cycles, and the rig system `targets/i286/rig.machine` runs each
+vector through it to compare that record with the trace: the processor's
+conformance at transaction boundaries (section 13). Over the corpus
+(string instructions and exceptions aside), 97% of vectors match every
+bus cycle.
 
 ### 11.3 Operand kinds and `fetch`
 
@@ -1135,10 +1167,9 @@ expression over the fetched operand that instructions, flag conditions and
 timing entries read as `operand.name`, e.g. on the 286
 
 ```
-    /// Base plus index plus a displacement: one more clock of address work.
-    ea_extra => if m.mod != 0 && m.mod != 3 && m.rm < 4 { 1 } else { 0 };
-    /// An 8-bit displacement follows the ModRM.
-    disp8 => m.mod == 1;
+    /// The address work before the first access (a unit shared by the
+    /// ModRM kinds): 4 for base+index with a displacement, else 3.
+    ea => EaWork(m.mod, m.rm);
 ```
 
 A query may not read memory or call an isa fn (E1037). In rtl routines,

@@ -47,7 +47,7 @@ pub struct MooTest {
 /// What timing needs from a captured cycle trace: every cycle from the jump
 /// that starts the test to the HALT that ends it, and how many of them
 /// belong to bus cycles.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CycleSummary {
     /// Cycles in the trace.
     pub total: u32,
@@ -55,6 +55,22 @@ pub struct CycleSummary {
     pub code: u32,
     /// Memory, I/O and interrupt-acknowledge bus cycles.
     pub data: u32,
+    /// Every bus cycle, in order: the cycle it started at (counted from the
+    /// test's start) and what it was.
+    pub bus: Vec<(u32, BusKind)>,
+}
+
+/// What a bus cycle was, from the 286's status lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BusKind {
+    Code,
+    MemRead,
+    MemWrite,
+    IoRead,
+    IoWrite,
+    Halt,
+    InterruptAck,
+    Other,
 }
 
 impl CycleSummary {
@@ -81,7 +97,7 @@ fn decode_cycles(body: &[u8]) -> Result<CycleSummary, MooError> {
         total: n as u32,
         ..CycleSummary::default()
     };
-    for _ in 0..n {
+    for k in 0..n {
         let rec = r.bytes(CYCLE_RECORD)?;
         let ale = rec[0] & 1 != 0;
         let status = rec[11] & 0x0F;
@@ -94,6 +110,17 @@ fn decode_cycles(body: &[u8]) -> Result<CycleSummary, MooError> {
                 0x00 | 0x05 | 0x06 | 0x09 | 0x0A => s.data += 1,
                 _ => {}
             }
+            let kind = match status {
+                0x00 => BusKind::InterruptAck,
+                0x04 => BusKind::Halt,
+                0x05 => BusKind::MemRead,
+                0x06 => BusKind::MemWrite,
+                0x09 => BusKind::IoRead,
+                0x0A => BusKind::IoWrite,
+                0x0D => BusKind::Code,
+                _ => BusKind::Other,
+            };
+            s.bus.push((k as u32, kind));
         }
     }
     Ok(s)

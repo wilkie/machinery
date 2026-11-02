@@ -228,6 +228,8 @@ pub struct Checker<'p> {
     /// The mode enum of each isa.
     pub(crate) isa_modes: HashMap<DefId, DefId>,
     pub(crate) latches: HashMap<DefId, Rc<hir::Latch>>,
+    /// The type of each operand-kind rule (queries are typed by their body).
+    pub(crate) kind_queries: HashMap<(DefId, String), Ty>,
     vectors: Vec<hir::VectorsInfo>,
     isas: Vec<hir::IsaInfo>,
     // --- buses and components ---
@@ -262,6 +264,7 @@ pub fn check_program(prog: &Program, diags: &mut Vec<Diagnostics>) -> (hir::Hir,
         instr_sigs: HashMap::new(),
         isa_modes: HashMap::new(),
         latches: HashMap::new(),
+        kind_queries: HashMap::new(),
         vectors: Vec::new(),
         isas: Vec::new(),
         buses: HashMap::new(),

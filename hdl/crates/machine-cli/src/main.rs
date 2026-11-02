@@ -153,6 +153,9 @@ fn check(args: &[String]) -> ExitCode {
         }
         if format == Format::Text {
             for (m, module) in checked.program.modules.iter().enumerate() {
+                if Some(m) == checked.program.prelude {
+                    continue;
+                }
                 if checked.diagnostics[m].is_empty() {
                     let skipped: Vec<String> = checked
                         .skipped

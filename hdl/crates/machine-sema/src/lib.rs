@@ -50,7 +50,8 @@ impl Checked {
 
 /// Parse and check a set of source files that form one program. Files refer
 /// to each other through `use <stem>::{...}`.
-pub fn check_files(files: Vec<SourceFile>) -> Checked {
+pub fn check_files(mut files: Vec<SourceFile>) -> Checked {
+    files.push(SourceFile::new(program::PRELUDE_NAME, program::PRELUDE));
     let (program, mut diagnostics) = Program::collect(files);
     let (hir, skipped) = check::check_program(&program, &mut diagnostics);
     Checked {

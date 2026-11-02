@@ -205,6 +205,12 @@ impl Diagnostics {
         self.items.push(d);
     }
 
+    /// Drops everything reported after the first `len` diagnostics (for a
+    /// checker that tries one reading of a construct and then another).
+    pub fn truncate(&mut self, len: usize) {
+        self.items.truncate(len);
+    }
+
     pub fn extend(&mut self, other: Diagnostics) {
         self.items.extend(other.items);
     }

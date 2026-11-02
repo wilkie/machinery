@@ -23,6 +23,17 @@ use alu::{AluOp, ArithFlags, Alu, AluFlags, Parity8};
 /// the base (the 286's descriptor cache).
 bundle Segment { selector: u16, base: u24 }
 
+/// The execution unit's address work before an instruction's first memory
+/// access through a ModRM (SPEC 11.2c), fitted to the SingleStepTests
+/// traces: base+index with a displacement takes 4 clocks, any other
+/// address 3; a register operand none.
+unit EaWork(mode: u2, rm: u3) -> u32 {
+    if mode == 3 {
+        return 0;
+    }
+    return if mode != 0 && rm < 4 { 4 } else { 3 };
+}
+
 isa I286 {
     space mem: addr u24 -> u8, little_endian;
     space io:  addr u16 -> u8, little_endian;
@@ -225,11 +236,13 @@ isa I286 {
     }
     operand_kind rm8 : u8 from m: ModRM {
         is_mem => m.mod != 3;
+        ea => EaWork(m.mod, m.rm);
         read => if m.mod == 3 { r8.select(m.rm) } else { mem.read_u8(ea(m, 1, Access::Read)) };
         write(v: u8) => if m.mod == 3 { r8.select(m.rm) = v; } else { mem.write_u8(ea(m, 1, Access::Write), v); };
     }
     operand_kind rm16 : u16 from m: ModRM {
         is_mem => m.mod != 3;
+        ea => EaWork(m.mod, m.rm);
         read => if m.mod == 3 { r16.select(m.rm) } else { mem.read_u16(ea(m, 2, Access::Read)) };
         write(v: u16) => if m.mod == 3 { r16.select(m.rm) = v; } else { mem.write_u16(ea(m, 2, Access::Write), v); };
     }
@@ -244,6 +257,7 @@ isa I286 {
     /// (the hardware does not fault on a pair straddling the segment end).
     operand_kind bounds : (lo: i16, hi: i16) from m: ModRM {
         is_mem => m.mod != 3;
+        ea => EaWork(m.mod, m.rm);
         read => {
             let (s, o) = effective_address(m);
             let lo = mem.read_u16(translate(s, o, 2, Access::Read)) as i16;
@@ -255,6 +269,7 @@ isa I286 {
     /// The effective offset of a ModRM memory form (LEA).
     operand_kind mem_offset : u16 from m: ModRM {
         is_mem => m.mod != 3;
+        ea => EaWork(m.mod, m.rm);
         read => effective_address(m).off;
     }
 
@@ -262,6 +277,7 @@ isa I286 {
     /// A far pointer in memory (`m16:16`): two word reads, offset first.
     operand_kind far_mem : (off: u16, seg: u16) from m: ModRM {
         is_mem => m.mod != 3;
+        ea => EaWork(m.mod, m.rm);
         read => {
             let (s, o) = effective_address(m);
             let off = mem.read_u16(translate(s, o, 2, Access::Read));
@@ -1117,6 +1133,8 @@ isa I286 {
             let di = mem.read_u16(translate(SS, SP, 2, Access::Read));
             let si = mem.read_u16(translate(SS, SP + 2, 2, Access::Read));
             let bp = mem.read_u16(translate(SS, SP + 4, 2, Access::Read));
+            // The saved SP is read (a bus cycle) and discarded.
+            let _sp = mem.read_u16(translate(SS, SP + 6, 2, Access::Read));
             let bx = mem.read_u16(translate(SS, SP + 8, 2, Access::Read));
             let dx = mem.read_u16(translate(SS, SP + 10, 2, Access::Read));
             let cx = mem.read_u16(translate(SS, SP + 12, 2, Access::Read));

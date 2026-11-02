@@ -1,0 +1,48 @@
+// The conformance rig for the 80286 processor model: Cpu286 alone on a
+// flat 16 MB memory with open I/O, which is what the SingleStepTests
+// vectors assume. A driver loads a vector's registers and memory, flushes
+// the pipeline (`fn flush`), runs the instruction and the HLT after it, and
+// compares the bus cycles the pipeline recorded with the hardware trace
+// (SPEC 11.2c, section 13).
+
+use board::{Cpu286, LocalBus, Space, BusSize};
+
+/// 16 MB of zero-wait-state memory, and I/O ports that read as all ones.
+component FlatSpace {
+    ports { bus port: LocalBus::Slave; }
+    model {
+        mem cells: [u8; 0x1000000];
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            if space == Space::Io {
+                return (data: 0xFFFF, wait: 0);
+            }
+            if size == BusSize::Word {
+                return (data: concat(cells[addr + 1], cells[addr]), wait: 0);
+            }
+            return (data: cells[addr] as u16, wait: 0);
+        }
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            if space == Space::Mem {
+                cells[addr] = data as u8;
+                if size == BusSize::Word {
+                    cells[addr + 1] = (data >> 8) as u8;
+                }
+            }
+            return (wait: 0);
+        }
+    }
+}
+
+system Rig286 {
+    clock cpu_clk: 8 MHz;
+
+    component cpu: Cpu286 @ cpu_clk;
+    component space: FlatSpace;
+
+    bus local: LocalBus @ cpu_clk {
+        master cpu.local;
+        slave space.port;
+    }
+
+    profile fast { default: model; }
+}

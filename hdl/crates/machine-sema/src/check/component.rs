@@ -460,6 +460,39 @@ impl Checker<'_> {
                         want_ret,
                     )
                 }
+                [single] if single.name == "retire" && !cs.names.contains_key("retire") => {
+                    // A processor model's instruction timing (SPEC 11.2c).
+                    if cs.isa.is_none() {
+                        self.error(module, "E1041", span, "`on retire` belongs to a processor's model (a component that `implements` an isa)");
+                        return None;
+                    }
+                    if clock.is_some() {
+                        self.error(module, "E1041", span, "`on retire` takes no `@ clock`");
+                        return None;
+                    }
+                    let Some(def) = self
+                        .prog
+                        .lookup(module, "Schedule")
+                        .filter(|d| self.prog.item(*d).kind == ItemKind::Bundle)
+                    else {
+                        self.error(
+                            module,
+                            "E1041",
+                            span,
+                            "the prelude bundle `Schedule` is not visible here",
+                        );
+                        return None;
+                    };
+                    let pname = decl_params
+                        .first()
+                        .map(|p| p.0.clone())
+                        .unwrap_or_else(|| "s".into());
+                    (
+                        HandlerKind::Retire,
+                        Some(vec![(pname, Ty::Bundle(def))]),
+                        Ty::UInt(32),
+                    )
+                }
                 [single]
                     if matches!(
                         cs.names.get(&single.name),

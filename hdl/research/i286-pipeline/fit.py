@@ -3,10 +3,11 @@
     python3 -I fit.py 89 01 E8 ...      # opcode files of the corpus
 
 Vectors are grouped by form: their data accesses and whether they jump,
-the addressing mode, and the prefix count. Each group gets the schedule
-(execution cycles before the first step and after each, the jump's place
-among the accesses, and the decoder's extra cycle after a ModRM with a
-displacement) that reproduces the most traces exactly, cycle for cycle.
+and the addressing mode. Each group gets the schedule (execution cycles
+before the first step and after each, and the jump's place among the
+accesses) that reproduces the most traces exactly, cycle for cycle. The
+search is coordinate descent and breaks ties toward fewer cycles, so a
+group that cannot tell two values apart reports the smaller.
 """
 import collections
 import os
@@ -21,6 +22,27 @@ MODRM = (set(range(0x00, 0x40)) - {x for x in range(0x00, 0x40) if x & 7 in (4, 
     0x8C, 0x8D, 0x8E, 0x8F, 0xC0, 0xC1, 0xC4, 0xC5, 0xC6, 0xC7, 0xD0, 0xD1, 0xD2, 0xD3, 0xF6,
     0xF7, 0xFE, 0xFF}
 CONDITIONAL = set(range(0x70, 0x80)) | {0xE0, 0xE1, 0xE2, 0xE3, 0xCE}
+# Opcodes whose operand after the opcode (rel8) or after the ModRM and its
+# displacement (simm8) is a sign-extended byte.
+SX_AFTER_OPCODE = set(range(0x70, 0x80)) | {0xEB, 0xE0, 0xE1, 0xE2, 0xE3, 0x6A}
+SX_AFTER_MODRM = {0x83, 0x6B}
+
+
+def sign_extended(t):
+    """Indices of the vector's sign-extended bytes: an 8-bit displacement,
+    an 8-bit immediate that is sign-extended, a short branch's offset. Each
+    costs the decoder a clock."""
+    b = t['bytes']
+    p, mpos, ea, mod = form(t)
+    out = []
+    if mpos is not None and mod == 1:
+        out.append(mpos + 1)
+    if b[p] in SX_AFTER_OPCODE:
+        out.append(p + 1)
+    if b[p] in SX_AFTER_MODRM and mpos is not None:
+        disp = {None: 0, 0: 2 if ea == 'd16' else 0, 1: 1, 2: 2}[mod]
+        out.append(mpos + 1 + disp)
+    return out
 
 
 def form(t):
@@ -43,11 +65,9 @@ def run(t, P, partial=False):
     L = len(t['bytes']) - 1
     p, mpos, ea, mod = form(t)
     extra = {}
-    # An 8-bit displacement that starts a word stays a clock longer in the
-    # queue (the address work itself is in the schedule).
-    hold = {}
-    if mpos is not None and mod == 1:
-        hold = {mpos + 1: 'stall' if (start_address(t) + mpos + 1) % 2 == 0 else 'late'}
+    # A sign-extended byte that starts a word stalls the decoder a clock;
+    # otherwise the instruction starts a clock late.
+    hold = {i: 'stall' if (start_address(t) + i) % 2 == 0 else 'late' for i in sign_extended(t)}
     seq = list(accesses(t))
     tgt = jump_target(t)
     if tgt is not None:
@@ -101,8 +121,10 @@ def main(files, per_file=400, min_group=12):
     for f in files:
         groups = collections.defaultdict(list)
         for t in vectors(f, per_file):
-            p, _, ea, mod = form(t)
-            key = (tuple(k for k, _ in accesses(t)), jump_target(t) is not None, ea, mod, p)
+            _, _, ea, mod = form(t)
+            # Prefix counts are pooled: a prefixed vector settles ties that
+            # unprefixed ones leave open (POP's 2 or 3 clocks before its read).
+            key = (tuple(k for k, _ in accesses(t)), jump_target(t) is not None, ea, mod)
             groups[key].append(t)
         for key, g in sorted(groups.items(), key=lambda kv: -len(kv[1])):
             if len(g) < min_group:

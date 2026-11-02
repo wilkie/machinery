@@ -34,10 +34,12 @@ start.
 
 **Decoder.** One byte per clock, in order, each no earlier than the clock
 after it arrives; the bus unit sees the freed space a clock later. A
-ModRM followed by a displacement costs the decoder one more clock in the
-8-bit-displacement forms. After an unconditional transfer (JMP, CALL, RET,
-IRET) the decoder stops taking sequential bytes; after a conditional one it
-carries on, not yet knowing the outcome.
+**sign-extended byte** (an 8-bit displacement, a short branch's offset, the
+immediate of `83 /r`, `6B` and `6A`) costs the decoder a clock: when it
+starts a word the decoder stalls on it, delaying the bytes after it too;
+otherwise the instruction starts a clock late. After an unconditional
+transfer (JMP, CALL, RET, IRET) the decoder stops taking sequential bytes;
+after a conditional one it carries on, not yet knowing the outcome.
 
 **Execution unit.** An instruction starts when its last byte is decoded.
 Its time is a schedule: cycles of work before its first step, and after
@@ -50,14 +52,22 @@ on the bus). A split word access is two bus cycles.
 **Prefixes** are bytes the decoder takes like any other, which is all the
 effect they have on timing.
 
+**Address work** before a ModRM operand's first access is 3 clocks, or 4
+for base+index with a displacement, whatever the instruction.
+
 ## How well it fits
 
-Schedules per form are short: MOV [m], r is 3 to 5 cycles of work, then
-the posted write; MOV r, [m] is the work, then a waiting read; MUL r16 is
-21 cycles, MUL m16 the address work, a waiting read and 20 cycles; ADD
-[m], r reads, waits, works 2 cycles and posts the write; CALL near works 4
-cycles, jumps, then posts the push; RET reads the return address, works 4
+Schedules per form are short: MOV [m], r is the address work, then the
+posted write; MOV r, [m] is the work, then a waiting read; MUL r16 is 21
+cycles, MUL m16 the address work, a waiting read and 20 cycles; ADD [m], r
+reads, waits, works 2 cycles and posts the write (CMP works 1 and does not
+write); CALL near works 4 cycles, posts the push and jumps; a far CALL
+pushes CS, jumps, then pushes IP; RET reads the return address, works 4
 cycles and jumps.
+
+Fitting pools the prefix counts: an unprefixed vector often cannot tell
+two values apart (POP's 2 or 3 clocks before its read), and the prefixed
+ones settle it.
 
 With one set of global constants (queue 6, request latency 2, jump latency
 1, HLT 3), these reproduce the traces exactly:
@@ -70,24 +80,32 @@ With one set of global constants (queue 6, request latency 2, jump latency
 | RET | 600 | about 94% |
 | IRET | 581 | 89% |
 
-A broad run over 74 representative opcode files (`RESULTS.md`) reproduces
-25,282 of 25,636 vectors exactly (98.6%); every file but one is at 90% or
-better and most at 100%.
+A fit of every opcode file (`RESULTS.md`, 200 vectors each) reproduces
+nearly all vectors exactly. The schedules are in the description,
+`targets/i286/schedules.machine`, and the processor model there runs the
+same rules: over the whole corpus (string instructions and exceptions
+aside, 123,600 vectors) it reproduces 97% of the traces bus cycle for bus
+cycle (`rig.machine`, `rig_test.rs`).
 
 ## Not covered yet
 
 - Repeated string instructions (several iterations per vector).
-- Vectors that raise an exception (delivery: pushes, IVT reads, the jump).
+- Vectors that raise an exception (delivery: pushes, IVT reads, the jump),
+  INT among them.
+- INTO without overflow: the decoder waits for the outcome without a
+  transfer, which a schedule does not say yet.
+- ENTER above level 0: work after a variable number of accesses.
+- ESC: the hardware writes the instruction to the coprocessor's ports.
 - The corner cases behind RET's and IRET's misses (a return to the last
-  byte of a segment, where the next fetch wraps).
+  byte of a segment, where the next fetch wraps), and shifts by a count
+  through memory (about 93%).
 
-## Toward the language
+## In the language
 
-The model needs two things from a description. The processor model holds
-the bus unit, decoder and execution-unit timeline as model state and code.
-Each instruction form's schedule, which is the work before and after each of
-its steps and where its jump falls among its accesses, belongs in the timing
-table in place of tier 1's single number. Whether a step waits follows from
-whether it is a read, so the schedule is a short list of numbers and a jump
-position. The decoder also needs to know where the ModRM is and whether a
-displacement follows it, which the interpreter knows when it decodes.
+SPEC 11.2c: the processor model (`Cpu286` in `targets/i286/board.machine`)
+holds the bus unit, decoder and execution unit as model state and code, and
+runs each instruction's schedule from the `schedules` table when the
+interpreter retires it. Whether a step waits follows from whether it is a
+read, so a schedule is a short list of numbers and steps. The decoder's
+sign-extended-byte rule is `decode Disp8 => 1;`: the interpreter marks the
+bytes of that operand format.

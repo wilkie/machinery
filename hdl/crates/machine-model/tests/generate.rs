@@ -104,6 +104,7 @@ fn i286_target_passes_its_tests_and_hardware_vectors() {
         target("alu.machine"),
         target("i286.machine"),
         target("timing.machine"),
+        target("schedules.machine"),
     ]);
     assert!(!checked.has_errors());
     let src = generate_isa(&checked, "I286").unwrap_or_else(|e| panic!("{e}"));
@@ -232,6 +233,7 @@ fn i286_board_system_boots() {
         target("alu.machine"),
         target("i286.machine"),
         target("timing.machine"),
+        target("schedules.machine"),
         target("board.machine"),
     ]);
     assert!(!checked.has_errors());
@@ -264,6 +266,61 @@ fn i286_board_system_boots() {
         "board tests failed:\n{stdout}\n{stderr}"
     );
     assert!(stdout.contains("13 passed"), "expected 13 tests:\n{stdout}");
+}
+
+/// The processor model's pipeline (SPEC 11.2c): the conformance rig
+/// (`targets/i286/rig.machine`) runs SingleStepTests vectors through
+/// `Cpu286` and compares its bus cycles with the hardware traces
+/// (`targets/i286/rig_test.rs`); nearly all match cycle for cycle. Skipped
+/// without the corpus.
+#[test]
+fn i286_pipeline_reproduces_bus_traces() {
+    let checked = check_files(vec![
+        target("alu.machine"),
+        target("i286.machine"),
+        target("timing.machine"),
+        target("schedules.machine"),
+        target("board.machine"),
+        target("rig.machine"),
+    ]);
+    assert!(!checked.has_errors());
+    let src = generate_system(&checked, "Rig286", Some("fast")).unwrap_or_else(|e| panic!("{e}"));
+    let root = hdl_root();
+    let crate_ = package(
+        &crate_name("Rig286"),
+        src,
+        &root.join("crates").join("machine-runtime"),
+    );
+    let dir = root.join("target").join("gen-tests").join("rig286");
+    write_crate(&dir, &crate_).unwrap();
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::copy(
+        root.join("targets").join("i286").join("rig_test.rs"),
+        dir.join("tests").join("rig.rs"),
+    )
+    .unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let output = Command::new(&cargo)
+        .args([
+            "test",
+            "--quiet",
+            "--release",
+            "--features",
+            "vectors",
+            "--test",
+            "rig",
+            "--manifest-path",
+        ])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+        .env("RIG_MIN", "97")
+        .arg("--")
+        .arg("--nocapture")
+        .output()
+        .expect("run cargo");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "rig failed:\n{stdout}\n{stderr}");
 }
 
 /// The sample timer board has no processor (its master is an rtl script),

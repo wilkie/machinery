@@ -71,20 +71,28 @@ impl Parser {
                         span: start.to(self.prev_span()),
                     }))
                 }
-                "timing" if self.nth_is_word(1, "on") => {
+                "timing" | "schedules" if self.nth_is_word(1, "on") => {
+                    let schedules = self.at_word("schedules");
                     self.advance();
                     self.expect_word("on")?;
                     let target = self.parse_path_dotted()?;
                     self.expect_punct(Punct::LBrace)?;
                     let entries = self.parse_items_until_rbrace(|p| {
                         let docs = p.take_docs();
-                        let name = p.expect_ident()?;
+                        let first = p.expect_ident()?;
+                        let (decode, name) =
+                            if first.name == "decode" && !p.at_punct(Punct::FatArrow) {
+                                (true, p.expect_ident()?)
+                            } else {
+                                (false, first)
+                            };
                         p.expect_punct(Punct::FatArrow)?;
                         let value = p.parse_expr()?;
                         p.expect_semi()?;
                         let span = name.span.to(p.prev_span());
                         Ok(TimingEntry {
                             docs,
+                            decode,
                             name,
                             value,
                             span,
@@ -92,6 +100,7 @@ impl Parser {
                     })?;
                     Ok(Decl::Timing(TimingDecl {
                         docs,
+                        schedules,
                         target,
                         entries,
                         span: start.to(self.prev_span()),

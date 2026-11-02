@@ -82,11 +82,52 @@ bus IrqLines {
     signal request(line: u3) = ir[line];
 }
 
+/// The later of two clocks.
+unit Later(x: u64, y: u64) -> u64 {
+    return if x > y { x } else { y };
+}
+
+/// One instruction as the pipeline model runs it: its schedule, with each
+/// `access` step matched to the data access it stands for.
+bundle Slot286 {
+    valid: bool,
+    len: u8,
+    /// A sign-extended byte costs the decoder a clock (`decode Disp8`):
+    /// one that starts a word stalls the decoder (`stall`, by byte);
+    /// otherwise the instruction starts late (`late`).
+    stall: [u4; 16],
+    late: u4,
+    start: u64,
+    next: u64,
+    halted: bool,
+    /// The instruction transfers unconditionally: the decoder stops at its end.
+    uncond: bool,
+    /// Work before the first step, then each step (1 memory read, 2 memory
+    /// write, 3 I/O read, 4 I/O write, 5 HALT, 6 jump), its bus cycles and
+    /// the work after it.
+    pre: u16,
+    n: u8,
+    kind: [u3; 24],
+    cycles: [u2; 24],
+    work: [u16; 24],
+    /// It flushed the queue; its last byte has been decoded (at `ready_at`).
+    jumped: bool,
+    ready: bool,
+    ready_at: u64,
+}
+
 /// The processor: the i286 isa, with its two address spaces bound to the
-/// local bus. Instruction fetch reads aligned words into a one-word buffer,
-/// as the bus unit does; the queue's look-ahead is not modelled (tier 2).
-/// With the timing table, an instruction costs its data transfers plus the
-/// larger of its code fetches and its execution cycles.
+/// local bus.
+///
+/// Its timing is a model of the 286 pipeline (SPEC 11.2c, fitted to the
+/// SingleStepTests traces in `research/i286-pipeline`): a 6-byte queue the
+/// bus unit refills a word at a time, a decoder taking a byte a clock, and
+/// an execution unit running each instruction's schedule. `on retire`
+/// runs it, one instruction behind the interpreter (the decoder needs to
+/// know where the following instruction ends), and returns the clocks
+/// each took; the bus cycles it would run are recorded in `trace_*`.
+/// The interpreter's own fetches go through a one-word buffer and take no
+/// time of their own.
 component Cpu286 {
     isa I286;
     ports {
@@ -99,6 +140,66 @@ component Cpu286 {
         state code: u16 = 0;
         state code_addr: u24 = 0;
         state code_valid: bool = false;
+
+        // The data accesses of the instruction being interpreted.
+        state lg_kind: [u3; 16];
+        state lg_n: [u2; 16];
+        state lg_count: u8 = 0;
+
+        // The pipeline. Time is in processor clocks.
+        state now: u64 = 0;
+        state last_done: u64 = 0;
+        state owed: u64 = 0;
+        state need_flush: bool = true;
+        /// The instruction executing (or next to) and the one after it.
+        state a: Slot286;
+        state b: Slot286;
+        /// Execution unit: 0 waiting to start, 1 working until `eu_t`, 2
+        /// waiting for a read, 3 done (at `done_at`); `si` is the next step.
+        state eu: u2 = 0;
+        state eu_t: u64 = 0;
+        state si: u8 = 0;
+        state done_at: u64 = 0;
+        state wait_work: u16 = 0;
+        state data_ready: u64 = 0;
+        state data_set: bool = false;
+        state halting: bool = false;
+        state halt_from: u64 = 0;
+        // Requests to the bus unit, oldest first.
+        state rq_made: [u64; 8];
+        state rq_kind: [u3; 8];
+        state rq_left: [u2; 8];
+        state rq_wait: [bool; 8];
+        state rq_head: u8 = 0;
+        state rq_count: u8 = 0;
+        // The bus unit: busy until `bus_free`, prefetching at `fp`, no
+        // prefetch decision before `fetch_block`; two fetches in flight.
+        state bus_free: u64 = 1;
+        state fetch_block: u64 = 0;
+        state fp: u24 = 0;
+        state f0_used: bool = false;
+        state f0_live: bool = false;
+        state f0_at: u64 = 0;
+        state f0_n: u2 = 0;
+        state f1_used: bool = false;
+        state f1_live: bool = false;
+        state f1_at: u64 = 0;
+        state f1_n: u2 = 0;
+        // The queue since the last flush: bytes arrived (an odd fetch's
+        // dead byte included), entries and real bytes decoded, when the
+        // last one was, and where the executing instruction starts.
+        state ent_at: [u64; 8];
+        state ent_dead: [bool; 8];
+        state arrived: u32 = 0;
+        state decoded: u32 = 0;
+        state real: u32 = 0;
+        state last_dec: u64 = 0;
+        state base: u32 = 0;
+        /// The bus cycles run: 0 code, 1 memory read, 2 memory write, 3 I/O
+        /// read, 4 I/O write, 5 HALT; at the clock each started.
+        state trace_kind: [u3; 64];
+        state trace_at: [u32; 64];
+        state trace_n: u8 = 0;
 
         on intr() -> bool { return intr_line; }
 
@@ -120,36 +221,463 @@ component Cpu286 {
         }
         on acknowledge() -> u8 { return local.inta().vector; }
 
+        /// The instruction made a data access of `cycles` bus cycles.
+        fn note(kind: u3, cycles: u2) {
+            if lg_count < 16 {
+                lg_kind[lg_count] = kind;
+                lg_n[lg_count] = cycles;
+                lg_count = lg_count + 1;
+            }
+        }
+
         on mem.read_u8(addr: u24) -> u8 {
+            note(1, 1);
             return local.read(space: Space::Mem, addr: addr, size: BusSize::Byte).data as u8;
         }
         /// An aligned word is one transfer; an odd address takes two.
         on mem.read_u16(addr: u24) -> u16 {
             if addr[0] == 0 {
+                note(1, 1);
                 return local.read(space: Space::Mem, addr: addr, size: BusSize::Word).data;
             }
+            note(1, 2);
             let lo = local.read(space: Space::Mem, addr: addr, size: BusSize::Byte).data as u8;
             let hi = local.read(space: Space::Mem, addr: addr + 1, size: BusSize::Byte).data as u8;
             return concat(hi, lo);
         }
         on mem.write_u8(addr: u24, data: u8) {
             wrote(addr);
+            note(2, 1);
             local.write(space: Space::Mem, addr: addr, size: BusSize::Byte, data: data as u16);
         }
         on mem.write_u16(addr: u24, data: u16) {
             wrote(addr);
             if addr[0] == 0 {
+                note(2, 1);
                 local.write(space: Space::Mem, addr: addr, size: BusSize::Word, data: data);
             } else {
+                note(2, 2);
                 local.write(space: Space::Mem, addr: addr, size: BusSize::Byte, data: data & 0xFF);
                 local.write(space: Space::Mem, addr: addr + 1, size: BusSize::Byte, data: data >> 8);
             }
         }
         on io.read_u8(addr: u16) -> u8 {
+            note(3, 1);
             return local.read(space: Space::Io, addr: addr as u24, size: BusSize::Byte).data as u8;
         }
         on io.write_u8(addr: u16, data: u8) {
+            note(4, 1);
             local.write(space: Space::Io, addr: addr as u24, size: BusSize::Byte, data: data as u16);
+        }
+        /// A word port is one access for the pipeline (two bus cycles at an
+        /// odd port); the devices see it a byte at a time.
+        on io.read_u16(addr: u16) -> u16 {
+            note(3, if addr[0] == 0 { 1 } else { 2 });
+            let lo = local.read(space: Space::Io, addr: addr as u24, size: BusSize::Byte).data as u8;
+            let hi = local.read(space: Space::Io, addr: (addr + 1) as u24, size: BusSize::Byte).data as u8;
+            return concat(hi, lo);
+        }
+        on io.write_u16(addr: u16, data: u16) {
+            note(4, if addr[0] == 0 { 1 } else { 2 });
+            local.write(space: Space::Io, addr: addr as u24, size: BusSize::Byte, data: data & 0xFF);
+            local.write(space: Space::Io, addr: (addr + 1) as u24, size: BusSize::Byte, data: data >> 8);
+        }
+
+        /// Start over with an empty pipeline at clock 0 and an empty bus
+        /// record, as after a jump: the next instruction is fetched from
+        /// scratch (the conformance rig runs each vector from here).
+        fn flush() {
+            now = 0;
+            last_done = 0;
+            owed = 0;
+            trace_n = 0;
+            a.valid = false;
+            b.valid = false;
+            eu = 0;
+            rq_count = 0;
+            data_set = false;
+            f0_used = false;
+            f1_used = false;
+            bus_free = 1;
+            lg_count = 0;
+            need_flush = true;
+        }
+
+        /// The instruction's timing: run the pipeline until the instruction
+        /// before it has finished (or, for HLT, this one), and return the
+        /// clocks that took.
+        on retire(s: Schedule) -> u32 {
+            if need_flush {
+                start_stream(s.start);
+                need_flush = false;
+            }
+            admit(s);
+            let mut guard: u32 = 0;
+            while a.valid && (b.valid || a.halted) && guard < 100000 {
+                clock();
+                guard = guard + 1;
+            }
+            let c = owed;
+            owed = 0;
+            return c as u32;
+        }
+
+        /// The queue starts over at `addr`.
+        fn start_stream(addr: u64) {
+            arrived = 0;
+            decoded = 0;
+            real = 0;
+            base = 0;
+            last_dec = now;
+            fp = addr as u24;
+            fetch_block = now;
+            f0_live = false;
+            f1_live = false;
+            halting = false;
+        }
+
+        /// Takes `s` (with the accesses noted while it ran) as the next
+        /// instruction to time.
+        fn admit(s: Schedule) {
+            b.valid = true;
+            b.len = s.length;
+            b.late = 0;
+            for i in 0..16 {
+                let d = s.decode[i];
+                let even = ((s.start + i as u64) & 1) == 0;
+                b.stall[i] = if even { d } else { 0 };
+                if !even && d > b.late {
+                    b.late = d;
+                }
+            }
+            b.start = s.start;
+            b.next = s.next;
+            b.halted = s.halted;
+            b.uncond = false;
+            b.jumped = false;
+            b.ready = s.length == 0;
+            b.ready_at = 0;
+            // HLT asks for its HALT bus cycle three clocks after it starts.
+            b.pre = if s.halted { 3 } else { s.work[0] };
+            b.n = 0;
+            let mut li: u8 = 0;
+            let mut jumps = false;
+            for i in 0..8 {
+                if (i as u4) < s.steps {
+                    let w = s.work[(i as u4) + 1];
+                    if s.step[i] == 1 {
+                        if li < lg_count {
+                            push(lg_kind[li], lg_n[li], w);
+                            li = li + 1;
+                        } else {
+                            add_work(w);
+                        }
+                    } else {
+                        push(6, 0, w);
+                        jumps = true;
+                        if s.step[i] == 2 {
+                            b.uncond = true;
+                        }
+                    }
+                }
+            }
+            // Accesses the schedule does not name follow with no work between.
+            while li < lg_count {
+                push(lg_kind[li], lg_n[li], 0);
+                li = li + 1;
+            }
+            // A transfer the schedule does not name (an unfitted entry, a
+            // fault, an interrupt) happens at the end.
+            if !jumps && !s.halted && (s.length == 0 || s.next != s.start + s.length as u64) {
+                push(6, 0, 0);
+                b.uncond = true;
+            }
+            if s.halted {
+                push(5, 1, 0);
+            }
+            lg_count = 0;
+            if !a.valid {
+                a = b;
+                b.valid = false;
+                eu = 0;
+                si = 0;
+            }
+        }
+
+        fn push(k: u3, c: u2, w: u16) {
+            if b.n < 24 {
+                b.kind[b.n] = k;
+                b.cycles[b.n] = c;
+                b.work[b.n] = w;
+                b.n = b.n + 1;
+            }
+        }
+
+        fn add_work(w: u16) {
+            if b.n == 0 {
+                b.pre = b.pre + w;
+            } else {
+                b.work[b.n - 1] = b.work[b.n - 1] + w;
+            }
+        }
+
+        /// One clock: fetches arrive, the decoder takes bytes, the execution
+        /// unit runs, and the bus unit chooses the next bus cycle.
+        fn clock() {
+            arrive();
+            decode_bytes();
+            execute();
+            bus_phase();
+            now = now + 1;
+        }
+
+        fn arrive() {
+            while f0_used && f0_at <= now {
+                if f0_live {
+                    // An odd fetch's word slot holds a dead byte until the
+                    // next flush.
+                    if f0_n == 1 {
+                        add_entry(f0_at, true);
+                    }
+                    add_entry(f0_at, false);
+                    if f0_n == 2 {
+                        add_entry(f0_at, false);
+                    }
+                }
+                f0_used = f1_used;
+                f0_live = f1_live;
+                f0_at = f1_at;
+                f0_n = f1_n;
+                f1_used = false;
+            }
+        }
+
+        fn add_entry(at: u64, dead: bool) {
+            ent_at[arrived & 7] = at;
+            ent_dead[arrived & 7] = dead;
+            arrived = arrived + 1;
+        }
+
+        /// Where the instruction after the executing one starts in the queue.
+        fn next_base() -> u32 {
+            return if a.jumped { 0 } else { base + a.len as u32 };
+        }
+
+        /// How many real bytes the decoder may have taken: through the
+        /// instruction after the executing one, or only the executing one's
+        /// when it transfers unconditionally.
+        fn decode_limit() -> u32 {
+            if !a.valid {
+                return base;
+            }
+            if a.uncond && !a.jumped {
+                return base + a.len as u32;
+            }
+            if b.valid {
+                return next_base() + b.len as u32;
+            }
+            return if a.jumped { 0 } else { base + a.len as u32 };
+        }
+
+        fn decode_bytes() {
+            let lim = decode_limit();
+            let nb = next_base();
+            while decoded < arrived && real < lim {
+                let k = decoded;
+                if ent_dead[k & 7] {
+                    // Freed with the byte beside it.
+                    if k + 1 >= arrived {
+                        return;
+                    }
+                    let p = Later(last_dec + 1, ent_at[(k + 1) & 7] + 1);
+                    if p > now {
+                        return;
+                    }
+                    decoded = decoded + 1;
+                    continue;
+                }
+                let mut p = Later(last_dec + 1, ent_at[k & 7] + 1);
+                // A sign-extended byte that starts a word stalls the decoder.
+                if a.valid && !a.jumped && k >= base && k < base + 16 {
+                    p = p + a.stall[k - base] as u64;
+                }
+                if b.valid && k >= nb && k < nb + 16 {
+                    p = p + b.stall[k - nb] as u64;
+                }
+                if p > now {
+                    return;
+                }
+                decoded = decoded + 1;
+                real = real + 1;
+                last_dec = p;
+                // Otherwise it starts the instruction late.
+                if a.valid && !a.jumped && !a.ready && real == base + a.len as u32 {
+                    a.ready = true;
+                    a.ready_at = p + a.late as u64;
+                }
+                if b.valid && !b.ready && real == nb + b.len as u32 {
+                    b.ready = true;
+                    b.ready_at = p + b.late as u64;
+                }
+            }
+        }
+
+        fn execute() {
+            let mut i: u32 = 0;
+            while i < 64 {
+                i = i + 1;
+                if !a.valid {
+                    return;
+                }
+                if eu == 0 {
+                    if !a.ready || now < a.ready_at {
+                        return;
+                    }
+                    eu = 1;
+                    eu_t = now + a.pre as u64;
+                    si = 0;
+                    if a.halted {
+                        halting = true;
+                        halt_from = now;
+                    }
+                } else if eu == 1 {
+                    if now < eu_t {
+                        return;
+                    }
+                    if si < a.n {
+                        start_step();
+                    } else {
+                        eu = 3;
+                        done_at = now;
+                    }
+                } else if eu == 2 {
+                    if !data_set || now < data_ready {
+                        return;
+                    }
+                    data_set = false;
+                    eu = 1;
+                    eu_t = now + wait_work as u64;
+                } else {
+                    if !b.valid && !a.halted {
+                        return;
+                    }
+                    complete();
+                }
+            }
+        }
+
+        /// The executing instruction is done: account for it and move on.
+        fn complete() {
+            owed = owed + (done_at - last_done);
+            last_done = done_at;
+            base = next_base();
+            a = b;
+            b.valid = false;
+            eu = 0;
+            si = 0;
+        }
+
+        fn start_step() {
+            let k = a.kind[si];
+            let c = a.cycles[si];
+            let w = a.work[si];
+            si = si + 1;
+            if k == 6 {
+                // A jump flushes the queue and refills it from the target;
+                // the target's fetch is decided a clock later.
+                f0_live = false;
+                f1_live = false;
+                arrived = 0;
+                decoded = 0;
+                real = 0;
+                last_dec = now;
+                fp = a.next as u24;
+                fetch_block = now + 1;
+                a.jumped = true;
+                b.ready = b.len == 0;
+                eu = 1;
+                eu_t = now + w as u64;
+                return;
+            }
+            // A request reaches the bus two clocks after it is made. Reads
+            // (and HALT) wait for their last bus cycle to start; writes are
+            // posted.
+            let wait = k == 1 || k == 3 || k == 5;
+            if rq_count < 8 {
+                let j = (rq_head + rq_count) & 7;
+                rq_made[j] = now;
+                rq_kind[j] = k;
+                rq_left[j] = c;
+                rq_wait[j] = wait;
+                rq_count = rq_count + 1;
+            }
+            if wait {
+                eu = 2;
+                wait_work = w;
+            } else {
+                eu = 1;
+                eu_t = now + w as u64;
+            }
+        }
+
+        fn record(kind: u3, at: u64) {
+            if trace_n < 64 {
+                trace_kind[trace_n] = kind;
+                trace_at[trace_n] = at as u32;
+                trace_n = trace_n + 1;
+            }
+        }
+
+        /// The bus unit decides, a clock ahead, what the next bus cycle is:
+        /// a request if one is due, else a prefetch if a word fits.
+        fn bus_phase() {
+            let s = now + 1;
+            if s < bus_free {
+                return;
+            }
+            if rq_count > 0 && s >= rq_made[rq_head] + 2 {
+                let h = rq_head;
+                record(rq_kind[h], s - 1);
+                rq_left[h] = rq_left[h] - 1;
+                bus_free = s + 2;
+                if rq_left[h] == 0 {
+                    rq_head = (h + 1) & 7;
+                    rq_count = rq_count - 1;
+                    if rq_wait[h] {
+                        data_ready = s;
+                        data_set = true;
+                    }
+                }
+                return;
+            }
+            if s < fetch_block || (halting && now > halt_from) {
+                return;
+            }
+            let consumed = if real > 0 && last_dec == now { real - 1 } else { real };
+            let mut q = arrived - consumed;
+            if f0_used && f0_live {
+                q = q + 2;
+            }
+            if f1_used && f1_live {
+                q = q + 2;
+            }
+            let n: u2 = if fp[0] == 1 { 1 } else { 2 };
+            if q + n as u32 <= 6 {
+                record(0, s - 1);
+                if !f0_used {
+                    f0_used = true;
+                    f0_live = true;
+                    f0_at = s + 2;
+                    f0_n = n;
+                } else {
+                    f1_used = true;
+                    f1_live = true;
+                    f1_at = s + 2;
+                    f1_n = n;
+                }
+                fp = fp + n as u24;
+                bus_free = s + 2;
+            }
         }
     }
 }

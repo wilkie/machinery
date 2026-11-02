@@ -165,6 +165,7 @@ impl Checker<'_> {
             latches,
             fault_cycles: None,
             interrupt_cycles: None,
+            interrupt_schedule: None,
         });
     }
 
@@ -831,6 +832,7 @@ impl Checker<'_> {
             tail_locals,
             tail,
             tail_set,
+            decode: 0,
         })
     }
 
@@ -982,6 +984,7 @@ impl Checker<'_> {
                 "read" => RuleKind::Read,
                 "write" => RuleKind::Write,
                 "is_mem" => RuleKind::IsMem,
+                _ if r.params.is_empty() => RuleKind::Query,
                 other => {
                     self.error_with(
                         module,
@@ -991,14 +994,18 @@ impl Checker<'_> {
                             format!("unknown operand kind rule `{other}`"),
                         )
                         .with_note(
-                            "rules are `select(n)`, `value(n)`, `read`, `write(v)` and `is_mem`",
+                            "rules are `select(n)`, `value(n)`, `read`, `write(v)`, `is_mem`, and queries without parameters",
                         ),
                     );
                     ok = false;
                     continue;
                 }
             };
-            if rules.iter().any(|(_, k, _)| *k == kind) {
+            // Queries are told apart by name; other rules by what they are.
+            if rules
+                .iter()
+                .any(|(n, k, _)| *k == kind && (kind != hir::RuleKind::Query || *n == r.name.name))
+            {
                 self.error(
                     module,
                     "E1001",
@@ -1101,12 +1108,16 @@ impl Checker<'_> {
                 );
                 ok = false;
             }
-            if has(RuleKind::Read) || has(RuleKind::Write) || has(RuleKind::IsMem) {
+            if has(RuleKind::Read)
+                || has(RuleKind::Write)
+                || has(RuleKind::IsMem)
+                || has(RuleKind::Query)
+            {
                 self.error(
                     module,
                     "E1037",
                     decl.name.span,
-                    "a field kind has no `read`, `write` or `is_mem` rules",
+                    "a field kind has no `read`, `write`, `is_mem` or query rules",
                 );
                 ok = false;
             }
@@ -1132,6 +1143,8 @@ impl Checker<'_> {
                 RuleKind::Select | RuleKind::Read | RuleKind::Value => Some(sig.ty.clone()),
                 RuleKind::IsMem => Some(Ty::Bool),
                 RuleKind::Write => Some(Ty::Unit),
+                // A query's type is its expression's.
+                RuleKind::Query => None,
             };
             let mut cx = FnCtx::new(scope, HashMap::new(), ret.clone());
             let mut param_ids = Vec::new();
@@ -1179,12 +1192,68 @@ impl Checker<'_> {
                     hir::ArmBody::Block(hb)
                 }
             };
+            let mut body = body;
+            let rty = match (kind, &mut body) {
+                (RuleKind::Query, hir::ArmBody::Expr(e)) => {
+                    // A bare literal settles to u32, so `3 + op.query` works.
+                    if matches!(e.ty, Ty::Const(_)) {
+                        let taken = std::mem::replace(
+                            e,
+                            hir::Expr {
+                                kind: hir::ExprKind::Error,
+                                ty: Ty::Error,
+                                span: r.span,
+                            },
+                        );
+                        *e = self.coerce(&cx, taken, &Ty::UInt(32));
+                    }
+                    let mut impure = false;
+                    hir::visit_expr(e, &mut |_| {}, &mut |x| {
+                        if matches!(
+                            x.kind,
+                            hir::ExprKind::SpaceRead(..)
+                                | hir::ExprKind::SpaceCell(..)
+                                | hir::ExprKind::FnCall(..)
+                        ) {
+                            impure = true;
+                        }
+                    });
+                    if impure {
+                        self.error(
+                            module,
+                            "E1037",
+                            r.span,
+                            format!(
+                                "query `{}` must not read memory or call an isa fn",
+                                r.name.name
+                            ),
+                        );
+                    }
+                    e.ty.clone()
+                }
+                (RuleKind::Query, hir::ArmBody::Block(_)) => {
+                    self.error(
+                        module,
+                        "E1037",
+                        r.span,
+                        format!(
+                            "query `{}` is an expression: `{} => expr;`",
+                            r.name.name, r.name.name
+                        ),
+                    );
+                    Ty::Error
+                }
+                (_, _) => ret.clone().unwrap_or(Ty::Unit),
+            };
+            self.kind_queries
+                .insert((id, r.name.name.clone()), rty.clone());
             rules.push(hir::KindRule {
                 name: r.name.name.clone(),
                 kind: *kind,
                 locals: cx.locals,
                 params: param_ids,
                 body,
+                ty: rty,
             });
         }
         Some(hir::OperandKind {
@@ -1754,9 +1823,11 @@ impl Checker<'_> {
                             ok = false;
                             continue;
                         };
-                        let mut cx = ops_cx(&sig);
-                        cx.in_timing = true;
-                        let e = self.check_expr(&mut cx, v, Some(&Ty::UInt(32)));
+                        let (cx, _, e) = self.check_timing_expr(module, v, false, &|| {
+                            let mut cx = ops_cx(&sig);
+                            cx.in_timing = true;
+                            (cx, Vec::new())
+                        });
                         timing_locals = cx.locals;
                         timing = Some(e);
                     }
@@ -1945,6 +2016,8 @@ impl Checker<'_> {
             semantics,
             timing_locals,
             timing,
+            schedule_locals: Vec::new(),
+            schedule: None,
             implements,
             references,
             allowed_in,
@@ -2548,33 +2621,90 @@ impl Checker<'_> {
         };
         let mut seen: Vec<String> = Vec::new();
         for e in &d.entries {
-            if seen.contains(&e.name.name) {
+            let key = if e.decode {
+                format!("decode {}", e.name.name)
+            } else {
+                e.name.name.clone()
+            };
+            if seen.contains(&key) {
                 self.error(
                     module,
                     "E1055",
                     e.name.span,
-                    format!("`{}` already has an entry", e.name.name),
+                    format!("`{key}` already has an entry"),
                 );
                 continue;
             }
-            seen.push(e.name.name.clone());
-            if e.name.name == "fault" || e.name.name == "interrupt" {
-                let mut cx = FnCtx::new(scope, HashMap::new(), None);
-                cx.in_timing = true;
-                // A fault's cost may depend on which fault it is.
-                let params = if e.name.name == "fault" {
-                    vec![cx.declare("vector", Ty::UInt(8), e.name.span)]
-                } else {
-                    Vec::new()
+            seen.push(key);
+            if e.decode && !d.schedules {
+                self.error(
+                    module,
+                    "E1055",
+                    e.name.span,
+                    "`decode` entries belong in a `schedules` table",
+                );
+                continue;
+            }
+            if e.decode {
+                // An operand format's extra decoder clocks: a constant.
+                let Some(oi) = self.isas[ii]
+                    .operands
+                    .iter()
+                    .position(|o| o.name == e.name.name)
+                else {
+                    let msg = format!(
+                        "isa `{}` has no operand format `{}`",
+                        d.target.dotted(),
+                        e.name.name
+                    );
+                    self.error(module, "E1055", e.name.span, msg);
+                    continue;
                 };
-                let expr = self.check_expr(&mut cx, &e.value, Some(&Ty::UInt(32)));
+                let mut cx = FnCtx::new(scope, HashMap::new(), None);
+                let v = self.check_expr(&mut cx, &e.value, None);
+                match v.ty {
+                    Ty::Const(n) if (0..=15).contains(&n) => {
+                        self.isas[ii].operands[oi].decode = n as u8
+                    }
+                    Ty::Error => {}
+                    _ => self.error(
+                        module,
+                        "E1055",
+                        e.value.span,
+                        "a `decode` entry is a constant number of clocks, 0 to 15",
+                    ),
+                }
+                continue;
+            }
+            if e.name.name == "fault" && d.schedules {
+                self.error(module, "E1055", e.name.span, "a fault's delivery is the `timing` table's `fault` entry; the schedule adds it after the last step");
+                continue;
+            }
+            if e.name.name == "fault" || e.name.name == "interrupt" {
+                // A fault's cost is cycles, and may depend on which fault it
+                // is; an interrupt's may be a schedule.
+                let fault = e.name.name == "fault";
+                let span = e.name.span;
+                let (cx, params, expr) =
+                    self.check_timing_expr(module, &e.value, d.schedules, &|| {
+                        let mut cx = FnCtx::new(scope, HashMap::new(), None);
+                        cx.in_timing = true;
+                        let p = if fault {
+                            vec![cx.declare("vector", Ty::UInt(8), span)]
+                        } else {
+                            Vec::new()
+                        };
+                        (cx, p)
+                    });
                 let t = Some(hir::TimingExpr {
                     locals: cx.locals,
                     params,
                     expr,
                 });
-                if e.name.name == "fault" {
+                if fault {
                     self.isas[ii].fault_cycles = t;
+                } else if d.schedules {
+                    self.isas[ii].interrupt_schedule = t;
                 } else {
                     self.isas[ii].interrupt_cycles = t;
                 }
@@ -2589,7 +2719,7 @@ impl Checker<'_> {
                 self.error(module, "E1055", e.name.span, msg);
                 continue;
             };
-            if self.isas[ii].instructions[j].timing.is_some() {
+            if !d.schedules && self.isas[ii].instructions[j].timing.is_some() {
                 let msg = format!("`{}` has timing in its declaration already", e.name.name);
                 self.error(module, "E1055", e.name.span, msg);
                 continue;
@@ -2598,13 +2728,79 @@ impl Checker<'_> {
             let Some(sig) = self.instr_sigs.get(&def).cloned() else {
                 continue;
             };
-            let mut cx = FnCtx::new(scope, HashMap::new(), None);
-            cx.operands = sig.operands.clone();
-            cx.in_timing = true;
-            let expr = self.check_expr(&mut cx, &e.value, Some(&Ty::UInt(32)));
+            let (cx, _, expr) = self.check_timing_expr(module, &e.value, d.schedules, &|| {
+                let mut cx = FnCtx::new(scope, HashMap::new(), None);
+                cx.operands = sig.operands.clone();
+                cx.in_timing = true;
+                (cx, Vec::new())
+            });
             let ins = &mut self.isas[ii].instructions[j];
-            ins.timing_locals = cx.locals;
-            ins.timing = Some(expr);
+            if d.schedules {
+                ins.schedule_locals = cx.locals;
+                ins.schedule = Some(expr);
+            } else {
+                ins.timing_locals = cx.locals;
+                ins.timing = Some(expr);
+            }
+        }
+    }
+}
+
+impl Checker<'_> {
+    /// A timing entry is cycles (`u32`; a bare literal settles to it) or,
+    /// where allowed, a `Schedule`.
+    /// Checks a timing entry: a schedule when one is allowed and the entry
+    /// is one, otherwise `u32` cycles (so that `if c { 6 } else { 3 }`
+    /// settles its constants). `mk` builds a fresh context each attempt.
+    pub(super) fn check_timing_expr(
+        &mut self,
+        module: crate::ModuleId,
+        v: &machine_syntax::ast::Expr,
+        schedule_ok: bool,
+        mk: &dyn Fn() -> (FnCtx, Vec<hir::LocalId>),
+    ) -> (FnCtx, Vec<hir::LocalId>, hir::Expr) {
+        let mark = self.diags[module].len();
+        let (mut cx, p) = mk();
+        let e = self.check_expr(&mut cx, v, None);
+        if matches!(&e.ty, Ty::Bundle(d) if self.prog.item_name(*d) == "Schedule") {
+            if !schedule_ok {
+                self.diags[module].truncate(mark);
+                self.error(
+                    module,
+                    "E1055",
+                    e.span,
+                    "a schedule belongs in a `schedules` table; a `timing` entry is `u32` cycles",
+                );
+            }
+            return (cx, p, e);
+        }
+        self.diags[module].truncate(mark);
+        let (mut cx, p) = mk();
+        let e = self.check_expr(&mut cx, v, Some(&Ty::UInt(32)));
+        let e = self.settle_timing(&cx, e, schedule_ok);
+        (cx, p, e)
+    }
+
+    pub(super) fn settle_timing(
+        &mut self,
+        cx: &FnCtx,
+        e: hir::Expr,
+        schedule_ok: bool,
+    ) -> hir::Expr {
+        match &e.ty {
+            Ty::Const(_) => self.coerce(cx, e, &Ty::UInt(32)),
+            Ty::UInt(32) | Ty::Error => e,
+            Ty::Bundle(d) if schedule_ok && self.prog.item_name(*d) == "Schedule" => e,
+            other => {
+                let what = if schedule_ok {
+                    "`u32` cycles or a `schedule(...)`"
+                } else {
+                    "`u32` cycles"
+                };
+                let msg = format!("a timing entry is {what}, found `{}`", self.display(other));
+                self.error(cx.module, "E1055", e.span, msg);
+                e
+            }
         }
     }
 }

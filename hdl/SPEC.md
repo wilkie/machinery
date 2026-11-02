@@ -69,6 +69,7 @@ has only a transaction model in a generated protocol adapter.
 | **bus** | A protocol: shared wires, roles, and transactions defined as wire-level sequences. |
 | **system** | A composition of components and buses on clocks, with build profiles. |
 | **routine** | A multi-cycle procedure inside `rtl`, compiled to a sequencer (state machine). |
+| **model fn** | An imperative helper inside a `model` body: reads and writes the component's state, may `emit` and start transactions. Also the host's way into a device model (section 8.3a). |
 | **profile** | A named fidelity selection for a system build. |
 
 ## 3. Lexical structure
@@ -204,11 +205,16 @@ table in each section says which.
 - `let name: T = expr;` binds a local **wire** (combinational value). Type
   may be omitted when inferable from `expr`. Immutable; it is a name for a
   value, not storage.
-- `name = expr;` **drives** a wire declared as an output or `wire` of the
-  enclosing body. May appear more than once; the **last assignment on the
+- `let mut name: T = expr;` binds a **mutable local**: a name whose value
+  the body may replace with `name = expr;` (section 6.1).
+- `place = expr;` **assigns** a place: drives a wire declared as an output
+  or `wire` of the enclosing body, writes architectural state in `isa`
+  code, writes `state` or a `mem` element in a model, or replaces a
+  mutable local. May appear more than once; the **last assignment on the
   executed path wins** within an evaluation (Verilog `always @*`
   semantics). Every output must be driven on every path, either by a
-  `default` or by assignment; the compiler checks this.
+  `default` or by assignment; the compiler checks this. What counts as a
+  place is given in section 6.2.
 - `name <- expr;` **schedules** a register's next value, committed at the
   clock edge. Last write on the executed path wins. The compiler warns when
   one `<-` unconditionally shadows another.
@@ -221,6 +227,79 @@ table in each section says which.
 - `assert(cond);` / `assert(cond, "message");`. Checked in both machine
   classes; a failure is a simulation fault with location.
 - `unreachable("msg");`.
+
+### 6.1 Mutable locals
+
+```
+let mut acc: u8 = 0;
+for i in 0..8 {
+    if irr[i] == 1 && imr[i] == 0 { acc = acc | (1 << i); }
+}
+```
+
+A mutable local is a name whose value changes along the executed path. It
+is legal in every body: in a unit, a model handler, a model fn or isa code
+it is an ordinary variable; in an `rtl` body or a routine it is a chain of
+multiplexers, the way blocking assignments in `always_comb` are. The same
+rules hold at every level, so a unit written with one means the same in
+the emulator and in the simulator.
+
+- **Declaration.** `let mut name[: T] = init;` or `let mut name: T;`
+  without an initial value. The type is the initialiser's when omitted.
+  `let mut` with a destructuring pattern is not allowed.
+- **Assignment.** `name = expr;` with `expr` of the local's type (no
+  implicit widening, as everywhere). A field or element of a mutable
+  local of bundle or array type is assignable too: `ch.count = v;`,
+  `bytes[i] = b;`.
+- **Last assignment wins** on the executed path. Within a `match` arm or
+  an `if` branch the assignment is seen only on that branch.
+- **Assigned before read.** Reading a mutable local on any path where it
+  may not have been assigned is an error (E1051). A `let mut x: T;`
+  without initialiser must therefore be assigned in every branch before
+  the first read after the branches join. There is no default value.
+- **Scope.** A local, mutable or not, is visible to the end of the
+  enclosing block. It may not share a name with a port, wire, register,
+  `state`, `mem`, latch or architectural register visible in the body
+  (E1001), so `x = expr;` never has two meanings. Shadowing an outer
+  local of the same body is allowed, as for `let`.
+- **Not storage.** A mutable local lives within one evaluation. In a
+  routine it may not be read after a `cycle` or `wait until` that follows
+  its last assignment (E1052: "use a `reg` to carry a value across a
+  cycle"). In rtl it may not be scheduled with `<-` and is not a clock
+  domain member.
+- **Assigning an immutable local** is an error (E1050), with a note to
+  declare it `let mut`.
+- **Units stay pure.** A mutable local never escapes its unit; a unit
+  with mutable locals is still a pure function and still inlinable into
+  rtl.
+
+The compiler lowers a mutable local to a fresh value per assignment
+(static single assignment); the model and isa backends emit a Rust
+`let mut`, the rtl backend a multiplexer per join point.
+
+### 6.2 Places
+
+A **place** is what may stand on the left of `=`. Places are:
+
+| Place | Where |
+|---|---|
+| an output port or `wire` of the body | rtl |
+| an architectural register, register field, register view, the mode register, a latch | isa |
+| a space cell `mem[addr]`, an operand `dst` (through its kind's `write` rule) | isa |
+| a `state` of the model | model |
+| a mutable local | everywhere |
+| `p.field` where `p` is a place of bundle type | everywhere |
+| `p[i]` where `p` is a place of array type, or a `mem` | everywhere |
+| a `match` or `if` expression every arm of which is a place | isa (operand selection) |
+
+Indexing nests: `ch[c].count = v;` writes one field of one element of a
+`state ch: [Channel; 3]`, and `line[x][y] = ...` is legal for arrays of
+arrays. The index of a dynamic `p[i]` is any unsigned expression; an
+index outside the array is a checked error, like division by zero (in
+rtl the compiler additionally requires the index type to fit the array,
+so that no check is needed in hardware). Fields of a `mem` element are
+assignable when the element type is a bundle: `mem ch: [Channel; 3]` is
+written `ch[c].count = v;` exactly like `state`.
 
 ## 7. Units
 
@@ -244,7 +323,8 @@ unit AluFlags<const W: width>(op: AluOp, a: u<W>, b: u<W>, raw: u<W + 1>) -> Fla
 ```
 
 A unit is a pure function. It has no state, no clock, no side effects. It may
-call other units. Recursion is forbidden. A single return value is written
+call other units and use mutable locals (section 6.1), which do not make it
+impure. Recursion is forbidden. A single return value is written
 `-> T`; several are a named tuple `-> (result: u<W>, raw: u<W + 1>)` and set
 with `return (result: x, raw: y);` or by driving the names.
 
@@ -312,8 +392,18 @@ no.
 
 The transaction level. Contents:
 
-- `state name: T = init;` plain state (no clock semantics).
-- `mem` as plain arrays.
+- `state name: T = init;` plain state (no clock semantics). `T` may be a
+  bundle or an array, including an array of bundles; elements and fields
+  are assignable (section 6.2): `state ch: [Channel; 3];` then
+  `ch[c].count = v;`. Without `= init` the state starts at the type's
+  zero (`false`, zeroed bundles).
+- `mem name: [T; N];` as plain arrays. `mem` is for large or
+  host-visible arrays (video RAM, a ROM, a framebuffer): it is not copied
+  with the component's state snapshot, and the generated struct exposes
+  it for the embedding program to fill or read. For a handful of channels
+  prefer `state`. Both are indexed and assigned the same way.
+- `fn name(params) -> T { ... }` helpers over the component's state
+  (section 8.3a).
 - Handlers:
   - `on bus_port.read(addr: u<A>, size: Size) -> (data: u<D>, wait: u8) { ... }`
   - `on bus_port.write(addr, size, data) -> (wait: u8) { ... }`
@@ -330,8 +420,72 @@ The transaction level. Contents:
   software; they may loop).
 
 A transaction handler runs inside the initiator's transaction, so it may
-`emit` signals but not start a transaction of its own (E1048); a device
-that masters a bus does so from `on tick`.
+`emit` signals but not start a transaction of its own (E1048), directly or
+through a model fn; a device that masters a bus does so from `on tick`.
+
+### 8.3a Model functions
+
+```
+// ports { bus port: LocalBus::Slave; }
+model {
+    state ch: [Channel; 3];
+
+    /// Set a channel's OUT pin; channel 0 is wired to IRQ 0.
+    fn set_out(c: u2, level: bool) {
+        ch[c].out = level;
+        if c == 0 { emit port.interrupt(0) = level; }
+    }
+
+    /// Host input: a key went down or up.
+    fn key(scancode: u8, down: bool) { ... }
+
+    on tick(n: u32) { ... set_out(c, false); set_out(c, true); ... }
+}
+```
+
+A model fn is the model-level counterpart of an isa `fn`: imperative,
+over the body's own state, with the body's effects. It exists because
+device models repeat themselves (the 8254's three channels, the 8237's
+four) and because a device needs an entry point for things that are not
+bus traffic (keys, incoming serial bytes, a disk image). Units remain the
+sharing mechanism between levels; a model fn is for logic that touches
+state or has effects and so cannot be a unit.
+
+- **Declaration.** `fn name(p: T, ...) [-> R] { body }` anywhere in a
+  `model` body, in any order with `state`, `mem` and handlers. Parameters
+  are immutable locals; the body may declare mutable ones. `-> R` is a
+  single type or a named tuple, as for units; the body must `return` a
+  value on every path (E1015).
+- **Access.** A model fn sees the component's ports, `state` and `mem`,
+  calls units and other model fns of the same component, and may
+  `emit` and start transactions on the component's master-role ports.
+  It may not be called from a `unit`, an `rtl` body or another
+  component, and not from a `state` initialiser.
+- **Effects are transitive.** The compiler computes, for every model fn,
+  whether it (or any fn it calls) starts a transaction. Calling such a fn
+  from a transaction handler is the E1048 error, reported at the call
+  with a note naming the fn that starts the transaction. Signal `emit`s
+  are allowed anywhere.
+- **No recursion**, direct or mutual (E1053), as for units and isa fns.
+  Every call graph in the language is finite, which the adapter and
+  timing derivations rely on.
+- **Lint W1005.** A model fn that reads or writes no state, performs no
+  effect and calls no fn with effects could be a `unit`; the compiler
+  warns, because a unit is shared with the rtl level and a model fn is
+  not. The warning names the fn and is silenced by making it a unit.
+- **Generated form.** Each fn becomes a public method of the component's
+  struct, taking the same ports context its handlers take:
+  `pub fn set_out<P: Pit8254Ports>(&mut self, ctx: &mut P, c: u8,
+  level: bool)`. Calls inside the body pass the context through. The
+  generated `System` offers `with_<instance>(|dev, ctx| ...)` so the
+  embedding program can call a device's fns with a live context, which
+  is how a host injects input. There is no visibility keyword yet: every
+  model fn is public in the generated crate.
+- **Processor models** (section 8.4) have model fns too, for example a
+  byte-lane helper shared by the space handlers.
+
+In an `rtl` body a `fn` would be inlined, as a Verilog function is. It is
+left out until the rtl slice and is a parse error there for now.
 
 A model's observable behaviour is its **transaction trace** (the
 transactions it initiates and the data and `wait` it returns) and the levels
@@ -401,7 +555,8 @@ byte order. This is where bus sizing and alignment live, and with them
 the bus time an access costs.
 
 The model also supplies every `extern fn` of the isa with a handler of the
-same name and signature (E1041), typically from signals and transactions:
+same name and signature (E1041), typically from signals and transactions,
+and may factor its handlers through model fns (section 8.3a):
 
 ```
 state intr_level: bool = false;
@@ -894,8 +1049,11 @@ section 14).
 Built into the language and the compiler:
 
 1. **Static**: type and width checking; exhaustive `match`; every output
-   driven on every path; no combinational loops; clock-domain discipline;
-   memory port limits; routine recursion; flag set consistency.
+   driven on every path; mutable locals assigned before read and not
+   carried across a cycle; no combinational loops; clock-domain
+   discipline; memory port limits; unit, isa fn and model fn recursion;
+   transaction starts reachable from a transaction handler; flag set
+   consistency.
 2. **Assertions**: `assert` in all bodies, kept in both classes (a build flag
    strips them for release).
 3. **Tests in the language**:
@@ -1012,3 +1170,25 @@ with stable error codes, so agents and editors can act on them.
 7. **Metastability / async inputs**: proposal is to model none of it.
 8. **Name of the language.** "Machine" with `.machine` files, as the
    exemplar used. Easy to change before any code exists.
+9. **Host-visible output.** A CGA produces pixels; at the rtl level they
+   are RGBI and sync pins sampled by a monitor component, but the model
+   level has no output notion. Interim: a `Display` component with a
+   public framebuffer `mem` the host reads after `sync`, the mirror of
+   ROM filling (question 6). A real mechanism (frame and audio sinks)
+   belongs to the Wasm/TypeScript binding layer, and the CGA model should
+   be written against a monitor component so that it slots in.
+10. **A second bus master in the model backend.** The 8237 DMA controller
+   starts transfers. The language allows a master-role device to do so
+   from `on tick`; the backend runs only the processor as a master.
+   Proposal: devices start transactions between instructions and charge
+   the cycles they steal; HOLD/HLDA arbitration is rtl. Needed before the
+   floppy controller.
+11. **Wires and the AT interrupt cascade.** Two 8259s: the slave's INT
+   drives the master's IR2, a `wire` between components, which the
+   backend does not generate yet. The interrupt lines (16 on an AT) also
+   outgrow the local bus declaration and should become their own small
+   bus. Needed for any 386-class system.
+12. **Tick granularity.** Devices are caught up after every instruction.
+   For a CGA that is a handful of pixels per call. Proposal: `on tick`
+   may return the number of its cycles until it next needs to run, and
+   the scheduler skips it until then or until a transaction reaches it.

@@ -2,8 +2,9 @@
 // on a 16-bit local bus with RAM and a boot ROM, and behind the AT's bus
 // controller the ISA bus with the PC's devices (`targets/pc`): the two
 // cascaded 8259 interrupt controllers, the 8254 timer, the 8237 DMA
-// controller, a host data link on DMA channel 1 (and IRQ 12), a CGA, and a
-// debugging console port.
+// controller, a host data link on DMA channel 1 (and IRQ 12), a CGA and a
+// Hercules Graphics Card (the two-monitor PC), and a debugging console
+// port.
 //
 // `machine build --system Board286 --out <dir> targets/pc/*.machine
 // targets/i286/*.machine` generates the emulator crate: the interpreter,
@@ -12,7 +13,7 @@
 
 use i286::{I286};
 use isabus::{Space, BusSize, IsaBus, IrqLines};
-use pc::{Pic8259, Pit8254, Dma8237, HostLink, Cga, Console};
+use pc::{Pic8259, Pit8254, Dma8237, HostLink, Cga, Hercules, Console};
 
 /// The 286 local bus at the transaction level. A word transfer is aligned;
 /// the processor splits an odd-address word into two byte transfers, as
@@ -799,6 +800,7 @@ system Board286 {
     clock cpu_clk: 8 MHz;                    // the processor clock (CLK / 2)
     clock pit_clk = osc / 12;                // 1.193182 MHz
     clock dma_clk = osc / 3;                 // 4.77 MHz
+    clock mda_clk: 16.257 MHz;               // the monochrome dot clock
 
     component cpu: Cpu286 @ cpu_clk;
     component ram: Ram;
@@ -810,6 +812,7 @@ system Board286 {
     component dma: Dma8237 @ dma_clk;
     component link: HostLink;
     component cga: Cga @ osc;
+    component herc: Hercules @ mda_clk;
     component console: Console;
 
     bus local: LocalBus @ cpu_clk {
@@ -835,6 +838,8 @@ system Board286 {
         slave link.port;
         slave console.port @ io 0xE9..=0xE9;
         slave cga.port @ mem 0xB8000..=0xBFFFF, io 0x3D0..=0x3DF;
+        // With the CGA at B8000 the Hercules's second page stays unmapped.
+        slave herc.port @ mem 0xB0000..=0xB7FFF, io 0x3B0..=0x3BF;
     }
 
     /// IRQ 0-7: the timer on 0, the slave controller on 2.

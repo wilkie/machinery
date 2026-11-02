@@ -520,3 +520,148 @@ fn bench_cga_modes() {
     bench_cga("80x25 text", &TEXT_80X25, 0x09);
     bench_cga("320x200 graphics", &GRAPHICS_320X200, 0x0A);
 }
+
+// --- Hercules ---
+
+/// Program the 6845 at 3B4/3B5 from R0.
+fn herc_crtc(code: &mut Vec<u8>, regs: &[u8]) {
+    for (i, v) in regs.iter().enumerate() {
+        out8(code, 0x3B4, i as u8);
+        out8(code, 0x3B5, *v);
+    }
+}
+
+/// The MDA's 80x25 text timing, the cursor off (R10 bits 6-5 = 01).
+const HERC_TEXT: [u8; 16] = [
+    0x61, 0x50, 0x52, 0x0F, 0x19, 0x06, 0x19, 0x19, 0x02, 0x0D, 0x2B, 0x0C, 0, 0, 0, 0,
+];
+/// The Hercules's 720x348 graphics timing: four scanlines a "row".
+const HERC_GRAPHICS: [u8; 16] = [
+    0x35, 0x2D, 0x2E, 0x07, 0x5B, 0x02, 0x57, 0x57, 0x02, 0x03, 0x00, 0x00, 0, 0, 0, 0,
+];
+
+/// Runs the program to its HLT, then until the Hercules has finished `n`
+/// more frames.
+fn herc_frames(sys: &mut System, n: u32) {
+    sys.run_until(200_000, |s| s.cpu.halted).unwrap();
+    assert!(sys.cpu.halted, "the program ran to its HLT");
+    sys.catch_up_all();
+    let want = sys.board().herc.frames + n;
+    sys.run_until(10_000_000, |s| {
+        s.catch_up_all();
+        s.board().herc.frames >= want
+    })
+    .unwrap();
+}
+
+/// MDA text: one character in five attributes, normal (07), reverse (70),
+/// underlined (01), intense (0F) and invisible (00).
+#[test]
+fn hercules_renders_mda_text() {
+    let mut code = SETUP.to_vec();
+    herc_crtc(&mut code, &HERC_TEXT);
+    out8(&mut code, 0x3B8, 0x08); // text, video on, no blinking
+    code.extend_from_slice(&[0xB8, 0x00, 0xB0, 0x8E, 0xD8]); // mov ax, 0xB000; mov ds, ax
+    for (i, attr) in [0x07u8, 0x70, 0x01, 0x0F, 0x00].iter().enumerate() {
+        let off = 2 + 2 * i as u16;
+        code.extend_from_slice(&[0xC7, 0x06, off as u8, (off >> 8) as u8, b'A', *attr]); // mov word [off], attr:'A'
+    }
+    code.push(0xF4);
+    let mut sys = boot(rom(&code, &[]));
+    sys.board().herc.font[b'A' as usize * 16] = 0x81;
+    herc_frames(&mut sys, 2);
+    let h = &sys.board().herc;
+    assert_eq!((h.frame_width, h.frame_height), (720, 350));
+    let cell = |line: usize, col: usize| h.frame[line * 720 + col * 9..line * 720 + col * 9 + 9].to_vec();
+    assert_eq!(cell(0, 1), [1, 0, 0, 0, 0, 0, 0, 1, 0], "normal");
+    assert_eq!(cell(0, 2), [0, 1, 1, 1, 1, 1, 1, 0, 1], "reverse");
+    assert_eq!(cell(0, 3), [1, 0, 0, 0, 0, 0, 0, 1, 0], "underlined, row 0");
+    assert_eq!(cell(12, 3), [1; 9], "underlined, row 12: all nine dots");
+    assert_eq!(cell(12, 1), [0; 9], "normal, row 12");
+    assert_eq!(cell(0, 4), [2, 0, 0, 0, 0, 0, 0, 2, 0], "intense");
+    assert_eq!(cell(0, 5), [0; 9], "invisible");
+}
+
+/// 720x348 graphics: the configuration switch allows it, each dot row is in
+/// one of four banks, and a frame is 864 dots by 370 lines of the
+/// 16.257 MHz clock.
+#[test]
+fn hercules_renders_720x348_graphics() {
+    let mut code = SETUP.to_vec();
+    out8(&mut code, 0x3BF, 0x01); // allow graphics
+    herc_crtc(&mut code, &HERC_GRAPHICS);
+    out8(&mut code, 0x3B8, 0x0A); // graphics, video on
+    code.extend_from_slice(&[0xB8, 0x00, 0xB0, 0x8E, 0xD8]); // mov ax, 0xB000; mov ds, ax
+    code.extend_from_slice(&[0xC6, 0x06, 0x00, 0x00, 0xF0]); // mov byte [0x0000], 0xF0: line 0
+    code.extend_from_slice(&[0xC6, 0x06, 0x00, 0x20, 0x0F]); // mov byte [0x2000], 0x0F: line 1
+    code.extend_from_slice(&[0xC6, 0x06, 0x5A, 0x00, 0x81]); // mov byte [0x005A], 0x81: line 4
+    code.push(0xF4);
+    let mut sys = boot(rom(&code, &[]));
+    herc_frames(&mut sys, 1);
+    let t0 = sys.seconds();
+    herc_frames(&mut sys, 1);
+    let period = sys.seconds() - t0;
+    let h = &sys.board().herc;
+    assert_eq!((h.frame_width, h.frame_height), (720, 348));
+    assert_eq!(&h.frame[0..8], &[1, 1, 1, 1, 0, 0, 0, 0]);
+    assert_eq!(&h.frame[720..728], &[0, 0, 0, 0, 1, 1, 1, 1]);
+    assert_eq!(&h.frame[4 * 720..4 * 720 + 8], &[1, 0, 0, 0, 0, 0, 0, 1]);
+    assert_eq!(&h.frame[2 * 720..2 * 720 + 8], &[0; 8]);
+    let expect = 864.0 * 370.0 / 16.257e6;
+    assert!((period - expect).abs() < 1e-4, "a frame took {period} s, expected {expect}");
+}
+
+/// A context for driving the Hercules model directly.
+struct QuietHerc;
+impl machine_board286::HerculesPorts for QuietHerc {}
+
+/// The configuration switch: graphics and the second page can be selected
+/// only once it allows them, and the second page is answered only then.
+#[test]
+fn hercules_configuration_switch() {
+    use machine_board286::Hercules;
+    let mut h = Hercules::new();
+    let mut c = QuietHerc;
+    h.on_port_write(&mut c, 1, 0x3B8, 0, 0x8A);
+    assert_eq!(h.mode, 0x08, "graphics and page 1 masked");
+    assert_eq!(h.on_port_write(&mut c, 0, 0xB8000, 0, 0x55), None, "second page not answered");
+    h.on_port_write(&mut c, 1, 0x3BF, 0, 0x03);
+    h.on_port_write(&mut c, 1, 0x3B8, 0, 0x8A);
+    assert_eq!(h.mode, 0x8A);
+    assert!(h.on_port_write(&mut c, 0, 0xB8000, 0, 0x55).is_some());
+    assert_eq!(h.vram[0x8000], 0x55);
+    assert_eq!(h.on_port_read(&mut c, 0, 0xB8000, 0).map(|r| r.0), Some(0x55));
+}
+
+/// Frames a second the Hercules model renders, driven directly.
+fn bench_herc(name: &str, regs: &[u8], config: u8, mode: u8) {
+    use machine_board286::Hercules;
+    let mut h = Hercules::new();
+    let mut c = QuietHerc;
+    h.on_port_write(&mut c, 1, 0x3BF, 0, config as u16);
+    for (i, &v) in regs.iter().enumerate() {
+        h.on_port_write(&mut c, 1, 0x3B4, 0, i as u16);
+        h.on_port_write(&mut c, 1, 0x3B5, 0, v as u16);
+    }
+    h.on_port_write(&mut c, 1, 0x3B8, 0, mode as u16);
+    let mut x: u32 = 12345;
+    for b in h.vram.iter_mut().chain(h.font.iter_mut()) {
+        x = x.wrapping_mul(1103515245).wrapping_add(12345);
+        *b = (x >> 16) as u8;
+    }
+    let n = 600;
+    let t = std::time::Instant::now();
+    let f0 = h.frames;
+    while h.frames < f0 + n {
+        h.on_tick(&mut c, 1_000_000);
+    }
+    let s = t.elapsed().as_secs_f64();
+    eprintln!("Hercules {name}: {:.0} frames/s ({:.1} us a frame)", n as f64 / s, s * 1e6 / n as f64);
+}
+
+#[test]
+#[ignore]
+fn bench_hercules_modes() {
+    bench_herc("80x25 text", &HERC_TEXT, 0x00, 0x08);
+    bench_herc("720x348 graphics", &HERC_GRAPHICS, 0x01, 0x0A);
+}

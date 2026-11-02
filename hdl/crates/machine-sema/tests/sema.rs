@@ -1588,7 +1588,7 @@ fn i286_board_system_checks_clean() {
     let c = check_files(files);
     assert_clean(&c);
     let sys = &c.hir.systems[0];
-    assert_eq!(sys.components.len(), 11);
+    assert_eq!(sys.components.len(), 12);
     let local = sys.buses.iter().find(|b| b.name == "local").unwrap();
     let isa = sys.buses.iter().find(|b| b.name == "isa").unwrap();
     // RAM, ROM and the bus controller on the local bus, which the processor
@@ -1598,9 +1598,9 @@ fn i286_board_system_checks_clean() {
     // The ROM answers at the top of both the 1 MB and the 16 MB space.
     assert_eq!(local.slaves[1].1.len(), 2);
     // On the ISA bus: system memory through the bus controller, both PICs,
-    // PIT, the DMA registers and pages, the link, the console, the CGA;
-    // mastered by the bus controller and the DMA controller.
-    assert_eq!(isa.slaves.len(), 9);
+    // PIT, the DMA registers and pages, the link, the console, the CGA and
+    // the Hercules; mastered by the bus controller and the DMA controller.
+    assert_eq!(isa.slaves.len(), 10);
     assert_eq!(isa.masters.len(), 2);
     // SP straps, CAS, and INTR.
     assert_eq!(sys.wires.len(), 4);

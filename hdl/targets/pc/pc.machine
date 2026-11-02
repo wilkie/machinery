@@ -1104,3 +1104,203 @@ component Ega {
         }
     }
 }
+
+/// The Hercules Graphics Card: the MDA's monochrome text and a 720x348
+/// graphics mode, with 64 KB of video RAM at B0000 in two 32 KB pages, an
+/// MC6845 CRTC at 3B4/3B5 (mirrored on the even and odd ports from 3B0;
+/// its logic in `crtc.machine`), the Display Mode Control register at 3B8,
+/// status at 3BA and the configuration switch at 3BF, on a 16.257 MHz dot
+/// clock.
+///
+/// The configuration switch guards the card's extensions: until bit 0 is
+/// set the mode register's graphics bit cannot be set, and until bit 1 is
+/// set its page bit cannot, and the second page (B8000-BFFFF) is not
+/// answered at all, so a colour card can sit there (the two-monitor PC).
+///
+/// Text is the MDA's: 80x25 characters of 9x14 dots, the character in the
+/// even byte and the attribute in the odd one, glyphs from the card's
+/// character ROM (`font`, 16 bytes a character, rows 0-13 used, most
+/// significant bit leftmost, which the host fills). The ninth dot repeats
+/// the eighth for the line-drawing characters C0-DF. Attributes: bit 3
+/// intensity, bit 7 blink (when the mode register enables blinking; else
+/// an intense background), foreground 1 underlined (on row 12), 70 reverse
+/// video, 00 and 77's background-only forms invisible.
+///
+/// Graphics: each character clock is 16 dots from two bytes, one bit a dot;
+/// a dot row is in one of four 8 KB banks by the 6845's row scan (the
+/// card puts its low two bits into address bits 13-14), 90 bytes a row.
+///
+/// `frame` holds 720 dots a line, each 0 (dark), 1 (normal) or 2 (intense).
+/// Status (3BA): bit 0 outside the display area, bit 7 low during vertical
+/// sync.
+component Hercules {
+    ports { bus port: IsaBus::Slave; }
+    model {
+        mem vram: [u8; 0x10000];
+        mem font: [u8; 4096];
+        mem frame: [u8; 252000];
+        state frame_width: u32 = 0;
+        state frame_height: u32 = 0;
+        /// Completed frames.
+        state frames: u32 = 0;
+        /// The beam, in dots from the top left of the frame.
+        state pos: u32 = 0;
+        state crtc: [u8; 18];
+        state index: u8 = 0;
+        /// What the 6845's registers give, derived when one is written.
+        state t: Mc6845Frame;
+        /// 3B8: bit 1 graphics, 3 video enable, 5 blink enable, 7 display
+        /// the second page.
+        state mode: u8 = 0;
+        /// 3BF: bit 0 allows graphics, bit 1 allows (and maps) the second
+        /// page.
+        state config: u8 = 0;
+
+        on reset { t = Mc6845Timing(crtc); }
+
+        fn graphics() -> bool { return mode[1] == 1; }
+        fn char_dots() -> u32 { return if graphics() { 16 } else { 9 }; }
+        fn line_dots() -> u32 { return t.line_chars * char_dots(); }
+
+        /// The offset of `addr` in video RAM, or 0x10000 when the card does
+        /// not answer it.
+        fn offset(addr: u24) -> u32 {
+            let a = addr as u32;
+            if a < 0xB0000 || a > 0xBFFFF { return 0x10000; }
+            let o = a - 0xB0000;
+            if o >= 0x8000 && config[1] == 0 { return 0x10000; }
+            return o;
+        }
+
+        /// Draw scanline `line` of the display area into `frame`.
+        fn render(line: u32) {
+            let ra = line % t.row_lines;
+            let row = line / t.row_lines;
+            let cd = char_dots();
+            let cols = t.shown_chars;
+            let page: u32 = if mode[7] == 1 { 0x8000 } else { 0 };
+            let base = line * 720;
+            for col in 0..90 {
+                let c = col as u32;
+                if c < cols && (c + 1) * cd <= 720 {
+                    let ma = Mc6845Address(t, row, c);
+                    let x0 = base + c * cd;
+                    if mode[3] == 0 {
+                        for d in 0..16 {
+                            if (d as u32) < cd { frame[x0 + d as u32] = 0; }
+                        }
+                    } else if graphics() {
+                        let a = page | ((ra & 3) << 13) | ((ma * 2) & 0x1FFF);
+                        let bits = concat(vram[a], vram[a + 1]);
+                        for d in 0..16 {
+                            frame[x0 + d as u32] = bits[15 - d] as u8;
+                        }
+                    } else {
+                        let a = page | ((ma * 2) & 0x7FFF);
+                        let ch = vram[a];
+                        let at = vram[a + 1];
+                        let mut glyph = if ra < 16 { font[(ch as u32) * 16 + ra] } else { 0 };
+                        let reverse = (at & 0x77) == 0x70;
+                        let blinking = mode[5] == 1;
+                        let mut fg: u8 = if reverse { 0 } else if at[3] == 1 { 2 } else { 1 };
+                        let bg: u8 = if !reverse { 0 } else if at[7] == 1 && !blinking { 2 } else { 1 };
+                        if (at & 0x77) == 0 { fg = bg; }
+                        if (at & 7) == 1 && ra == 12 { glyph = 0xFF; }
+                        if blinking && at[7] == 1 && frames[4] == 1 { fg = bg; }
+                        if Mc6845Cursor(t, ma, ra, frames) {
+                            glyph = 0xFF;
+                            fg = if reverse { 0 } else { 1 };
+                        }
+                        let ninth = ch >= 0xC0 && ch <= 0xDF && glyph[0] == 1 || glyph == 0xFF && (at & 7) == 1 && ra == 12;
+                        for d in 0..9 {
+                            let on = if d < 8 { glyph[7 - (d as u3)] == 1 } else { ninth };
+                            frame[x0 + d as u32] = if on { fg } else { bg };
+                        }
+                    }
+                }
+            }
+            frame_width = if cols * cd < 720 { cols * cd } else { 720 };
+        }
+
+        /// Returns the dots left in the frame.
+        on tick(n: u32) -> u32 {
+            let ld = line_dots();
+            let total = ld * t.frame_lines;
+            if total == 0 {
+                return 0xFFFFFFFF;
+            }
+            let mut left = n;
+            while left > 0 {
+                let line = pos / ld;
+                let end = (line + 1) * ld;
+                if pos + left < end {
+                    pos = pos + left;
+                    left = 0;
+                } else {
+                    left = left - (end - pos);
+                    if line < t.shown_lines && line < 350 {
+                        render(line);
+                    }
+                    pos = end;
+                    if pos >= total {
+                        pos = 0;
+                        frames = frames + 1;
+                        frame_height = if t.shown_lines < 350 { t.shown_lines } else { 350 };
+                    }
+                }
+            }
+            return total - pos;
+        }
+
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            if space == Space::Mem {
+                let o = offset(addr);
+                if o > 0xFFFF { decline; }
+                if size == BusSize::Word {
+                    return (data: concat(vram[(o + 1) & 0xFFFF], vram[o]), wait: 1);
+                }
+                return (data: vram[o] as u16, wait: 1);
+            }
+            let r = addr[11:0];
+            if r == 0x3BA {
+                let ld = line_dots();
+                let line = if ld == 0 { 0 } else { pos / ld };
+                let h = if ld == 0 { 0 } else { pos % ld };
+                let o = Mc6845Outputs(t, line, h / char_dots());
+                let v: u8 = (if o.display { 0 } else { 1 }) | (if o.vsync { 0 } else { 0x80 });
+                return (data: v as u16, wait: 1);
+            }
+            if r >= 0x3B0 && r < 0x3B8 && r[0] == 1 && index >= 14 && index < 18 {
+                return (data: crtc[index] as u16, wait: 1);
+            }
+            return (data: 0xFF, wait: 1);
+        }
+
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            if space == Space::Mem {
+                let o = offset(addr);
+                if o > 0xFFFF { decline; }
+                vram[o] = data as u8;
+                if size == BusSize::Word { vram[(o + 1) & 0xFFFF] = (data >> 8) as u8; }
+                return (wait: 1);
+            }
+            let r = addr[11:0];
+            let d = data as u8;
+            if r >= 0x3B0 && r < 0x3B8 {
+                if r[0] == 0 {
+                    index = d & 31;
+                } else if index < 18 {
+                    crtc[index] = d;
+                    t = Mc6845Timing(crtc);
+                }
+            } else if r == 0x3B8 {
+                let mut allowed: u8 = 0x7F;
+                if config[0] == 0 { allowed = allowed & 0xFD; }
+                mode = d & (if config[1] == 1 { allowed | 0x80 } else { allowed });
+            } else if r == 0x3BF {
+                config = d & 3;
+            }
+            return (wait: 1);
+        }
+    }
+}

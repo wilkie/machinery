@@ -1366,6 +1366,20 @@ impl Checker<'_> {
 
     // -- calls ------------------------------------------------------------------------
 
+    /// A single integer generic argument: the width of a family instance.
+    fn generic_width(generics: &[ast::GenericArg]) -> Option<u128> {
+        match generics {
+            [ast::GenericArg::Expr(e)] => match &e.kind {
+                A::Int {
+                    value,
+                    suffix: None,
+                } => Some(*value),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn check_call(
         &mut self,
         cx: &mut FnCtx,
@@ -1377,6 +1391,18 @@ impl Checker<'_> {
     ) -> Expr {
         // Method-style calls on namespaces: `mem.read_u8(a)`, `r8.select(n)`.
         if let A::Field(base, method) = &callee.kind {
+            // `mem.read<16>(a)`: the width as a parameter (SPEC 11.2d).
+            if let (Some(w), "read" | "write") =
+                (Self::generic_width(generics), method.name.as_str())
+            {
+                if let Some(Namespace::Space(def)) = self.namespace_of(cx, base) {
+                    let m = ast::Ident {
+                        name: format!("{}_u{w}", method.name),
+                        span: method.span,
+                    };
+                    return self.space_method(cx, def, &m, args, span);
+                }
+            }
             if !generics.is_empty() {
                 self.error(
                     cx.module,
@@ -1439,6 +1465,15 @@ impl Checker<'_> {
                 }
                 if let Some(call) = self.model_fn_call(cx, name, generics, args, span) {
                     return call;
+                }
+                // `push<16>(v)`: an instance of an isa fn family.
+                if let Some(w) = Self::generic_width(generics) {
+                    let inst = format!("{name}<{w}>");
+                    if let Some(d) = self.lookup_item(cx.scope, &inst) {
+                        if self.prog.item(d).kind == ItemKind::Fn {
+                            return self.fn_call(cx, d, &inst, args, span);
+                        }
+                    }
                 }
                 match self.lookup_item(cx.scope, name) {
                     Some(d) => d,

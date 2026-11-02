@@ -92,6 +92,9 @@ pub(crate) struct Parser {
     /// When > 0, `>`, `>=` and `>>` are not binary operators (we are inside
     /// generic arguments).
     no_gt_ops: u32,
+    /// Instances of a family after the first (SPEC 11.2d), for the item
+    /// loop to emit in order.
+    pub(crate) family_extra: Vec<crate::ast::IsaItem>,
 }
 
 impl Parser {
@@ -103,7 +106,121 @@ impl Parser {
             bailed: false,
             no_struct_literal: 0,
             no_gt_ops: 0,
+            family_extra: Vec::new(),
         }
+    }
+
+    // -- families (SPEC 11.2d) ----------------------------------------------
+
+    /// `name<16>` written without spaces is one name, an instance of a
+    /// family: `r<16>`, `Alu_rm_r<32>`. Anything else is left alone.
+    pub(crate) fn fuse_width(&mut self, base: Ident) -> Ident {
+        let i = self.skip_docs_from(self.pos);
+        let (Some(lt), Some(n), Some(gt)) = (
+            self.tokens.get(i),
+            self.tokens.get(i + 1),
+            self.tokens.get(i + 2),
+        ) else {
+            return base;
+        };
+        if lt.kind != TokenKind::Punct(Punct::Lt) || lt.span.start != base.span.end {
+            return base;
+        }
+        let TokenKind::Int(lit) = &n.kind else {
+            return base;
+        };
+        if gt.kind != TokenKind::Punct(Punct::Gt) || lit.suffix.is_some() {
+            return base;
+        }
+        let w = lit.value;
+        let span = base.span.to(gt.span);
+        self.pos = i + 3;
+        Ident {
+            name: format!("{}<{}>", base.name, w),
+            span,
+        }
+    }
+
+    /// After `Name`: `<const W: width> in [16, 32]`, a family header. Returns
+    /// the parameter and the widths, or `None` when there is no header.
+    pub(crate) fn family_header(&mut self) -> PResult<Option<(Ident, Vec<u32>)>> {
+        if !(self.at_punct(Punct::Lt)
+            && matches!(self.peek_nth(1).kind, TokenKind::Keyword(Keyword::Const)))
+        {
+            return Ok(None);
+        }
+        let params = self.parse_generic_params()?;
+        if params.len() != 1 {
+            return Err(self.error(
+                "E0106",
+                self.prev_span(),
+                "a family has one `const W: width` parameter",
+            ));
+        }
+        let widths = if self.eat_kw(Keyword::In) {
+            self.parse_delimited(Punct::LBracket, Punct::RBracket, &[Punct::Comma], |p| {
+                let t = p.advance().clone();
+                match t.kind {
+                    TokenKind::Int(l) if l.suffix.is_none() && l.value > 0 && l.value <= 128 => {
+                        Ok(l.value as u32)
+                    }
+                    _ => Err(p.error(
+                        "E0106",
+                        t.span,
+                        "a family's widths are integers: `in [16, 32]`",
+                    )),
+                }
+            })?
+        } else {
+            vec![8, 16, 32]
+        };
+        Ok(Some((params.into_iter().next().unwrap().name, widths)))
+    }
+
+    /// The token index of the `}` closing the first `{` at or after the
+    /// cursor (the end of a declaration's body).
+    pub(crate) fn body_end(&self) -> Option<usize> {
+        let mut depth = 0i32;
+        let mut i = self.pos;
+        while let Some(t) = self.tokens.get(i) {
+            match &t.kind {
+                TokenKind::Punct(Punct::LBrace) => depth += 1,
+                TokenKind::Punct(Punct::RBrace) => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                TokenKind::Eof => return None,
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// A parser over the tokens from the cursor through `end`, with the
+    /// family parameter `param` replaced by `width`.
+    pub(crate) fn instance_parser(&self, end: usize, param: &str, width: u32) -> Parser {
+        let mut tokens: Vec<Token> = self.tokens[self.pos..=end]
+            .iter()
+            .map(|t| match &t.kind {
+                TokenKind::Ident(n) if n == param => Token {
+                    kind: TokenKind::Int(crate::token::IntLit {
+                        value: width as u128,
+                        suffix: None,
+                    }),
+                    span: t.span,
+                },
+                _ => t.clone(),
+            })
+            .collect();
+        let last = tokens.last().map(|t| t.span).unwrap_or(self.cur_span());
+        tokens.push(Token {
+            kind: TokenKind::Eof,
+            span: last,
+        });
+        Parser::new(tokens)
     }
 
     // -- cursor ------------------------------------------------------------

@@ -87,6 +87,7 @@ impl Parser {
                         } else {
                             (false, false, first)
                         };
+                        let name = p.fuse_width(name);
                         p.expect_punct(Punct::FatArrow)?;
                         let value = p.parse_expr()?;
                         p.expect_semi()?;
@@ -568,7 +569,14 @@ impl Parser {
         let start = self.expect_word("isa")?;
         let name = self.expect_ident()?;
         self.expect_punct(Punct::LBrace)?;
-        let items = self.parse_items_until_rbrace(|p| p.parse_isa_item())?;
+        // A family declaration yields its instances in order (SPEC 11.2d).
+        let groups = self.parse_items_until_rbrace(|p| {
+            let first = p.parse_isa_item()?;
+            let mut v = vec![first];
+            v.append(&mut p.family_extra);
+            Ok(v)
+        })?;
+        let items = groups.into_iter().flatten().collect();
         Ok(IsaDecl {
             docs,
             name,
@@ -697,6 +705,30 @@ impl Parser {
                     }
                 }
                 let name = self.expect_ident()?;
+                if !external {
+                    if let Some((param, widths)) = self.family_header()? {
+                        // One fn per width, named `name<16>`; calls write
+                        // `name<W>(...)`.
+                        let mut out = Vec::new();
+                        for w in widths {
+                            let (params, ret, body) = self.family_instance(&param.name, w, |p| {
+                                let params = p.parse_params()?;
+                                let ret = if p.eat_punct(Punct::RArrow) { Some(p.parse_type()?) } else { None };
+                                Ok((params, ret, p.parse_block()?))
+                            })?;
+                            out.push(IsaItem::Fn(FnDecl {
+                                docs: docs.clone(),
+                                name: Ident { name: format!("{}<{w}>", name.name), span: name.span },
+                                params,
+                                ret,
+                                body,
+                                external,
+                                span: start.to(self.prev_span()),
+                            }));
+                        }
+                        return self.family_items(out);
+                    }
+                }
                 let params = self.parse_params()?;
                 let ret = if self.eat_punct(Punct::RArrow) {
                     Some(self.parse_type()?)
@@ -838,56 +870,44 @@ impl Parser {
             "operand_kind" => {
                 self.advance();
                 let name = self.expect_ident()?;
-                self.expect_punct(Punct::Colon)?;
-                let ty = self.parse_type()?;
-                let from = if self.eat_word("from") {
-                    let binding = self.expect_ident()?;
-                    self.expect_punct(Punct::Colon)?;
-                    Some((binding, self.parse_path_colons()?))
-                } else {
-                    None
-                };
-                self.expect_punct(Punct::LBrace)?;
-                let mut rules = Vec::new();
-                while !self.at_punct(Punct::RBrace) {
-                    if self.at_eof() {
-                        return Err(self.error_expected("`}`"));
+                if let Some((param, widths)) = self.family_header()? {
+                    let mut out = Vec::new();
+                    for w in widths {
+                        let span = start;
+                        let kd = self.family_instance(&param.name, w, |p| {
+                            let n = Ident { name: format!("{}<{w}>", name.name), span: name.span };
+                            p.parse_operand_kind_rest(docs.clone(), n, span)
+                        })?;
+                        out.push(IsaItem::OperandKind(kd));
                     }
-                    let rs = self.cur_span();
-                    let rname = self.expect_ident()?;
-                    let params = if self.at_punct(Punct::LParen) {
-                        self.parse_params()?
-                    } else {
-                        Vec::new()
-                    };
-                    self.expect_punct(Punct::FatArrow)?;
-                    let body = if self.at_punct(Punct::LBrace) {
-                        ArmBody::Block(self.parse_block()?)
-                    } else {
-                        ArmBody::Expr(self.parse_expr()?)
-                    };
-                    self.expect_semi()?;
-                    rules.push(KindRule {
-                        name: rname,
-                        params,
-                        body,
-                        span: rs.to(self.prev_span()),
-                    });
+                    return self.family_items(out);
                 }
-                self.expect_punct(Punct::RBrace)?;
-                Ok(IsaItem::OperandKind(OperandKindDecl {
-                    docs,
-                    name,
-                    ty,
-                    from,
-                    rules,
-                    span: start.to(self.prev_span()),
-                }))
+                let name = self.fuse_width(name);
+                Ok(IsaItem::OperandKind(self.parse_operand_kind_rest(docs, name, start)?))
             }
             "instruction" | "prefix" => {
                 let prefix = word == "prefix";
                 self.advance();
                 let name = self.expect_ident()?;
+                if let Some((param, widths)) = self.family_header()? {
+                    // One instruction per width, named `Name<16>`.
+                    let mut out = Vec::new();
+                    for w in widths {
+                        let decl = self.family_instance(&param.name, w, |p| {
+                            p.expect_punct(Punct::LBrace)?;
+                            p.parse_items_until_rbrace(|p| p.parse_instruction_item())
+                        })?;
+                        out.push(IsaItem::Instruction(InstructionDecl {
+                            docs: docs.clone(),
+                            prefix,
+                            name: Ident { name: format!("{}<{w}>", name.name), span: name.span },
+                            items: decl,
+                            span: start.to(self.prev_span()),
+                        }));
+                    }
+                    return self.family_items(out);
+                }
+                let name = self.fuse_width(name);
                 self.expect_punct(Punct::LBrace)?;
                 let items = self.parse_items_until_rbrace(|p| p.parse_instruction_item())?;
                 Ok(IsaItem::Instruction(InstructionDecl {
@@ -902,6 +922,98 @@ impl Parser {
                 "`space`, `register`, `mode`, `fault`, `fn`, `operand`, `operand_kind`, `instruction`, `prefix`, `latch`, `istream`, `enum`, `bundle` or `const`",
             )),
         }
+    }
+
+    /// An operand kind after its name: `: T (from m: Op)? { rules }`.
+    fn parse_operand_kind_rest(
+        &mut self,
+        docs: Docs,
+        name: Ident,
+        start: crate::span::Span,
+    ) -> PResult<OperandKindDecl> {
+        self.expect_punct(Punct::Colon)?;
+        let ty = self.parse_type()?;
+        let from = if self.eat_word("from") {
+            let binding = self.expect_ident()?;
+            self.expect_punct(Punct::Colon)?;
+            Some((binding, self.parse_path_colons()?))
+        } else {
+            None
+        };
+        self.expect_punct(Punct::LBrace)?;
+        let mut rules = Vec::new();
+        while !self.at_punct(Punct::RBrace) {
+            if self.at_eof() {
+                return Err(self.error_expected("`}`"));
+            }
+            let rs = self.cur_span();
+            let rname = self.expect_ident()?;
+            let params = if self.at_punct(Punct::LParen) {
+                self.parse_params()?
+            } else {
+                Vec::new()
+            };
+            self.expect_punct(Punct::FatArrow)?;
+            let body = if self.at_punct(Punct::LBrace) {
+                ArmBody::Block(self.parse_block()?)
+            } else {
+                ArmBody::Expr(self.parse_expr()?)
+            };
+            self.expect_semi()?;
+            rules.push(KindRule {
+                name: rname,
+                params,
+                body,
+                span: rs.to(self.prev_span()),
+            });
+        }
+        self.expect_punct(Punct::RBrace)?;
+        Ok(OperandKindDecl {
+            docs,
+            name,
+            ty,
+            from,
+            rules,
+            span: start.to(self.prev_span()),
+        })
+    }
+
+    /// Parses one instance of a family whose header the cursor is just
+    /// past: the declaration's remaining tokens, through its body's closing
+    /// brace, with the parameter replaced by `width`.
+    fn family_instance<T>(
+        &mut self,
+        param: &str,
+        width: u32,
+        f: impl FnOnce(&mut Parser) -> PResult<T>,
+    ) -> PResult<T> {
+        let Some(end) = self.body_end() else {
+            return Err(self.error_expected("the family's body"));
+        };
+        let mut sub = self.instance_parser(end, param, width);
+        let r = f(&mut sub);
+        let diags = std::mem::take(&mut sub.diagnostics);
+        self.diagnostics.extend(diags);
+        r
+    }
+
+    /// Emits a family's instances: the first as this item, the rest after
+    /// it; the cursor moves past the declaration.
+    fn family_items(&mut self, mut out: Vec<IsaItem>) -> PResult<IsaItem> {
+        let Some(end) = self.body_end() else {
+            return Err(self.error_expected("the family's body"));
+        };
+        self.pos = end + 1;
+        if out.is_empty() {
+            return Err(self.error(
+                "E0106",
+                self.prev_span(),
+                "a family needs at least one width",
+            ));
+        }
+        let first = out.remove(0);
+        self.family_extra = out;
+        Ok(first)
     }
 
     fn parse_instruction_item(&mut self) -> PResult<InstructionItem> {
@@ -942,7 +1054,12 @@ impl Parser {
                     self.parse_delimited(Punct::LParen, Punct::RParen, &[Punct::Comma], |p| {
                         let name = p.expect_ident()?;
                         p.expect_punct(Punct::Colon)?;
-                        let kind = p.parse_path_colons()?;
+                        let mut kind = p.parse_path_colons()?;
+                        if let Some(last) = kind.segments.pop() {
+                            let last = p.fuse_width(last);
+                            kind.span = kind.span.to(last.span);
+                            kind.segments.push(last);
+                        }
                         let span = name.span.to(kind.span);
                         Ok(OperandBinding { name, kind, span })
                     })?;

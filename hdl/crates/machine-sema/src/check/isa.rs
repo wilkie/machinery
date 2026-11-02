@@ -194,6 +194,36 @@ impl Checker<'_> {
                 _ => None,
             })
         }
+        /// A `when E == c` condition as (the shape of `E`, `c`).
+        fn when_key(i: &hir::Instruction) -> Option<(String, i128)> {
+            let w = i.when.as_ref()?;
+            let hir::ExprKind::Binary(machine_syntax::ast::BinaryOp::Eq, lhs, rhs) = &w.kind else {
+                return None;
+            };
+            let mut r = rhs.as_ref();
+            while let hir::ExprKind::Cast(inner) = &r.kind {
+                r = inner;
+            }
+            let hir::ExprKind::Int(c) = r.kind else {
+                return None;
+            };
+            Some((shape(&format!("{:?}", lhs.kind)), c))
+        }
+        /// Debug text without source positions.
+        fn shape(text: &str) -> String {
+            let mut out = String::new();
+            let mut rest = text;
+            while let Some(i) = rest.find("span: Span {") {
+                out.push_str(&rest[..i]);
+                rest = &rest[i..];
+                match rest.find('}') {
+                    Some(j) => rest = &rest[j + 1..],
+                    None => break,
+                }
+            }
+            out.push_str(rest);
+            out
+        }
         let overlap = |a: &[hir::OpcodeByte], b: &[hir::OpcodeByte]| {
             a.iter()
                 .zip(b)
@@ -205,6 +235,12 @@ impl Checker<'_> {
                 let lb = lead(ib);
                 if !overlap(&la, &lb) {
                     continue;
+                }
+                // `when E == a` and `when E == b` with a != b (SPEC 11.2d).
+                if let (Some(ka), Some(kb)) = (when_key(ia), when_key(ib)) {
+                    if ka.0 == kb.0 && ka.1 != kb.1 {
+                        continue;
+                    }
                 }
                 let distinguished = la.len() == lb.len()
                     && !ia.prefix
@@ -873,6 +909,19 @@ impl Checker<'_> {
             let mut cx = FnCtx::new(scope, HashMap::new(), None);
             for f in &fields {
                 cx.declare(&f.name, f.ty.clone(), decl.span);
+            }
+            // The one operand whose tail this operand is may be read as
+            // `parent` (the SIB's displacement depends on the ModRM's mod).
+            if let Some(isa) = scope.isa {
+                let mut parents = self.prog.isa_items_of(isa, ItemKind::Operand).filter(|&o| {
+                    o != id
+                        && self.prog.operand_decl(o).tail.as_ref().is_some_and(|t| {
+                            format!("{:?}", t).contains(&format!("name: \"{}\"", decl.name.name))
+                        })
+                });
+                if let (Some(p), None) = (parents.next(), parents.next()) {
+                    cx.declare("parent", Ty::Operand(p), decl.span);
+                }
             }
             let stmts: Vec<&ast::Stmt> = block
                 .stmts
@@ -1620,6 +1669,8 @@ impl Checker<'_> {
         let mut locals = Vec::new();
         let mut timing = None;
         let mut timing_locals = Vec::new();
+        let mut when = None;
+        let mut when_locals = Vec::new();
         let mut implements = None;
         let mut references = Vec::new();
         let mut allowed_in = Vec::new();
@@ -1685,6 +1736,24 @@ impl Checker<'_> {
                     let wrote_opcode = items.iter().any(|ei| ei.name.name == "opcode");
                     for ei in items {
                         let step = steps.len() as u32;
+                        if ei.name.name == "when" {
+                            // A decode condition (SPEC 11.2d).
+                            let Some(arg) = &ei.arg else {
+                                self.error(
+                                    module,
+                                    "E1032",
+                                    ei.span,
+                                    "`when` takes a condition: `when operand_size() == 32;`",
+                                );
+                                ok = false;
+                                continue;
+                            };
+                            let mut cx = FnCtx::new(scope, HashMap::new(), None);
+                            let e = self.check_expr(&mut cx, arg, Some(&Ty::Bool));
+                            when_locals = cx.locals;
+                            when = Some(e);
+                            continue;
+                        }
                         if ei.name.name == "opcode" {
                             let Some(arg) = &ei.arg else {
                                 self.error(
@@ -2093,6 +2162,8 @@ impl Checker<'_> {
             schedule_locals: Vec::new(),
             schedule: None,
             fault_schedule: None,
+            when_locals,
+            when,
             implements,
             references,
             allowed_in,

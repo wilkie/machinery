@@ -89,6 +89,38 @@ fn cpu_slice_interpreter_compiles_and_passes_its_tests() {
     );
 }
 
+/// Instruction families and decode conditions (SPEC 11.2d): the
+/// `families` sample's tests run its 16- and 32-bit instances and its
+/// 32-bit addressing through a SIB.
+#[test]
+fn families_sample_passes_its_tests() {
+    let checked = check_files(vec![sample("alu.machine"), sample("families.machine")]);
+    assert!(!checked.has_errors());
+    let src = generate_isa(&checked, "T").unwrap_or_else(|e| panic!("{e}"));
+    let root = hdl_root();
+    let crate_ = package(
+        &crate_name("T"),
+        src,
+        &root.join("crates").join("machine-runtime"),
+    );
+    let dir = root.join("target").join("gen-tests").join("families");
+    write_crate(&dir, &crate_).unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let output = Command::new(cargo)
+        .args(["test", "--quiet", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+        .output()
+        .expect("run cargo");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "families failed:\n{stdout}\n{stderr}"
+    );
+    assert!(stdout.contains("10 passed"), "expected 10 tests:\n{stdout}");
+}
+
 fn target(name: &str) -> SourceFile {
     let path = hdl_root().join("targets").join("i286").join(name);
     SourceFile::new(name, std::fs::read_to_string(&path).unwrap())

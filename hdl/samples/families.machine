@@ -1,0 +1,132 @@
+// Instruction families and decode conditions (SPEC 11.2d), the way the 386
+// uses them: an ALU instruction at 16 and 32 bits chosen by the
+// operand-size prefix, kinds and fns per width, and a ModRM whose tail
+// depends on the address size, through a SIB whose displacement depends on
+// its parent ModRM.
+use alu::{AluOp, ArithFlags, Alu, AluFlags};
+isa T {
+    space mem: addr u24 -> u8, little_endian;
+    register EAX: u32 { AX: u16 @ 0; AL: u8 @ 0; AH: u8 @ 8; }
+    register ECX: u32 { CX: u16 @ 0; CL: u8 @ 0; CH: u8 @ 8; }
+    register ESP: u32 { SP: u16 @ 0; }
+    register EIP: u32 { IP: u16 @ 0; }
+    register FLAGS: u16 {
+        CF: u1 @ 0; PF: u1 @ 2; AF: u1 @ 4; ZF: u1 @ 6; SF: u1 @ 7; OF: u1 @ 11;
+        view arith: ArithFlags { cf: CF, pf: PF, af: AF, zf: ZF, sf: SF, of: OF }
+    }
+    fault UD { vector: 6, class: Fault }
+    latch opsize: u1 = 0;
+    prefix OperandSize { encoding { opcode 0x66; } semantics { opsize = 1; } }
+    fn operand_size() -> u6 { return if opsize == 1 { 32 } else { 16 }; }
+    fn code_address() -> u24 { return IP as u24; }
+    fn next_byte() -> u8 { let b = mem.read_u8(code_address()); IP = IP + 1; return b; }
+    istream { space mem; address code_address; next next_byte; undefined UD; }
+
+    latch adsize: u1 = 0;
+    prefix AddressSize { encoding { opcode 0x67; } semantics { adsize = 1; } }
+    fn address_size() -> u6 { return if adsize == 1 { 32 } else { 16 }; }
+    operand ModRM {
+        size 1;
+        fields { mod: u2 @ 6; reg: u3 @ 3; rm: u3 @ 0; }
+        tail {
+            if address_size() == 32 {
+                if mod != 3 && rm == 4 { Sib }
+                else if mod == 1 { Disp8 }
+                else if mod == 2 || (mod == 0 && rm == 5) { Disp32 }
+            } else if mod == 1 { Disp8 }
+            else if mod == 2 || (mod == 0 && rm == 6) { Disp16 }
+        }
+    }
+    operand Sib {
+        size 1;
+        fields { scale: u2 @ 6; index: u3 @ 3; base: u3 @ 0; }
+        tail {
+            if parent.mod == 1 { Disp8 }
+            else if parent.mod == 2 || (parent.mod == 0 && base == 5) { Disp32 }
+        }
+    }
+    operand Disp8 { size 1; fields { value: i8 @ 0; } }
+    operand Disp16 { size 2; fields { value: i16 @ 0; } }
+    operand Disp32 { size 4; fields { value: i32 @ 0; } }
+    /// The displacement a ModRM carries, through a SIB if it has one: the
+    /// same field tests as the tails.
+    fn disp(m: ModRM) -> u32 {
+        if address_size() == 32 {
+            if m.mod != 3 && m.rm == 4 {
+                let b = m.tail.Sib;
+                if m.mod == 1 { return (b.tail.Disp8.value as i32) as u32; }
+                if m.mod == 2 || (m.mod == 0 && b.base == 5) { return b.tail.Disp32.value as u32; }
+                return 0;
+            }
+            if m.mod == 1 { return (m.tail.Disp8.value as i32) as u32; }
+            if m.mod == 2 || (m.mod == 0 && m.rm == 5) { return m.tail.Disp32.value as u32; }
+            return 0;
+        }
+        if m.mod == 1 { return (m.tail.Disp8.value as i32) as u32; }
+        if m.mod == 2 || (m.mod == 0 && m.rm == 6) { return (m.tail.Disp16.value as i32) as u32; }
+        return 0;
+    }
+    operand_kind modrm : ModRM from m: ModRM { read => m; }
+    instruction Probe {
+        mnemonic "probe";
+        encoding { opcode 0x8D; ModRM }
+        operands (m: modrm);
+        semantics { EAX = disp(m); }
+    }
+    operand_kind alu_op : AluOp { value(n: u3) => n as AluOp; }
+    operand_kind r<16> : u16 { select(n: u3) => match n { 0 => AX, 1 => CX, 4 => SP, _ => AX }; }
+    operand_kind r<32> : u32 { select(n: u3) => match n { 0 => EAX, 1 => ECX, 4 => ESP, _ => EAX }; }
+    operand_kind rm<const W: width> in [16, 32] : u<W> from m: ModRM {
+        is_mem => m.mod != 3;
+        read => if m.mod == 3 { r<W>.select(m.rm) } else { mem.read<W>(0x100) };
+        write(v: u<W>) => if m.mod == 3 { r<W>.select(m.rm) = v; } else { mem.write<W>(0x100, v); };
+    }
+
+    fn push<const W: width> in [16, 32](v: u<W>) {
+        SP = SP - (W / 8);
+        mem.write<W>(SP as u24, v);
+    }
+
+    instruction Alu_rm_r<const W: width> in [16, 32] {
+        mnemonic "alu";
+        encoding { when operand_size() == W; opcode "00ooo001" { o: alu_op }; ModRM { reg: r<W> } }
+        operands (op: alu_op, dst: rm<W>, src: r<W>);
+        semantics {
+            let a = dst;
+            let (result, raw) = Alu<W>(op, a, src, 0);
+            if op != AluOp::Cmp { dst = result; }
+            FLAGS.arith = AluFlags<W>(op, a, src, raw);
+            push<W>(result);
+        }
+    }
+}
+
+test "family instance runs" on T {
+    given { AX = 0x7FFF; CX = 1; SP = 0x200; IP = 0x100; }
+    run bytes [0x01, 0xC8];          // add ax, cx
+    expect { AX == 0x8000; FLAGS.OF == 1; SP == 0x1FE; mem[0x1FE] == 0x00; mem[0x1FF] == 0x80; }
+}
+
+test "the operand-size prefix picks the 32-bit instance" on T {
+    given { EAX = 0x7FFFFFFF; ECX = 1; SP = 0x200; IP = 0x100; }
+    run bytes [0x66, 0x01, 0xC8];    // add eax, ecx
+    expect { EAX == 0x80000000; FLAGS.OF == 1; SP == 0x1FC; mem[0x1FF] == 0x80; }
+}
+
+test "a 32-bit address reads a SIB and its displacement" on T {
+    given { IP = 0x100; }
+    run bytes [0x67, 0x8D, 0x44, 0x24, 0x10];   // [esp + 0x10]: mod 1, SIB, disp8
+    expect { EAX == 0x10; IP == 0x105; }
+}
+
+test "a SIB with no base takes a 32-bit displacement" on T {
+    given { IP = 0x100; }
+    run bytes [0x67, 0x8D, 0x04, 0x25, 0x78, 0x56, 0x34, 0x12];   // [disp32]
+    expect { EAX == 0x12345678; IP == 0x108; }
+}
+
+test "a 16-bit address reads its displacement directly" on T {
+    given { IP = 0x100; }
+    run bytes [0x8D, 0x44, 0x10];   // [si + 0x10]: mod 1, disp8
+    expect { EAX == 0x10; IP == 0x103; }
+}

@@ -533,6 +533,10 @@ pub struct Instruction {
     /// cycles meaning `schedule(n)`.
     pub schedule_locals: Vec<Local>,
     pub schedule: Option<Expr>,
+    /// `when <cond>;` in the encoding (SPEC 11.2d): a decode condition over
+    /// latches, registers and pure fns, checked after the bytes match.
+    pub when_locals: Vec<Local>,
+    pub when: Option<Expr>,
     /// `fault <Name> =>` in a `schedules` table: delivering a fault this
     /// instruction raises, with `vector` (its first param) in scope.
     pub fault_schedule: Option<TimingExpr>,

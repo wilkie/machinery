@@ -1228,11 +1228,16 @@ instruction Alu_rm_r<const W: width> in [16, 32] {
 - **Kind families.** An operand kind is declared per width with the width
   in its name, `operand_kind r<16> : u16 { ... }` and `operand_kind r<32>
   : u32 { ... }`, or once with a parameter when its rules are uniform,
-  `operand_kind rm<const W: width> : u<W> from m: ModRM { ... }`. `r<W>`
-  in an instance resolves to the kind for that width.
-- **Fn families.** `fn push<const W: width>(v: u<W>) { ... }` is an isa
-  fn instantiated at each width it is called with, `push<W>(v)` or
-  `push<32>(v)`.
+  `operand_kind rm<const W: width> in [16, 32] : u<W> from m: ModRM { ...
+  }`. `r<W>` in an instance resolves to the kind for that width.
+- **Fn families.** `fn push<const W: width> in [16, 32](v: u<W>) { ... }`
+  is an isa fn per listed width, called as `push<W>(v)` or `push<32>(v)`.
+  A kind or fn family without `in [...]` is instantiated at 8, 16 and 32.
+- **Names.** An instance is written with its width and no spaces,
+  `r<16>`, `Alu_rm_r<32>`; with spaces, `<` is a comparison. A family is
+  expanded when it is parsed, by substituting the width for its
+  parameter, so every later stage sees ordinary instructions, kinds and
+  fns.
 - **Width-generic access.** `mem.read<W>(addr)` and `mem.write<W>(addr,
   v)` are `mem.read_u16` and friends with the width a parameter.
 - **Decode conditions.** `when <expr>;` in an encoding is a condition the
@@ -1269,7 +1274,10 @@ operand Sib {
 ```
 
   A tail may also name its parent's fields (`parent.mod`), since the
-  SIB's displacement depends on the ModRM it follows.
+  SIB's displacement depends on the ModRM it follows; that operand must
+  be the tail of exactly one other. Code reading an operand's tail decides
+  which one it is from the same fields the tail did (the 286 and 386
+  effective-address fns do), since there is no query for it.
 
 A family is a convenience, not a new kind of instruction: each instance is
 an ordinary instruction to the interpreter, the rig, the timing tables and

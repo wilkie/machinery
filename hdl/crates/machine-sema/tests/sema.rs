@@ -2024,6 +2024,35 @@ fn timing_tables_check() {
 }
 
 #[test]
+fn instruction_families_and_decode_conditions() {
+    let fam = |enc: &str| {
+        let src = DEC_PRELUDE.replace(
+            "undefined UD; }",
+            &format!("undefined UD; }}\n    latch opsize: u1 = 0;\n    fn osize() -> u6 {{ return if opsize == 1 {{ 32 }} else {{ 16 }}; }}\n    instruction Nop<const W: width> in [16, 32] {{ mnemonic \"nop\"; encoding {{ {enc} opcode 0x90; }} semantics {{ let x: u<W> = 0; }} }}"),
+        );
+        format!("{src}\n}}")
+    };
+    // Instances told apart by a `when` on the same expression.
+    let c = check_src(&fam("when osize() == W;"));
+    assert_clean(&c);
+    let names: Vec<&str> = c.hir.isas[0]
+        .instructions
+        .iter()
+        .map(|i| i.name.as_str())
+        .collect();
+    assert!(
+        names.contains(&"Nop<16>") && names.contains(&"Nop<32>"),
+        "{names:?}"
+    );
+    // Without one, they overlap.
+    assert_codes(&fam(""), &["E1045"]);
+    // Nor with the same constant.
+    assert_codes(&fam("when osize() == 16;"), &["E1045"]);
+    // A `when` needs a condition.
+    assert_codes(&fam("when;"), &["E1032", "E1032"]);
+}
+
+#[test]
 fn schedule_tables_check() {
     let tables = |schedules: &str| {
         let src = DEC_PRELUDE.replace(

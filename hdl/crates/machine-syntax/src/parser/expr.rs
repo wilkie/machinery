@@ -140,10 +140,29 @@ impl Parser {
                 self.advance();
                 let field = self.expect_ident()?;
                 let span = e.span.to(field.span);
+                // `mem.read<16>(a)`: a method with a width (SPEC 11.2d).
+                let generic = self.at_punct(Punct::Lt)
+                    && self.peek().span.start == field.span.end
+                    && matches!(self.peek_nth(1).kind, TokenKind::Int(_))
+                    && matches!(self.peek_nth(2).kind, TokenKind::Punct(Punct::Gt))
+                    && matches!(self.peek_nth(3).kind, TokenKind::Punct(Punct::LParen));
                 e = Expr {
                     kind: ExprKind::Field(Box::new(e), field),
                     span,
                 };
+                if generic {
+                    let generics = self.parse_generic_args()?;
+                    let args = self.parse_args()?;
+                    let span = e.span.to(self.prev_span());
+                    e = Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(e),
+                            generics,
+                            args,
+                        },
+                        span,
+                    };
+                }
             } else if self.at_punct(Punct::LBracket) {
                 self.advance();
                 let first = self.parse_expr()?;
@@ -324,7 +343,18 @@ impl Parser {
                         span,
                     });
                 }
-                let path = self.parse_path_colons()?;
+                let mut path = self.parse_path_colons()?;
+                // `r<16>` written without spaces and not called: an instance
+                // of a family (SPEC 11.2d).
+                if self.at_punct(Punct::Lt)
+                    && !matches!(self.peek_nth(3).kind, TokenKind::Punct(Punct::LParen))
+                {
+                    if let Some(last) = path.segments.pop() {
+                        let last = self.fuse_width(last);
+                        path.span = path.span.to(last.span);
+                        path.segments.push(last);
+                    }
+                }
                 // Generic call: `Alu<8>(...)`. Speculative because `<` may be
                 // a comparison.
                 if self.at_punct(Punct::Lt) {

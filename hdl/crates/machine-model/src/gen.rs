@@ -57,6 +57,9 @@ const KEYWORDS: &[&str] = &[
 fn ident(name: &str) -> String {
     if KEYWORDS.contains(&name) {
         format!("{name}_")
+    } else if name.contains('<') {
+        // A family instance (SPEC 11.2d): `rm<16>` is `rm_16`.
+        name.replace('<', "_").replace('>', "")
     } else {
         name.to_string()
     }
@@ -1731,12 +1734,60 @@ impl<'a> Gen<'a> {
             }
         }
         match &o.tail {
-            Some(t) => {
+            Some(t) if tail_is_local(t, o.fields.len()) => {
                 let _ = writeln!(s, "        {}", self.tail_expr(&cx, t, &o.tail_set)?);
             }
-            None => s.push_str("        0\n"),
+            // A tail that reads the machine (SPEC 11.2d) is the machine's
+            // `tail_of_` method; here, for the encoders, there is none.
+            _ => s.push_str("        0\n"),
         }
         s.push_str("    }\n}\n");
+        self.out.push_str(&s);
+        Ok(())
+    }
+
+    /// The operand `o`'s tail, chosen with the machine's state at hand:
+    /// its fields, and `parent` when it is another operand's tail.
+    fn emit_tail_of(&mut self, o: &hir::Operand) -> R<()> {
+        let on = ident(&o.name);
+        let cx = Cx {
+            locals: &o.tail_locals,
+            fallible: true,
+            recv: "self",
+            ops: None,
+            comp: None,
+            opt: false,
+        };
+        let parent = tail_parent(o).map(|p| ident(&self.prog.item_name(p)));
+        let pparam = match &parent {
+            Some(p) => format!(", parent: &{p}"),
+            None => String::new(),
+        };
+        let mut s = format!("    #[allow(unused_variables)]\n    pub fn tail_of_{on}(&mut self, o: &{on}{pparam}) -> Result<u8, Fault> {{\n");
+        for (i, f) in o.fields.iter().enumerate() {
+            if i < o.tail_locals.len() {
+                let _ = writeln!(
+                    s,
+                    "        let {} = o.{};",
+                    self.local_name(&cx, i as u32),
+                    ident(&f.name)
+                );
+            }
+        }
+        if parent.is_some() {
+            let _ = writeln!(
+                s,
+                "        let {} = parent;",
+                self.local_name(&cx, o.fields.len() as u32)
+            );
+        }
+        match &o.tail {
+            Some(t) => {
+                let _ = writeln!(s, "        Ok({})", self.tail_expr(&cx, t, &o.tail_set)?);
+            }
+            None => s.push_str("        Ok(0)\n"),
+        }
+        s.push_str("    }\n");
         self.out.push_str(&s);
         Ok(())
     }
@@ -2066,7 +2117,12 @@ impl<'a> Gen<'a> {
         for o in &self.isa.operands {
             let on = ident(&o.name);
             let mut s = format!(
-                "    pub fn fetch_{on}(&mut self) -> Result<{on}, Fault> {{\n        let mut bits: u64 = 0;\n        for i in 0..{on}::SIZE {{ bits |= (self.istream_next()? as u64) << (8 * i); }}\n        let mut o = {on}::from_bits(bits);\n{mark}        match o.tail_sel() {{\n",
+                "    pub fn fetch_{on}(&mut self{pparam}) -> Result<{on}, Fault> {{\n        let mut bits: u64 = 0;\n        for i in 0..{on}::SIZE {{ bits |= (self.istream_next()? as u64) << (8 * i); }}\n        let mut o = {on}::from_bits(bits);\n{mark}        match self.tail_of_{on}(&o{parg})? {{\n",
+                pparam = match tail_parent(o) {
+                    Some(p) => format!(", parent: &{}", ident(&self.prog.item_name(p))),
+                    None => String::new(),
+                },
+                parg = if tail_parent(o).is_some() { ", parent" } else { "" },
                 mark = if o.decode > 0 {
                     format!("        // `decode {on} => {0}`: the decoder spends {0} more clock(s) on its first byte.\n        if let Some(d) = self.decode_at.get_mut((self.fetched as usize).wrapping_sub({on}::SIZE as usize)) {{ *d = {0}; }}\n", o.decode)
                 } else {
@@ -2077,12 +2133,14 @@ impl<'a> Gen<'a> {
                 let tn = ident(&self.prog.item_name(*t));
                 let _ = writeln!(
                     s,
-                    "            {} => o.tail = {on}_Tail::{tn}(self.fetch_{tn}()?),",
-                    k + 1
+                    "            {} => {{ let t = self.fetch_{tn}({})?; o.tail = {on}_Tail::{tn}(t); }}",
+                    k + 1,
+                    if self.operands.get(t).is_some_and(|x| tail_parent(x).is_some()) { "&o" } else { "" }
                 );
             }
             s.push_str("            _ => {}\n        }\n        Ok(o)\n    }\n");
             self.out.push_str(&s);
+            self.emit_tail_of(o)?;
         }
 
         // A trie over concrete leading opcode bytes.
@@ -2239,6 +2297,52 @@ impl<'a> Gen<'a> {
     /// Code for a trie leaf: one instruction, or several told apart by
     /// constraints on the operand they all fetch first.
     fn emit_leaf(&self, leaves: &[usize], undefined: &str) -> R<String> {
+        // Decode conditions (SPEC 11.2d): test them first, in declaration
+        // order, then decode within the group whose condition holds.
+        if leaves
+            .iter()
+            .any(|&i| self.isa.instructions[i].when.is_some())
+        {
+            let mut groups: Vec<(Option<String>, Vec<usize>)> = Vec::new();
+            for &i in leaves {
+                let ins = &self.isa.instructions[i];
+                let cond = match &ins.when {
+                    Some(w) => {
+                        let cx = Cx {
+                            locals: &ins.when_locals,
+                            fallible: true,
+                            recv: "self",
+                            ops: None,
+                            comp: None,
+                            opt: false,
+                        };
+                        Some(self.expr(&cx, w)?)
+                    }
+                    None => None,
+                };
+                match groups.iter_mut().find(|(c, _)| *c == cond) {
+                    Some((_, g)) => g.push(i),
+                    None => groups.push((cond, vec![i])),
+                }
+            }
+            let mut chain = Vec::new();
+            let mut otherwise = None;
+            for (cond, g) in groups {
+                let body = self.emit_leaf_plain(&g, undefined)?;
+                match cond {
+                    Some(c) => chain.push(format!("if {c} {{\n{body}}}")),
+                    None => otherwise = Some(body),
+                }
+            }
+            let tail = otherwise.unwrap_or_else(|| format!("{undefined}\n"));
+            return Ok(format!("{} else {{\n{tail}}}\n", chain.join(" else ")));
+        }
+        self.emit_leaf_plain(leaves, undefined)
+    }
+
+    /// A leaf's instructions told apart by their first operand's field
+    /// constraints.
+    fn emit_leaf_plain(&self, leaves: &[usize], undefined: &str) -> R<String> {
         let first = &self.isa.instructions[leaves[0]];
         // A prefix is not an instruction: the opcode that follows decides.
         let mut out = if first.prefix {
@@ -3327,3 +3431,33 @@ pub fn schedule_then(s: Schedule, performed: u8, f: Schedule) -> Schedule {
     out
 }
 "#;
+
+/// Whether a tail reads only its operand's fields (locals below `fields`)
+/// and constants, so that the operand struct can compute it.
+fn tail_is_local(t: &hir::TailExpr, fields: usize) -> bool {
+    match t {
+        hir::TailExpr::Operand(_) => true,
+        hir::TailExpr::If(c, a, b) => {
+            let mut ok = true;
+            hir::visit_expr(c, &mut |_| {}, &mut |e| match &e.kind {
+                hir::ExprKind::Local(l) if (*l as usize) < fields => {}
+                hir::ExprKind::Local(_)
+                | hir::ExprKind::Register(_)
+                | hir::ExprKind::Latch(_)
+                | hir::ExprKind::Mode(_)
+                | hir::ExprKind::FnCall(..) => ok = false,
+                _ => {}
+            });
+            ok && tail_is_local(a, fields) && b.as_ref().is_none_or(|b| tail_is_local(b, fields))
+        }
+    }
+}
+
+/// The operand whose tail `o` is, when `o`'s tail reads it as `parent`.
+fn tail_parent(o: &hir::Operand) -> Option<DefId> {
+    let l = o.tail_locals.get(o.fields.len())?;
+    match (&l.name[..], &l.ty) {
+        ("parent", Ty::Operand(p)) => Some(*p),
+        _ => None,
+    }
+}

@@ -24,8 +24,8 @@ pub enum Builtin {
     /// address the previous one did (a repeated string instruction's later
     /// iterations).
     Restarted,
-    /// `schedule(w0, step, w1, ..., decode: n) -> Schedule` in a timing
-    /// expression (SPEC 11.2c).
+    /// `schedule(w0, step, w1, ...) -> Schedule` in a timing expression
+    /// (SPEC 11.2c).
     Schedule,
 }
 

@@ -146,6 +146,9 @@ isa I286 {
     }
 
     fn code_address() -> u24 { return translate(CS, IP, 1, Access::Execute); }
+    /// The bytes of code from IP to the end of CS (offset FFFF in real
+    /// mode): the bus unit does not prefetch past them.
+    fn code_room() -> u32 { return 0x10000 - (IP as u32); }
 
     fn next_byte() -> u8 {
         if fetched == 10 { raise GP(0); }
@@ -155,7 +158,7 @@ isa I286 {
         return b;
     }
 
-    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; }
+    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; }
 
     /// The INTR pin, and the two interrupt-acknowledge bus cycles that
     /// fetch the vector from the interrupt controller: the processor model
@@ -266,6 +269,25 @@ isa I286 {
         };
     }
 
+    /// An ESC instruction's ModRM as it goes to the coprocessor: the byte,
+    /// and for a memory form the operand's selector and offset.
+    operand_kind esc_op : (modrm: u8, seg: u16, off: u16) from m: ModRM {
+        is_mem => m.mod != 3;
+        ea => EaWork(m.mod, m.rm);
+        read => {
+            let b = concat(m.mod, m.reg, m.rm);
+            if m.mod == 3 {
+                (modrm: b, seg: 0, off: 0)
+            } else {
+                // The operand is checked against its segment's limit (a
+                // word at FFFF is #GP), though not read.
+                let (s, o) = effective_address(m);
+                let _ = translate(s, o, 2, Access::Read);
+                (modrm: b, seg: s.selector, off: o)
+            }
+        };
+    }
+
     /// The effective offset of a ModRM memory form (LEA).
     operand_kind mem_offset : u16 from m: ModRM {
         is_mem => m.mod != 3;
@@ -295,6 +317,7 @@ isa I286 {
     }
     /// The segment register number in ModRM `reg` (8C/8E); 4-7 are #UD.
     operand_kind sreg_n : u3 { value(n: u3) => n; }
+    operand_kind bits3 : u3 { value(n: u3) => n; }
 
     operand_kind alu_op : AluOp { value(n: u3) => n as AluOp; }
 
@@ -694,7 +717,8 @@ isa I286 {
             modifies: [OF, SF, ZF, AF, PF, CF];
             undefined: [OF if (CL & 0x1F) != 1, AF if is_shift(op) && (CL & 0x1F) != 0, CF if is_shift(op) && (CL & 0x1F) > 8];
         }
-        semantics { dst = shift(op, dst as u16, 8, CL) as u8; }
+        // A count of 0 (mod 32) reads the operand but writes nothing back.
+        semantics { let v = shift(op, dst as u16, 8, CL) as u8; if (CL & 0x1F) != 0 { dst = v; } }
     }
     instruction Shift_rm16_cl {
         mnemonic shift_name(op);
@@ -704,7 +728,7 @@ isa I286 {
             modifies: [OF, SF, ZF, AF, PF, CF];
             undefined: [OF if (CL & 0x1F) != 1, AF if is_shift(op) && (CL & 0x1F) != 0, CF if is_shift(op) && (CL & 0x1F) > 16];
         }
-        semantics { dst = shift(op, dst, 16, CL); }
+        semantics { let v = shift(op, dst, 16, CL); if (CL & 0x1F) != 0 { dst = v; } }
     }
     instruction Shift_rm8_imm8 {
         mnemonic shift_name(op);
@@ -714,7 +738,7 @@ isa I286 {
             modifies: [OF, SF, ZF, AF, PF, CF];
             undefined: [OF if (n & 0x1F) != 1, AF if is_shift(op) && (n & 0x1F) != 0, CF if is_shift(op) && (n & 0x1F) > 8];
         }
-        semantics { dst = shift(op, dst as u16, 8, n) as u8; }
+        semantics { let v = shift(op, dst as u16, 8, n) as u8; if (n & 0x1F) != 0 { dst = v; } }
     }
     instruction Shift_rm16_imm8 {
         mnemonic shift_name(op);
@@ -724,7 +748,7 @@ isa I286 {
             modifies: [OF, SF, ZF, AF, PF, CF];
             undefined: [OF if (n & 0x1F) != 1, AF if is_shift(op) && (n & 0x1F) != 0, CF if is_shift(op) && (n & 0x1F) > 16];
         }
-        semantics { dst = shift(op, dst, 16, n); }
+        semantics { let v = shift(op, dst, 16, n); if (n & 0x1F) != 0 { dst = v; } }
     }
 
     // -- TEST, NOT, NEG, MUL, DIV ---------------------------------------------------------------
@@ -1425,11 +1449,25 @@ isa I286 {
     /// Coprocessor escape: with no coprocessor and MSW clear, the 286
     /// consumes the ModRM (and displacement) and, for a memory form, reads
     /// the operand word (so it can fault) and discards it.
+    /// With no coprocessor, the 286 still hands an ESC instruction to one
+    /// over I/O (the SingleStepTests traces): the opcode and ModRM to port
+    /// F8, then the instruction's IP and CS, and for a memory operand its
+    /// offset and selector, to port FC. Memory is not read, but the
+    /// operand's address is checked.
     instruction Esc {
         mnemonic "esc";
-        encoding { opcode "11011---"; ModRM }
-        operands (m: rm16);
-        semantics { if m.is_mem { let _ = m; } }
+        encoding { opcode "11011eee" { e: bits3 }; ModRM }
+        operands (e: bits3, m: esc_op);
+        semantics {
+            let o = m;
+            io.write_u16(0xF8, concat(o.modrm, 0xD8_u8 | (e as u8)));
+            io.write_u16(0xFC, start_ip);
+            io.write_u16(0xFC, CS.selector);
+            if m.is_mem {
+                io.write_u16(0xFC, o.off);
+                io.write_u16(0xFC, o.seg);
+            }
+        }
     }
     instruction Wait { mnemonic "wait"; encoding { opcode 0x9B; } }
 

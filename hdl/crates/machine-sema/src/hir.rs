@@ -628,6 +628,9 @@ pub struct Istream {
     /// `fn () -> bool` run at each instruction boundary; `true` means it
     /// took an interrupt in place of the next instruction.
     pub boundary: Option<DefId>,
+    /// `fn () -> u32`: bytes the stream holds from the current address
+    /// before its segment ends (a processor model stops prefetching there).
+    pub limit: Option<DefId>,
 }
 
 /// A resolved `enum`/`mode`, exported for backends.

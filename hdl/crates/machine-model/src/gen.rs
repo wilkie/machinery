@@ -1336,14 +1336,35 @@ impl<'a> Gen<'a> {
             self.out.push_str(SCHEDULE_THEN);
         }
         for b in &self.hir.bundles {
+            // Rust derives `Default` only for arrays of up to 32 elements.
+            fn big(t: &Ty) -> bool {
+                match t {
+                    Ty::Array(e, n) => *n > 32 || big(e),
+                    Ty::Tuple(items) => items.iter().any(|(_, t)| big(t)),
+                    _ => false,
+                }
+            }
+            let manual = b.fields.iter().any(|f| big(&f.ty));
             let mut s = format!(
-                "#[derive(Clone, Copy, Debug, PartialEq, Default)]\npub struct {} {{\n",
+                "#[derive(Clone, Copy, Debug, PartialEq{})]\npub struct {} {{\n",
+                if manual { "" } else { ", Default" },
                 ident(&b.name)
             );
             for f in &b.fields {
                 let _ = writeln!(s, "    pub {}: {},", ident(&f.name), self.rty(&f.ty)?);
             }
             s.push_str("}\n");
+            if manual {
+                let mut init = String::new();
+                for f in &b.fields {
+                    let _ = write!(init, "{}: {}, ", ident(&f.name), self.default_value(&f.ty)?);
+                }
+                let _ = writeln!(
+                    s,
+                    "impl Default for {0} {{ fn default() -> {0} {{ {0} {{ {init}}} }} }}",
+                    ident(&b.name)
+                );
+            }
             self.out.push_str(&s);
         }
         // Units.
@@ -2114,11 +2135,23 @@ impl<'a> Gen<'a> {
         );
         let boundary = match istream.boundary {
             Some(b) => format!(
-                "        // The isa's boundary fn may take an interrupt in place of the\n        // next instruction (and wakes a halted processor when it does).\n        match self.fn_{}() {{\n            Ok(true) => {{ self.halted = false; self.cycles = self.interrupt_cycles(); let mut s = self.interrupt_schedule(); s.start = self.fn_{1}().map(|a| a as u64).unwrap_or(u64::MAX); s.next = s.start; self.bus.retire(self.cycles, s); return Ok(()); }}\n            Ok(false) => {{}}\n            Err(f) => return self.finish(Err(f)),\n        }}\n",
+                "        // The isa's boundary fn may take an interrupt in place of the\n        // next instruction (and wakes a halted processor when it does).\n        match self.fn_{}() {{\n            Ok(true) => {{ self.halted = false; self.cycles = self.interrupt_cycles(); let mut s = self.interrupt_schedule(); s.start = self.fn_{1}().map(|a| a as u64).unwrap_or(u64::MAX); s.next = s.start; s.room = {2}; self.bus.retire(self.cycles, s); return Ok(()); }}\n            Ok(false) => {{}}\n            Err(f) => return self.finish(Err(f)),\n        }}\n",
                 ident(&self.fns[&b].name),
-                ident(&self.fns[&istream.address].name)
+                ident(&self.fns[&istream.address].name),
+                match istream.limit {
+                    Some(f) => format!("self.fn_{}().unwrap_or(u32::MAX)", ident(&self.fns[&f].name)),
+                    None => "u32::MAX".to_string(),
+                }
             ),
             None => String::new(),
+        };
+        // How far the stream reaches past where execution continues.
+        let room = match istream.limit {
+            Some(f) => format!(
+                "        sched.room = self.fn_{}().unwrap_or(u32::MAX);\n",
+                ident(&self.fns[&f].name)
+            ),
+            None => "        sched.room = u32::MAX;\n".to_string(),
         };
         // A delivered fault: its `schedules` entry after the accesses the
         // instruction made, else its cycles as work after the last step.
@@ -2134,7 +2167,7 @@ impl<'a> Gen<'a> {
             "        let _ = (performed, cur);\n        let k = (sched.steps as usize).min(8);\n        sched.work[k] = sched.work[k].saturating_add(self.cycles.saturating_sub(before) as u16);\n".to_string()
         };
         s.push_str(&format!(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.fetched = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let mut cur: Option<Instr> = None;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); cur = Some(i); sched = self.schedule_of(&i); self.cycles = self.timing_of(&i) + self.prefix_cycles; self.exec(i) }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        sched.halted = self.halted;\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.fetched = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let mut cur: Option<Instr> = None;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); cur = Some(i); sched = self.schedule_of(&i); self.cycles = self.timing_of(&i) + self.prefix_cycles; self.exec(i) }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
         ));
         let _ = write!(
             s,
@@ -3185,38 +3218,47 @@ pub mod vectors {{
 }
 
 /// Joining a fault's delivery onto the faulting instruction's schedule
-/// (SPEC 11.2c): the instruction's `access` steps past the accesses it made
-/// are dropped (their work joins the step before), then the delivery's
-/// steps follow; past 8 steps, the rest is work at the end.
+/// (SPEC 11.2c): the instruction's schedule up to the first access it did
+/// not make (where it stopped), then the delivery's steps; past 8 steps,
+/// the rest is work at the end.
 const SCHEDULE_THEN: &str = r#"/// `s` up to the `performed` accesses its instruction made, then `f`.
 pub fn schedule_then(s: Schedule, performed: u8, f: Schedule) -> Schedule {
     let mut work: Vec<u16> = vec![s.work[0]];
-    let mut steps: Vec<u8> = Vec::new();
+    let mut steps: Vec<(u8, u8)> = Vec::new();
     let mut seen = 0u8;
     for i in 0..(s.steps as usize).min(8) {
+        let mut count = s.count[i];
         if s.step[i] == 1 {
+            // The instruction stopped at the access it did not make.
             if seen >= performed {
-                let w = work.last_mut().unwrap();
-                *w = w.saturating_add(s.work[i + 1]);
-                continue;
+                break;
             }
-            seen += 1;
+            let full = count;
+            count = count.min(performed - seen);
+            seen += count;
+            if count < full {
+                steps.push((1, count));
+                work.push(0);
+                break;
+            }
         }
-        steps.push(s.step[i]);
+        steps.push((s.step[i], count));
         work.push(s.work[i + 1]);
     }
     let w = work.last_mut().unwrap();
     *w = w.saturating_add(f.work[0]);
     for i in 0..(f.steps as usize).min(8) {
-        steps.push(f.step[i]);
+        steps.push((f.step[i], f.count[i]));
         work.push(f.work[i + 1]);
     }
     let mut out = s;
     out.work = [0; 9];
     out.step = [0; 8];
+    out.count = [0; 8];
     let n = steps.len().min(8);
     for i in 0..n {
-        out.step[i] = steps[i];
+        out.step[i] = steps[i].0;
+        out.count[i] = steps[i].1;
     }
     for (i, w) in work.iter().enumerate() {
         let k = i.min(8);

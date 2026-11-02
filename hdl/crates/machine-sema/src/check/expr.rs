@@ -2014,7 +2014,7 @@ impl Checker<'_> {
                         cx.module,
                         "E1020",
                         span,
-                        "`restarted()` is only meaningful in a timing expression",
+                        format!("`{}()` is only meaningful in a timing expression", b.name()),
                     );
                     return err(span);
                 }
@@ -2513,6 +2513,7 @@ impl Checker<'_> {
         };
         let mut works: Vec<Expr> = Vec::new();
         let mut steps: Vec<i128> = Vec::new();
+        let mut counts: Vec<Option<Expr>> = Vec::new();
         let mut expect_work = true;
         for a in args {
             if let Some(n) = &a.name {
@@ -2531,6 +2532,10 @@ impl Checker<'_> {
                     "branch" => Some(3),
                     _ => None,
                 },
+                // `access * n`: n accesses with no work between them.
+                A::Binary(ast::BinaryOp::Mul, l, _) if matches!(&l.kind, A::Path(p) if p.segments.len() == 1 && p.segments[0].name == "access") => {
+                    Some(1)
+                }
                 _ => None,
             };
             match (step, expect_work) {
@@ -2541,6 +2546,10 @@ impl Checker<'_> {
                 }
                 (Some(k), false) => {
                     steps.push(k);
+                    counts.push(match &a.value.kind {
+                        A::Binary(_, _, n) => Some(self.check_expr(cx, n, Some(&Ty::UInt(8)))),
+                        _ => None,
+                    });
                     expect_work = true;
                 }
                 (Some(_), true) => {
@@ -2585,6 +2594,13 @@ impl Checker<'_> {
         while work_items.len() < 9 {
             work_items.push(int(0, Ty::UInt(16)));
         }
+        let mut count_items: Vec<Expr> = counts
+            .into_iter()
+            .map(|c| c.unwrap_or_else(|| int(1, Ty::UInt(8))))
+            .collect();
+        while count_items.len() < 8 {
+            count_items.push(int(0, Ty::UInt(8)));
+        }
         let mut step_items: Vec<Expr> = steps.iter().map(|k| int(*k, Ty::UInt(2))).collect();
         let nsteps = step_items.len() as i128;
         while step_items.len() < 8 {
@@ -2601,6 +2617,11 @@ impl Checker<'_> {
                 ty: Ty::Array(Box::new(Ty::UInt(2)), 8),
                 span,
             },
+            Expr {
+                kind: H::Array(count_items),
+                ty: Ty::Array(Box::new(Ty::UInt(8)), 8),
+                span,
+            },
             int(nsteps, Ty::UInt(4)),
             int(0, Ty::UInt(8)),
             Expr {
@@ -2610,6 +2631,7 @@ impl Checker<'_> {
             },
             int(0, Ty::UInt(64)),
             int(0, Ty::UInt(64)),
+            int(0, Ty::UInt(32)),
             Expr {
                 kind: H::Bool(false),
                 ty: Ty::Bool,

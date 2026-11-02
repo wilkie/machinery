@@ -767,6 +767,9 @@ bundle Schedule {
     work: [u16; 9],
     /// 1 access, 2 jump, 3 branch; 0 past the last step.
     step: [u2; 8],
+    /// How many accesses an `access` step stands for (`access * n`; 1
+    /// otherwise), with no work between them.
+    count: [u8; 8],
     steps: u4,
     // Filled by the interpreter:
     /// Bytes decoded, prefixes included.
@@ -777,6 +780,9 @@ bundle Schedule {
     /// Where the instruction started and where execution continues.
     start: u64,
     next: u64,
+    /// Bytes the stream holds from `next` before its segment ends
+    /// (`istream { limit ...; }`; all ones without one).
+    room: u32,
     halted: bool,
 }
 "#;

@@ -1066,6 +1066,9 @@ pub struct IstreamDecl {
     /// `boundary take_interrupt;`: a `fn () -> bool` run at every
     /// instruction boundary; `true` means it took an interrupt instead.
     pub boundary: Option<Path>,
+    /// `limit code_room;`: a `fn () -> u32`, how many bytes the stream
+    /// holds from the current address before its segment ends.
+    pub limit: Option<Path>,
     pub span: Span,
 }
 

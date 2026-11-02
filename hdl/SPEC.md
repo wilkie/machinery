@@ -865,6 +865,11 @@ fn take_interrupt() -> bool {
 }
 ```
 
+`limit` names a `fn () -> u32`: how many bytes the stream holds from the
+current address before its segment ends. It is timing information only:
+a processor model's bus unit does not prefetch past it (section 11.2c).
+On the 286, `fn code_room() -> u32 { return 0x10000 - (IP as u32); }`.
+
 ### 11.2 Instructions
 
 ```
@@ -1039,10 +1044,12 @@ a boundary.
 schedule of delivering a fault, and `fault <Instruction> => ...` (with
 `vector` and the instruction's operands) overrides it for faults that
 instruction raises: the 286's IDIV raises #DE two clocks later than DIV.
-The delivery follows the faulting instruction's schedule: the
-interpreter counts the data accesses the instruction made before the
-fault, drops the `access` steps past those (their work joins the step
-before), and appends the delivery's steps. A fault the decoder raises
+The delivery follows the faulting instruction's schedule up to where the
+instruction stopped: the interpreter counts the data accesses the
+instruction made before the fault, and the schedule is cut at the first
+`access` it did not make (a #GP on a word at offset FFFF stops at that
+access; a divide that overflows has made its accesses and done its work);
+the delivery's steps follow. A fault the decoder raises
 (an undefined opcode) has no instruction schedule. An instruction whose
 operands the semantics reject can say so in its own entry: on the 286,
 `Les => if src.is_mem { ... } else { schedule(0) };` puts #UD's delivery
@@ -1080,6 +1087,10 @@ steps. The steps are:
   that knows the instruction transfers stops decoding past it.
 - `branch`: a conditional transfer that was taken. The same flush, but the
   decoder had carried on past the instruction, not knowing the outcome.
+- `access * n`: `n` accesses (a `u8` expression, which may be 0) with no
+  work between them; the work after the step follows the last. ENTER
+  copies a frame pointer per nesting level:
+  `schedule(4, access, 4, access * (2 * (level - 1)), 4, access, 5)`.
 
 An instruction that transfers control without a `jump` or `branch` step
 (an unscheduled one, a fault, an interrupt) is given a `jump` after its
@@ -1097,6 +1108,8 @@ bundle Schedule {
     work: [u16; 9],
     /// 1 access, 2 jump, 3 branch; 0 past the last step.
     step: [u2; 8],
+    /// The accesses an `access` step stands for (1, or `access * n`).
+    count: [u8; 8],
     steps: u4,
     // Filled by the interpreter for each instruction:
     /// Bytes decoded, prefixes included.
@@ -1107,6 +1120,9 @@ bundle Schedule {
     /// (istream addresses), and whether it halted.
     start: u64,
     next: u64,
+    /// Bytes the stream holds from `next` before its segment ends
+    /// (`istream { limit ...; }`, section 11.1a; all ones without one).
+    room: u32,
     halted: bool,
 }
 ```
@@ -1148,14 +1164,15 @@ SingleStepTests traces (`research/i286-pipeline`):
 - no prefetch once HLT runs, and HLT's HALT cycle requested three clocks
   after it starts;
 - a repeated string instruction's later iterations decoding nothing (its
-  bytes stay decoded) and not transferring.
+  bytes stay decoded) and not transferring;
+- no prefetch past the end of the code segment (the schedule's `room`).
 
 Address work before a ModRM access is the operand kinds' `ea` query: 4
 clocks for base+index with a displacement, otherwise 3. The model records
 its bus cycles, and the rig system `targets/i286/rig.machine` runs each
 vector through it to compare that record with the trace: the processor's
 conformance at transaction boundaries (section 13). Over the whole
-corpus (130,000 vectors, repeated strings and exceptions included), 97%
+corpus (130,000 vectors, repeated strings and exceptions included), 98%
 match every bus cycle.
 
 ### 11.3 Operand kinds and `fetch`

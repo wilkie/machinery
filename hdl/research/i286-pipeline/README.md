@@ -103,19 +103,26 @@ the faulting instruction's own work, and the decoder had carried on past
 it: #DE comes 4 clocks after a DIV's whole schedule and 6 after IDIV's,
 #UD 7 after decoding, #GP about 17.
 
+ENTER pushes BP, copies a frame pointer per nesting level beyond the first
+(a read and a push each, back to back), and pushes the new frame pointer:
+4 clocks before, 4 after the first push, 4 after the copies, 5 at the end.
+ESC with no coprocessor still writes to the coprocessor's ports: the
+opcode and ModRM to F8, then IP, CS and, for a memory operand, its offset
+and selector to FC. The bus unit does not prefetch past the end of the
+code segment, which is what a return to offset FFFF shows.
+
 ## Not covered yet
 
 - INTO without overflow: the decoder waits for the outcome without a
   transfer, which a schedule does not say yet.
-- ENTER above level 0: work after a variable number of accesses.
-- ESC: the hardware writes the instruction to the coprocessor's ports.
 - A split I/O word write is followed by an idle clock the bus unit does
   not model (OUTSW to an odd port).
 - After #UD the decoder goes on into the bytes after the instruction,
   whose lengths the model cannot know.
-- The corner cases behind RET's and IRET's misses (a return to the last
-  byte of a segment, where the next fetch wraps), and shifts by a count
-  through memory (about 93%).
+- An immediate after a ModRM and an 8-bit displacement, with prefixes:
+  a code fetch a clock late (about 95% of those forms).
+- CALL far: the work around its pushes depends on their alignment in a
+  way the model does not capture (89%, and 53% through memory).
 
 ## In the language
 

@@ -99,6 +99,8 @@ bundle Slot286 {
     late: u4,
     start: u64,
     next: u64,
+    /// Code bytes from `next` to the end of its segment.
+    room: u32,
     halted: bool,
     /// The instruction transfers unconditionally: the decoder stops at its end.
     uncond: bool,
@@ -107,9 +109,9 @@ bundle Slot286 {
     /// the work after it.
     pre: u16,
     n: u8,
-    kind: [u3; 24],
-    cycles: [u2; 24],
-    work: [u16; 24],
+    kind: [u3; 72],
+    cycles: [u2; 72],
+    work: [u16; 72],
     /// It flushed the queue; its last byte has been decoded (at `ready_at`).
     jumped: bool,
     ready: bool,
@@ -142,8 +144,8 @@ component Cpu286 {
         state code_valid: bool = false;
 
         // The data accesses of the instruction being interpreted.
-        state lg_kind: [u3; 16];
-        state lg_n: [u2; 16];
+        state lg_kind: [u3; 64];
+        state lg_n: [u2; 64];
         state lg_count: u8 = 0;
 
         // The pipeline. Time is in processor clocks.
@@ -182,6 +184,9 @@ component Cpu286 {
         state bus_free: u64 = 1;
         state fetch_block: u64 = 0;
         state fp: u24 = 0;
+        /// The bus unit does not prefetch at or past this address (the end
+        /// of the code segment).
+        state fetch_end: u64 = 0xFFFFFFFFFFFFFFFF;
         state f0_used: bool = false;
         state f0_live: bool = false;
         state f0_at: u64 = 0;
@@ -228,7 +233,7 @@ component Cpu286 {
 
         /// The instruction made a data access of `cycles` bus cycles.
         fn note(kind: u3, cycles: u2) {
-            if lg_count < 16 {
+            if lg_count < 64 {
                 lg_kind[lg_count] = kind;
                 lg_n[lg_count] = cycles;
                 lg_count = lg_count + 1;
@@ -337,6 +342,7 @@ component Cpu286 {
             base = 0;
             last_dec = now;
             fp = addr as u24;
+            fetch_end = 0xFFFFFFFFFFFFFFFF;
             fetch_block = now;
             f0_live = false;
             f1_live = false;
@@ -364,6 +370,7 @@ component Cpu286 {
             }
             b.start = s.start;
             b.next = s.next;
+            b.room = s.room;
             b.halted = s.halted;
             b.uncond = false;
             b.jumped = false;
@@ -378,12 +385,14 @@ component Cpu286 {
                 if (i as u4) < s.steps {
                     let w = s.work[(i as u4) + 1];
                     if s.step[i] == 1 {
-                        if li < lg_count {
-                            push(lg_kind[li], lg_n[li], w);
+                        // `access * n`: n accesses, the work after the last.
+                        let mut k: u8 = 0;
+                        while k < s.count[i] && li < lg_count {
+                            push(lg_kind[li], lg_n[li], 0);
                             li = li + 1;
-                        } else {
-                            add_work(w);
+                            k = k + 1;
                         }
+                        add_work(w);
                     } else {
                         push(6, 0, w);
                         jumps = true;
@@ -419,7 +428,7 @@ component Cpu286 {
         }
 
         fn push(k: u3, c: u2, w: u16) {
-            if b.n < 24 {
+            if b.n < 72 {
                 b.kind[b.n] = k;
                 b.cycles[b.n] = c;
                 b.work[b.n] = w;
@@ -606,6 +615,7 @@ component Cpu286 {
                 real = 0;
                 last_dec = now;
                 fp = a.next as u24;
+                fetch_end = a.next + a.room as u64;
                 fetch_block = now + 1;
                 a.jumped = true;
                 b.ready = b.len == 0;
@@ -664,7 +674,7 @@ component Cpu286 {
                 }
                 return;
             }
-            if s < fetch_block || (halting && now > halt_from) {
+            if s < fetch_block || (halting && now > halt_from) || fp as u64 >= fetch_end {
                 return;
             }
             let consumed = if real > 0 && last_dec == now { real - 1 } else { real };

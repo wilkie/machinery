@@ -378,6 +378,24 @@ impl Checker<'_> {
                 }
             },
         };
+        let limit = match &d.limit {
+            None => None,
+            Some(p) => match fn_item(self, p) {
+                Some(f) => {
+                    if let Some(sig) = self.fn_sig(f) {
+                        if !sig.params.is_empty() || sig.ret != Ty::UInt(32) {
+                            self.error(module, "E1046", p.span, "`limit` is a `fn () -> u32`: the bytes the stream holds from the current address before its segment ends");
+                            ok = false;
+                        }
+                    }
+                    Some(f)
+                }
+                None => {
+                    ok = false;
+                    None
+                }
+            },
+        };
         let (Some(space), Some(address), Some(next)) = (space, address, next) else {
             return None;
         };
@@ -388,6 +406,7 @@ impl Checker<'_> {
             undefined,
             fault,
             boundary,
+            limit,
         })
     }
 

@@ -1610,6 +1610,19 @@ fn extern_fns_and_the_boundary_hook() {
         "undefined UD; boundary take; }\n    fn take() { }",
     );
     assert_codes(&format!("{bad}\n}}"), &["E1046"]);
+    // The limit fn says how far the stream reaches (SPEC 11.1a).
+    let src = DEC_PRELUDE.replace(
+        "undefined UD; }",
+        "undefined UD; limit room; }\n    fn room() -> u32 { return 0x10000 - (IP as u32); }",
+    );
+    let c = check_src(&format!("{src}\n}}"));
+    assert_clean(&c);
+    assert!(c.hir.isas[0].istream.as_ref().unwrap().limit.is_some());
+    let bad = DEC_PRELUDE.replace(
+        "undefined UD; }",
+        "undefined UD; limit room; }\n    fn room() -> u16 { return 1; }",
+    );
+    assert_codes(&format!("{bad}\n}}"), &["E1046"]);
     // An extern fn has no body.
     let bad = DEC_PRELUDE.replace(
         "undefined UD; }",
@@ -2052,6 +2065,12 @@ fn schedule_tables_check() {
         &tables("Nop => schedule(0, access, 0, access, 0, access, 0, access, 0, access, 0, access, 0, access, 0, access, 0, access, 0);"),
         &["E1056"],
     );
+    // `access * n`: n accesses with no work between them.
+    assert_codes(
+        &tables("Nop => schedule(4, access, 4, access * (AL & 3), 4, access, 5);"),
+        &[],
+    );
+    assert_codes(&tables("Nop => schedule(4, access * true, 0);"), &["E1005"]);
     // Only timing expressions build schedules.
     assert_codes(&isa("fn f() { let s = schedule(3); }"), &["E1020"]);
 }

@@ -99,7 +99,7 @@ struct Inst<'h> {
 }
 
 impl<'a> Gen<'a> {
-    fn default_value(&self, ty: &Ty) -> R<String> {
+    pub(super) fn default_value(&self, ty: &Ty) -> R<String> {
         Ok(match ty {
             Ty::Bool => "false".into(),
             Ty::Bundle(_) => format!("{}::default()", self.rty(ty)?),

@@ -574,6 +574,10 @@ pub struct IsaInfo {
     /// instruction boundary (`fault =>`, `interrupt =>` in a timing table).
     pub fault_cycles: Option<TimingExpr>,
     pub interrupt_cycles: Option<TimingExpr>,
+    /// Cycles a data access in the instruction stream's space adds (`split
+    /// =>` in a timing table, with `address` and `width` in scope): how the
+    /// processor splits an access that crosses its natural boundary.
+    pub split_cycles: Option<TimingExpr>,
     /// `interrupt =>` and `fault =>` (with `vector`) in a `schedules` table.
     pub interrupt_schedule: Option<TimingExpr>,
     pub fault_schedule: Option<TimingExpr>,

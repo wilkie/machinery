@@ -70,7 +70,7 @@ pub struct CycleSummary {
     pub bus: Vec<(u32, BusKind)>,
 }
 
-/// What a bus cycle was, from the 286's status lines.
+/// What a bus cycle was, from the processor's status lines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BusKind {
     Code,
@@ -83,8 +83,19 @@ pub enum BusKind {
     Other,
 }
 
+/// Which processor captured a file's traces (the `MOO ` header names it):
+/// their status lines are encoded differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TraceCpu {
+    /// The 286: COD/INTA, M/IO, S1, S0.
+    I286,
+    /// The 386 (the 386EX of the 80386 corpus): M/IO, D/C, W/R.
+    I386,
+}
+
 impl CycleSummary {
-    /// Clocks per bus cycle on the 286 with no wait states (Ts, Tc).
+    /// Clocks per bus cycle with no wait states: Ts, Tc on the 286, T1, T2
+    /// on the 386.
     pub const BUS_CLOCKS: u32 = 2;
 
     /// The cycles not spent in bus cycles, less `harness` (the fixed cost
@@ -100,7 +111,7 @@ impl CycleSummary {
 /// T-state, queue operation, queue byte.
 const CYCLE_RECORD: usize = 1 + 4 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1;
 
-fn decode_cycles(body: &[u8]) -> Result<CycleSummary, MooError> {
+fn decode_cycles(body: &[u8], cpu: TraceCpu) -> Result<CycleSummary, MooError> {
     let mut r = Reader { buf: body, pos: 0 };
     let n = r.u32()? as usize;
     let mut s = CycleSummary {
@@ -112,24 +123,34 @@ fn decode_cycles(body: &[u8]) -> Result<CycleSummary, MooError> {
         let ale = rec[0] & 1 != 0;
         let status = rec[11] & 0x0F;
         if ale {
-            // The 286 status (COD/INTA, M/IO, S1, S0), as the corpus tool
-            // decodes it.
-            match status {
-                0x0D => s.code += 1,
-                // IRQA, MEMR, MEMW, IOR, IOW
-                0x00 | 0x05 | 0x06 | 0x09 | 0x0A => s.data += 1,
-                _ => {}
-            }
-            let kind = match status {
-                0x00 => BusKind::InterruptAck,
-                0x04 => BusKind::Halt,
-                0x05 => BusKind::MemRead,
-                0x06 => BusKind::MemWrite,
-                0x09 => BusKind::IoRead,
-                0x0A => BusKind::IoWrite,
-                0x0D => BusKind::Code,
+            // The status as the corpus tool decodes it: the 286's COD/INTA,
+            // M/IO, S1, S0; the 386's M/IO, D/C, W/R (ALE is ADS there).
+            let kind = match (cpu, status) {
+                (TraceCpu::I286, 0x00) => BusKind::InterruptAck,
+                (TraceCpu::I286, 0x04) => BusKind::Halt,
+                (TraceCpu::I286, 0x05) => BusKind::MemRead,
+                (TraceCpu::I286, 0x06) => BusKind::MemWrite,
+                (TraceCpu::I286, 0x09) => BusKind::IoRead,
+                (TraceCpu::I286, 0x0A) => BusKind::IoWrite,
+                (TraceCpu::I286, 0x0D) => BusKind::Code,
+                (TraceCpu::I386, 0x00) => BusKind::InterruptAck,
+                (TraceCpu::I386, 0x02) => BusKind::IoRead,
+                (TraceCpu::I386, 0x03) => BusKind::IoWrite,
+                (TraceCpu::I386, 0x04) => BusKind::Code,
+                (TraceCpu::I386, 0x05) => BusKind::Halt,
+                (TraceCpu::I386, 0x06) => BusKind::MemRead,
+                (TraceCpu::I386, 0x07) => BusKind::MemWrite,
                 _ => BusKind::Other,
             };
+            match kind {
+                BusKind::Code => s.code += 1,
+                BusKind::InterruptAck
+                | BusKind::MemRead
+                | BusKind::MemWrite
+                | BusKind::IoRead
+                | BusKind::IoWrite => s.data += 1,
+                _ => {}
+            }
             s.bus.push((k as u32, kind));
         }
     }
@@ -238,7 +259,7 @@ fn decode_state(body: &[u8]) -> Result<CpuState, MooError> {
     Ok(st)
 }
 
-fn decode_test(body: &[u8]) -> Result<MooTest, MooError> {
+fn decode_test(body: &[u8], cpu: TraceCpu) -> Result<MooTest, MooError> {
     let mut r = Reader { buf: body, pos: 0 };
     let mut t = MooTest {
         index: r.u32()?,
@@ -259,7 +280,7 @@ fn decode_test(body: &[u8]) -> Result<MooTest, MooError> {
             b"INIT" => t.initial = decode_state(chunk)?,
             b"FINA" => t.final_ = decode_state(chunk)?,
             b"EXCP" => t.exception = Some(c.u8()?),
-            b"CYCL" => t.timing = Some(decode_cycles(chunk)?),
+            b"CYCL" => t.timing = Some(decode_cycles(chunk, cpu)?),
             b"HASH" => t.hash = Some(chunk.iter().map(|b| format!("{b:02x}")).collect()),
             _ => {}
         }
@@ -270,10 +291,16 @@ fn decode_test(body: &[u8]) -> Result<MooTest, MooError> {
 /// Parse an (uncompressed) MOO file.
 pub fn parse_moo(data: &[u8]) -> Result<Vec<MooTest>, MooError> {
     let mut r = Reader { buf: data, pos: 0 };
-    let (tag, _) = r.chunk()?;
+    let (tag, header) = r.chunk()?;
     if &tag != b"MOO " {
         return Err(MooError("not a MOO file (missing `MOO ` header)".into()));
     }
+    // The header ends with the CPU's name (`C286`, `386E`).
+    let cpu = if header.windows(3).any(|w| w == b"386") {
+        TraceCpu::I386
+    } else {
+        TraceCpu::I286
+    };
     let mut tests = Vec::new();
     // A file-level `RM32` masks every test's final state (the bits to compare).
     let mut file_masks: Vec<(&'static str, u32)> = Vec::new();
@@ -283,7 +310,7 @@ pub fn parse_moo(data: &[u8]) -> Result<Vec<MooTest>, MooError> {
             let st = decode_state(&[&tag[..], &(body.len() as u32).to_le_bytes(), body].concat())?;
             file_masks = st.undefined;
         } else if &tag == b"TEST" {
-            let mut t = decode_test(body)?;
+            let mut t = decode_test(body, cpu)?;
             t.final_.undefined.extend(file_masks.iter().copied());
             tests.push(t);
         }

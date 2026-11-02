@@ -509,11 +509,14 @@ impl<'a> Gen<'a> {
                 } else {
                     "read"
                 };
-                // Data accesses are counted for fault delivery (SPEC 11.2c).
+                // Data accesses are counted for fault delivery (SPEC 11.2c),
+                // and may cost a split (`split =>`).
                 let count = if op == "read" {
                     format!(
-                        "{}.accesses = {}.accesses.wrapping_add(1); ",
-                        cx.recv, cx.recv
+                        "{}.accesses = {}.accesses.wrapping_add(1); {}",
+                        cx.recv,
+                        cx.recv,
+                        self.split_charge(cx, *d, *bits)
                     )
                 } else {
                     String::new()
@@ -539,11 +542,12 @@ impl<'a> Gen<'a> {
             H::SpaceWrite(d, bits, addr, v) => {
                 let sp = self.spaces[d];
                 format!(
-                    "{{ let a = ({}) as u64; let v = ({}) as u128; {2}.accesses = {2}.accesses.wrapping_add(1); {2}.bus.{3}_write(a, {bits}, v); }}",
+                    "{{ let a = ({}) as u64; let v = ({}) as u128; {2}.accesses = {2}.accesses.wrapping_add(1); {4}{2}.bus.{3}_write(a, {bits}, v); }}",
                     self.expr(cx, addr)?,
                     self.expr(cx, v)?,
                     cx.recv,
-                    ident(&sp.name)
+                    ident(&sp.name),
+                    self.split_charge(cx, *d, *bits)
                 )
             }
             H::KindSelect(k, args) => {
@@ -1024,11 +1028,12 @@ impl<'a> Gen<'a> {
             S::SpaceWrite(d, bits, addr, v) => {
                 let sp = self.spaces[d];
                 format!(
-                    "{{ let a = ({}) as u64; let v = ({}) as u128; {2}.accesses = {2}.accesses.wrapping_add(1); {2}.bus.{3}_write(a, {bits}, v); }}\n",
+                    "{{ let a = ({}) as u64; let v = ({}) as u128; {2}.accesses = {2}.accesses.wrapping_add(1); {4}{2}.bus.{3}_write(a, {bits}, v); }}\n",
                     self.expr(cx, addr)?,
                     self.expr(cx, v)?,
                     cx.recv,
-                    ident(&sp.name)
+                    ident(&sp.name),
+                    self.split_charge(cx, *d, *bits)
                 )
             }
             S::Raise(d, args) => {
@@ -1605,7 +1610,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut s = format!(
-            "#[derive(Clone, Debug)]\npub struct {isa_name}<B: Bus = Flat> {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n    /// Execution cycles of the last step beyond its bus transfers (the\n    /// timing table: the instruction, its prefixes, a delivered fault).\n    pub cycles: u32,\n    /// Prefix cycles accumulated while decoding.\n    pub prefix_cycles: u32,\n    /// Where the last step started, and whether this one started there too.\n    pub last_start: u64,\n    pub restarted: bool,\n    /// Bytes decoded this step, and the extra decoder clocks on each.\n    pub fetched: u8,\n    pub decode_at: [u8; 16],\n    /// Data accesses made this step (a fault's delivery follows those the\n    /// instruction made).\n    pub accesses: u8,\n    /// Shut down: a fault while delivering a double fault.\n    pub shutdown: bool,\n"
+            "#[derive(Clone, Debug)]\npub struct {isa_name}<B: Bus = Flat> {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n    /// Execution cycles of the last step beyond its bus transfers (the\n    /// timing table: the instruction, its prefixes, a delivered fault).\n    pub cycles: u32,\n    /// Prefix cycles accumulated while decoding.\n    pub prefix_cycles: u32,\n    /// Of `cycles`, the instruction's own timing-table entry.\n    pub entry_cycles: u32,\n    /// Where the last step started, and whether this one started there too.\n    pub last_start: u64,\n    pub restarted: bool,\n    /// Bytes decoded this step, and the extra decoder clocks on each.\n    pub fetched: u8,\n    pub decode_at: [u8; 16],\n    /// Data accesses made this step (a fault's delivery follows those the\n    /// instruction made).\n    pub accesses: u8,\n    /// Shut down: a fault while delivering a double fault.\n    pub shutdown: bool,\n"
         );
         s.push_str("    pub bus: B,\n");
         for l in &self.isa.latches {
@@ -1615,7 +1620,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut s = format!(
-            "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            cycles: 0,\n            prefix_cycles: 0,\n            last_start: u64::MAX,\n            restarted: false,\n            fetched: 0,\n            decode_at: [0; 16],\n            accesses: 0,\n            shutdown: false,\n            bus,\n"
+            "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            cycles: 0,\n            prefix_cycles: 0,\n            entry_cycles: 0,\n            last_start: u64::MAX,\n            restarted: false,\n            fetched: 0,\n            decode_at: [0; 16],\n            accesses: 0,\n            shutdown: false,\n            bus,\n"
         );
         for l in &self.isa.latches {
             let _ = writeln!(
@@ -2311,7 +2316,7 @@ impl<'a> Gen<'a> {
             "        let _ = (performed, cur);\n        let k = (sched.steps as usize).min(8);\n        sched.work[k] = sched.work[k].saturating_add(self.cycles.saturating_sub(before) as u16);\n".to_string()
         };
         s.push_str(&format!(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.fetched = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let mut cur: Option<Instr> = None;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); cur = Some(i); sched = self.schedule_of(&i); self.cycles = self.timing_of(&i) + self.prefix_cycles; {lock_check} }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.entry_cycles = 0;\n        self.fetched = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let mut cur: Option<Instr> = None;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); cur = Some(i); sched = self.schedule_of(&i); self.entry_cycles = self.timing_of(&i); self.cycles = self.entry_cycles + self.prefix_cycles; {lock_check} }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
         ));
         let _ = write!(
             s,
@@ -2572,7 +2577,7 @@ impl<'a> Gen<'a> {
         s.push_str("    /// Execution cycles of `i` beyond its bus transfers (its timing entry, on the state\n    /// before it runs; 0 without one).\n    pub fn timing_of(&mut self, i: &Instr) -> u32 {\n        let r: Result<u32, Fault> = (|| Ok(match *i {\n");
         let mut sched = String::from("    /// The schedule of `i` (its timing entry, on the state before it runs; a plain\n    /// count is all work before any step).\n    pub fn schedule_of(&mut self, i: &Instr) -> Schedule {\n        let r: Result<Schedule, Fault> = (|| Ok(match *i {\n");
         let mut has = String::from("    /// Whether `i` has a timing entry.\n    pub fn has_timing(i: &Instr) -> bool {\n        match i {\n");
-        let mut feats = String::from("    /// For fitting timing: whether each memory-capable operand of `i` is in memory.\n    pub fn timing_features(&mut self, i: &Instr) -> Vec<(&'static str, bool)> {\n        match *i {\n");
+        let mut feats = String::from("    /// For fitting timing: whether each memory-capable operand of `i` is in\n    /// memory, and its address work (an `ea` query) when it has one.\n    pub fn timing_features(&mut self, i: &Instr) -> Vec<(&'static str, i64)> {\n        match *i {\n");
         for i in &instrs {
             let text = match &i.timing {
                 Some(t) => {
@@ -2630,11 +2635,19 @@ impl<'a> Gen<'a> {
                 let kind = self.kinds[&b.kind];
                 if kind.rules.iter().any(|r| r.kind == hir::RuleKind::IsMem) {
                     fs.push(format!(
-                        "({:?}, self.kind_{}_is_mem(ops.{}).unwrap_or(false))",
-                        b.name,
+                        "({:?}, self.kind_{}_is_mem(ops.{}).unwrap_or(false) as i64)",
+                        format!("{}.is_mem", b.name),
                         ident(&kind.name),
                         ident(&b.name)
                     ));
+                    if kind.rules.iter().any(|r| r.kind == hir::RuleKind::Query && r.name == "ea") {
+                        fs.push(format!(
+                            "({:?}, if self.kind_{1}_is_mem(ops.{2}).unwrap_or(false) {{ self.kind_{1}_ea(ops.{2}).map(|v| v as i64).unwrap_or(0) }} else {{ 0 }})",
+                            format!("{}.ea", b.name),
+                            ident(&kind.name),
+                            ident(&b.name)
+                        ));
+                    }
                 }
             }
             let _ = writeln!(
@@ -2693,6 +2706,23 @@ impl<'a> Gen<'a> {
                 None => "0".into(),
             };
             let _ = write!(s, "    /// Timing table: `{}`.\n    pub fn {name}(&mut self, {params}) -> u32 {{\n        {body}\n    }}\n", name.trim_end_matches("_cycles"));
+        }
+        if let Some(t) = &self.isa.split_cycles {
+            let cx = Cx {
+                locals: &t.locals,
+                fallible: true,
+                recv: "self",
+                ops: None,
+                comp: None,
+                opt: false,
+            };
+            let _ = write!(
+                s,
+                "    /// Timing table: `split`, the cycles a data access adds.\n    #[allow(unused_variables)]\n    pub fn split_cycles(&mut self, {}: u32, {}: u32) -> u32 {{\n        let r: Result<u32, Fault> = (|| Ok(({}) as u32))();\n        r.unwrap_or(0)\n    }}\n",
+                self.local_name(&cx, t.params[0]),
+                self.local_name(&cx, t.params[1]),
+                self.expr(&cx, &t.expr)?
+            );
         }
         // The interrupt's schedule: its `schedules` entry, else its cycles as work.
         let sbody = match &self.isa.interrupt_schedule {
@@ -2977,6 +3007,20 @@ impl<'a> Gen<'a> {
         Ok(())
     }
 
+    /// The cycles a data access of `bits` in space `d` adds (`split =>`):
+    /// charged for the instruction stream's space only.
+    fn split_charge(&self, cx: &Cx, d: DefId, bits: u32) -> String {
+        let data_space = self.isa.istream.as_ref().is_some_and(|i| i.space == d);
+        if self.isa.split_cycles.is_none() || !data_space {
+            return String::new();
+        }
+        format!(
+            "{{ let c = {0}.split_cycles(a as u32, {1}); {0}.cycles = {0}.cycles.wrapping_add(c); }} ",
+            cx.recv,
+            bits / 8
+        )
+    }
+
     /// The vector runner: one module per `vectors ... on <this isa>`.
     fn emit_vectors(&mut self) -> R<()> {
         let vs: Vec<&hir::VectorsInfo> = self
@@ -3251,7 +3295,11 @@ pub mod vectors {{
     #[derive(Debug, Clone)]
     pub struct TimingSample {{
         pub name: &'static str,
-        pub features: Vec<(&'static str, bool)>,
+        pub features: Vec<(&'static str, i64)>,
+        /// Of `predicted`, the cycles that are not the instruction's table
+        /// entry: its prefixes and split accesses (what a fit must not
+        /// attribute to the entry).
+        pub dynamic: i64,
         /// Execution cycles the timing table gives, summed over the steps.
         pub predicted: i64,
         /// The trace's cycles outside bus cycles, less the rig's.
@@ -3278,6 +3326,7 @@ pub mod vectors {{
         let mut fault = false;
         let mut fault_vector: Option<u8> = None;
         let mut timed = true;
+        let mut dynamic: i64 = 0;
         for _ in 0..4096 {{
             if m.halted {{ break; }}
             if m.step().is_err() {{ return None; }}
@@ -3289,10 +3338,14 @@ pub mod vectors {{
                 // Faulted before an instruction decoded (an undefined
                 // opcode): only the delivery is timed.
                 if first.is_none() {{
-                    return Some(TimingSample {{ name: "(fault while decoding)", features: Vec::new(), predicted: m.cycles as i64, measured: c.execution(HARNESS_CYCLES), fault: true, fault_vector: m.last_fault.as_ref().and_then(|f| f.vector()), timed: true }});
+                    return Some(TimingSample {{ name: "(fault while decoding)", features: Vec::new(), dynamic: 0, predicted: m.cycles as i64, measured: c.execution(HARNESS_CYCLES), fault: true, fault_vector: m.last_fault.as_ref().and_then(|f| f.vector()), timed: true }});
                 }}
             }}
-            if let Some(i) = &m.last {{ if !<{isa_name}>::has_timing(i) {{ timed = false; }} }}
+            if let Some(i) = &m.last {{
+                if !<{isa_name}>::has_timing(i) {{ timed = false; }}
+                // What this step charged beyond its table entry.
+                dynamic += m.cycles as i64 - m.entry_cycles as i64;
+            }}
             fault |= m.last_fault.is_some();
             if let Some(f) = &m.last_fault {{ fault_vector = f.vector(); }}
             predicted += m.cycles as i64;
@@ -3302,6 +3355,7 @@ pub mod vectors {{
         Some(TimingSample {{
             name: <{isa_name}>::instr_name(&i),
             features: pre.timing_features(&i),
+            dynamic,
             predicted,
             measured: c.execution(HARNESS_CYCLES),
             fault,
@@ -3357,8 +3411,8 @@ pub mod vectors {{
                     if s.fault {{
                         *fault_excess.entry(s.fault_vector).or_default().entry(s.measured - s.predicted).or_default() += 1;
                     }} else {{
-                        let key = s.features.iter().map(|(n, m)| format!("{{n}}.is_mem={{m}}")).collect::<Vec<_>>().join(" ");
-                        *hist.entry((s.name, key)).or_default().entry(s.measured).or_default() += 1;
+                        let key = s.features.iter().map(|(n, v)| format!("{{n}}={{v}}")).collect::<Vec<_>>().join(" ");
+                        *hist.entry((s.name, key)).or_default().entry(s.measured - s.dynamic).or_default() += 1;
                     }}
                 }}
                 file.add(&s);

@@ -1012,6 +1012,21 @@ with the fault's `vector` in scope; `interrupt` is the cost of taking an
 interrupt at an instruction boundary. An instruction without an entry
 costs 0 and is reported by the timing comparison.
 
+`split` is the cost of how the processor makes a data access: it is
+evaluated for each read or write of the instruction stream's space during
+a step, with the access's `address` and `width` (in bytes) in scope, and
+added to that step. The 386 makes an access that crosses a dword boundary
+as two, which costs it four clocks however the bus then splits it:
+
+```
+split => if (address & 3) + width > 4 { 4 } else { 0 };
+```
+
+`machine vectors --fit` groups vectors by each memory-capable operand's
+`is_mem` and, when its kind has one, its `ea` query (the address work), and
+fits what the table's entry must explain: the measured cycles less what
+the step charged beyond the entry (its prefixes and splits).
+
 The interpreter computes a step's cycles and hands them to the bus
 (`Bus::retire`); the plain-memory bus ignores them. The model build charges
 an instruction its data transfers plus the larger of its code fetches and

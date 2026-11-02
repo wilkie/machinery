@@ -1,0 +1,296 @@
+// Execution cycles of each 80386 instruction beyond its bus transfers,
+// measured from the SingleStepTests 80386 cycle traces (a 386EX: a 16-bit
+// bus, two clocks a bus cycle).
+//
+// A trace starts at a jump (an empty queue) and ends at the injected
+// HLT's bus cycle, whose first clock belongs to no instruction
+// (`harness_cycles` in i386.machine). Its other clocks outside bus cycles
+// are the instruction's own. Most entries are the value that explains the
+// most vectors within a clock, from `machine vectors --isa I386 --fit`
+// (turned into entries by `research/i386-timing/table.py`); the rest are
+// formulas fitted by hand (`research/i386-timing/`):
+//
+// - A ModRM memory operand adds its address work (the kinds' `ea`: a clock
+//   for a 16- or 32-bit displacement, one for an index register).
+// - An access that crosses a dword boundary costs 4 clocks (`split`): the
+//   core makes it as two (one that only crosses a word costs nothing more;
+//   the 16-bit bus splits it).
+// - The multiplier is early-out: the multiplier's significant bits (at
+//   least 3), plus 7 for MUL and IMUL r/m, plus 5 for the two- and
+//   three-operand IMULs, whose multiplier is the immediate when there is one.
+// - BSF and BSR scan a bit a time, 3 clocks a bit.
+// - A repeated string instruction costs one amount for its first element
+//   and another for each further one (`restarted()`); with a zero count
+//   only the check. Repeated dword stores pipeline (an element costs 1
+//   clock beyond its bus cycles, against 3 for bytes and words).
+// - Jcc, LOOP and INTO by whether they transfer; ENTER by whether it copies
+//   frame pointers (the copies are bus time).
+//
+// What the table cannot see is a clock that depends on where the next
+// instruction falls in the decoder (the traces alternate by a clock with
+// the number of prefixes), and the prefetch queue refilling around the
+// accesses; `machine vectors --timing` reports how close it comes.
+
+use i386::{I386};
+
+timing on I386 {
+    Aaa => 3;
+    Aad => 16;
+    Aam => 15;
+    Aas => 3;
+    Alu_al_imm8 => 2;
+    Alu_ax_imm<16> => 2;
+    Alu_ax_imm<32> => 3;
+    Alu_r8_rm8 => if src.is_mem { 2 + src.ea } else { 3 };
+    Alu_r_rm<16> => if src.is_mem { 2 + src.ea } else { 3 };
+    Alu_r_rm<32> => if src.is_mem { 2 + src.ea } else { 3 };
+    Alu_rm8_imm8 => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Alu_rm8_r8 => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Alu_rm_imm<16> => if dst.is_mem { 3 + dst.ea } else { 4 };
+    Alu_rm_imm<32> => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Alu_rm_r<16> => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Alu_rm_r<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Alu_rm_simm8<16> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Alu_rm_simm8<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Bound<16> => 4 + lim.ea;
+    Bound<32> => 3 + lim.ea;
+    Bsf<16> => (if src == 0 { 3 } else { 7 + 3 * trailing_zeros<16>(src) }) + (if src.is_mem { src.ea } else { 0 });
+    Bsf<32> => (if src == 0 { 3 } else { 7 + 3 * trailing_zeros<32>(src) }) + (if src.is_mem { src.ea } else { 0 });
+    Bsr<16> => (if src == 0 { 2 } else { 5 + 3 * leading_zeros<16>(src) }) + (if src.is_mem { src.ea } else { 0 });
+    Bsr<32> => (if src == 0 { 2 } else { 5 + 3 * leading_zeros<32>(src) }) + (if src.is_mem { src.ea } else { 0 });
+    Bt_rm_imm<16> => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Bt_rm_imm<32> => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Bt_rm_r<16> => if dst.is_mem { 7 + dst.ea } else { 3 };
+    Bt_rm_r<32> => if dst.is_mem { 6 + dst.ea } else { 3 };
+    Call_far<16> => 13;
+    Call_far<32> => 11;
+    Call_far_mem<16> => 15 + target.ea;
+    Call_rel<16> => 5;
+    Call_rel<32> => 4;
+    Call_rm<16> => if target.is_mem { 5 + target.ea } else { 5 };
+    Cbw<16> => 2;
+    Cbw<32> => 3;
+    Clc => 2;
+    Cld => 2;
+    Cli => 3;
+    Clts => 3;
+    Cmc => 2;
+    Cmps<16> => if !repeating() { 3 } else if restarted() { 5 } else if count_zero() { 3 } else { 10 };
+    Cmps<32> => if !repeating() { 3 } else if restarted() { 5 } else if count_zero() { 3 } else { 10 };
+    Cmpsb => if !repeating() { 3 } else if restarted() { 5 } else if count_zero() { 3 } else { 10 };
+    Cwd<16> => 3;
+    Cwd<32> => 2;
+    Daa => 3;
+    Das => 3;
+    Dec_r<16> => 3;
+    Dec_r<32> => 2;
+    Dec_rm8 => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Dec_rm<16> => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Div_rm8 => if src.is_mem { 11 + src.ea } else { 13 };
+    Div_rm<16> => if src.is_mem { 19 + src.ea } else { 21 };
+    Div_rm<32> => if src.is_mem { 34 + src.ea } else { 36 };
+    Enter<16> => if (level & 0x1F) < 2 { 7 } else { 9 };
+    Enter<32> => if (level & 0x1F) < 2 { 7 } else { 9 };
+    Hlt => 3;
+    Idiv_rm8 => if src.is_mem { 15 + src.ea } else { 18 };
+    Idiv_rm<16> => if src.is_mem { 22 + src.ea } else { 26 };
+    Idiv_rm<32> => if src.is_mem { 37 + src.ea } else { 41 };
+    Imul_r_rm<16> => 5 + mul_bits<16>(src, true) + (if src.is_mem { src.ea } else { 0 });
+    Imul_r_rm<32> => 5 + mul_bits<32>(src, true) + (if src.is_mem { src.ea } else { 0 });
+    Imul_r_rm_imm<16> => 5 + mul_bits<16>(k, true) + (if src.is_mem { src.ea } else { 0 });
+    Imul_r_rm_imm<32> => 5 + mul_bits<32>(k, true) + (if src.is_mem { src.ea } else { 0 });
+    Imul_r_rm_simm8<16> => 5 + mul_bits<16>(k, true) + (if src.is_mem { src.ea } else { 0 });
+    Imul_r_rm_simm8<32> => 5 + mul_bits<32>(k, true) + (if src.is_mem { src.ea } else { 0 });
+    Imul_rm8 => 7 + mul_bits<8>(src, true) + (if src.is_mem { src.ea } else { 0 });
+    Imul_rm<16> => 7 + mul_bits<16>(src, true) + (if src.is_mem { src.ea } else { 0 });
+    Imul_rm<32> => 7 + mul_bits<32>(src, true) + (if src.is_mem { src.ea } else { 0 });
+    In_al_dx => 10;
+    In_al_imm8 => 10;
+    In_ax_dx<16> => 10;
+    In_ax_dx<32> => 15;
+    In_ax_imm8<16> => 10;
+    In_ax_imm8<32> => 13;
+    Inc_r<16> => 3;
+    Inc_r<32> => 2;
+    Inc_rm8 => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Inc_rm<16> => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Ins<16> => if !repeating() { 10 } else if restarted() { 3 } else if count_zero() { 15 } else { 18 };
+    Ins<32> => if !repeating() { 7 } else if restarted() { 1 } else if count_zero() { 15 } else { 18 };
+    Insb => if !repeating() { 10 } else if restarted() { 3 } else if count_zero() { 15 } else { 18 };
+    Int3 => 24;
+    Int_imm8 => 27;
+    Into => if OF == 1 { 27 } else { 2 };
+    Iret<16> => 19;
+    Iret<32> => 18;
+    Jcc => if condition(c) { 4 } else { 3 };
+    Jcc_near<16> => if condition(c) { 3 } else { 2 };
+    Jcc_near<32> => if condition(c) { 3 } else { 2 };
+    Jcxz => 3;
+    Jmp_far<16> => 18;
+    Jmp_far<32> => 18;
+    Jmp_far_mem<16> => 13 + target.ea;
+    Jmp_rel8 => 6;
+    Jmp_rel<16> => 6;
+    Jmp_rel<32> => 5;
+    Jmp_rm<16> => if target.is_mem { 6 + target.ea } else { 6 };
+    Lahf => 3;
+    Lds<16> => 3 + src.ea;
+    Lds<32> => 3 + src.ea;
+    Lea<16> => 4 + src.ea;
+    Lea<32> => 4 + src.ea;
+    Leave<16> => 3;
+    Leave<32> => 3;
+    Les<16> => 3 + src.ea;
+    Les<32> => 3 + src.ea;
+    Lfs<16> => 3 + src.ea;
+    Lfs<32> => 3 + src.ea;
+    Lgs<16> => 3 + src.ea;
+    Lgs<32> => 3 + src.ea;
+    Lods<16> => if !repeating() { 2 } else if restarted() { 4 } else if count_zero() { 3 } else { 9 };
+    Lods<32> => if !repeating() { 3 } else if restarted() { 4 } else if count_zero() { 3 } else { 9 };
+    Lodsb => if !repeating() { 2 } else if restarted() { 4 } else if count_zero() { 3 } else { 9 };
+    Loop => if count_last() { 10 } else { 8 };
+    Loope => if count_last() || ZF == 0 { 10 } else { 8 };
+    Loopne => if count_last() || ZF == 1 { 10 } else { 8 };
+    Lss<16> => 3 + src.ea;
+    Lss<32> => 3 + src.ea;
+    Mov_al_moffs<16> => 3;
+    Mov_al_moffs<32> => 3;
+    Mov_ax_moffs<16> => 3;
+    Mov_ax_moffs<32> => 3;
+    Mov_moffs_al<16> => 3;
+    Mov_moffs_al<32> => 3;
+    Mov_moffs_ax<16> => 3;
+    Mov_moffs_ax<32> => 4;
+    Mov_r8_imm8 => 2;
+    Mov_r8_rm8 => if src.is_mem { 2 + src.ea } else { 3 };
+    Mov_r_imm<16> => 2;
+    Mov_r_imm<32> => 3;
+    Mov_r_rm<16> => if src.is_mem { 2 + src.ea } else { 3 };
+    Mov_r_rm<32> => if src.is_mem { 2 + src.ea } else { 3 };
+    Mov_rm8_imm8 => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Mov_rm8_r8 => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Mov_rm_imm<16> => if dst.is_mem { 2 + dst.ea } else { 4 };
+    Mov_rm_imm<32> => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Mov_rm_r<16> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Mov_rm_r<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Mov_rm_sreg => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Mov_sreg_rm => if src.is_mem { 3 + src.ea } else { 3 };
+    Movs<16> => if !repeating() { 3 } else if restarted() { 0 } else if count_zero() { 3 } else { 8 };
+    Movs<32> => if !repeating() { 4 } else if restarted() { 0 } else if count_zero() { 3 } else { 8 };
+    Movsb => if !repeating() { 3 } else if restarted() { 0 } else if count_zero() { 3 } else { 8 };
+    Movsx_r_rm16<16> => if src.is_mem { 2 + src.ea } else { 3 };
+    Movsx_r_rm16<32> => if src.is_mem { 2 + src.ea } else { 3 };
+    Movsx_r_rm8<16> => if src.is_mem { 2 + src.ea } else { 3 };
+    Movsx_r_rm8<32> => if src.is_mem { 2 + src.ea } else { 3 };
+    Movzx_r_rm16<16> => if src.is_mem { 2 + src.ea } else { 3 };
+    Movzx_r_rm16<32> => if src.is_mem { 2 + src.ea } else { 3 };
+    Movzx_r_rm8<16> => if src.is_mem { 2 + src.ea } else { 3 };
+    Movzx_r_rm8<32> => if src.is_mem { 2 + src.ea } else { 3 };
+    Mul_rm8 => 7 + mul_bits<8>(src, false) + (if src.is_mem { src.ea } else { 0 });
+    Mul_rm<16> => 7 + mul_bits<16>(src, false) + (if src.is_mem { src.ea } else { 0 });
+    Mul_rm<32> => 7 + mul_bits<32>(src, false) + (if src.is_mem { src.ea } else { 0 });
+    Neg_rm8 => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Neg_rm<16> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Neg_rm<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Not_rm8 => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Not_rm<16> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Not_rm<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Out_dx_al => 10;
+    Out_dx_ax<16> => 10;
+    Out_dx_ax<32> => 15;
+    Out_imm8_al => 10;
+    Out_imm8_ax<16> => 10;
+    Out_imm8_ax<32> => 13;
+    Outs<16> => if !repeating() { 11 } else if restarted() { 4 } else if count_zero() { 14 } else { 18 };
+    Outs<32> => if !repeating() { 11 } else if restarted() { 4 } else if count_zero() { 14 } else { 18 };
+    Outsb => if !repeating() { 11 } else if restarted() { 4 } else if count_zero() { 14 } else { 18 };
+    Pop_ds => 4;
+    Pop_es => 4;
+    Pop_fs => 4;
+    Pop_gs => 4;
+    Pop_r<16> => 3;
+    Pop_r<32> => 2;
+    Pop_rm<16> => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Pop_rm<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Pop_ss => 4;
+    Popa<16> => 13;
+    Popa<32> => 3;
+    Popf<16> => 3;
+    Popf<32> => 4;
+    Push_cs => 3;
+    Push_ds => 3;
+    Push_es => 3;
+    Push_fs => 3;
+    Push_gs => 3;
+    Push_imm<16> => 2;
+    Push_imm<32> => 3;
+    Push_r<16> => 3;
+    Push_r<32> => 2;
+    Push_rm<16> => if src.is_mem { 4 + src.ea } else { 3 };
+    Push_simm8<16> => 2;
+    Push_simm8<32> => 3;
+    Push_ss => 3;
+    Pusha<16> => 9;
+    Pusha<32> => 2;
+    Pushf<16> => 4;
+    Pushf<32> => 3;
+    Ret<16> => 6;
+    Ret<32> => 7;
+    Ret_imm<16> => 7;
+    Ret_imm<32> => 6;
+    Retf<16> => 15;
+    Retf<32> => 16;
+    Retf_imm<16> => 16;
+    Retf_imm<32> => 15;
+    Sahf => 2;
+    Salc => 3;
+    Scas<16> => if !repeating() { 3 } else if restarted() { 6 } else if count_zero() { 3 } else { 11 };
+    Scas<32> => if !repeating() { 4 } else if restarted() { 6 } else if count_zero() { 3 } else { 11 };
+    Scasb => if !repeating() { 3 } else if restarted() { 6 } else if count_zero() { 3 } else { 11 };
+    Setcc => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shift_rm8_1 => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Shift_rm8_cl => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Shift_rm8_imm8 => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shift_rm_1<16> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shift_rm_1<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shift_rm_cl<16> => if dst.is_mem { 3 + dst.ea } else { 3 };
+    Shift_rm_cl<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shift_rm_imm8<16> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shift_rm_imm8<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shld_cl<16> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shld_cl<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shld_imm<16> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shld_imm<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shrd_cl<16> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shrd_cl<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shrd_imm<16> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Shrd_imm<32> => if dst.is_mem { 2 + dst.ea } else { 3 };
+    Stc => 2;
+    Std => 2;
+    Sti => 3;
+    Stos<16> => if !repeating() { 2 } else if restarted() { 3 } else if count_zero() { 3 } else { 8 };
+    Stos<32> => if !repeating() { 3 } else if restarted() { 1 } else if count_zero() { 3 } else { 8 };
+    Stosb => if !repeating() { 2 } else if restarted() { 3 } else if count_zero() { 3 } else { 8 };
+    Test_al_imm8 => 2;
+    Test_ax_imm<16> => 2;
+    Test_rm8_imm8 => if a.is_mem { 3 + a.ea } else { 3 };
+    Test_rm8_imm8_alias => if a.is_mem { 3 + a.ea } else { 3 };
+    Test_rm8_r8 => if a.is_mem { 3 + a.ea } else { 3 };
+    Test_rm_imm<16> => if a.is_mem { 3 + a.ea } else { 4 };
+    Test_rm_imm<32> => if a.is_mem { 4 + a.ea } else { 3 };
+    Test_rm_imm_alias<16> => if a.is_mem { 3 + a.ea } else { 3 };
+    Test_rm_imm_alias<32> => if a.is_mem { 4 + a.ea } else { 3 };
+    Test_rm_r<16> => if a.is_mem { 3 + a.ea } else { 3 };
+    Test_rm_r<32> => if a.is_mem { 3 + a.ea } else { 3 };
+    Wait => 4;
+    Xchg_ax_r<16> => 2;
+    Xchg_ax_r<32> => 3;
+    Xchg_rm8_r8 => if a.is_mem { 3 + a.ea } else { 3 };
+    Xchg_rm_r<16> => if a.is_mem { 3 + a.ea } else { 3 };
+    Xchg_rm_r<32> => if a.is_mem { 3 + a.ea } else { 3 };
+    Xlat => 3;
+    split => if (address & 3) + width > 4 { 4 } else { 0 };
+    fault => match vector { 0 => 54, 5 => 39, 6 => 42, 12 => 61, 13 => 60, _ => 60 };
+    interrupt => 27;
+}

@@ -165,6 +165,7 @@ impl Checker<'_> {
             latches,
             fault_cycles: None,
             interrupt_cycles: None,
+            split_cycles: None,
             interrupt_schedule: None,
             fault_schedule: None,
         });
@@ -2890,6 +2891,29 @@ impl Checker<'_> {
                 }
                 continue;
             }
+            if e.name.name == "split" {
+                // A data access's extra cycles, by its address and width.
+                if d.schedules {
+                    self.error(module, "E1055", e.name.span, "`split` belongs in a `timing` table");
+                    continue;
+                }
+                let span = e.name.span;
+                let (cx, params, expr) = self.check_timing_expr(module, &e.value, false, &|| {
+                    let mut cx = FnCtx::new(scope, HashMap::new(), None);
+                    cx.in_timing = true;
+                    let p = vec![
+                        cx.declare("address", Ty::UInt(32), span),
+                        cx.declare("width", Ty::UInt(32), span),
+                    ];
+                    (cx, p)
+                });
+                self.isas[ii].split_cycles = Some(hir::TimingExpr {
+                    locals: cx.locals,
+                    params,
+                    expr,
+                });
+                continue;
+            }
             if e.name.name == "fault" || e.name.name == "interrupt" {
                 // Either may depend on which fault it is (`vector`), and be a
                 // schedule in a `schedules` table.
@@ -2927,7 +2951,7 @@ impl Checker<'_> {
                 .iter()
                 .position(|i| i.name == e.name.name)
             else {
-                let msg = format!("isa `{}` has no instruction `{}` (entries are instructions, prefixes, `fault` and `interrupt`)", d.target.dotted(), e.name.name);
+                let msg = format!("isa `{}` has no instruction `{}` (entries are instructions, prefixes, `fault`, `interrupt` and `split`)", d.target.dotted(), e.name.name);
                 self.error(module, "E1055", e.name.span, msg);
                 continue;
             };

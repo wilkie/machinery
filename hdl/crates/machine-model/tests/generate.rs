@@ -300,7 +300,11 @@ fn i386_target_passes_hardware_vectors() {
         let path = root.join("targets").join(dir).join(name);
         SourceFile::new(name, std::fs::read_to_string(&path).unwrap())
     };
-    let checked = check_files(vec![read("i286", "alu.machine"), read("i386", "i386.machine")]);
+    let checked = check_files(vec![
+        read("i286", "alu.machine"),
+        read("i386", "i386.machine"),
+        read("i386", "timing.machine"),
+    ]);
     assert!(!checked.has_errors());
     let src = generate_isa(&checked, "I386").unwrap_or_else(|e| panic!("{e}"));
     let crate_ = package(
@@ -384,6 +388,38 @@ fn i386_target_passes_hardware_vectors() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "hardware vectors failed:\n{stdout}\n{stderr}");
     assert!(stdout.contains(" 0 failed"), "{stdout}");
+
+    // The timing table against the same vectors' cycle traces. Tier 1
+    // cannot see the clock that depends on where the next instruction
+    // falls in the decoder, nor how misaligned accesses overlap in
+    // pipelined sequences, so about half match exactly and most within a
+    // clock (`targets/i386/timing.machine`).
+    let output = Command::new(&cargo)
+        .args(["run", "--quiet", "--features", "vectors", "--bin", "vectors", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .arg("--")
+        .arg("--dir")
+        .arg(&vectors)
+        .args([
+            "--timing",
+            "--quiet",
+            "--filter",
+            "00,6601,6703,80.4,6683.5,0F8E,E8,66E8,C3,66CF,9A,FF.3,668F,6660,6661,C8,A4,66A5,67AD,D3.5,66C1.7,F7.4,66F7.6,6687,8D,0FA3,0FBC,0FA4,0FB6,62,CC,CF,27,D5,9C,8E,0FA1,F4,74,E2,F3",
+        ])
+        .output()
+        .expect("run timing");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
+        .lines()
+        .find(|l| l.starts_with("timing:"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    let pct = |label: &str| -> f64 {
+        let i = line.find(label).unwrap_or_else(|| panic!("{line}"));
+        line[..i].trim_end().trim_end_matches('%').rsplit(' ').next().unwrap().parse().unwrap()
+    };
+    assert!(pct("% exact") >= 45.0, "{line}");
+    assert!(pct("% within 1") >= 75.0, "{line}");
 }
 
 /// The model backend: the i286 board system generates, compiles, boots a

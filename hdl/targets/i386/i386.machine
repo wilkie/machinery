@@ -45,6 +45,18 @@ bundle TableReg { base: u32, limit: u16 }
 /// `base[15:0]`, its parameter count `base[20:16]`).
 bundle Descriptor { base: u32, limit: u32, rights: u8, big: bool, w0: u16, w3: u16 }
 
+/// The address work of a ModRM memory operand beyond a plain base
+/// register, fitted to the SingleStepTests 80386 traces: a clock for a
+/// 16- or 32-bit displacement (an 8-bit one costs nothing) and one for an
+/// index register (16-bit base+index forms, or a SIB that names an index);
+/// a register operand none.
+unit EaWork(mode: u2, rm: u3, a32: bool, sib_index: u3, sib_base: u3) -> u32 {
+    if mode == 3 { return 0; }
+    let disp = if a32 { mode == 2 || (mode == 0 && (rm == 5 || (rm == 4 && sib_base == 5))) } else { mode == 2 || (mode == 0 && rm == 6) };
+    let index = if a32 { rm == 4 && sib_index != 4 } else { rm < 4 };
+    return (if disp { 1 } else { 0 }) + (if index { 1 } else { 0 });
+}
+
 isa I386 {
     space mem: addr u32 -> u8, little_endian;
     space io:  addr u16 -> u8, little_endian;
@@ -1222,6 +1234,8 @@ isa I386 {
     }
     operand_kind rm<const W: width> in [8, 16, 32] : u<W> from m: ModRM {
         is_mem => m.mod != 3;
+        /// Address work, for timing.
+        ea => if (adsize ^ (CS.big as u1)) == 1 && m.mod != 3 && m.rm == 4 { EaWork(m.mod, m.rm, true, m.tail.Sib.index, m.tail.Sib.base) } else { EaWork(m.mod, m.rm, (adsize ^ (CS.big as u1)) == 1, 4, 0) };
         /// The register a register form names.
         index => m.rm;
         read => if m.mod == 3 { r<W>.select(m.rm) } else { ea_read<W>(m) };
@@ -1231,6 +1245,9 @@ isa I386 {
     /// address sees the popped ESP, but a store that faults leaves SP
     /// where it was.
     operand_kind pop_rm<const W: width> in [16, 32] : u<W> from m: ModRM {
+        is_mem => m.mod != 3;
+        /// Address work, for timing.
+        ea => if (adsize ^ (CS.big as u1)) == 1 && m.mod != 3 && m.rm == 4 { EaWork(m.mod, m.rm, true, m.tail.Sib.index, m.tail.Sib.base) } else { EaWork(m.mod, m.rm, (adsize ^ (CS.big as u1)) == 1, 4, 0) };
         read => unreachable("POP's destination is not read");
         write(v: u<W>) => pop_store<W>(m, v);
     }
@@ -1285,6 +1302,45 @@ isa I386 {
     fn jump_near(target: u32) {
         EIP = near_target(target);
     }
+
+    // -- for the timing table (`timing.machine`) ------------------------------------------
+
+    /// The early-out multiplier's work: the multiplier's significant bits
+    /// (of its magnitude when signed), at least 3.
+    fn mul_bits<const W: width> in [8, 16, 32](m: u<W>, signed: bool) -> u32 {
+        let neg = signed && ((m >> ((W - 1) as u<W>)) & 1) == 1;
+        let x = (if neg { ~m } else { m }) as u32;
+        let mut n: u32 = 0;
+        for i in 0..32 {
+            if ((x >> (i as u32)) & 1) == 1 { n = (i as u32) + 1; }
+        }
+        return if n < 3 { 3 } else { n };
+    }
+
+    /// The zero bits below the lowest set bit (BSF's scan), or the width.
+    fn trailing_zeros<const W: width> in [16, 32](v: u<W>) -> u32 {
+        let x = v as u32;
+        let mut n: u32 = W;
+        for i in 0..32 {
+            let k = 31 - (i as u32);
+            if k < W && ((x >> k) & 1) == 1 { n = k; }
+        }
+        return n;
+    }
+
+    /// The zero bits above the highest set bit (BSR's scan), or the width.
+    fn leading_zeros<const W: width> in [16, 32](v: u<W>) -> u32 {
+        let x = v as u32;
+        let mut n: u32 = W;
+        for i in 0..32 {
+            let k = i as u32;
+            if k < W && ((x >> k) & 1) == 1 { n = W - 1 - k; }
+        }
+        return n;
+    }
+
+    /// Whether LOOP's count is about to run out (it decrements first).
+    fn count_last() -> bool { return if address_size() == 32 { ECX == 1 } else { CX == 1 }; }
 
     // -- prefixes ------------------------------------------------------------------------
 
@@ -1949,6 +2005,8 @@ isa I386 {
     /// The offset of a ModRM memory form, at the address size.
     operand_kind mem_offset : u32 from m: ModRM {
         is_mem => m.mod != 3;
+        /// Address work, for timing.
+        ea => if (adsize ^ (CS.big as u1)) == 1 && m.mod != 3 && m.rm == 4 { EaWork(m.mod, m.rm, true, m.tail.Sib.index, m.tail.Sib.base) } else { EaWork(m.mod, m.rm, (adsize ^ (CS.big as u1)) == 1, 4, 0) };
         read => effective_address(m).off;
     }
     /// The register form is #UD.
@@ -2357,6 +2415,8 @@ isa I386 {
     /// selector's word.
     operand_kind far_mem<const W: width> in [16, 32] : (off: u32, seg: u16) from m: ModRM {
         is_mem => m.mod != 3;
+        /// Address work, for timing.
+        ea => if (adsize ^ (CS.big as u1)) == 1 && m.mod != 3 && m.rm == 4 { EaWork(m.mod, m.rm, true, m.tail.Sib.index, m.tail.Sib.base) } else { EaWork(m.mod, m.rm, (adsize ^ (CS.big as u1)) == 1, 4, 0) };
         read => {
             let (s, o) = effective_address(m);
             let off = seg_read<W>(s, o);
@@ -2420,6 +2480,8 @@ isa I386 {
     /// The signed bounds pair of BOUND.
     operand_kind bounds<const W: width> in [16, 32] : (lo: u<W>, hi: u<W>) from m: ModRM {
         is_mem => m.mod != 3;
+        /// Address work, for timing.
+        ea => if (adsize ^ (CS.big as u1)) == 1 && m.mod != 3 && m.rm == 4 { EaWork(m.mod, m.rm, true, m.tail.Sib.index, m.tail.Sib.base) } else { EaWork(m.mod, m.rm, (adsize ^ (CS.big as u1)) == 1, 4, 0) };
         read => {
             let (s, o) = effective_address(m);
             let lo = seg_read<W>(s, o);
@@ -2988,6 +3050,8 @@ isa I386 {
     /// address it forms. The bit tests address memory by a bit offset.
     operand_kind place : (seg: Segment, off: u32) from m: ModRM {
         is_mem => m.mod != 3;
+        /// Address work, for timing.
+        ea => if (adsize ^ (CS.big as u1)) == 1 && m.mod != 3 && m.rm == 4 { EaWork(m.mod, m.rm, true, m.tail.Sib.index, m.tail.Sib.base) } else { EaWork(m.mod, m.rm, (adsize ^ (CS.big as u1)) == 1, 4, 0) };
         index => m.rm;
         read => effective_address(m);
     }
@@ -3172,6 +3236,9 @@ vectors "../../../simulators/test/i386/SingleStepTests/v1_ex_real_mode/*.MOO.gz"
     memory mem;
     /// The capture rig has nothing on the I/O bus: reads float high.
     open io = 0xFF;
+    /// Each trace starts at the jump to the instruction and ends at the
+    /// injected HLT's bus cycle, whose first clock belongs to no instruction.
+    harness_cycles 1;
     reg cr0 = CR0;
     reg cr3 = CR3;
     reg eax = EAX;

@@ -750,7 +750,9 @@ impl Checker<'_> {
                         tx = true;
                         touch = true;
                     }
-                    H::State(..) | H::ModelMem(..) | H::Port(..) => touch = true,
+                    H::State(..) | H::ModelMem(..) | H::Port(..) | H::SignalLevel(..) => {
+                        touch = true
+                    }
                     _ => {}
                 },
             );
@@ -1078,16 +1080,26 @@ impl Checker<'_> {
             return err;
         };
         let Some(t) = info.transactions.iter().find(|t| t.name == method.name) else {
-            if info.signals.iter().any(|s| s.name == method.name) {
-                self.error(
-                    cx.module,
-                    "E1044",
-                    method.span,
-                    format!(
-                        "`{}` is a signal; set it with `emit {}.{}(...) = level;`",
-                        method.name, cs.ports[port as usize].name, method.name
-                    ),
-                );
+            if let Some(sig) = info.signals.iter().find(|s| s.name == method.name) {
+                // Read as a value: the signal's current level.
+                let Some(ordered) = self.order_args(
+                    cx,
+                    &format!("signal `{}`", sig.name),
+                    &sig.params,
+                    args,
+                    span,
+                ) else {
+                    return err;
+                };
+                let mut hargs = Vec::new();
+                for (a, (_, pty)) in ordered.iter().zip(&sig.params) {
+                    hargs.push(self.check_expr(cx, &a.value, Some(pty)));
+                }
+                return hir::Expr {
+                    kind: H::SignalLevel(port, sig.def, hargs),
+                    ty: Ty::Bool,
+                    span,
+                };
             } else {
                 self.error(
                     cx.module,

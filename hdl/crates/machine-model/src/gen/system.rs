@@ -157,7 +157,7 @@ impl<'a> Gen<'a> {
 
         // The ports trait.
         let mut t = format!(
-            "/// What a `{name}` model reaches through its ports.\npub trait {name}Ports {{\n"
+            "/// What a `{name}` model reaches through its ports. Every method has a\n/// default (nothing attached: open bus, low levels, emits go nowhere), so a\n/// hand-written context overrides only what it observes.\npub trait {name}Ports {{\n"
         );
         for p in &comp.ports {
             let PortKind::Bus { bus, role } = p.kind else {
@@ -166,18 +166,32 @@ impl<'a> Gen<'a> {
             let info = self.bus(bus)?;
             if role == 0 {
                 for tr in &info.transactions {
-                    let ret = match &tr.ret {
-                        Some(r) => self.rty(r)?,
-                        None => "()".into(),
+                    let (ret, open) = match &tr.ret {
+                        Some(r @ Ty::Tuple(items)) => {
+                            let vals: R<Vec<String>> =
+                                items.iter().map(|(_, t)| self.open_value(t)).collect();
+                            (self.rty(r)?, format!("({},)", vals?.join(", ")))
+                        }
+                        _ => ("()".into(), "()".into()),
                     };
                     let _ = writeln!(
                         t,
-                        "    fn {}_{}(&mut self, {}) -> {ret};",
+                        "    #[allow(unused_variables)]\n    fn {}_{}(&mut self, {}) -> {ret} {{ {open} }}",
                         ident(&p.name),
                         ident(&tr.name),
                         self.params_text(&tr.params)?
                     );
                 }
+            }
+            for s in &info.signals {
+                let _ = writeln!(
+                    t,
+                    "    /// The current level of signal `{}`.\n    #[allow(unused_variables)]\n    fn level_{}_{}(&mut self, {}) -> bool {{ false }}",
+                    s.name,
+                    ident(&p.name),
+                    ident(&s.name),
+                    self.params_text(&s.params)?
+                );
             }
             for s in Self::drivable(info, role) {
                 let mut ps = self.params_text(&s.params)?;
@@ -186,7 +200,7 @@ impl<'a> Gen<'a> {
                 }
                 let _ = writeln!(
                     t,
-                    "    fn emit_{}_{}(&mut self, {ps}value: bool);",
+                    "    #[allow(unused_variables)]\n    fn emit_{}_{}(&mut self, {ps}value: bool) {{}}",
                     ident(&p.name),
                     ident(&s.name)
                 );
@@ -237,6 +251,7 @@ impl<'a> Gen<'a> {
             recv: "s",
             ops: None,
             comp: Some(comp),
+            opt: false,
         };
         for s in &model.states {
             if let Some(init) = &s.init {
@@ -257,6 +272,7 @@ impl<'a> Gen<'a> {
                 recv: "self",
                 ops: None,
                 comp: Some(comp),
+                opt: false,
             };
             let mut ps = String::new();
             for p in &f.params {
@@ -280,12 +296,15 @@ impl<'a> Gen<'a> {
             );
         }
         for h in &model.handlers {
+            // A transaction handler returns `None` when it declines.
+            let opt = matches!(h.kind, HandlerKind::Transaction { .. });
             let cx = Cx {
                 locals: &h.locals,
                 fallible: false,
                 recv: "self",
                 ops: None,
                 comp: Some(comp),
+                opt,
             };
             let mname = match &h.kind {
                 HandlerKind::Reset => "on_reset".to_string(),
@@ -320,6 +339,7 @@ impl<'a> Gen<'a> {
             let body = self.block_stmts(&cx, &h.body)?;
             let (ret, tail) = match h.ret {
                 Ty::Unit => (String::new(), ""),
+                ref t if opt => (format!(" -> Option<{}>", self.rty(t)?), "        #[allow(unreachable_code)]\n        { unreachable!(\"handler fell off its end\") }\n"),
                 ref t => (format!(" -> {}", self.rty(t)?), "        #[allow(unreachable_code)]\n        { unreachable!(\"handler fell off its end\") }\n"),
             };
             let _ = write!(
@@ -401,14 +421,6 @@ impl<'a> Gen<'a> {
                     "bus `{}`: bridges are not generated yet",
                     b.name
                 )));
-            }
-            if let Some((m, _)) = b.master {
-                if m as usize != proc_idx {
-                    return Err(GenError::new(format!(
-                        "bus `{}` is mastered by `{}`; in the model backend only the processor starts transactions",
-                        b.name, insts[m as usize].name
-                    )));
-                }
             }
             if b.slaves.iter().filter(|(_, r)| r.is_empty()).count() > 1 {
                 return Err(GenError::new(format!(
@@ -513,8 +525,93 @@ impl<'a> Gen<'a> {
             "    #[derive(Clone, Debug, Default)]\n    pub struct Marks {{\n{marks}    }}\n"
         );
 
-        // Emit methods for an instance: by its port's attachment.
-        let emit_methods = |g: &Gen<'a>, ii: usize, sig: &str| -> R<String> {
+        // Who masters a bus: the processor, and at most one device.
+        let masters_any = |ii: usize| -> bool {
+            sys.buses
+                .iter()
+                .any(|b| b.masters.iter().any(|(i, _)| *i as usize == ii))
+        };
+        let dev_masters: Vec<usize> = (0..insts.len())
+            .filter(|&ii| ii != proc_idx && masters_any(ii))
+            .collect();
+        if dev_masters.len() > 1 {
+            let names: Vec<&str> = dev_masters
+                .iter()
+                .map(|&i| insts[i].name.as_str())
+                .collect();
+            return Err(GenError::new(format!(
+                "several devices master buses ({}); the model backend supports one besides the processor",
+                names.join(", ")
+            )));
+        }
+        if ticks.iter().any(|t| t.0 == proc_idx) {
+            return Err(GenError::new(
+                "an `on tick` handler on the processor model is not generated yet",
+            ));
+        }
+        // A master's context holds every other device, so its bus calls can
+        // reach them; any other device's context holds only the signals.
+        let full = |ii: usize| ii == proc_idx || dev_masters.contains(&ii);
+        let field = |src: &str, deref: bool, f: &str| -> String {
+            if deref {
+                format!("&mut *{src}.{f}")
+            } else {
+                format!("&mut {src}.{f}")
+            }
+        };
+        let ctx_for = |ii: usize, src: &str, deref: bool| -> String {
+            let n = ident(&insts[ii].name);
+            if full(ii) {
+                let mut s = format!(
+                    "Ctx_{n} {{ sig: {}, marks: {}",
+                    field(src, deref, "sig"),
+                    field(src, deref, "marks")
+                );
+                for (jj, j) in insts.iter().enumerate() {
+                    if jj != proc_idx && jj != ii {
+                        let jn = ident(&j.name);
+                        let _ = write!(s, ", {jn}: {}", field(src, deref, &jn));
+                    }
+                }
+                s.push_str(" }");
+                s
+            } else {
+                format!("Ctx_{n} {{ sig: {} }}", field(src, deref, "sig"))
+            }
+        };
+        let ticking = |ii: usize| ticks.iter().any(|t| t.0 == ii);
+        // Statements that catch device `ii` up, from a source holding it.
+        let catch_from = |ii: usize, src: &str, deref: bool| -> String {
+            if !ticking(ii) {
+                return String::new();
+            }
+            let n = ident(&insts[ii].name);
+            if full(ii) {
+                format!(
+                    "{{ let mut c = {}; catch_up_{n}({}, &mut c); }} ",
+                    ctx_for(ii, src, deref),
+                    field(src, deref, &n)
+                )
+            } else {
+                format!(
+                    "catch_up_{n}({}, {}, {}); ",
+                    field(src, deref, &n),
+                    field(src, deref, "sig"),
+                    field(src, deref, "marks")
+                )
+            }
+        };
+        // The bus a port is attached to.
+        let attached = |ii: usize, pi: usize| -> Option<usize> {
+            let ip = (ii as u32, pi as u32);
+            sys.buses
+                .iter()
+                .position(|b| b.masters.contains(&ip) || b.slaves.iter().any(|(s, _)| *s == ip))
+        };
+
+        // Signal methods for an instance: emit through its ports, and read
+        // the levels of the signals on its buses.
+        let signal_methods = |g: &Gen<'a>, ii: usize| -> R<String> {
             let i = &insts[ii];
             let mut s = String::new();
             for (pi, p) in i.comp.ports.iter().enumerate() {
@@ -522,28 +619,32 @@ impl<'a> Gen<'a> {
                     continue;
                 };
                 let info = g.bus(bus)?;
-                let attached = sys.buses.iter().position(|b| {
-                    b.master == Some((ii as u32, pi as u32))
-                        || b.slaves.iter().any(|(ip, _)| *ip == (ii as u32, pi as u32))
-                });
+                let at = attached(ii, pi);
+                let line = |sg: &hir::SignalInfo| -> (String, String) {
+                    let idx = match sg.params.first() {
+                        Some((n, _)) => format!("{} as usize", ident(n)),
+                        None => "0".into(),
+                    };
+                    let f = at
+                        .and_then(|bi| {
+                            sig_names
+                                .iter()
+                                .find(|(b, d, _, _)| *b == bi && *d == sg.def)
+                                .map(|x| x.2.clone())
+                        })
+                        .unwrap_or_default();
+                    (f, idx)
+                };
                 for sg in Self::drivable(info, role) {
                     let mut ps = g.params_text(&sg.params)?;
                     if !ps.is_empty() {
                         ps.push_str(", ");
                     }
-                    let body = match attached {
-                        None => String::new(),
-                        Some(bi) => {
-                            let (_, _, f, _) = sig_names
-                                .iter()
-                                .find(|(b, d, _, _)| *b == bi && *d == sg.def)
-                                .unwrap();
-                            let idx = match sg.params.first() {
-                                Some((n, _)) => format!("{} as usize", ident(n)),
-                                None => "0".into(),
-                            };
-                            format!("let i = {idx}; if {sig}.{f}[i] != value {{ {sig}.{f}[i] = value; {sig}.events.push(Event::{f}(i, value)); }}")
-                        }
+                    let (f, idx) = line(sg);
+                    let body = if at.is_none() {
+                        String::new()
+                    } else {
+                        format!("let i = {idx}; if self.sig.{f}[i] != value {{ self.sig.{f}[i] = value; self.sig.events.push(Event::{f}(i, value)); }}")
                     };
                     let _ = writeln!(
                         s,
@@ -552,173 +653,89 @@ impl<'a> Gen<'a> {
                         ident(&sg.name)
                     );
                 }
+                for sg in &info.signals {
+                    let (f, idx) = line(sg);
+                    let body = if at.is_none() {
+                        "false".to_string()
+                    } else {
+                        format!("self.sig.{f}[{idx}]")
+                    };
+                    let _ = writeln!(
+                        s,
+                        "        fn level_{}_{}(&mut self, {}) -> bool {{ {body} }}",
+                        ident(&p.name),
+                        ident(&sg.name),
+                        g.params_text(&sg.params)?
+                    );
+                }
             }
             Ok(s)
         };
 
-        // Device contexts: signals only; their master ports reach nothing.
+        // One context per instance.
         for (ii, i) in insts.iter().enumerate() {
-            if ii == proc_idx {
-                continue;
-            }
             let cname = ident(&i.comp.name);
             let n = ident(&i.name);
+            let mut fields = String::from("        pub sig: &'a mut Signals,\n");
+            if full(ii) {
+                fields.push_str("        pub marks: &'a mut Marks,\n");
+                for (jj, j) in insts.iter().enumerate() {
+                    if jj != proc_idx && jj != ii {
+                        let _ = writeln!(
+                            fields,
+                            "        pub {}: &'a mut {},",
+                            ident(&j.name),
+                            ident(&j.comp.name)
+                        );
+                    }
+                }
+            }
             let mut m = String::new();
-            for p in &i.comp.ports {
+            for (pi, p) in i.comp.ports.iter().enumerate() {
                 let PortKind::Bus { bus, role: 0 } = p.kind else {
                     continue;
                 };
-                for tr in &self.bus(bus)?.transactions {
-                    let (ret, val) = match &tr.ret {
-                        Some(Ty::Tuple(items)) => {
-                            let vals: R<Vec<String>> =
-                                items.iter().map(|(_, t)| self.open_value(t)).collect();
-                            (
-                                self.rty(tr.ret.as_ref().unwrap())?,
-                                format!("({},)", vals?.join(", ")),
-                            )
-                        }
-                        _ => ("()".into(), "()".into()),
+                let info = self.bus(bus)?;
+                let inst_bus = sys
+                    .buses
+                    .iter()
+                    .find(|b| b.masters.contains(&(ii as u32, pi as u32)));
+                for tr in &info.transactions {
+                    let ret_items: Vec<(Option<String>, Ty)> = match &tr.ret {
+                        Some(Ty::Tuple(items)) => items.clone(),
+                        _ => Vec::new(),
                     };
-                    let _ = writeln!(
-                        m,
-                        "        fn {}_{}(&mut self, {}) -> {ret} {{ {val} }}",
-                        ident(&p.name),
-                        ident(&tr.name),
-                        self.params_text(&tr.params)?
-                    );
-                }
-            }
-            m.push_str(&emit_methods(self, ii, "self.sig")?);
-            let _ = write!(o, "    pub struct Ctx_{n}<'a> {{\n        pub sig: &'a mut Signals,\n    }}\n    impl {cname}Ports for Ctx_{n}<'_> {{\n{m}    }}\n");
-        }
-
-        // Catch-up functions.
-        for (ii, i) in insts.iter().enumerate() {
-            let mine: Vec<&(usize, Option<u32>, u32)> =
-                ticks.iter().filter(|t| t.0 == ii).collect();
-            if mine.is_empty() || ii == proc_idx {
-                continue;
-            }
-            let n = ident(&i.name);
-            let mut body = String::new();
-            for (_, clock, sc) in mine {
-                let mt = method_tick(i.comp, *clock);
-                let _ = write!(
-                    body,
-                    "        {{\n            let p = clock::C{sc};\n            let mut n = (sig.now - marks.{n}_{mt}) / p;\n            marks.{n}_{mt} += n * p;\n            while n > 0 {{\n                let k = n.min(u32::MAX as u64);\n                n -= k;\n                let mut c = Ctx_{n} {{ sig: &mut *sig }};\n                dev.{mt}(&mut c, k as u32);\n            }}\n        }}\n"
-                );
-            }
-            let _ = write!(o, "    /// Run `{n}`'s clocks up to the present.\n    pub fn catch_up_{n}(dev: &mut {}, sig: &mut Signals, marks: &mut Marks) {{\n{body}    }}\n", ident(&i.comp.name));
-        }
-        if ticks.iter().any(|t| t.0 == proc_idx) {
-            return Err(GenError::new(
-                "an `on tick` handler on the processor model is not generated yet",
-            ));
-        }
-
-        // The processor context: every device, for the bus decoders.
-        let mut fields =
-            String::from("        pub sig: &'a mut Signals,\n        pub marks: &'a mut Marks,\n");
-        for (ii, i) in insts.iter().enumerate() {
-            if ii != proc_idx {
-                let _ = writeln!(
-                    fields,
-                    "        pub {}: &'a mut {},",
-                    ident(&i.name),
-                    ident(&i.comp.name)
-                );
-            }
-        }
-        let mut m = String::new();
-        for (pi, p) in cpu.comp.ports.iter().enumerate() {
-            let PortKind::Bus { bus, role: 0 } = p.kind else {
-                continue;
-            };
-            let info = self.bus(bus)?;
-            let inst_bus = sys
-                .buses
-                .iter()
-                .find(|b| b.master == Some((proc_idx as u32, pi as u32)));
-            for tr in &info.transactions {
-                let ret_items: Vec<(Option<String>, Ty)> = match &tr.ret {
-                    Some(Ty::Tuple(items)) => items.clone(),
-                    _ => Vec::new(),
-                };
-                let ret = match &tr.ret {
-                    Some(r) => self.rty(r)?,
-                    None => "()".into(),
-                };
-                let open: R<Vec<String>> =
-                    ret_items.iter().map(|(_, t)| self.open_value(t)).collect();
-                let open = if ret_items.is_empty() {
-                    "()".to_string()
-                } else {
-                    format!("({},)", open?.join(", "))
-                };
-                let mut body = String::new();
-                if let Some(b) = inst_bus {
-                    let base = tr.base_cycles.ok_or_else(|| {
-                        GenError::new(format!(
-                            "transaction `{}.{}`: the base cycle count cannot be derived (the initiating role's body is missing or not straight-line)",
-                            info.name, tr.name
-                        ))
-                    })?;
-                    let period = format!("clock::C{}", b.clock);
-                    let addr = tr
-                        .params
-                        .iter()
-                        .find(|(n, _)| n == "addr")
-                        .map(|(n, _)| ident(n));
-                    let space = tr
-                        .params
-                        .iter()
-                        .find(|(n, _)| n == "space")
-                        .map(|(n, _)| ident(n));
-                    let args: Vec<String> = tr.params.iter().map(|(n, _)| ident(n)).collect();
-                    // Ranged slaves first, then the one without ranges.
-                    let mut order: Vec<&(hir::InstPort, Vec<hir::AddressRange>)> =
-                        b.slaves.iter().filter(|(_, r)| !r.is_empty()).collect();
-                    order.extend(b.slaves.iter().filter(|(_, r)| r.is_empty()));
-                    for ((si, sp), ranges) in order {
-                        let dev = &insts[*si as usize];
-                        let dn = ident(&dev.name);
-                        let handler = dev.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Transaction { port, transaction } if port == *sp && transaction == tr.def));
-                        if addr.is_none() && !handler {
-                            // Not decoded: only a slave that handles it answers.
-                            continue;
-                        }
-                        let cond = if ranges.is_empty() || addr.is_none() {
-                            "true".to_string()
-                        } else {
-                            let a = addr
-                                .clone()
-                                .ok_or_else(|| GenError::new("ranges without `addr`"))?;
-                            let parts: Vec<String> = ranges
-                                .iter()
-                                .map(|r| {
-                                    let sp = match (r.space, &space) {
-                                        (Some(v), Some(s)) => format!("{s} as i128 == {v} && "),
-                                        _ => String::new(),
-                                    };
-                                    format!(
-                                        "({sp}({a} as u128) >= {:#x} && ({a} as u128) <= {:#x})",
-                                        r.lo, r.hi
-                                    )
-                                })
-                                .collect();
-                            parts.join(" || ")
-                        };
-                        if !handler {
-                            // Selected, but the device does not answer this transaction.
-                            let _ = writeln!(body, "        if {cond} {{ self.sig.now += {base} * {period}; return {open}; }}");
-                            continue;
-                        }
-                        let catch = if ticks.iter().any(|t| t.0 == *si as usize) {
-                            format!("catch_up_{dn}(&mut *self.{dn}, &mut *self.sig, &mut *self.marks); ")
-                        } else {
-                            String::new()
-                        };
+                    let ret = match &tr.ret {
+                        Some(r) => self.rty(r)?,
+                        None => "()".into(),
+                    };
+                    let open: R<Vec<String>> =
+                        ret_items.iter().map(|(_, t)| self.open_value(t)).collect();
+                    let open = if ret_items.is_empty() {
+                        "()".to_string()
+                    } else {
+                        format!("({},)", open?.join(", "))
+                    };
+                    let mut body = String::new();
+                    if let (Some(b), true) = (inst_bus, full(ii)) {
+                        let base = tr.base_cycles.ok_or_else(|| {
+                            GenError::new(format!(
+                                "transaction `{}.{}`: the base cycle count cannot be derived (the initiating role's body is missing or not straight-line)",
+                                info.name, tr.name
+                            ))
+                        })?;
+                        let period = format!("clock::C{}", b.clock);
+                        let addr = tr
+                            .params
+                            .iter()
+                            .find(|(n, _)| n == "addr")
+                            .map(|(n, _)| ident(n));
+                        let space = tr
+                            .params
+                            .iter()
+                            .find(|(n, _)| n == "space")
+                            .map(|(n, _)| ident(n));
+                        let args: Vec<String> = tr.params.iter().map(|(n, _)| ident(n)).collect();
                         let n_ret = ret_items.len();
                         let pass: Vec<String> = (0..n_ret).map(|k| format!("r.{k}")).collect();
                         let result = if n_ret == 0 {
@@ -726,31 +743,109 @@ impl<'a> Gen<'a> {
                         } else {
                             format!("({},)", pass.join(", "))
                         };
-                        let _ = writeln!(
-                            body,
-                            "        if {cond} {{\n            {catch}let r = {{ let mut c = Ctx_{dn} {{ sig: &mut *self.sig }}; self.{dn}.on_{}_{}(&mut c, {}) }};\n            self.sig.now += ({base} + r.{n_ret} as u64) * {period};\n            return {result};\n        }}",
-                            ident(&dev.comp.ports[*sp as usize].name),
-                            ident(&tr.name),
-                            args.join(", ")
-                        );
+                        // Ranged slaves first, then the one without ranges;
+                        // never the master's own ports.
+                        let mut order: Vec<&(hir::InstPort, Vec<hir::AddressRange>)> =
+                            b.slaves.iter().filter(|(_, r)| !r.is_empty()).collect();
+                        order.extend(b.slaves.iter().filter(|(_, r)| r.is_empty()));
+                        order.retain(|((si, _), _)| *si as usize != ii);
+                        for ((si, sp), ranges) in order {
+                            let si = *si as usize;
+                            let dev = &insts[si];
+                            let dn = ident(&dev.name);
+                            let handler = dev.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Transaction { port, transaction } if port == *sp && transaction == tr.def));
+                            let catch = catch_from(si, "self", true);
+                            let call = format!(
+                                "{{ let mut c = {}; self.{dn}.on_{}_{}(&mut c, {}) }}",
+                                ctx_for(si, "self", true),
+                                ident(&dev.comp.ports[*sp as usize].name),
+                                ident(&tr.name),
+                                args.join(", ")
+                            );
+                            let Some(a) = addr.clone() else {
+                                // Not decoded: offered to each responder that
+                                // handles it, in binding order, until one
+                                // does not decline.
+                                if handler {
+                                    let _ = writeln!(
+                                        body,
+                                        "        {{\n            {catch}if let Some(r) = {call} {{\n                self.sig.now += ({base} + r.{n_ret} as u64) * {period};\n                return {result};\n            }}\n        }}"
+                                    );
+                                }
+                                continue;
+                            };
+                            let cond = if ranges.is_empty() {
+                                "true".to_string()
+                            } else {
+                                let parts: Vec<String> = ranges
+                                    .iter()
+                                    .map(|r| {
+                                        let sp = match (r.space, &space) {
+                                            (Some(v), Some(s)) => format!("{s} as i128 == {v} && "),
+                                            _ => String::new(),
+                                        };
+                                        format!("({sp}({a} as u128) >= {:#x} && ({a} as u128) <= {:#x})", r.lo, r.hi)
+                                    })
+                                    .collect();
+                                parts.join(" || ")
+                            };
+                            if !handler {
+                                // Selected, but the device does not answer this transaction.
+                                let _ = writeln!(body, "        if {cond} {{ self.sig.now += {base} * {period}; return {open}; }}");
+                                continue;
+                            }
+                            let _ = writeln!(
+                                body,
+                                "        if {cond} {{\n            {catch}match {call} {{\n                Some(r) => {{\n                    self.sig.now += ({base} + r.{n_ret} as u64) * {period};\n                    return {result};\n                }}\n                None => {{\n                    self.sig.now += {base} * {period};\n                    return {open};\n                }}\n            }}\n        }}"
+                            );
+                        }
+                        let _ = writeln!(body, "        self.sig.now += {base} * {period};");
                     }
-                    let _ = writeln!(body, "        self.sig.now += {base} * {period};");
+                    let _ = write!(
+                        m,
+                        "        fn {}_{}(&mut self, {}) -> {ret} {{\n{body}        {open}\n        }}\n",
+                        ident(&p.name),
+                        ident(&tr.name),
+                        self.params_text(&tr.params)?
+                    );
                 }
-                let _ = write!(
-                    m,
-                    "        fn {}_{}(&mut self, {}) -> {ret} {{\n{body}        {open}\n        }}\n",
-                    ident(&p.name),
-                    ident(&tr.name),
-                    self.params_text(&tr.params)?
-                );
             }
+            m.push_str(&signal_methods(self, ii)?);
+            let _ = write!(o, "    pub struct Ctx_{n}<'a> {{\n{fields}    }}\n    impl {cname}Ports for Ctx_{n}<'_> {{\n{m}    }}\n");
         }
-        m.push_str(&emit_methods(self, proc_idx, "self.sig")?);
-        let _ = write!(
-            o,
-            "    pub struct Ctx_{cpu_name}<'a> {{\n{fields}    }}\n    impl {}Ports for Ctx_{cpu_name}<'_> {{\n{m}    }}\n",
-            ident(&cpu.comp.name)
-        );
+
+        // Catch-up functions: run a device's clocks up to the present.
+        for (ii, i) in insts.iter().enumerate() {
+            let mine: Vec<&(usize, Option<u32>, u32)> =
+                ticks.iter().filter(|t| t.0 == ii).collect();
+            if mine.is_empty() {
+                continue;
+            }
+            let n = ident(&i.name);
+            let cname = ident(&i.comp.name);
+            let mut body = String::new();
+            for (_, clock, sc) in mine {
+                let mt = method_tick(i.comp, *clock);
+                if full(ii) {
+                    let _ = write!(
+                        body,
+                        "        {{\n            let p = clock::C{sc};\n            let mut k = (c.sig.now - c.marks.{n}_{mt}) / p;\n            c.marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as u64);\n                k -= s;\n                dev.{mt}(&mut *c, s as u32);\n            }}\n        }}\n"
+                    );
+                } else {
+                    let _ = write!(
+                        body,
+                        "        {{\n            let p = clock::C{sc};\n            let mut k = (sig.now - marks.{n}_{mt}) / p;\n            marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as u64);\n                k -= s;\n                let mut c = Ctx_{n} {{ sig: &mut *sig }};\n                dev.{mt}(&mut c, s as u32);\n            }}\n        }}\n"
+                    );
+                }
+            }
+            let sig = if full(ii) {
+                format!("c: &mut Ctx_{n}<'_>")
+            } else {
+                "sig: &mut Signals, marks: &mut Marks".to_string()
+            };
+            let _ = write!(o, "    /// Run `{n}`'s clocks up to the present.\n    pub fn catch_up_{n}(dev: &mut {cname}, {sig}) {{\n{body}    }}\n");
+        }
+        let ctx_cpu = |b: &str| ctx_for(proc_idx, b, false);
 
         // The board.
         let mut fields = String::from("        pub sig: Signals,\n        pub marks: Marks,\n");
@@ -771,16 +866,6 @@ impl<'a> Gen<'a> {
                 ident(&i.comp.name)
             );
         }
-        let ctx_cpu = |b: &str| -> String {
-            let mut s = format!("Ctx_{cpu_name} {{ sig: &mut {b}.sig, marks: &mut {b}.marks");
-            for (ii, i) in insts.iter().enumerate() {
-                if ii != proc_idx {
-                    let _ = write!(s, ", {0}: &mut {b}.{0}", ident(&i.name));
-                }
-            }
-            s.push_str(" }");
-            s
-        };
         let mut bus_impl = String::new();
         for sp in &self.isa.spaces {
             let n = ident(&sp.name);
@@ -832,6 +917,7 @@ impl<'a> Gen<'a> {
                 recv: "self",
                 ops: None,
                 comp: None,
+                opt: false,
             };
             let mut ps = String::new();
             let mut args = String::new();
@@ -865,24 +951,17 @@ impl<'a> Gen<'a> {
                 continue;
             }
             let n = ident(&i.name);
-            if ii == proc_idx {
-                let _ = writeln!(
-                    reset,
-                    "        {{ let mut c = {}; b.{n}.on_reset(&mut c); }}",
-                    ctx_cpu("b")
-                );
-            } else {
-                let _ = writeln!(reset, "        {{ let mut c = Ctx_{n} {{ sig: &mut b.sig }}; b.{n}.on_reset(&mut c); }}");
-            }
+            let _ = writeln!(
+                reset,
+                "        {{ let mut c = {}; b.{n}.on_reset(&mut c); }}",
+                ctx_for(ii, "b", false)
+            );
         }
         let mut sync = String::new();
-        for (ii, i) in insts.iter().enumerate() {
-            if ii != proc_idx && ticks.iter().any(|t| t.0 == ii) {
-                let n = ident(&i.name);
-                let _ = writeln!(
-                    sync,
-                    "        catch_up_{n}(&mut b.{n}, &mut b.sig, &mut b.marks);"
-                );
+        for ii in 0..insts.len() {
+            let c = catch_from(ii, "b", false);
+            if !c.is_empty() {
+                let _ = writeln!(sync, "            {c}");
             }
         }
         // Host entry points: a model's fns with a live context.
@@ -890,19 +969,11 @@ impl<'a> Gen<'a> {
         for (ii, i) in insts.iter().enumerate() {
             let n = ident(&i.name);
             let cname = ident(&i.comp.name);
-            let (catch, ctx) = if ii == proc_idx {
-                (String::new(), ctx_cpu("b"))
-            } else {
-                let catch = if ticks.iter().any(|t| t.0 == ii) {
-                    format!("                catch_up_{n}(&mut b.{n}, &mut b.sig, &mut b.marks);\n")
-                } else {
-                    String::new()
-                };
-                (catch, format!("Ctx_{n} {{ sig: &mut b.sig }}"))
-            };
+            let catch = catch_from(ii, "b", false);
+            let ctx = ctx_for(ii, "b", false);
             let _ = write!(
                 with,
-                "        /// Call into `{n}` with a live context: how the embedding program\n        /// reaches its model fns (host input). The device is caught up first,\n        /// and signal edges it raises are delivered after.\n        pub fn with_{n}<R>(&mut self, f: impl FnOnce(&mut {cname}, &mut Ctx_{n}<'_>) -> R) -> R {{\n            let r = {{\n                let b = &mut self.{cpu_name}.bus;\n{catch}                let mut c = {ctx};\n                f(&mut b.{n}, &mut c)\n            }};\n            self.deliver();\n            r\n        }}\n"
+                "        /// Call into `{n}` with a live context: how the embedding program\n        /// reaches its model fns (host input). The device is caught up first,\n        /// and signal edges it raises are delivered after.\n        pub fn with_{n}<R>(&mut self, f: impl FnOnce(&mut {cname}, &mut Ctx_{n}<'_>) -> R) -> R {{\n            let r = {{\n                let b = &mut self.{cpu_name}.bus;\n                {catch}\n                let mut c = {ctx};\n                f(&mut b.{n}, &mut c)\n            }};\n            self.deliver();\n            r\n        }}\n"
             );
         }
         let mut deliver = String::new();
@@ -910,7 +981,7 @@ impl<'a> Gen<'a> {
             let b = &sys.buses[*bi];
             let mut calls = String::new();
             let ports: Vec<hir::InstPort> = b
-                .master
+                .masters
                 .iter()
                 .copied()
                 .chain(b.slaves.iter().map(|(p, _)| *p))
@@ -926,20 +997,13 @@ impl<'a> Gen<'a> {
                     Some(t) => format!("i as {t}, "),
                     None => String::new(),
                 };
-                let call = format!(
-                    "b.{n}.on_{}_{}(&mut c, {arg}v);",
+                let _ = writeln!(
+                    calls,
+                    "                    {{ let mut c = {}; b.{n}.on_{}_{}(&mut c, {arg}v); }}",
+                    ctx_for(ii as usize, "b", false),
                     ident(&i.comp.ports[pi as usize].name),
                     ident(&self.prog.item_name(*sd))
                 );
-                if ii as usize == proc_idx {
-                    let _ = writeln!(
-                        calls,
-                        "                    {{ let mut c = {}; {call} }}",
-                        ctx_cpu("b")
-                    );
-                } else {
-                    let _ = writeln!(calls, "                    {{ let mut c = Ctx_{n} {{ sig: &mut b.sig }}; {call} }}");
-                }
             }
             let _ = writeln!(
                 deliver,

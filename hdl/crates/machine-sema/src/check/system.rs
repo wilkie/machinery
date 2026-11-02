@@ -557,7 +557,7 @@ impl Checker<'_> {
         });
 
         let mut ok = true;
-        let mut master = None;
+        let mut masters = Vec::new();
         let mut slaves: Vec<(hir::InstPort, Vec<hir::AddressRange>)> = Vec::new();
         let mut bridges = Vec::new();
         for b in &bi.bindings {
@@ -601,11 +601,7 @@ impl Checker<'_> {
                         continue;
                     }
                     if is_master {
-                        if master.is_some() {
-                            self.error(module, "E1049", p.span, "a bus has one master (arbitration between masters is not supported yet)");
-                            ok = false;
-                        }
-                        master = Some(ip);
+                        masters.push(ip);
                         continue;
                     }
                     let BusBinding::Slave { ranges, .. } = b else {
@@ -742,7 +738,7 @@ impl Checker<'_> {
             name: bi.name.name.clone(),
             bus,
             clock,
-            master,
+            masters,
             slaves,
             bridges,
         })

@@ -439,6 +439,9 @@ pub enum StmtKind {
     Retire,
     /// `halt;` in isa code: stop until an interrupt or reset.
     Halt,
+    /// `decline;` in a transaction handler: this responder does not drive
+    /// the data; the transaction goes on to the next responder.
+    Decline,
     /// `fault Path(args)?;`
     Fault(Expr),
     /// `raise Fault(args);` in isa code.

@@ -387,6 +387,18 @@ impl Checker<'_> {
                     }
                 },
             },
+            A::Decline => {
+                if cx.responding {
+                    H::Decline
+                } else {
+                    self.error_with(
+                        cx.module,
+                        Diagnostic::error("E1054", span, "`decline` is only allowed in a transaction handler")
+                            .with_note("it tells the bus this responder does not drive the data; the transaction goes on to the next responder"),
+                    );
+                    H::Error
+                }
+            }
             A::Halt => {
                 if cx.scope.isa.is_none() || cx.in_test || cx.component.is_some() {
                     self.error(
@@ -627,6 +639,7 @@ fn stmt_name(k: &ast::StmtKind) -> &'static str {
         A::WaitUntil(_) => "wait until",
         A::Retire => "retire",
         A::Halt => "halt",
+        A::Decline => "decline",
         A::Fault(_) => "fault",
         A::Raise(_) => "raise",
         A::Start(_) => "start",
@@ -660,7 +673,7 @@ fn stmt_name(k: &ast::StmtKind) -> &'static str {
 /// Does control flow never continue past this statement?
 pub fn stmt_diverges(s: &Stmt) -> bool {
     match &s.kind {
-        H::Return(_) | H::Unreachable(_) | H::Raise(..) => true,
+        H::Return(_) | H::Unreachable(_) | H::Raise(..) | H::Decline => true,
         H::Expr(e) => matches!(e.ty, Ty::Never),
         // A `loop` with no `break` never ends.
         H::Loop(b) => !block_has_break(b),

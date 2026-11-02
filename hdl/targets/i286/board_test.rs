@@ -174,16 +174,91 @@ fn pit_counter_latch_and_rate_generator() {
     pit.on_tick(&mut p, 30);
     pit.on_port_write(&mut p, io, 0x43, b, 0x00); // latch channel 0
     pit.on_tick(&mut p, 5); // the latch holds the old value
-    let lo = pit.on_port_read(&mut p, io, 0x40, b).0;
-    let hi = pit.on_port_read(&mut p, io, 0x40, b).0;
+    let lo = pit.on_port_read(&mut p, io, 0x40, b).unwrap().0;
+    let hi = pit.on_port_read(&mut p, io, 0x40, b).unwrap().0;
     assert_eq!((hi << 8) | lo, 70);
     // Unlatched reads follow the counter.
-    let lo = pit.on_port_read(&mut p, io, 0x40, b).0;
-    let hi = pit.on_port_read(&mut p, io, 0x40, b).0;
+    let lo = pit.on_port_read(&mut p, io, 0x40, b).unwrap().0;
+    let hi = pit.on_port_read(&mut p, io, 0x40, b).unwrap().0;
     assert_eq!((hi << 8) | lo, 65);
     // Crossing the end of the count reloads it and pulses OUT once.
     p.edges.clear();
     pit.on_tick(&mut p, 65 + 250);
     assert_eq!(p.edges, [false, true]);
     assert_eq!(pit.ch[0].count, 100 - 50);
+}
+
+/// Program 8237 channel 1 (`mode`, page:address, `count` + 1 bytes),
+/// unmask it, poll the status register until its terminal count, halt.
+fn dma_program(mode: u8, page: u8, addr: u16, count: u16) -> Vec<u8> {
+    let mut code = SETUP.to_vec();
+    code.extend_from_slice(&[
+        0xB0, 0x05, 0xE6, 0x0A, // mask channel 1
+        0xE6, 0x0C, // clear the flip-flop
+        0xB0, mode, 0xE6, 0x0B, // mode
+        0xB0, addr as u8, 0xE6, 0x02, // address low
+        0xB0, (addr >> 8) as u8, 0xE6, 0x02, // address high
+        0xB0, page, 0xE6, 0x83, // page register for channel 1
+        0xB0, count as u8, 0xE6, 0x03, // count low
+        0xB0, (count >> 8) as u8, 0xE6, 0x03, // count high
+        0xB0, 0x01, 0xE6, 0x0A, // unmask channel 1
+        0xE4, 0x08, // poll: in al, 0x08
+        0xA8, 0x02, // test al, 0x02 (channel 1 terminal count)
+        0x74, 0xFA, // jz poll
+        0xF4, // hlt
+    ]);
+    code
+}
+
+/// The host pushes six bytes; the guest has the 8237 write them to RAM.
+#[test]
+fn dma_writes_host_bytes_to_memory() {
+    // Single transfer, write to memory, channel 1, six bytes at 0:0700.
+    let mut sys = boot(rom(&dma_program(0x45, 0x00, 0x0700, 5), &[]));
+    sys.with_link(|link, ctx| {
+        for &b in b"DMA OK" {
+            link.fn_push(ctx, b);
+        }
+    });
+    let n = sys.run(100_000).unwrap();
+    assert!(sys.cpu.halted, "halted after {n} steps");
+    let b = sys.board();
+    assert_eq!(&b.ram.cells[0x700..0x706], b"DMA OK");
+    assert_eq!(b.link.head, b.link.tail, "every byte delivered");
+    // Without autoinitialise the channel masks itself at terminal count.
+    assert!(b.dma.ch[1].masked);
+    assert_eq!(b.dma.ch[1].addr, 0x0706);
+    assert_eq!(b.dma.ch[1].count, 0xFFFF);
+    // Nothing is left requesting.
+    assert!(!b.sig.local_dreq[1]);
+}
+
+/// The host expects eleven bytes; the guest has the 8237 read them out of
+/// the ROM (F000:0040, physical 0F0040) into the link.
+#[test]
+fn dma_reads_memory_out_to_the_host() {
+    let mut image = rom(&dma_program(0x49, 0x0F, 0x0040, 10), &[]);
+    image[0x40..0x4B].copy_from_slice(b"Hello, 286!");
+    let mut sys = boot(image);
+    sys.with_link(|link, ctx| link.fn_expect(ctx, 11));
+    let n = sys.run(100_000).unwrap();
+    assert!(sys.cpu.halted, "halted after {n} steps");
+    let b = sys.board();
+    assert_eq!(&b.link.outbox[..b.link.out_len as usize], b"Hello, 286!");
+    assert_eq!(b.link.wanted, 0);
+}
+
+/// Acknowledges for another channel, or with nothing queued, are declined:
+/// the controller then reads open bus.
+#[test]
+fn host_link_declines_other_channels() {
+    use machine_board286::{HostLink, HostLinkPorts};
+    struct Nothing;
+    impl HostLinkPorts for Nothing {}
+    let mut link = HostLink::new();
+    let mut p = Nothing;
+    assert_eq!(link.on_port_dack_read(&mut p, 1), None, "nothing queued");
+    link.fn_push(&mut p, 0x42);
+    assert_eq!(link.on_port_dack_read(&mut p, 2), None, "not its channel");
+    assert_eq!(link.on_port_dack_read(&mut p, 1), Some((0x42, 0)));
 }

@@ -1053,7 +1053,8 @@ fn model_masters_initiate_and_slaves_respond() {
         &master("on tick(n: u32) { emit io.interrupt(0) = true; }"),
         &["E1044"],
     );
-    assert_codes(&master("on tick(n: u32) { io.interrupt(0); }"), &["E1044"]);
+    // Calling a signal reads its level (here the block's value).
+    assert_codes(&master("on tick(n: u32) { io.interrupt(0); }"), &[]);
     assert_codes(
         &master("on tick(n: u32) { let f = io.fields; }"),
         &["E1041"],
@@ -1375,7 +1376,7 @@ fn counter_bus_system_resolves_clocks_and_bindings() {
     // `@ (bus_clk: bus_clk, tick: tick)`: ports 0 and 1.
     assert_eq!(timer.clocks, [(Some(0), 0), (Some(1), 1)]);
     let bus = &sys.buses[0];
-    assert_eq!(bus.master, Some((0, 0)));
+    assert_eq!(bus.masters, [(0, 0)]);
     assert_eq!(bus.slaves.len(), 1);
     assert_eq!((bus.slaves[0].1[0].lo, bus.slaves[0].1[0].hi), (0x40, 0x43));
     assert_eq!(sys.profiles.len(), 2);
@@ -1545,8 +1546,11 @@ fn i286_board_system_checks_clean() {
     let c = check_files(files);
     assert_clean(&c);
     let sys = &c.hir.systems[0];
-    assert_eq!(sys.components.len(), 6);
-    assert_eq!(sys.buses[0].slaves.len(), 5);
+    assert_eq!(sys.components.len(), 8);
+    // RAM, ROM, PIC, PIT, the DMA registers and pages, the link, the console.
+    assert_eq!(sys.buses[0].slaves.len(), 8);
+    // The processor and the DMA controller master the local bus.
+    assert_eq!(sys.buses[0].masters.len(), 2);
     // The ROM answers at the top of both the 1 MB and the 16 MB space.
     assert_eq!(sys.buses[0].slaves[1].1.len(), 2);
 }
@@ -1793,4 +1797,48 @@ fn transaction_handlers_cannot_reach_transactions_through_fns() {
         .as_ref()
         .unwrap();
     assert!(model.fns.iter().all(|f| f.starts_transaction));
+}
+
+// --- decline, signal reads, several masters ---
+
+#[test]
+fn decline_is_for_transaction_handlers() {
+    assert_codes(
+        &dev("on io.read(addr: u8) -> (data: u8, wait: u8) { if addr > 4 { decline; } return (data: 0, wait: 0); }"),
+        &[],
+    );
+    // `decline` diverges, so this handler returns on every path.
+    assert_codes(
+        &dev("on io.read(addr: u8) -> (data: u8, wait: u8) { decline; }"),
+        &[],
+    );
+    assert_codes(&dev("on reset { decline; }"), &["E1054"]);
+    assert_codes(
+        &dev("state n: u8 = 0; fn f() { n = 1; decline; }"),
+        &["E1054"],
+    );
+}
+
+#[test]
+fn models_read_signal_levels() {
+    let c = check_src(&dev(
+        "state seen: bool = false; on reset { seen = io.interrupt(1); }",
+    ));
+    assert_clean(&c);
+    // A level needs its arguments, and is a `bool`.
+    assert_codes(
+        &dev("state n: u8 = 0; on reset { n = io.interrupt(1); }"),
+        &["E1005"],
+    );
+}
+
+#[test]
+fn a_bus_may_have_several_masters() {
+    let src = system(
+        "clock a: 1 MHz; component h: Host; component g: Host; component d: Dev @ a;
+         bus x: B @ a { master h.io; master g.io; slave d.io @ mem 0..=7; }",
+    );
+    let c = check_src(&src);
+    assert_clean(&c);
+    assert_eq!(c.hir.systems[0].buses[0].masters, [(0, 0), (1, 0)]);
 }

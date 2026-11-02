@@ -420,6 +420,13 @@ The transaction level. Contents:
     acknowledges, DMA requests, reset).
 - `emit bus_port.irq(n);` and other transaction initiations, including
   `let v = bus_port.read(addr, size);` from a master.
+- `bus_port.signal(args)` as an expression reads the signal's **current
+  level** (a `bool`), in any role. Edges are delivered to `on` handlers
+  after each instruction; a model that must see a level change sooner
+  reads it, as a DMA controller reads DREQ between transfers of a burst.
+- `decline;` in a transaction handler: this responder does not drive the
+  data, and the transaction goes on (section 10). It ends the handler like
+  `return`. Anywhere else it is an error (E1054).
 - Ordinary statements plus `while`/`for` with dynamic bounds (models are
   software; they may loop).
 
@@ -718,11 +725,20 @@ Address decoding reads the transaction parameter named `addr` and, when a
 range names a space (`io 0x40..=0x43`), the parameter named `space`, whose
 enum variant is matched ignoring case. A slave without ranges answers what
 no ranged slave does. A transaction without an `addr` parameter is not
-decoded: the attached responder that handles it answers (an interrupt
-acknowledge goes to the interrupt controller). A bus may declare more than
+decoded: it is offered to every attached responder that handles it, in
+the order the system binds them, until one does not `decline` (an
+interrupt acknowledge goes to the interrupt controller; a DMA acknowledge
+to the device on that channel, which the others decline). A selected
+slave that declines a decoded transaction leaves it unanswered. A bus may declare more than
 two roles; every role after the first responds, and a role observes the
 signals other roles drive, so an interrupt controller in its own role
-watches the devices' `irq` lines and drives `intr`. A read nobody answers returns all ones and a write
+watches the devices' `irq` lines and drives `intr`. A bus may have
+several masters (`master cpu.local; master dma.dma;`). Transactions are
+atomic in the model build, so masters need no arbitration there: a
+device masters from its `on tick`, which runs between instructions, and
+the cycles it uses are charged to the same time line, which is how DMA
+steals time from the processor. HOLD/HLDA arbitration is the rtl
+level's business. A read nobody answers returns all ones and a write
 nobody answers is dropped; both still take the base cycles. This is how a 386 instruction's
 duration in the emulator includes correct ISA wait states without the
 emulator simulating the bus wires.
@@ -1048,11 +1064,21 @@ drives), and `system::System`:
   of its clock per step. `run(n)` runs until the processor halts and
   `run_until(n, stop)` until a condition holds.
 
+- A device that masters a bus (a DMA controller) gets a context holding
+  every other device, like the processor's; its `on tick`, `on reset`,
+  signal handlers and fns may start transactions. It is caught up through
+  that context, before a transaction reaches it and after every
+  instruction, so a burst it starts in `on tick` happens between
+  instructions. Other devices' contexts hold only the signals.
+- Each component's ports trait gives every method a default (open bus,
+  low levels, emits go nowhere), so a test can drive a model directly
+  with a context that overrides only what it observes. A transaction
+  handler is generated returning `Option`, `None` meaning it declined.
+
 Not generated yet, and reported when a system needs them: more than one
-processor, a bus mastered by anything but the processor, `bridge`,
-`wire`, an rtl level in the profile, and processor time between bus
-transfers (an instruction costs only its bus time until timing is derived,
-section 14).
+processor, more than one device master, `bridge`, `wire`, an rtl level
+in the profile, and processor time between bus transfers (an instruction
+costs only its bus time until timing is derived, section 14).
 
 ## 13. Verification
 
@@ -1187,12 +1213,12 @@ with stable error codes, so agents and editors can act on them.
    ROM filling (question 6). A real mechanism (frame and audio sinks)
    belongs to the Wasm/TypeScript binding layer, and the CGA model should
    be written against a monitor component so that it slots in.
-10. **A second bus master in the model backend.** The 8237 DMA controller
-   starts transfers. The language allows a master-role device to do so
-   from `on tick`; the backend runs only the processor as a master.
-   Proposal: devices start transactions between instructions and charge
-   the cycles they steal; HOLD/HLDA arbitration is rtl. Needed before the
-   floppy controller.
+10. **More than one device master in the model backend.** Resolved for
+   one (the 8237, section 12): devices master between instructions and
+   charge the cycles they steal. Two device masters would each need the
+   other in its context while the other is mid-transaction; the likely
+   answer is to give every master a context assembled per call. Needed
+   for bus-mastering cards, not for the PC/AT.
 11. **Wires and the AT interrupt cascade.** Two 8259s: the slave's INT
    drives the master's IR2, a `wire` between components, which the
    backend does not generate yet. The interrupt lines (16 on an AT) also

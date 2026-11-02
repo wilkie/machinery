@@ -111,6 +111,8 @@ pub enum ExprKind {
     ModelMem(DefId, u32),
     /// `port.transaction(args)` initiated by a model.
     BusCall(u32, DefId, Vec<Expr>),
+    /// `port.signal(args)` read as a value: the signal's current level.
+    SignalLevel(u32, DefId, Vec<Expr>),
     /// Call of a model fn of the enclosing component, by index into
     /// [`ModelBody::fns`].
     ModelFnCall(u32, Vec<Expr>),
@@ -236,6 +238,8 @@ pub enum StmtKind {
     RunBytes(Vec<u8>),
     /// `halt;`
     Halt,
+    /// `decline;` in a transaction handler.
+    Decline,
 
     // --- component model ---
     /// `emit port.signal(args) = value;`
@@ -834,8 +838,8 @@ pub struct SystemBus {
     pub name: String,
     pub bus: DefId,
     pub clock: u32,
-    /// The port in the initiating role.
-    pub master: Option<InstPort>,
+    /// The ports in the initiating role, in binding order.
+    pub masters: Vec<InstPort>,
     /// Responding ports and the ranges each answers.
     pub slaves: Vec<(InstPort, Vec<AddressRange>)>,
     /// `bridge` targets (not generated yet).
@@ -957,6 +961,7 @@ pub fn visit_stmt(s: &Stmt, on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn Fn
         StmtKind::Unreachable(_)
         | StmtKind::RunBytes(_)
         | StmtKind::Halt
+        | StmtKind::Decline
         | StmtKind::Break
         | StmtKind::Continue
         | StmtKind::Error => {}
@@ -1006,6 +1011,7 @@ pub fn visit_expr(x: &Expr, on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn Fn
         | ExprKind::KindSelect(_, xs)
         | ExprKind::FnCall(_, xs)
         | ExprKind::BusCall(_, _, xs)
+        | ExprKind::SignalLevel(_, _, xs)
         | ExprKind::ModelFnCall(_, xs) => all(xs, on_stmt, on_expr),
         ExprKind::Match(s, arms) => {
             visit_expr(s, on_stmt, on_expr);

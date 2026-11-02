@@ -105,6 +105,9 @@ struct Cx<'a> {
     ops: Option<&'a hir::Instruction>,
     /// The component whose model body this is (state, ports, `ctx`).
     comp: Option<&'a hir::ComponentInfo>,
+    /// A transaction handler: values are returned as `Some(..)` and
+    /// `decline` returns `None`.
+    opt: bool,
 }
 
 pub struct Gen<'a> {
@@ -625,6 +628,18 @@ impl<'a> Gen<'a> {
                 );
                 s
             }
+            H::SignalLevel(port, sig, args) => {
+                let c = cx
+                    .comp
+                    .ok_or_else(|| GenError::new("signal read outside a component"))?;
+                let a: R<Vec<String>> = args.iter().map(|x| self.expr(cx, x)).collect();
+                format!(
+                    "ctx.level_{}_{}({})",
+                    ident(&c.ports[*port as usize].name),
+                    ident(&self.prog.item_name(*sig)),
+                    a?.join(", ")
+                )
+            }
             H::Port(..) => {
                 return Err(GenError::new(
                     "wire ports are not readable in the model backend yet",
@@ -933,6 +948,8 @@ impl<'a> Gen<'a> {
                     self.block_stmts(cx, body)?
                 )
             }
+            S::Return(Some(e)) if cx.opt => format!("return Some({});\n", self.expr(cx, e)?),
+            S::Decline => "return None;\n".into(),
             S::Return(Some(e)) => {
                 if cx.fallible {
                     format!("return Ok({});\n", self.expr(cx, e)?)
@@ -1304,6 +1321,7 @@ impl<'a> Gen<'a> {
                 recv: "self",
                 ops: None,
                 comp: None,
+                opt: false,
             };
             let mut params = Vec::new();
             for p in &u.params {
@@ -1424,6 +1442,7 @@ impl<'a> Gen<'a> {
                 recv: "self",
                 ops: None,
                 comp: None,
+                opt: false,
             };
             let mut ps = String::new();
             for p in &f.params {
@@ -1506,6 +1525,7 @@ impl<'a> Gen<'a> {
                 recv: "self",
                 ops: None,
                 comp: None,
+                opt: false,
             };
             let _ = writeln!(
                 s,
@@ -1599,6 +1619,7 @@ impl<'a> Gen<'a> {
             recv: "self",
             ops: None,
             comp: None,
+            opt: false,
         };
         for (i, f) in o.fields.iter().enumerate() {
             if i < o.tail_locals.len() {
@@ -1650,6 +1671,7 @@ impl<'a> Gen<'a> {
             recv: "self",
             ops: None,
             comp: None,
+            opt: false,
         };
         let mut params = vec!["&mut self".to_string()];
         for p in &f.params {
@@ -1692,6 +1714,7 @@ impl<'a> Gen<'a> {
                 recv: "self",
                 ops: None,
                 comp: None,
+                opt: false,
             };
             let pure = Cx {
                 fallible: false,
@@ -1886,6 +1909,7 @@ impl<'a> Gen<'a> {
             recv: "self",
             ops: Some(i),
             comp: None,
+            opt: false,
         };
         let body = match &i.semantics {
             Some(b) => self.block_stmts(&cx, b)?,
@@ -2202,6 +2226,7 @@ impl<'a> Gen<'a> {
                 recv: "self",
                 ops: Some(i),
                 comp: None,
+                opt: false,
             };
             let mut arm = String::new();
             for f in &i.flags.undefined {
@@ -2245,6 +2270,7 @@ impl<'a> Gen<'a> {
                         recv: "self",
                         ops: Some(i),
                         comp: None,
+                        opt: false,
                     };
                     self.expr(&cx, expr)?
                 }
@@ -2305,6 +2331,7 @@ impl<'a> Gen<'a> {
                 recv: "m",
                 ops: None,
                 comp: None,
+                opt: false,
             };
             let mut body = format!("let mut m = <{isa_name}>::new();\n");
             for s in &t.body.stmts {
@@ -2471,6 +2498,7 @@ impl<'a> Gen<'a> {
                 recv: "m",
                 ops: None,
                 comp: None,
+                opt: false,
             };
             let value_name = self.local_name(&cx, r.value);
             let _ = writeln!(

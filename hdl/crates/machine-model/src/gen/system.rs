@@ -490,13 +490,13 @@ impl<'a> Gen<'a> {
         let mut o = String::new();
         let _ = write!(
             o,
-            "\n/// The system `{}`.\npub mod system {{\n    use super::*;\n\n    /// The time unit is `BASE_NUM / BASE_DEN` seconds.\n    pub const BASE_NUM: u128 = {};\n    pub const BASE_DEN: u128 = {};\n    /// Clock periods in time units.\n    pub mod clock {{\n",
+            "\n/// The system `{}`.\npub mod system {{\n    use super::*;\n\n    /// The time unit is `BASE_NUM / BASE_DEN` seconds.\n    pub const BASE_NUM: u128 = {};\n    pub const BASE_DEN: u128 = {};\n    /// Clock periods in time units.\n    pub mod clock {{\n        /// A time: a count of the system's time unit. 128 bits, so that time\n        /// stays exact over any run however fine the unit the clocks need.\n        pub type Time = u128;\n",
             sys.name, sys.base_num, sys.base_den
         );
         for (i, c) in sys.clocks.iter().enumerate() {
             let _ = writeln!(
                 o,
-                "        /// `{}`: {} / {} Hz\n        pub const C{i}: u64 = {};",
+                "        /// `{}`: {} / {} Hz\n        pub const C{i}: Time = {};",
                 c.name, c.hz_num, c.hz_den, c.period
             );
         }
@@ -532,7 +532,7 @@ impl<'a> Gen<'a> {
         }
         let _ = write!(
             o,
-            "    #[allow(non_camel_case_types)]\n    #[derive(Clone, Copy, Debug, PartialEq)]\n    pub enum Event {{\n{events}    }}\n    /// Time and signal levels.\n    #[derive(Clone, Debug)]\n    pub struct Signals {{\n        /// Time in units of `BASE_NUM / BASE_DEN` seconds.\n        pub now: u64,\n{sig_fields}        /// Edges not yet delivered.\n        pub events: Vec<Event>,\n    }}\n    impl Signals {{\n        pub fn new() -> Signals {{\n            Signals {{\n                now: 0,\n{sig_init}                events: Vec::new(),\n            }}\n        }}\n    }}\n"
+            "    #[allow(non_camel_case_types)]\n    #[derive(Clone, Copy, Debug, PartialEq)]\n    pub enum Event {{\n{events}    }}\n    /// Time and signal levels.\n    #[derive(Clone, Debug)]\n    pub struct Signals {{\n        /// Time in units of `BASE_NUM / BASE_DEN` seconds.\n        pub now: clock::Time,\n{sig_fields}        /// Edges not yet delivered.\n        pub events: Vec<Event>,\n    }}\n    impl Signals {{\n        pub fn new() -> Signals {{\n            Signals {{\n                now: 0,\n{sig_init}                events: Vec::new(),\n            }}\n        }}\n    }}\n"
         );
 
         // Tick marks: the last time each device's clock was caught up to.
@@ -562,14 +562,14 @@ impl<'a> Gen<'a> {
                     })?;
                 let _ = writeln!(
                     marks,
-                    "        pub {}_{}: u64,",
+                    "        pub {}_{}: clock::Time,",
                     ident(&i.name),
                     method_tick(i.comp, clock)
                 );
                 if h.ret == Ty::UInt(32) {
                     let _ = writeln!(
                         marks,
-                        "        /// When `{}`'s `{}` must next run.\n        pub due_{}_{}: u64,",
+                        "        /// When `{}`'s `{}` must next run.\n        pub due_{}_{}: clock::Time,",
                         i.name,
                         method_tick(i.comp, clock),
                         ident(&i.name),
@@ -924,7 +924,7 @@ impl<'a> Gen<'a> {
                                 if handler {
                                     let _ = writeln!(
                                         body,
-                                        "        {{\n            {catch}if let Some(r) = {call} {{\n                self.sig.now += ({base} + r.{n_ret} as u64) * {period};\n                return {result};\n            }}\n        }}"
+                                        "        {{\n            {catch}if let Some(r) = {call} {{\n                self.sig.now += ({base} + r.{n_ret} as clock::Time) * {period};\n                return {result};\n            }}\n        }}"
                                     );
                                 }
                                 continue;
@@ -951,7 +951,7 @@ impl<'a> Gen<'a> {
                             }
                             let _ = writeln!(
                                 body,
-                                "        if {cond} {{\n            {catch}match {call} {{\n                Some(r) => {{\n                    self.sig.now += ({base} + r.{n_ret} as u64) * {period};\n                    return {result};\n                }}\n                None => {{\n                    self.sig.now += {base} * {period};\n                    return {open};\n                }}\n            }}\n        }}"
+                                "        if {cond} {{\n            {catch}match {call} {{\n                Some(r) => {{\n                    self.sig.now += ({base} + r.{n_ret} as clock::Time) * {period};\n                    return {result};\n                }}\n                None => {{\n                    self.sig.now += {base} * {period};\n                    return {open};\n                }}\n            }}\n        }}"
                             );
                         }
                         let _ = writeln!(body, "        self.sig.now += {base} * {period};");
@@ -1023,7 +1023,7 @@ impl<'a> Gen<'a> {
                 let (call_pre, after) = if sched {
                     (
                         "let r = ",
-                        format!("\n                {{m}}.due_{n}_{mt} = {{m}}.{n}_{mt}.saturating_add((r as u64).saturating_mul(p));"),
+                        format!("\n                {{m}}.due_{n}_{mt} = {{m}}.{n}_{mt}.saturating_add((r as clock::Time).saturating_mul(p));"),
                     )
                 } else {
                     ("", String::new())
@@ -1032,13 +1032,13 @@ impl<'a> Gen<'a> {
                     let after = after.replace("{m}", "c.marks");
                     let _ = write!(
                         body,
-                        "        {{\n            let p = clock::C{sc};\n            let mut k = (c.sig.now - c.marks.{n}_{mt}) / p;\n            c.marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as u64);\n                k -= s;\n                {call_pre}dev.{mt}(&mut *c, s as u32);{after}\n            }}\n        }}\n"
+                        "        {{\n            let p = clock::C{sc};\n            let mut k = (c.sig.now - c.marks.{n}_{mt}) / p;\n            c.marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as clock::Time);\n                k -= s;\n                {call_pre}dev.{mt}(&mut *c, s as u32);{after}\n            }}\n        }}\n"
                     );
                 } else {
                     let after = after.replace("{m}", "marks");
                     let _ = write!(
                         body,
-                        "        {{\n            let p = clock::C{sc};\n            let mut k = (sig.now - marks.{n}_{mt}) / p;\n            marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as u64);\n                k -= s;\n                let mut c = Ctx_{n} {{ sig: &mut *sig }};\n                {call_pre}dev.{mt}(&mut c, s as u32);{after}\n            }}\n        }}\n"
+                        "        {{\n            let p = clock::C{sc};\n            let mut k = (sig.now - marks.{n}_{mt}) / p;\n            marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as clock::Time);\n                k -= s;\n                let mut c = Ctx_{n} {{ sig: &mut *sig }};\n                {call_pre}dev.{mt}(&mut c, s as u32);{after}\n            }}\n        }}\n"
                     );
                 }
             }
@@ -1052,7 +1052,7 @@ impl<'a> Gen<'a> {
         let ctx_cpu = |b: &str| ctx_for(proc_idx, b, None);
 
         // The board.
-        let mut fields = String::from("        pub sig: Signals,\n        pub marks: Marks,\n        /// Time the current instruction spent fetching code (overlapped\n        /// with its execution at retire).\n        pub code_time: u64,\n");
+        let mut fields = String::from("        pub sig: Signals,\n        pub marks: Marks,\n        /// Time the current instruction spent fetching code (overlapped\n        /// with its execution at retire).\n        pub code_time: clock::Time,\n");
         let mut init = String::from(
             "            sig: Signals::new(),\n            marks: Marks::default(),\n            code_time: 0,\n",
         );
@@ -1156,13 +1156,13 @@ impl<'a> Gen<'a> {
             if cpu_retire {
                 let _ = write!(
                     bus_impl,
-                    "    /// The processor model times the instruction from its schedule.\n    fn retire(&mut self, _cycles: u32, schedule: Schedule) {{\n        let c = {{\n            let mut ctx = {};\n            self.{cpu_name}.on_retire(&mut ctx, schedule)\n        }};\n        self.sig.now += c as u64 * clock::C{cpu_clock};\n        self.code_time = 0;\n    }}\n",
+                    "    /// The processor model times the instruction from its schedule.\n    fn retire(&mut self, _cycles: u32, schedule: Schedule) {{\n        let c = {{\n            let mut ctx = {};\n            self.{cpu_name}.on_retire(&mut ctx, schedule)\n        }};\n        self.sig.now += c as clock::Time * clock::C{cpu_clock};\n        self.code_time = 0;\n    }}\n",
                     ctx_cpu("self")
                 );
             } else {
                 let _ = write!(
                 bus_impl,
-                "    /// The instruction's execution overlaps its code fetches: charge what\n    /// exceeds them.\n    fn retire(&mut self, cycles: u32, _schedule: Schedule) {{\n        let x = cycles as u64 * clock::C{cpu_clock};\n        if x > self.code_time {{\n            self.sig.now += x - self.code_time;\n        }}\n        self.code_time = 0;\n    }}\n"
+                "    /// The instruction's execution overlaps its code fetches: charge what\n    /// exceeds them.\n    fn retire(&mut self, cycles: u32, _schedule: Schedule) {{\n        let x = cycles as clock::Time * clock::C{cpu_clock};\n        if x > self.code_time {{\n            self.sig.now += x - self.code_time;\n        }}\n        self.code_time = 0;\n    }}\n"
             );
             }
         }
@@ -1364,7 +1364,7 @@ impl<'a> Gen<'a> {
             &mut self.{cpu_name}.bus
         }}
         /// Time in units of `BASE_NUM / BASE_DEN` seconds.
-        pub fn now(&self) -> u64 {{
+        pub fn now(&self) -> clock::Time {{
             self.{cpu_name}.bus.sig.now
         }}
         pub fn seconds(&self) -> f64 {{

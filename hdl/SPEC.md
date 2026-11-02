@@ -1447,7 +1447,11 @@ drives), and `system::System`:
   answering device's handler, charging the bus clock period times (base
   cycles + `wait`).
 - Time is an integer count of the base unit above, kept exact: a
-  14.31818 MHz crystal and `osc / 12` share a unit.
+  14.31818 MHz crystal and `osc / 12` share a unit. It is 128 bits
+  (`system::clock::Time`). Clocks that share no simple ratio need a very
+  fine unit (the VGA's 25.175 and 28.322 MHz dot clocks beside the bus's
+  crystals give about 1/2.5e20 s), and 64 bits of that runs out within
+  a tenth of a second.
 - A device catches up lazily: before a transaction reaches it and after
   every instruction, its `on tick` runs with the cycles of its clock that
   elapsed since the last call (in one call, which is what lets a model

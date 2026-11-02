@@ -87,7 +87,7 @@ fn time_is_the_pipelines_clocks() {
     let cpu = &sys.board().cpu;
     let clocks = cpu.last_done;
     assert_eq!(cpu.trace_kind[cpu.trace_n as usize - 1], 5);
-    assert_eq!(sys.now(), (3 + clocks) * clock::C1);
+    assert_eq!(sys.now(), (3 + clocks as u128) * clock::C1);
 }
 
 /// MUL r16 works 21 clocks to a register move's 2: with the queue full

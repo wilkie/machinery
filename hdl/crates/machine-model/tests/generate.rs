@@ -512,6 +512,7 @@ fn i386_board_system_boots() {
         pc("isabus.machine"),
         pc("crtc.machine"),
         pc("pc.machine"),
+        pc("vga.machine"),
         read("i286", "alu.machine"),
         read("i386", "i386.machine"),
         read("i386", "timing.machine"),
@@ -546,6 +547,53 @@ fn i386_board_system_boots() {
         "board tests failed:\n{stdout}\n{stderr}"
     );
     assert!(stdout.contains("12 passed"), "expected 12 tests:\n{stdout}");
+}
+
+/// The 386 board with a VGA (`Board386Vga`): generates, compiles, and runs
+/// `targets/i386/vga_test.rs`, which sets the card up with IBM's VGA BIOS
+/// when its image is in `~/roms` and drives it directly otherwise.
+#[test]
+fn i386_vga_board_system_boots() {
+    let root = hdl_root();
+    let read = |dir: &str, name: &str| {
+        let path = root.join("targets").join(dir).join(name);
+        SourceFile::new(name, std::fs::read_to_string(&path).unwrap())
+    };
+    let checked = check_files(vec![
+        pc("isabus.machine"),
+        pc("crtc.machine"),
+        pc("pc.machine"),
+        pc("vga.machine"),
+        read("i286", "alu.machine"),
+        read("i386", "i386.machine"),
+        read("i386", "timing.machine"),
+        read("i386", "board.machine"),
+    ]);
+    assert!(!checked.has_errors());
+    let src = generate_system(&checked, "Board386Vga", Some("fast")).unwrap_or_else(|e| panic!("{e}"));
+    let crate_ = package(
+        &crate_name("Board386Vga"),
+        src,
+        &root.join("crates").join("machine-runtime"),
+    );
+    let dir = root.join("target").join("gen-tests").join("board386vga");
+    write_crate(&dir, &crate_).unwrap();
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::copy(
+        root.join("targets").join("i386").join("vga_test.rs"),
+        dir.join("tests").join("vga.rs"),
+    )
+    .unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let output = Command::new(&cargo)
+        .args(["test", "--quiet", "--test", "vga", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+        .output()
+        .expect("run cargo");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "VGA board tests failed:\n{stdout}\n{stderr}");
 }
 
 /// The processor model's pipeline (SPEC 11.2c): the conformance rig

@@ -148,3 +148,87 @@ unit EgaCrtcOutputs(f: EgaCrtcFrame, line: u32, ch: u32) -> (display: bool, retr
         retrace: line >= f.retrace_line && line < f.retrace_line + f.retrace_lines,
     );
 }
+
+/// What the VGA CRTC's registers make of a frame: the EGA's, with a tenth
+/// bit for each vertical count in the overflow register (R7 bits 5, 6 and
+/// 7, and R9 bit 5), character clocks a scanline R0 + 5, double scanning
+/// (R9 bit 7: every scanline drawn twice), and three address widths: byte,
+/// word (R17h bit 6 clear) and doubleword (R14h bit 6: mode 13h's), the
+/// character address shifted left by 0, 1 or 2. A row is the Offset
+/// register (R13h) times two characters on.
+bundle VgaCrtcFrame {
+    line_chars: u32,
+    shown_chars: u32,
+    row_lines: u32,
+    double_scan: bool,
+    frame_lines: u32,
+    shown_lines: u32,
+    retrace_line: u32,
+    retrace_lines: u32,
+    stride: u32,
+    shift: u32,
+    start: u32,
+    cursor: u32,
+    cursor_first: u32,
+    cursor_last: u32,
+    cursor_off: bool,
+    mode: u8,
+}
+
+unit VgaCrtcTiming(r: [u8; 25]) -> VgaCrtcFrame {
+    let o = r[7];
+    let vs = r[16] as u32 | ((o[2] as u32) << 8) | ((o[7] as u32) << 9);
+    let len = ((r[17] & 15) as u32 + 16 - (vs & 15)) % 16;
+    return VgaCrtcFrame {
+        line_chars: r[0] as u32 + 5,
+        shown_chars: r[1] as u32 + 1,
+        row_lines: (r[9] & 31) as u32 + 1,
+        double_scan: r[9][7] == 1,
+        frame_lines: (r[6] as u32 | ((o[0] as u32) << 8) | ((o[5] as u32) << 9)) + 2,
+        shown_lines: (r[18] as u32 | ((o[1] as u32) << 8) | ((o[6] as u32) << 9)) + 1,
+        retrace_line: vs,
+        retrace_lines: if len == 0 { 16 } else { len },
+        stride: r[19] as u32 * 2,
+        shift: if r[20][6] == 1 { 2 } else if r[23][6] == 0 { 1 } else { 0 },
+        start: concat(r[12], r[13]) as u32,
+        cursor: concat(r[14], r[15]) as u32,
+        cursor_first: (r[10] & 31) as u32,
+        cursor_last: (r[11] & 31) as u32,
+        cursor_off: r[10][5] == 1,
+        mode: r[23],
+    };
+}
+
+/// The character row and row scan of display line `line`.
+unit VgaCrtcRow(f: VgaCrtcFrame, line: u32) -> (row: u32, ra: u32) {
+    let l = if f.double_scan { line / 2 } else { line };
+    return (row: l / f.row_lines, ra: l % f.row_lines);
+}
+
+/// The memory address of character `col` of character row `row` on row
+/// scan `ra`: the character address shifted by the address width, then
+/// row scan bits in address bits 13 and 14 when the compatibility bits ask
+/// for them.
+unit VgaCrtcAddress(f: VgaCrtcFrame, row: u32, col: u32, ra: u32) -> u32 {
+    let ma = (f.start + row * f.stride + col) & 0xFFFF;
+    let mut a = ma << f.shift;
+    if f.mode[0] == 0 { a = (a & 0xDFFF) | ((ra & 1) << 13); }
+    if f.mode[1] == 0 { a = (a & 0xBFFF) | (((ra >> 1) & 1) << 14); }
+    return a & 0xFFFF;
+}
+
+/// Whether the cursor shows at character `col` of character row `row` on
+/// row scan `ra` of frame number `frame` (it blinks every 16 frames).
+unit VgaCrtcCursor(f: VgaCrtcFrame, row: u32, col: u32, ra: u32, frame: u32) -> bool {
+    let ma = (f.start + row * f.stride + col) & 0xFFFF;
+    return !f.cursor_off && ((frame >> 3) & 1) == 1 && ma == f.cursor && ra >= f.cursor_first && ra <= f.cursor_last;
+}
+
+/// The CRTC's display enable and vertical retrace at character clock `ch`
+/// of scanline `line`.
+unit VgaCrtcOutputs(f: VgaCrtcFrame, line: u32, ch: u32) -> (display: bool, retrace: bool) {
+    return (
+        display: ch < f.shown_chars && line < f.shown_lines,
+        retrace: line >= f.retrace_line && line < f.retrace_line + f.retrace_lines,
+    );
+}

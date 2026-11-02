@@ -15,6 +15,7 @@
 use i386::{I386};
 use isabus::{Space, BusSize, IsaBus, IrqLines};
 use pc::{Pic8259, Pit8254, Dma8237, HostLink, Ega, Console};
+use vga::{Vga};
 
 /// The 386 local bus at the transaction level: a transfer names an aligned
 /// dword (`addr`, its low two bits clear) and the byte lanes it uses
@@ -343,6 +344,72 @@ system Board386 {
     /// (whose mode sets the EGA BIOS hands to the system BIOS's video
     /// routine at F000:F065).
     wire ega.switches = 0x9;
+
+    profile fast { default: model; }
+}
+
+/// The same board with a VGA in place of the EGA.
+system Board386Vga {
+    clock osc: 14.31818 MHz;                 // the PC crystal
+    clock cpu_clk: 25 MHz;                   // the processor clock
+    clock bclk = cpu_clk / 3;                // 8.33 MHz ISA
+    clock pit_clk = osc / 12;                // 1.193182 MHz
+    clock dma_clk = osc / 3;                 // 4.77 MHz
+    clock vga25: 25.175 MHz;                 // the VGA's dot clocks
+    clock vga28: 28.322 MHz;
+
+    component cpu: Cpu386 @ cpu_clk;
+    component ram: Ram386;
+    component rom: Rom386;
+    component atbus: AtBus386;
+    component pic1: Pic8259;
+    component pic2: Pic8259;
+    component pit: Pit8254 @ pit_clk;
+    component dma: Dma8237 @ dma_clk;
+    component link: HostLink;
+    component vga: Vga @ (dot25: vga25, dot28: vga28);
+    component console: Console;
+
+    bus local: LocalBus386 @ cpu_clk {
+        master cpu.local;
+        master atbus.mem;
+        slave ram.port @ mem 0x000000..=0x09FFFF, mem 0x100000..=0x3FFFFF;
+        slave rom.port @ mem 0xF0000..=0xFFFFF, mem 0xFFFF0000..=0xFFFFFFFF;
+        slave atbus.local;
+    }
+
+    bus isa: IsaBus @ bclk {
+        master atbus.isa;
+        master dma.dma;
+        // System RAM and the boot ROM, as ISA masters see them.
+        slave atbus.sysmem @ mem 0x000000..=0x09FFFF, mem 0x0F0000..=0x3FFFFF;
+        // The master first: it sees the acknowledge before the slave.
+        slave pic1.port @ io 0x20..=0x21;
+        slave pic2.port @ io 0xA0..=0xA1;
+        slave pit.port @ io 0x40..=0x43;
+        slave dma.regs @ io 0x00..=0x0F;
+        slave dma.pages @ io 0x81..=0x87;
+        slave link.port;
+        slave console.port @ io 0xE9..=0xE9;
+        slave vga.port @ mem 0xA0000..=0xBFFFF, mem 0xC0000..=0xC7FFF, io 0x3B0..=0x3DF;
+    }
+
+    /// IRQ 0-7: the timer on 0, the slave controller on 2.
+    bus irq_master: IrqLines @ cpu_clk {
+        master pic1.ir;
+        slave pit.irq;
+        slave pic2.cascade;
+    }
+    /// IRQ 8-15: the host link on 12.
+    bus irq_slave: IrqLines @ cpu_clk {
+        master pic2.ir;
+        slave link.irq;
+    }
+
+    wire pic1.sp = true;
+    wire pic2.sp = false;
+    wire pic2.cas_in = pic1.cas_out;
+    wire cpu.intr_line = pic1.int;
 
     profile fast { default: model; }
 }

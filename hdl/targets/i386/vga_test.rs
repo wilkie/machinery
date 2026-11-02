@@ -1,0 +1,324 @@
+//! Drives the crate generated from `board.machine`'s `Board386Vga`
+//! (`machine build --system Board386Vga`): the 386 board with a VGA, set up
+//! by IBM's own VGA BIOS where its image is available (`~/roms`, or
+//! `PC_ROMS`; it is not in the repository), and driven directly otherwise.
+
+use machine_board386_vga::system::System;
+
+/// A 64 KB ROM image (filled with HLT): `code` at F000:0000, the reset
+/// vector's far jump to F000:0000, and an IRET at F000:F065, where the PC
+/// BIOS's video routine is.
+fn rom(code: &[u8]) -> Vec<u8> {
+    let mut r = vec![0xF4u8; 0x10000];
+    r[..code.len()].copy_from_slice(code);
+    r[0xF065] = 0xCF;
+    r[0xFFF0..0xFFF5].copy_from_slice(&[0xEA, 0x00, 0x00, 0x00, 0xF0]); // jmp far F000:0000
+    r
+}
+
+fn boot(image: Vec<u8>) -> System {
+    let mut sys = System::new();
+    sys.board().rom.cells = image;
+    sys.reset();
+    sys
+}
+
+/// A font extracted from the cards' ROMs (`targets/pc/fonts`).
+fn font(name: &str) -> Vec<u8> {
+    let here = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut dir = here.as_path();
+    loop {
+        let f = dir.join("targets/pc/fonts").join(name);
+        if f.exists() {
+            return std::fs::read(f).unwrap();
+        }
+        dir = dir.parent().expect("targets/pc/fonts not found");
+    }
+}
+
+/// The IBM VGA's BIOS (a 24 KB option ROM at 2000 in the 32 KB image).
+fn vga_bios() -> Option<Vec<u8>> {
+    let dir = match std::env::var("PC_ROMS") {
+        Ok(d) => std::path::PathBuf::from(d),
+        Err(_) => std::path::PathBuf::from(std::env::var("HOME").ok()?).join("roms"),
+    };
+    let image = std::fs::read(dir.join("ibm_vga.bin")).ok()?;
+    let rom = image.get(0x2000..)?.to_vec();
+    (rom.len() == 0x6000 && rom[..2] == [0x55, 0xAA]).then_some(rom)
+}
+
+/// The stand-in system BIOS's start, at F000:0000: every interrupt vector
+/// at F000:F065 (an IRET), the data area's equipment word with no video and
+/// 640 KB, and a far call to the option ROM's initialisation at C000:0003.
+const HOST_PROLOGUE: &[u8] = &[
+    0xFA, // cli
+    0x31, 0xC0, // xor ax, ax
+    0x8E, 0xD8, // mov ds, ax
+    0x8E, 0xC0, // mov es, ax
+    0x8E, 0xD0, // mov ss, ax
+    0xBC, 0x00, 0x7C, // mov sp, 0x7C00
+    0x31, 0xFF, // xor di, di
+    0xB9, 0x00, 0x01, // mov cx, 256
+    0xC7, 0x05, 0x65, 0xF0, // .vec: mov word [di], 0xF065
+    0xC7, 0x45, 0x02, 0x00, 0xF0, // mov word [di + 2], 0xF000
+    0x83, 0xC7, 0x04, // add di, 4
+    0xE2, 0xF2, // loop .vec
+    0xC7, 0x06, 0x10, 0x04, 0x00, 0x00, // mov word [0x410], 0x0000
+    0xC7, 0x06, 0x13, 0x04, 0x80, 0x02, // mov word [0x413], 640
+    0x9A, 0x03, 0x00, 0x00, 0xC0, // call 0xC000:0x0003
+];
+
+/// INT 10h with AX, BX, CX and DX.
+fn int10(ax: u16, bx: u16, cx: u16, dx: u16) -> Vec<u8> {
+    let mut v = Vec::new();
+    for (op, x) in [(0xB8, ax), (0xBB, bx), (0xB9, cx), (0xBA, dx)] {
+        v.extend_from_slice(&[op, x as u8, (x >> 8) as u8]);
+    }
+    v.extend_from_slice(&[0xCD, 0x10]);
+    v
+}
+
+/// `mov [addr], al`
+fn store_al(addr: u16) -> Vec<u8> {
+    vec![0xA2, addr as u8, (addr >> 8) as u8]
+}
+
+/// Runs the program to its HLT, then until the VGA has finished `n` more
+/// frames.
+fn frames(sys: &mut System, n: u32) {
+    sys.run_until(50_000_000, |s| s.cpu.halted).unwrap();
+    assert!(sys.cpu.halted, "the program ran to its HLT");
+    sys.catch_up_all();
+    let want = sys.board().vga.frames + n;
+    sys.run_until(50_000_000, |s| {
+        s.catch_up_all();
+        s.board().vga.frames >= want
+    })
+    .unwrap();
+}
+
+/// Boots the stand-in BIOS with `calls` after the option ROM's
+/// initialisation; None without the VGA BIOS image.
+fn run_vga_bios(calls: &[u8]) -> Option<System> {
+    let bios = vga_bios()?;
+    let mut code = HOST_PROLOGUE.to_vec();
+    code.extend_from_slice(calls);
+    code.push(0xF4); // hlt
+    let mut sys = boot(rom(&code));
+    sys.board().vga.bios[..bios.len()].copy_from_slice(&bios);
+    frames(&mut sys, 2);
+    Some(sys)
+}
+
+fn skip() {
+    eprintln!("the VGA BIOS image is not in ~/roms; skipping");
+}
+
+/// The DAC's colour for dot `x` of line `y`: red, green, blue.
+fn rgb(sys: &mut System, x: usize, y: usize) -> [u8; 3] {
+    let f = &sys.board().vga.frame;
+    let at = (y * 720 + x) * 3;
+    [f[at], f[at + 1], f[at + 2]]
+}
+
+/// IBM's VGA BIOS on our VGA: its initialisation senses a colour monitor
+/// through the DAC's comparator, and INT 10h sets mode 3 (720x400 on the
+/// 28 MHz clock), loads its 8x16 font into plane 2, and writes text by
+/// teletype.
+#[test]
+fn vga_bios_sets_text_mode() {
+    let mut calls = int10(0x0003, 0, 0, 0);
+    calls.extend(int10(0x0E48, 0x0007, 0, 0)); // 'H'
+    calls.extend(int10(0x0E69, 0x0007, 0, 0)); // 'i'
+    let Some(mut sys) = run_vga_bios(&calls) else { return skip() };
+    let b = sys.board();
+    let bda = |a: usize| b.ram.cells[a];
+    assert_eq!(bda(0x410) & 0x30, 0x20, "80-column colour: a colour monitor sensed");
+    assert_eq!((bda(0x449), bda(0x44A), bda(0x485)), (3, 80, 16), "mode 3: 80 columns, 16 rows a character");
+    assert_eq!((bda(0x463), bda(0x464)), (0xD4, 0x03), "the CRTC at 3D4");
+    assert_eq!(b.vga.misc & 0x0D, 0x05, "the 28 MHz clock, colour addressing");
+    assert_eq!((b.vga.frame_width, b.vga.frame_height), (720, 400));
+    let font16 = font("vga_8x16.bin");
+    for c in [b'H', b'i'] {
+        let at = 0x20000 + c as usize * 32;
+        assert_eq!(&b.vga.planes[at..at + 16], &font16[c as usize * 16..c as usize * 16 + 16]);
+    }
+    assert_eq!((b.vga.planes[0], b.vga.planes[2]), (b'H', b'i'));
+    // Light grey on black, nine dots a character (the ninth blank for a
+    // letter).
+    let grey = [0x2A, 0x2A, 0x2A];
+    for (col, c) in [b'H', b'i'].iter().enumerate() {
+        for r in 0..16 {
+            let row = font16[*c as usize * 16 + r];
+            for d in 0..9 {
+                let on = d < 8 && row >> (7 - d) & 1 == 1;
+                let want = if on { grey } else { [0, 0, 0] };
+                assert_eq!(rgb(&mut sys, col * 9 + d, r), want, "{} row {r} dot {d}", *c as char);
+            }
+        }
+    }
+}
+
+/// Mode 13h (320x200 in 256 colours, chain-4) by the BIOS: a DAC entry set
+/// through INT 10h, a dot written by INT 10h and one by the processor
+/// straight into A000, each 2x2 in the 640x400 frame (doubled dots, double
+/// scan), and read-pixel back.
+#[test]
+fn vga_bios_mode_13h() {
+    let mut calls = int10(0x0013, 0, 0, 0);
+    calls.extend(int10(0x1010, 0x0080, 0x0020, 0x3F00)); // DAC 80: red 3F, green 00, blue 20
+    calls.extend(int10(0x0C80, 0, 5, 3)); // colour 80 at (5, 3)
+    calls.extend_from_slice(&[0xB8, 0x00, 0xA0, 0x8E, 0xC0]); // mov ax, 0xA000; mov es, ax
+    calls.extend_from_slice(&[0x26, 0xC6, 0x06, 0x3F, 0x01, 0x80]); // mov byte es:[319], 0x80: (319, 0)
+    calls.extend(int10(0x0D00, 0, 5, 3));
+    calls.extend(store_al(0x0500));
+    let Some(mut sys) = run_vga_bios(&calls) else { return skip() };
+    let b = sys.board();
+    assert_eq!(b.ram.cells[0x449], 0x13);
+    assert_eq!(b.ram.cells[0x500], 0x80, "read back");
+    assert_eq!((b.vga.frame_width, b.vga.frame_height), (640, 400));
+    // Chain-4: byte 319 of the window is plane 3's byte at 316.
+    assert_eq!(b.vga.planes[0x30000 + 316], 0x80);
+    let magenta = [0x3F, 0x00, 0x20];
+    for (x, y) in [(5, 3), (319, 0)] {
+        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            assert_eq!(rgb(&mut sys, 2 * x + dx, 2 * y + dy), magenta, "({x}, {y})");
+        }
+    }
+    assert_ne!(rgb(&mut sys, 2 * 4, 2 * 3), magenta);
+}
+
+/// Mode 12h (640x480 in 16 colours) by the BIOS: the far corner written and
+/// read back, through the attribute palette and the DAC.
+#[test]
+fn vga_bios_mode_12h() {
+    let mut calls = int10(0x0012, 0, 0, 0);
+    calls.extend(int10(0x0C0C, 0, 639, 479)); // colour 12 at (639, 479)
+    calls.extend(int10(0x0D00, 0, 639, 479));
+    calls.extend(store_al(0x0500));
+    let Some(mut sys) = run_vga_bios(&calls) else { return skip() };
+    let b = sys.board();
+    assert_eq!(b.ram.cells[0x449], 0x12);
+    assert_eq!(b.ram.cells[0x500], 12, "read back");
+    assert_eq!((b.vga.frame_width, b.vga.frame_height), (640, 480));
+    let index = (b.vga.attr[12] & 0x3F) as usize;
+    let want = [b.vga.dac[index * 3], b.vga.dac[index * 3 + 1], b.vga.dac[index * 3 + 2]];
+    assert_ne!(want, [0, 0, 0]);
+    assert_eq!(rgb(&mut sys, 639, 479), want);
+    assert_eq!(rgb(&mut sys, 638, 479), [0, 0, 0]);
+}
+
+// --- driven directly ---
+
+struct Quiet;
+impl machine_board386_vga::VgaPorts for Quiet {}
+
+fn out(v: &mut machine_board386_vga::Vga, port: u32, d: u8) {
+    v.on_port_write(&mut Quiet, 1, port, 0, d as u16);
+}
+
+fn inp(v: &mut machine_board386_vga::Vga, port: u32) -> u8 {
+    v.on_port_read(&mut Quiet, 1, port, 0).unwrap().0 as u8
+}
+
+/// The DAC: three writes an entry from the write index, auto-incrementing;
+/// reads likewise from the read index; 3C7 tells which was set last.
+#[test]
+fn vga_dac_ports() {
+    let mut v = machine_board386_vga::Vga::new();
+    out(&mut v, 0x3C8, 0x10);
+    for c in [1, 2, 3, 4, 5, 0x7F] {
+        out(&mut v, 0x3C9, c);
+    }
+    assert_eq!(&v.dac[0x30..0x36], &[1, 2, 3, 4, 5, 0x3F], "six bits a component");
+    assert_eq!(inp(&mut v, 0x3C8), 0x12);
+    assert_eq!(inp(&mut v, 0x3C7), 0, "write mode");
+    out(&mut v, 0x3C7, 0x11);
+    assert_eq!(inp(&mut v, 0x3C7), 3, "read mode");
+    let got: Vec<u8> = (0..3).map(|_| inp(&mut v, 0x3C9)).collect();
+    assert_eq!(got, [4, 5, 0x3F]);
+}
+
+/// Registers read back; the CRTC's R0-R7 ignore writes while R11h bit 7 is
+/// set (but for R7's line compare bit).
+#[test]
+fn vga_registers_read_back_and_crtc_protect() {
+    let mut v = machine_board386_vga::Vga::new();
+    out(&mut v, 0x3C2, 0x01); // colour addressing
+    assert_eq!(inp(&mut v, 0x3CC), 0x01);
+    out(&mut v, 0x3D4, 0x00);
+    out(&mut v, 0x3D5, 0x5F);
+    out(&mut v, 0x3D4, 0x11);
+    out(&mut v, 0x3D5, 0x80);
+    out(&mut v, 0x3D4, 0x00);
+    out(&mut v, 0x3D5, 0x12);
+    assert_eq!(inp(&mut v, 0x3D5), 0x5F, "protected");
+    out(&mut v, 0x3D4, 0x07);
+    out(&mut v, 0x3D5, 0xFF);
+    assert_eq!(inp(&mut v, 0x3D5), 0x10, "only the line compare bit");
+    out(&mut v, 0x3CE, 0x05);
+    out(&mut v, 0x3CF, 0x40);
+    assert_eq!(inp(&mut v, 0x3CF), 0x40);
+    // 3Bx is another card's while colour addressing is selected.
+    assert!(v.on_port_read(&mut Quiet, 1, 0x3B5, 0).is_none());
+}
+
+/// Chain-4 puts byte n in plane n mod 4; write mode 3 masks the Set/Reset
+/// colour by the rotated byte and the Bit Mask.
+#[test]
+fn vga_chain4_and_write_mode_3() {
+    let mut v = machine_board386_vga::Vga::new();
+    out(&mut v, 0x3C2, 0x03); // RAM enabled
+    out(&mut v, 0x3C4, 0x02);
+    out(&mut v, 0x3C5, 0x0F); // map mask
+    out(&mut v, 0x3C4, 0x04);
+    out(&mut v, 0x3C5, 0x0E); // chain-4
+    out(&mut v, 0x3CE, 0x06);
+    out(&mut v, 0x3CF, 0x05); // A0000, 64 KB
+    out(&mut v, 0x3CE, 0x08);
+    out(&mut v, 0x3CF, 0xFF); // bit mask
+    for (i, b) in [0x11u8, 0x22, 0x33, 0x44, 0x55].iter().enumerate() {
+        v.on_port_write(&mut Quiet, 0, 0xA0000 + i as u32, 0, *b as u16);
+    }
+    assert_eq!((v.planes[0], v.planes[0x10000], v.planes[0x20000], v.planes[0x30000]), (0x11, 0x22, 0x33, 0x44));
+    assert_eq!(v.planes[4], 0x55, "byte 4: plane 0 at 4");
+    // Unchained, write mode 3: Set/Reset colour 5, rotated byte F0 ANDed
+    // with the bit mask 3C.
+    out(&mut v, 0x3C4, 0x04);
+    out(&mut v, 0x3C5, 0x06);
+    out(&mut v, 0x3CE, 0x00);
+    out(&mut v, 0x3CF, 0x05);
+    out(&mut v, 0x3CE, 0x05);
+    out(&mut v, 0x3CF, 0x03);
+    out(&mut v, 0x3CE, 0x08);
+    out(&mut v, 0x3CF, 0x3C);
+    let _ = v.on_port_read(&mut Quiet, 0, 0xA0100, 0); // latches: zero
+    v.on_port_write(&mut Quiet, 0, 0xA0100, 0, 0xF0);
+    let p = |n: u32| v.planes[(n * 0x10000 + 0x100) as usize];
+    assert_eq!((p(0), p(1), p(2), p(3)), (0x30, 0x00, 0x30, 0x00));
+}
+
+/// Frames a second the VGA model renders in modes the BIOS sets, driven
+/// directly once the BIOS has programmed it.
+#[test]
+#[ignore]
+fn bench_vga_modes() {
+    for (name, mode) in [("80x25 text (720x400)", 0x03u16), ("320x200x256 (mode 13h)", 0x13), ("640x480x16 (mode 12h)", 0x12)] {
+        let Some(mut sys) = run_vga_bios(&int10(mode, 0, 0, 0)) else { return skip() };
+        let mut v = sys.board().vga.clone();
+        let mut x: u32 = 12345;
+        for b in v.planes.iter_mut() {
+            x = x.wrapping_mul(1103515245).wrapping_add(12345);
+            *b = (x >> 16) as u8;
+        }
+        let n = 300;
+        let t = std::time::Instant::now();
+        let f0 = v.frames;
+        while v.frames < f0 + n {
+            let left = v.on_tick_dot25(&mut Quiet, 1_000_000);
+            let _ = v.on_tick_dot28(&mut Quiet, 1_000_000.min(left));
+        }
+        let s = t.elapsed().as_secs_f64();
+        eprintln!("VGA {name}: {:.0} frames/s ({:.1} us a frame)", n as f64 / s, s * 1e6 / n as f64);
+    }
+}

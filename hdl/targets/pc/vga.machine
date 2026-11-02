@@ -1,0 +1,486 @@
+// The IBM VGA as an ISA card (the PS/2 Display Adapter's design): the
+// EGA's architecture with readable registers, a 256-entry DAC, chain-4
+// addressing for 256 colours, write mode 3, double scanning, and the 25
+// and 28 MHz dot clocks.
+
+use isabus::{Space, BusSize, IsaBus};
+use crtc::{VgaCrtcFrame, VgaCrtcTiming, VgaCrtcRow, VgaCrtcAddress, VgaCrtcCursor, VgaCrtcOutputs};
+
+/// The byte offset in plane 2 of character map `n` (0-7): maps 0-3 at
+/// 16 KB steps, maps 4-7 8 KB above them.
+unit VgaFontBase(n: u8) -> u32 {
+    return if n < 4 { (n as u32) * 0x4000 } else { ((n - 4) as u32) * 0x4000 + 0x2000 };
+}
+
+/// The IBM VGA with 256 KB: four 64 KB bit planes behind the sequencer,
+/// the graphics controller and the attribute controller, a CRTC, and the
+/// DAC, at the ISA bus's window A0000-BFFFF and ports 3B0-3DF; its BIOS
+/// (`bios`, a 32 KB window at C0000, which the host fills) is the system's
+/// video BIOS.
+///
+/// The processor's side is the EGA's (`Ega`), and more:
+/// - every register reads back;
+/// - write mode 3: the rotated byte, ANDed with the Bit Mask, is the mask
+///   for the Set/Reset colour;
+/// - chain-4 (the sequencer's Memory Mode bit 3): address bits 0-1 pick
+///   the plane, which sees the address with them clear; mode 13h's 320x200
+///   in 256 colours is a byte a dot this way.
+///
+/// The display: the CRTC (`crtc.machine`'s `VgaCrtc*`) counts character
+/// clocks of 8 or 9 dots at 25.175 MHz or 28.322 MHz (the Miscellaneous
+/// Output register's clock select), halved for 320-dot modes, and may
+/// draw each scanline twice (double scan). Text, 16-colour planar
+/// graphics and the CGA's modes are the EGA's. In the 256-colour shift
+/// mode (Graphics Mode bit 6) a character clock shows four dots, one from
+/// each plane's byte. A 4-bit colour goes through the attribute palette to
+/// a DAC index: the palette's six bits, or with the Mode Control register's
+/// bit 7 its low four and Color Select bits 0-1 as bits 4-5, and Color
+/// Select bits 2-3 as bits 6-7. In 256-colour mode the byte is the index.
+/// The index, through the PEL mask, selects one of the DAC's 256 colours.
+///
+/// `frame` holds what the monitor receives: three bytes a dot (red,
+/// green, blue, each 0-63), 720 dots a line, up to 480 lines. A screen the
+/// sequencer turns off is black. The host reads `frame`, `frame_width`,
+/// `frame_height` and the `frames` counter.
+///
+/// The CRTC and Input Status 1 answer at 3Dx or 3Bx by the Miscellaneous
+/// Output register's I/O address bit, as on the EGA. Input Status 0 bit 4
+/// is the DAC's comparator, which the BIOS uses to sense the monitor: into
+/// a colour monitor's three 75 ohm loads it is set while all three outputs
+/// are below its reference (about 0.3 V: a level under 1A of 3F), for the
+/// dot under the beam and the DAC as it is at that moment (`dots` keeps
+/// each dot's DAC index from the last frame).
+component Vga {
+    ports {
+        clock dot25;
+        clock dot28;
+        bus port: IsaBus::Slave;
+    }
+    model {
+        mem planes: [u8; 0x40000];
+        mem bios: [u8; 0x8000];
+        mem frame: [u8; 1036800];
+        mem dots: [u8; 345600];
+        mem dac: [u8; 768];
+        state frame_width: u32 = 0;
+        state frame_height: u32 = 0;
+        /// Completed frames.
+        state frames: u32 = 0;
+        /// The beam, in dots from the top left of the frame.
+        state pos: u32 = 0;
+        state latch: [u8; 4];
+
+        state misc: u8 = 0;
+        state feature: u8 = 0;
+        state seq_index: u8 = 0;
+        state seq: [u8; 5];
+        state gc_index: u8 = 0;
+        state gc: [u8; 9];
+        state crtc_index: u8 = 0;
+        state crtc: [u8; 25];
+        /// What the CRTC's registers give, derived when one is written.
+        state t: VgaCrtcFrame;
+        state attr_flip: bool = false;
+        state attr_index: u8 = 0;
+        state attr: [u8; 21];
+        state pel_mask: u8 = 0xFF;
+        /// The DAC's write and read indices, the colour component (0-2) of
+        /// each, and whether the last index written was the read one.
+        state dac_write: u8 = 0;
+        state dac_read: u8 = 0;
+        state dac_wc: u8 = 0;
+        state dac_rc: u8 = 0;
+        state dac_reading: bool = false;
+
+        on reset { t = VgaCrtcTiming(crtc); }
+
+        // -- the processor's side --------------------------------------------------
+
+        fn plane(p: u2, off: u32) -> u8 { return planes[((p as u32) << 16) | (off & 0xFFFF)]; }
+        fn set_plane(p: u2, off: u32, v: u8) { planes[((p as u32) << 16) | (off & 0xFFFF)] = v; }
+
+        /// The offset of `addr` in the processor's window, or 0x10000.
+        fn window(addr: u24) -> u32 {
+            let a = addr as u32;
+            let map = (gc[6] >> 2) & 3;
+            if map == 0 { return if a >= 0xA0000 && a <= 0xBFFFF { (a - 0xA0000) & 0xFFFF } else { 0x10000 }; }
+            if map == 1 { return if a >= 0xA0000 && a <= 0xAFFFF { a - 0xA0000 } else { 0x10000 }; }
+            if map == 2 { return if a >= 0xB0000 && a <= 0xB7FFF { a - 0xB0000 } else { 0x10000 }; }
+            return if a >= 0xB8000 && a <= 0xBFFFF { a - 0xB8000 } else { 0x10000 };
+        }
+
+        fn chain4() -> bool { return seq[4][3] == 1; }
+        fn odd_even() -> bool { return !chain4() && seq[4][2] == 0; }
+
+        fn read_byte(addr: u24) -> u8 {
+            let w = window(addr);
+            if w > 0xFFFF || misc[1] == 0 { return 0xFF; }
+            let off = if chain4() { w & 0xFFFC } else if odd_even() { w & 0xFFFE } else { w };
+            for p in 0..4 { latch[p] = plane(p as u2, off); }
+            if gc[5][3] == 1 {
+                let mut r: u8 = 0xFF;
+                for p in 0..4 {
+                    if gc[7][p] == 1 {
+                        let want: u8 = if gc[2][p] == 1 { 0xFF } else { 0 };
+                        r = r & ~(latch[p] ^ want);
+                    }
+                }
+                return r;
+            }
+            let p = if chain4() { (w & 3) as u8 }
+                else if odd_even() && gc[5][4] == 1 { (gc[4] & 2) | (w as u8 & 1) }
+                else { gc[4] & 3 };
+            return latch[p];
+        }
+
+        fn write_byte(addr: u24, data: u8) {
+            let w = window(addr);
+            if w > 0xFFFF || misc[1] == 0 { return; }
+            let mut mask = seq[2] & 15;
+            let mut off = w;
+            if chain4() {
+                mask = mask & (1 << (w & 3));
+                off = w & 0xFFFC;
+            } else if odd_even() {
+                mask = mask & (if w[0] == 1 { 0x0A } else { 0x05 });
+                off = w & 0xFFFE;
+            }
+            let rot = gc[3] & 7;
+            let rotated = if rot == 0 { data } else { (data >> rot) | (data << (8 - rot)) };
+            let mode = gc[5] & 3;
+            let func = (gc[3] >> 3) & 3;
+            let bitmask = if mode == 3 { rotated & gc[8] } else { gc[8] };
+            for p in 0..4 {
+                if mask[p] == 1 {
+                    let mut v: u8 = if mode == 1 {
+                        latch[p]
+                    } else if mode == 2 {
+                        if data[p] == 1 { 0xFF } else { 0 }
+                    } else if mode == 3 || gc[1][p] == 1 {
+                        if gc[0][p] == 1 { 0xFF } else { 0 }
+                    } else {
+                        rotated
+                    };
+                    if mode != 1 {
+                        if func == 1 { v = v & latch[p]; }
+                        if func == 2 { v = v | latch[p]; }
+                        if func == 3 { v = v ^ latch[p]; }
+                        v = (v & bitmask) | (latch[p] & ~bitmask);
+                    }
+                    set_plane(p as u2, off, v);
+                }
+            }
+        }
+
+        // -- the display -----------------------------------------------------------------
+
+        fn char_dots() -> u32 {
+            let d: u32 = if seq[1][0] == 1 { 8 } else { 9 };
+            return if seq[1][3] == 1 { d * 2 } else { d };
+        }
+        fn line_dots() -> u32 { return t.line_chars * char_dots(); }
+        fn clock28() -> bool { return ((misc >> 2) & 3) == 1; }
+
+        /// A 4-bit colour through the attribute palette to a DAC index.
+        fn colour(c: u8) -> u8 {
+            let p = attr[c & attr[18] & 15];
+            let low = if attr[16][7] == 1 { (p & 15) | ((attr[20] & 3) << 4) } else { p & 0x3F };
+            return low | ((attr[20] & 0x0C) << 4);
+        }
+
+        /// Dot `x` of the line at `base`: the DAC's colour for `index`.
+        fn put(base: u32, x: u32, index: u8) {
+            let i = index & pel_mask;
+            dots[base / 3 + x] = i;
+            let c = (i as u32) * 3;
+            let at = base + x * 3;
+            frame[at] = dac[c];
+            frame[at + 1] = dac[c + 1];
+            frame[at + 2] = dac[c + 2];
+        }
+
+        /// Draw scanline `line` of the display area into `frame`.
+        fn render(line: u32) {
+            let rr = VgaCrtcRow(t, line);
+            let row = rr.row;
+            let ra = rr.ra;
+            let cols = t.shown_chars;
+            let cd = char_dots();
+            let half = seq[1][3] == 1;
+            let base = line * 2160;
+            frame_width = if cols * cd < 720 { cols * cd } else { 720 };
+            if seq[1][5] == 1 {
+                // Screen off: black.
+                for x in 0..2160 { frame[base + x as u32] = 0; }
+                for x in 0..720 { dots[line * 720 + x as u32] = 0; }
+                return;
+            }
+            let graphics = attr[16][0] == 1;
+            let map_a = ((seq[3] >> 5) & 1) << 2 | ((seq[3] >> 2) & 3);
+            let map_b = ((seq[3] >> 4) & 1) << 2 | (seq[3] & 3);
+            for col in 0..90 {
+                let c = col as u32;
+                if c < cols && (c + 1) * cd <= 720 {
+                    let a = VgaCrtcAddress(t, row, c, ra);
+                    let x0 = c * cd;
+                    if !graphics {
+                        let ch = plane(0, a);
+                        let at = plane(1, a);
+                        let map = if at[3] == 1 && map_a != map_b { map_b } else { map_a };
+                        let mut glyph = plane(2, VgaFontBase(map) + (ch as u32) * 32 + ra);
+                        let mut fg = at & 15;
+                        let mut bg = at >> 4;
+                        if attr[16][3] == 1 {
+                            bg = bg & 7;
+                            if at[7] == 1 && frames[4] == 1 { fg = bg; }
+                        }
+                        if VgaCrtcCursor(t, row, c, ra, frames) {
+                            glyph = 0xFF;
+                            fg = at & 15;
+                        }
+                        let fgi = colour(fg);
+                        let bgi = colour(bg);
+                        for d in 0..18 {
+                            let dd = d as u32;
+                            if dd < cd {
+                                let px = if half { dd / 2 } else { dd };
+                                let on = if px < 8 {
+                                    glyph[7 - (px as u3)] == 1
+                                } else {
+                                    attr[16][2] == 1 && ch >= 0xC0 && ch <= 0xDF && glyph[0] == 1
+                                };
+                                put(base, x0 + dd, if on { fgi } else { bgi });
+                            }
+                        }
+                    } else if gc[5][6] == 1 {
+                        // 256 colours: four dots a character clock, a byte
+                        // from each plane.
+                        for d in 0..16 {
+                            let dd = d as u32;
+                            if dd < cd {
+                                let p = (dd * 4) / cd;
+                                put(base, x0 + dd, plane(p as u2, a));
+                            }
+                        }
+                    } else if gc[5][5] == 1 {
+                        let bytes = concat(plane(0, a), plane(1, a));
+                        for d in 0..16 {
+                            let dd = d as u32;
+                            if dd < cd {
+                                let px = if half { dd / 2 } else { dd };
+                                let v = (bytes >> (14 - (px & 7) * 2)) & 3;
+                                put(base, x0 + dd, colour(v as u8));
+                            }
+                        }
+                    } else if gc[6][1] == 1 {
+                        let bytes = concat(plane(0, a), plane(1, a));
+                        for d in 0..16 {
+                            let dd = d as u32;
+                            if dd < cd {
+                                let px = if half { dd / 2 } else { dd };
+                                put(base, x0 + dd, colour(bytes[15 - (px & 15) as u4] as u8));
+                            }
+                        }
+                    } else {
+                        let p0 = plane(0, a);
+                        let p1 = plane(1, a);
+                        let p2 = plane(2, a);
+                        let p3 = plane(3, a);
+                        for d in 0..18 {
+                            let dd = d as u32;
+                            if dd < cd {
+                                let px = (if half { dd / 2 } else { dd }) & 7;
+                                let b = 7 - (px as u3);
+                                let v = (p0[b] as u8) | ((p1[b] as u8) << 1) | ((p2[b] as u8) << 2) | ((p3[b] as u8) << 3);
+                                put(base, x0 + dd, colour(v));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// The beam moves `n` dots; returns the dots left in the frame.
+        fn advance(n: u32) -> u32 {
+            let ld = line_dots();
+            let total = ld * t.frame_lines;
+            if total == 0 || seq[0] & 3 != 3 {
+                return 0xFFFFFFFF;
+            }
+            let mut left = n;
+            while left > 0 {
+                let line = pos / ld;
+                let end = (line + 1) * ld;
+                if pos + left < end {
+                    pos = pos + left;
+                    left = 0;
+                } else {
+                    left = left - (end - pos);
+                    if line < t.shown_lines && line < 480 {
+                        render(line);
+                    }
+                    pos = end;
+                    if pos >= total {
+                        pos = 0;
+                        frames = frames + 1;
+                        frame_height = if t.shown_lines < 480 { t.shown_lines } else { 480 };
+                    }
+                }
+            }
+            return total - pos;
+        }
+
+        on tick @ dot25 (n: u32) -> u32 {
+            if clock28() { return 0xFFFFFFFF; }
+            return advance(n);
+        }
+        on tick @ dot28 (n: u32) -> u32 {
+            if !clock28() { return 0xFFFFFFFF; }
+            return advance(n);
+        }
+
+        // -- the bus -----------------------------------------------------------------------
+
+        /// Whether the card answers I/O port `r`: 3C0-3CF always, and the
+        /// 3Dx or the 3Bx range by the I/O address bit.
+        fn io_selected(r: u12) -> bool {
+            if r >= 0x3C0 && r <= 0x3CF { return true; }
+            if r >= 0x3D0 && r <= 0x3DF { return misc[0] == 1; }
+            if r >= 0x3B0 && r <= 0x3BF { return misc[0] == 0; }
+            return false;
+        }
+
+        /// The beam's line and the dot within it.
+        fn beam() -> (line: u32, h: u32) {
+            let ld = line_dots();
+            return (line: if ld == 0 { 0 } else { pos / ld }, h: if ld == 0 { 0 } else { pos % ld });
+        }
+
+        fn read_io(r: u12) -> u8 {
+            if r == 0x3C0 { return attr_index; }
+            if r == 0x3C1 { return if (attr_index & 31) < 21 { attr[attr_index & 31] } else { 0 }; }
+            if r == 0x3C2 {
+                // Input Status 0: bit 4 the DAC's comparator on the dot under
+                // the beam (blanked outside the display area).
+                let b = beam();
+                let o = VgaCrtcOutputs(t, b.line, b.h / char_dots());
+                let mut low = true;
+                if o.display && b.line < 480 && b.h < 720 {
+                    let c = (dots[b.line * 720 + b.h] as u32) * 3;
+                    low = dac[c] < 0x1A && dac[c + 1] < 0x1A && dac[c + 2] < 0x1A;
+                }
+                return if low { 0x10 } else { 0 };
+            }
+            if r == 0x3C4 { return seq_index; }
+            if r == 0x3C5 { return if seq_index < 5 { seq[seq_index] } else { 0xFF }; }
+            if r == 0x3C6 { return pel_mask; }
+            if r == 0x3C7 { return if dac_reading { 3 } else { 0 }; }
+            if r == 0x3C8 { return dac_write; }
+            if r == 0x3C9 {
+                let v = dac[(dac_read as u32) * 3 + dac_rc as u32];
+                dac_rc = dac_rc + 1;
+                if dac_rc == 3 { dac_rc = 0; dac_read = dac_read + 1; }
+                return v;
+            }
+            if r == 0x3CA { return feature; }
+            if r == 0x3CC { return misc; }
+            if r == 0x3CE { return gc_index; }
+            if r == 0x3CF { return if gc_index < 9 { gc[gc_index] } else { 0xFF }; }
+            if r == 0x3D4 || r == 0x3B4 { return crtc_index; }
+            if r == 0x3D5 || r == 0x3B5 { return if crtc_index < 25 { crtc[crtc_index] } else { 0xFF }; }
+            if r == 0x3DA || r == 0x3BA {
+                // Input Status 1: bit 0 outside the display area, bit 3
+                // vertical retrace; the read resets the attribute flip-flop.
+                attr_flip = false;
+                let b = beam();
+                let o = VgaCrtcOutputs(t, b.line, b.h / char_dots());
+                return (if o.display { 0 } else { 1 }) | (if o.retrace { 8 } else { 0 });
+            }
+            return 0xFF;
+        }
+
+        fn write_io(r: u12, d: u8) {
+            if r == 0x3C0 {
+                if !attr_flip {
+                    attr_index = d & 0x3F;
+                } else if (attr_index & 31) < 21 {
+                    attr[attr_index & 31] = d;
+                }
+                attr_flip = !attr_flip;
+            } else if r == 0x3C2 {
+                misc = d;
+            } else if r == 0x3C4 {
+                seq_index = d & 7;
+            } else if r == 0x3C5 {
+                if seq_index < 5 { seq[seq_index] = d; }
+            } else if r == 0x3C6 {
+                pel_mask = d;
+            } else if r == 0x3C7 {
+                dac_read = d;
+                dac_rc = 0;
+                dac_reading = true;
+            } else if r == 0x3C8 {
+                dac_write = d;
+                dac_wc = 0;
+                dac_reading = false;
+            } else if r == 0x3C9 {
+                dac[(dac_write as u32) * 3 + dac_wc as u32] = d & 0x3F;
+                dac_wc = dac_wc + 1;
+                if dac_wc == 3 { dac_wc = 0; dac_write = dac_write + 1; }
+            } else if r == 0x3CE {
+                gc_index = d & 15;
+            } else if r == 0x3CF {
+                if gc_index < 9 { gc[gc_index] = d; }
+            } else if r == 0x3D4 || r == 0x3B4 {
+                crtc_index = d & 31;
+            } else if r == 0x3D5 || r == 0x3B5 {
+                // R11h bit 7 protects R0-R7 (all but R7's line compare bit).
+                if crtc_index < 25 {
+                    if crtc[17][7] == 1 && crtc_index < 8 {
+                        if crtc_index == 7 { crtc[7] = (crtc[7] & 0xEF) | (d & 0x10); }
+                    } else {
+                        crtc[crtc_index] = d;
+                    }
+                    t = VgaCrtcTiming(crtc);
+                }
+            } else if r == 0x3DA || r == 0x3BA {
+                feature = d;
+            }
+        }
+
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            if space == Space::Mem && addr >= 0xC0000 && addr <= 0xC7FFF {
+                let a = addr[14:0];
+                if size == BusSize::Word {
+                    return (data: concat(bios[(a + 1) & 0x7FFF], bios[a]), wait: 1);
+                }
+                return (data: bios[a] as u16, wait: 1);
+            }
+            if space == Space::Mem {
+                let lo = read_byte(addr);
+                if size == BusSize::Word {
+                    return (data: concat(read_byte(addr + 1), lo), wait: 1);
+                }
+                return (data: lo as u16, wait: 1);
+            }
+            let r = addr[11:0];
+            if !io_selected(r) { decline; }
+            return (data: read_io(r) as u16, wait: 1);
+        }
+
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            if space == Space::Mem && addr >= 0xC0000 {
+                return (wait: 1);
+            }
+            if space == Space::Mem {
+                write_byte(addr, data as u8);
+                if size == BusSize::Word { write_byte(addr + 1, (data >> 8) as u8); }
+                return (wait: 1);
+            }
+            let r = addr[11:0];
+            if !io_selected(r) { decline; }
+            write_io(r, data as u8);
+            return (wait: 1);
+        }
+    }
+}

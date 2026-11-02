@@ -1256,6 +1256,9 @@ pub struct TimingEntry {
     pub docs: Docs,
     /// `decode <Operand> => n;`: an operand format's decoding cost.
     pub decode: bool,
+    /// `fault <Instruction> => ...;`: delivering a fault that instruction
+    /// raises (a `schedules` table).
+    pub fault: bool,
     pub name: Ident,
     pub value: Expr,
     pub span: Span,

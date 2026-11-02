@@ -151,6 +151,11 @@ component Cpu286 {
         state last_done: u64 = 0;
         state owed: u64 = 0;
         state need_flush: bool = true;
+        /// Where the last instruction admitted started and continued: a
+        /// repeated string instruction's next iteration starts where it
+        /// started, with its bytes already decoded.
+        state prev_start: u64 = 0xFFFFFFFFFFFFFFFF;
+        state prev_next: u64 = 0xFFFFFFFFFFFFFFFF;
         /// The instruction executing (or next to) and the one after it.
         state a: Slot286;
         state b: Slot286;
@@ -197,9 +202,9 @@ component Cpu286 {
         state base: u32 = 0;
         /// The bus cycles run: 0 code, 1 memory read, 2 memory write, 3 I/O
         /// read, 4 I/O write, 5 HALT; at the clock each started.
-        state trace_kind: [u3; 64];
-        state trace_at: [u32; 64];
-        state trace_n: u8 = 0;
+        state trace_kind: [u3; 512];
+        state trace_at: [u32; 512];
+        state trace_n: u16 = 0;
 
         on intr() -> bool { return intr_line; }
 
@@ -301,6 +306,8 @@ component Cpu286 {
             bus_free = 1;
             lg_count = 0;
             need_flush = true;
+            prev_start = 0xFFFFFFFFFFFFFFFF;
+            prev_next = 0xFFFFFFFFFFFFFFFF;
         }
 
         /// The instruction's timing: run the pipeline until the instruction
@@ -339,11 +346,16 @@ component Cpu286 {
         /// Takes `s` (with the accesses noted while it ran) as the next
         /// instruction to time.
         fn admit(s: Schedule) {
+            // A repeated string instruction's later iteration: its bytes
+            // were decoded for the first.
+            let again = s.start == prev_start && prev_next == prev_start;
+            prev_start = s.start;
+            prev_next = s.next;
             b.valid = true;
-            b.len = s.length;
+            b.len = if again { 0 } else { s.length };
             b.late = 0;
             for i in 0..16 {
-                let d = s.decode[i];
+                let d = if again { 0 } else { s.decode[i] };
                 let even = ((s.start + i as u64) & 1) == 0;
                 b.stall[i] = if even { d } else { 0 };
                 if !even && d > b.late {
@@ -355,7 +367,7 @@ component Cpu286 {
             b.halted = s.halted;
             b.uncond = false;
             b.jumped = false;
-            b.ready = s.length == 0;
+            b.ready = b.len == 0;
             b.ready_at = 0;
             // HLT asks for its HALT bus cycle three clocks after it starts.
             b.pre = if s.halted { 3 } else { s.work[0] };
@@ -387,8 +399,10 @@ component Cpu286 {
                 li = li + 1;
             }
             // A transfer the schedule does not name (an unfitted entry, a
-            // fault, an interrupt) happens at the end.
-            if !jumps && !s.halted && (s.length == 0 || s.next != s.start + s.length as u64) {
+            // fault, an interrupt) happens at the end; an iteration that
+            // repeats does not transfer.
+            let repeats = s.next == s.start && s.length != 0;
+            if !jumps && !s.halted && !repeats && (s.length == 0 || s.next != s.start + s.length as u64) {
                 push(6, 0, 0);
                 b.uncond = true;
             }
@@ -621,7 +635,7 @@ component Cpu286 {
         }
 
         fn record(kind: u3, at: u64) {
-            if trace_n < 64 {
+            if trace_n < 512 {
                 trace_kind[trace_n] = kind;
                 trace_at[trace_n] = at as u32;
                 trace_n = trace_n + 1;

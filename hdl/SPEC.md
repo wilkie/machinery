@@ -1033,8 +1033,36 @@ entries (on the state before the instruction runs, with its operands in
 scope). An instruction without a schedule runs its timing entry as work
 before its accesses, and a plain number `n` in this table is
 `schedule(n)`. `interrupt =>` gives the schedule of an interrupt taken at
-a boundary. A fault's delivery is the timing table's `fault` entry, added
-as work after the last step.
+a boundary.
+
+**Faults.** `fault => ...` (with the fault's `vector` in scope) is the
+schedule of delivering a fault, and `fault <Instruction> => ...` (with
+`vector` and the instruction's operands) overrides it for faults that
+instruction raises: the 286's IDIV raises #DE two clocks later than DIV.
+The delivery follows the faulting instruction's schedule: the
+interpreter counts the data accesses the instruction made before the
+fault, drops the `access` steps past those (their work joins the step
+before), and appends the delivery's steps. A fault the decoder raises
+(an undefined opcode) has no instruction schedule. An instruction whose
+operands the semantics reject can say so in its own entry: on the 286,
+`Les => if src.is_mem { ... } else { schedule(0) };` puts #UD's delivery
+right after decoding. Without a `fault` entry, the timing table's `fault`
+cycles are work after the last step.
+
+**Repeated string instructions** run an iteration per interpreter step,
+and each iteration retires with its own schedule (`restarted()` tells the
+later ones from the first). Since an entry is evaluated before its
+iteration runs, it cannot know whether that iteration is the last
+(REPE and REPNE stop on a flag); the 286's entries put the last
+iteration's tail at the end of every iteration and the extra gap between
+iterations at the start of each later one:
+
+```
+Movsb => if !repeating() { schedule(3, access, 2, access, 0) }
+         else if restarted() { schedule(1, access, 0, access, 1) }
+         else if CX == 0 { schedule(7) }
+         else { schedule(7, access, 0, access, 1) };
+```
 
 `schedule(w0, step1, w1, ..., stepN, wN)` alternates execution cycles
 (`u32` expressions) and steps, starting and ending with cycles; at most 8
@@ -1118,15 +1146,17 @@ SingleStepTests traces (`research/i286-pipeline`):
   it starts a word, and otherwise starting the instruction a clock late;
 - an odd jump target's word slot holding a dead byte until the next flush;
 - no prefetch once HLT runs, and HLT's HALT cycle requested three clocks
-  after it starts.
+  after it starts;
+- a repeated string instruction's later iterations decoding nothing (its
+  bytes stay decoded) and not transferring.
 
 Address work before a ModRM access is the operand kinds' `ea` query: 4
 clocks for base+index with a displacement, otherwise 3. The model records
 its bus cycles, and the rig system `targets/i286/rig.machine` runs each
 vector through it to compare that record with the trace: the processor's
-conformance at transaction boundaries (section 13). Over the corpus
-(string instructions and exceptions aside), 97% of vectors match every
-bus cycle.
+conformance at transaction boundaries (section 13). Over the whole
+corpus (130,000 vectors, repeated strings and exceptions included), 97%
+match every bus cycle.
 
 ### 11.3 Operand kinds and `fetch`
 

@@ -166,6 +166,7 @@ impl Checker<'_> {
             fault_cycles: None,
             interrupt_cycles: None,
             interrupt_schedule: None,
+            fault_schedule: None,
         });
     }
 
@@ -2018,6 +2019,7 @@ impl Checker<'_> {
             timing,
             schedule_locals: Vec::new(),
             schedule: None,
+            fault_schedule: None,
             implements,
             references,
             allowed_in,
@@ -2623,6 +2625,8 @@ impl Checker<'_> {
         for e in &d.entries {
             let key = if e.decode {
                 format!("decode {}", e.name.name)
+            } else if e.fault {
+                format!("fault {}", e.name.name)
             } else {
                 e.name.name.clone()
             };
@@ -2636,6 +2640,15 @@ impl Checker<'_> {
                 continue;
             }
             seen.push(key);
+            if e.fault && !d.schedules {
+                self.error(
+                    module,
+                    "E1055",
+                    e.name.span,
+                    "`fault <instruction>` entries belong in a `schedules` table",
+                );
+                continue;
+            }
             if e.decode && !d.schedules {
                 self.error(
                     module,
@@ -2676,13 +2689,9 @@ impl Checker<'_> {
                 }
                 continue;
             }
-            if e.name.name == "fault" && d.schedules {
-                self.error(module, "E1055", e.name.span, "a fault's delivery is the `timing` table's `fault` entry; the schedule adds it after the last step");
-                continue;
-            }
             if e.name.name == "fault" || e.name.name == "interrupt" {
-                // A fault's cost is cycles, and may depend on which fault it
-                // is; an interrupt's may be a schedule.
+                // Either may depend on which fault it is (`vector`), and be a
+                // schedule in a `schedules` table.
                 let fault = e.name.name == "fault";
                 let span = e.name.span;
                 let (cx, params, expr) =
@@ -2701,7 +2710,9 @@ impl Checker<'_> {
                     params,
                     expr,
                 });
-                if fault {
+                if fault && d.schedules {
+                    self.isas[ii].fault_schedule = t;
+                } else if fault {
                     self.isas[ii].fault_cycles = t;
                 } else if d.schedules {
                     self.isas[ii].interrupt_schedule = t;
@@ -2719,6 +2730,28 @@ impl Checker<'_> {
                 self.error(module, "E1055", e.name.span, msg);
                 continue;
             };
+            if e.fault {
+                // Delivering a fault this instruction raises: its operands
+                // and the fault's `vector` in scope.
+                let def = self.isas[ii].instructions[j].def;
+                let Some(sig) = self.instr_sigs.get(&def).cloned() else {
+                    continue;
+                };
+                let span = e.name.span;
+                let (cx, params, expr) = self.check_timing_expr(module, &e.value, true, &|| {
+                    let mut cx = FnCtx::new(scope, HashMap::new(), None);
+                    cx.operands = sig.operands.clone();
+                    cx.in_timing = true;
+                    let p = vec![cx.declare("vector", Ty::UInt(8), span)];
+                    (cx, p)
+                });
+                self.isas[ii].instructions[j].fault_schedule = Some(hir::TimingExpr {
+                    locals: cx.locals,
+                    params,
+                    expr,
+                });
+                continue;
+            }
             if !d.schedules && self.isas[ii].instructions[j].timing.is_some() {
                 let msg = format!("`{}` has timing in its declaration already", e.name.name);
                 self.error(module, "E1055", e.name.span, msg);

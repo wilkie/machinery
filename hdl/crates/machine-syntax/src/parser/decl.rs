@@ -80,12 +80,13 @@ impl Parser {
                     let entries = self.parse_items_until_rbrace(|p| {
                         let docs = p.take_docs();
                         let first = p.expect_ident()?;
-                        let (decode, name) =
-                            if first.name == "decode" && !p.at_punct(Punct::FatArrow) {
-                                (true, p.expect_ident()?)
-                            } else {
-                                (false, first)
-                            };
+                        let (decode, fault, name) = if !p.at_punct(Punct::FatArrow)
+                            && (first.name == "decode" || first.name == "fault")
+                        {
+                            (first.name == "decode", first.name == "fault", p.expect_ident()?)
+                        } else {
+                            (false, false, first)
+                        };
                         p.expect_punct(Punct::FatArrow)?;
                         let value = p.parse_expr()?;
                         p.expect_semi()?;
@@ -93,6 +94,7 @@ impl Parser {
                         Ok(TimingEntry {
                             docs,
                             decode,
+                            fault,
                             name,
                             value,
                             span,

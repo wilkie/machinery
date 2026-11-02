@@ -3,6 +3,7 @@
 //! through SingleStepTests vectors and compares the bus cycles the pipeline
 //! records with each vector's hardware trace, cycle for cycle.
 //!
+//! Every vector counts, repeated string instructions and exceptions too.
 //! `RIG_FILES` (comma-separated opcode files, `89,F7.4`) and `RIG_LIMIT`
 //! (vectors per file) choose the sample; `RIG_MIN` is the share that must
 //! match exactly; `RIG_SHOW` prints the first mismatches of each file.
@@ -76,7 +77,9 @@ fn run(sys: &mut System, t: &MooTest) -> Vec<(u32, BusKind)> {
     }
     sys.board().cpu.code_valid = false;
     sys.with_cpu(|c, ctx| c.fn_flush(ctx));
-    for _ in 0..16 {
+    // The instruction (a repeated string one an iteration a step, an
+    // exception's delivery included) and the HLT after it.
+    for _ in 0..2000 {
         if sys.cpu.halted || sys.step().is_err() {
             break;
         }
@@ -95,7 +98,8 @@ fn pipeline_reproduces_the_bus_traces() {
         return;
     }
     let files = std::env::var("RIG_FILES").unwrap_or_else(|_| {
-        "00,01,03,05,40,50,58,74,80.0,83.0,88,8B,8D,9C,A1,B8,C3,C6,CF,D1.4,D3.4,E2,E5,E8,EB,F6.4,F7.6,FF.2,60,9A".into()
+        "00,01,03,05,40,50,58,74,80.0,83.0,88,8B,8D,9C,A1,B8,C3,C6,CF,D1.4,D3.4,E2,E5,E8,EB,F6.4,F7.6,F7.7,FF.2,60,9A,A4,A6,AB,AD,AE,CD,8E"
+            .into()
     });
     let limit: usize = std::env::var("RIG_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(400);
     let min: f64 = std::env::var("RIG_MIN").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
@@ -106,7 +110,7 @@ fn pipeline_reproduces_the_bus_traces() {
     for f in files.split(',').filter(|f| !f.is_empty()) {
         let tests = read_moo(&dir.join(format!("{f}.MOO.gz"))).unwrap_or_else(|e| panic!("{e}"));
         let (mut n, mut ok, mut shown) = (0usize, 0usize, 0usize);
-        for t in tests.iter().filter(|t| t.exception.is_none()).take(limit) {
+        for t in tests.iter().take(limit) {
             let Some(timing) = &t.timing else { continue };
             let want: Vec<(u32, BusKind)> = timing
                 .bus

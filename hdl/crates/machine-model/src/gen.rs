@@ -506,8 +506,17 @@ impl<'a> Gen<'a> {
                 } else {
                     "read"
                 };
+                // Data accesses are counted for fault delivery (SPEC 11.2c).
+                let count = if op == "read" {
+                    format!(
+                        "{}.accesses = {}.accesses.wrapping_add(1); ",
+                        cx.recv, cx.recv
+                    )
+                } else {
+                    String::new()
+                };
                 format!(
-                    "{{ let a = ({}) as u64; {}.bus.{}_{op}(a, {bits}) as {out_ty} }}",
+                    "{{ let a = ({}) as u64; {count}{}.bus.{}_{op}(a, {bits}) as {out_ty} }}",
                     self.expr(cx, addr)?,
                     cx.recv,
                     ident(&sp.name)
@@ -517,7 +526,7 @@ impl<'a> Gen<'a> {
                 let sp = self.spaces[d];
                 let (_, _, out_ty) = self.int_shape(&e.ty).unwrap();
                 format!(
-                    "{{ let a = ({}) as u64; {}.bus.{}_read(a, {}) as {out_ty} }}",
+                    "{{ let a = ({}) as u64; {1}.accesses = {1}.accesses.wrapping_add(1); {1}.bus.{2}_read(a, {3}) as {out_ty} }}",
                     self.expr(cx, addr)?,
                     cx.recv,
                     ident(&sp.name),
@@ -527,7 +536,7 @@ impl<'a> Gen<'a> {
             H::SpaceWrite(d, bits, addr, v) => {
                 let sp = self.spaces[d];
                 format!(
-                    "{{ let a = ({}) as u64; let v = ({}) as u128; {}.bus.{}_write(a, {bits}, v); }}",
+                    "{{ let a = ({}) as u64; let v = ({}) as u128; {2}.accesses = {2}.accesses.wrapping_add(1); {2}.bus.{3}_write(a, {bits}, v); }}",
                     self.expr(cx, addr)?,
                     self.expr(cx, v)?,
                     cx.recv,
@@ -1012,7 +1021,7 @@ impl<'a> Gen<'a> {
             S::SpaceWrite(d, bits, addr, v) => {
                 let sp = self.spaces[d];
                 format!(
-                    "{{ let a = ({}) as u64; let v = ({}) as u128; {}.bus.{}_write(a, {bits}, v); }}\n",
+                    "{{ let a = ({}) as u64; let v = ({}) as u128; {2}.accesses = {2}.accesses.wrapping_add(1); {2}.bus.{3}_write(a, {bits}, v); }}\n",
                     self.expr(cx, addr)?,
                     self.expr(cx, v)?,
                     cx.recv,
@@ -1136,7 +1145,7 @@ impl<'a> Gen<'a> {
             H::SpaceCell(d, addr) => {
                 let sp = self.spaces[d];
                 format!(
-                    "{{ let a = ({}) as u64; let v = ({rhs}) as u128; {}.bus.{}_write(a, {}, v); }}\n",
+                    "{{ let a = ({}) as u64; let v = ({rhs}) as u128; {1}.accesses = {1}.accesses.wrapping_add(1); {1}.bus.{2}_write(a, {3}, v); }}\n",
                     self.expr(cx, addr)?,
                     cx.recv,
                     ident(&sp.name),
@@ -1323,6 +1332,9 @@ impl<'a> Gen<'a> {
             self.out.push_str(&s);
         }
         // Bundles.
+        if self.hir.bundles.iter().any(|b| b.name == "Schedule") {
+            self.out.push_str(SCHEDULE_THEN);
+        }
         for b in &self.hir.bundles {
             let mut s = format!(
                 "#[derive(Clone, Copy, Debug, PartialEq, Default)]\npub struct {} {{\n",
@@ -1512,7 +1524,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut s = format!(
-            "#[derive(Clone, Debug)]\npub struct {isa_name}<B: Bus = Flat> {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n    /// Execution cycles of the last step beyond its bus transfers (the\n    /// timing table: the instruction, its prefixes, a delivered fault).\n    pub cycles: u32,\n    /// Prefix cycles accumulated while decoding.\n    pub prefix_cycles: u32,\n    /// Where the last step started, and whether this one started there too.\n    pub last_start: u64,\n    pub restarted: bool,\n    /// Bytes decoded this step, and the extra decoder clocks on each.\n    pub fetched: u8,\n    pub decode_at: [u8; 16],\n"
+            "#[derive(Clone, Debug)]\npub struct {isa_name}<B: Bus = Flat> {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n    /// Execution cycles of the last step beyond its bus transfers (the\n    /// timing table: the instruction, its prefixes, a delivered fault).\n    pub cycles: u32,\n    /// Prefix cycles accumulated while decoding.\n    pub prefix_cycles: u32,\n    /// Where the last step started, and whether this one started there too.\n    pub last_start: u64,\n    pub restarted: bool,\n    /// Bytes decoded this step, and the extra decoder clocks on each.\n    pub fetched: u8,\n    pub decode_at: [u8; 16],\n    /// Data accesses made this step (a fault's delivery follows those the\n    /// instruction made).\n    pub accesses: u8,\n"
         );
         s.push_str("    pub bus: B,\n");
         for l in &self.isa.latches {
@@ -1522,7 +1534,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut s = format!(
-            "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            cycles: 0,\n            prefix_cycles: 0,\n            last_start: u64::MAX,\n            restarted: false,\n            fetched: 0,\n            decode_at: [0; 16],\n            bus,\n"
+            "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            cycles: 0,\n            prefix_cycles: 0,\n            last_start: u64::MAX,\n            restarted: false,\n            fetched: 0,\n            decode_at: [0; 16],\n            accesses: 0,\n            bus,\n"
         );
         for l in &self.isa.latches {
             let _ = writeln!(
@@ -2108,8 +2120,21 @@ impl<'a> Gen<'a> {
             ),
             None => String::new(),
         };
+        // A delivered fault: its `schedules` entry after the accesses the
+        // instruction made, else its cycles as work after the last step.
+        let deliver_schedule = if self.isa.fault_schedule.is_some()
+            || self
+                .isa
+                .instructions
+                .iter()
+                .any(|i| i.fault_schedule.is_some())
+        {
+            "        if let Some(v) = self.last_fault.as_ref().and_then(|f| f.vector()) {\n            let f = self.fault_schedule_for(cur, v);\n            sched = schedule_then(sched, performed, f);\n        }\n".to_string()
+        } else {
+            "        let _ = (performed, cur);\n        let k = (sched.steps as usize).min(8);\n        sched.work[k] = sched.work[k].saturating_add(self.cycles.saturating_sub(before) as u16);\n".to_string()
+        };
         s.push_str(&format!(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.fetched = 0;\n        self.decode_at = [0; 16];\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); sched = self.schedule_of(&i); self.cycles = self.timing_of(&i) + self.prefix_cycles; self.exec(i) }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let r = self.finish(r);\n        // A fault's delivery is work after the instruction's last step.\n        let k = (sched.steps as usize).min(8);\n        sched.work[k] = sched.work[k].saturating_add(self.cycles.saturating_sub(before) as u16);\n        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        sched.halted = self.halted;\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.fetched = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let mut cur: Option<Instr> = None;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); cur = Some(i); sched = self.schedule_of(&i); self.cycles = self.timing_of(&i) + self.prefix_cycles; self.exec(i) }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        sched.halted = self.halted;\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
         ));
         let _ = write!(
             s,
@@ -2467,6 +2492,57 @@ impl<'a> Gen<'a> {
             None => "let mut s = Schedule::default();\n        s.work[0] = self.interrupt_cycles() as u16;\n        s".into(),
         };
         let _ = write!(s, "    /// The schedule of an interrupt taken at a boundary.\n    pub fn interrupt_schedule(&mut self) -> Schedule {{\n        {sbody}\n    }}\n");
+        // A fault's delivery schedule, when the `schedules` table has one:
+        // the instruction's own `fault <Name>` entry, else the isa's.
+        let any_fault_schedule =
+            self.isa.fault_schedule.is_some() || instrs.iter().any(|i| i.fault_schedule.is_some());
+        if any_fault_schedule {
+            let mut arms = String::new();
+            for i in &instrs {
+                let Some(t) = &i.fault_schedule else { continue };
+                let cx = Cx {
+                    locals: &t.locals,
+                    fallible: true,
+                    recv: "self",
+                    ops: Some(i),
+                    comp: None,
+                    opt: false,
+                };
+                let vn = self.local_name(&cx, t.params[0]);
+                let e = self.expr(&cx, &t.expr)?;
+                let body = if matches!(t.expr.ty, Ty::Bundle(_)) {
+                    e
+                } else {
+                    format!("{{ let mut s = Schedule::default(); s.work[0] = ({e}) as u16; s }}")
+                };
+                let _ = writeln!(arms, "            Some(Instr::{}(ops)) => {{ let {vn}: u8 = v; let r: Result<Schedule, Fault> = (|| Ok({body}))(); r.unwrap_or_default() }}", ident(&i.name));
+            }
+            let _ = write!(s, "    /// The schedule of delivering fault `v` that `i` raised.\n    #[allow(unused_variables)]\n    pub fn fault_schedule_for(&mut self, i: Option<Instr>, v: u8) -> Schedule {{\n        match i {{\n{arms}            _ => self.fault_schedule(v),\n        }}\n    }}\n");
+        }
+        if !any_fault_schedule {
+        } else if self.isa.fault_schedule.is_none() {
+            let _ = write!(s, "    /// The schedule of delivering a fault: its timing cost as work.\n    pub fn fault_schedule(&mut self, v: u8) -> Schedule {{\n        let mut s = Schedule::default();\n        s.work[0] = self.fault_cycles(v) as u16;\n        s\n    }}\n");
+        } else if let Some(t) = &self.isa.fault_schedule {
+            let cx = Cx {
+                locals: &t.locals,
+                fallible: true,
+                recv: "self",
+                ops: None,
+                comp: None,
+                opt: false,
+            };
+            let param = match t.params.first() {
+                Some(p) => self.local_name(&cx, *p),
+                None => "_vector".into(),
+            };
+            let e = self.expr(&cx, &t.expr)?;
+            let body = if matches!(t.expr.ty, Ty::Bundle(_)) {
+                format!("let r: Result<Schedule, Fault> = (|| Ok({e}))();\n        r.unwrap_or_default()")
+            } else {
+                format!("let r: Result<u32, Fault> = (|| Ok(({e}) as u32))();\n        let mut s = Schedule::default();\n        s.work[0] = r.unwrap_or(0) as u16;\n        s")
+            };
+            let _ = write!(s, "    /// The schedule of delivering fault `{param}`, after the faulting instruction's.\n    pub fn fault_schedule(&mut self, {param}: u8) -> Schedule {{\n        {body}\n    }}\n");
+        }
 
         // mnemonic
         s.push_str("    pub fn mnemonic(&mut self, i: &Instr) -> &'static str {\n        let r: Result<&'static str, Fault> = (|| Ok(match *i {\n");
@@ -3107,3 +3183,46 @@ pub mod vectors {{
         Ok(())
     }
 }
+
+/// Joining a fault's delivery onto the faulting instruction's schedule
+/// (SPEC 11.2c): the instruction's `access` steps past the accesses it made
+/// are dropped (their work joins the step before), then the delivery's
+/// steps follow; past 8 steps, the rest is work at the end.
+const SCHEDULE_THEN: &str = r#"/// `s` up to the `performed` accesses its instruction made, then `f`.
+pub fn schedule_then(s: Schedule, performed: u8, f: Schedule) -> Schedule {
+    let mut work: Vec<u16> = vec![s.work[0]];
+    let mut steps: Vec<u8> = Vec::new();
+    let mut seen = 0u8;
+    for i in 0..(s.steps as usize).min(8) {
+        if s.step[i] == 1 {
+            if seen >= performed {
+                let w = work.last_mut().unwrap();
+                *w = w.saturating_add(s.work[i + 1]);
+                continue;
+            }
+            seen += 1;
+        }
+        steps.push(s.step[i]);
+        work.push(s.work[i + 1]);
+    }
+    let w = work.last_mut().unwrap();
+    *w = w.saturating_add(f.work[0]);
+    for i in 0..(f.steps as usize).min(8) {
+        steps.push(f.step[i]);
+        work.push(f.work[i + 1]);
+    }
+    let mut out = s;
+    out.work = [0; 9];
+    out.step = [0; 8];
+    let n = steps.len().min(8);
+    for i in 0..n {
+        out.step[i] = steps[i];
+    }
+    for (i, w) in work.iter().enumerate() {
+        let k = i.min(8);
+        out.work[k] = out.work[k].saturating_add(*w);
+    }
+    out.steps = n as u8;
+    out
+}
+"#;

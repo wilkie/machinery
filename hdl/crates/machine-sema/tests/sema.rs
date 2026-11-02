@@ -1996,6 +1996,7 @@ fn timing_tables_check() {
     // A schedule belongs in a `schedules` table, as do `decode` entries.
     assert_codes(&table("Nop => schedule(3);"), &["E1055"]);
     assert_codes(&table("decode Imm8 => 1;"), &["E1055"]);
+    assert_codes(&table("fault Nop => 1;"), &["E1055"]);
 }
 
 #[test]
@@ -2026,8 +2027,14 @@ fn schedule_tables_check() {
     );
     // A plain number is `schedule(n)`.
     assert_codes(&tables("Nop => 3; interrupt => 9;"), &[]);
-    // A fault's delivery stays in the timing table.
-    assert_codes(&tables("fault => 9;"), &["E1055"]);
+    // A fault's delivery, generally and for one instruction (with its
+    // operands and `vector` in scope).
+    assert_codes(
+        &tables("fault => match vector { 0 => schedule(4, access, 0, branch, 0), _ => schedule(5) }; fault Nop => if vector == 6 { schedule(7) } else { schedule(2) };"),
+        &[],
+    );
+    assert_codes(&tables("fault Nope => 1;"), &["E1055"]);
+    assert_codes(&tables("fault Nop => 1; fault Nop => 2;"), &["E1055"]);
     // `decode` names an operand format and a constant.
     assert_codes(&tables("decode Nope => 1;"), &["E1055"]);
     assert_codes(&tables("decode Imm8 => AL;"), &["E1055"]);

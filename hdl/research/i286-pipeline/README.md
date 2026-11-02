@@ -83,19 +83,36 @@ With one set of global constants (queue 6, request latency 2, jump latency
 A fit of every opcode file (`RESULTS.md`, 200 vectors each) reproduces
 nearly all vectors exactly. The schedules are in the description,
 `targets/i286/schedules.machine`, and the processor model there runs the
-same rules: over the whole corpus (string instructions and exceptions
-aside, 123,600 vectors) it reproduces 97% of the traces bus cycle for bus
+same rules: over the whole corpus (130,000 vectors, repeated strings and
+exceptions included) it reproduces 97% of the traces bus cycle for bus
 cycle (`rig.machine`, `rig_test.rs`).
+
+## Repeated strings and exceptions
+
+`strings.py` fits repeated string instructions. A vector runs the whole
+repetition, and it is a lead-in (6 or 7 clocks), then each iteration's
+accesses with a little work after each, then a tail; none of it fetches
+code, since the queue holds the instruction. Byte strings and the
+compares fit every vector; a word string's split store (odd DI) lengthens
+the tail by 2.
+
+`exceptions.py` fits delivery: three pushes (FLAGS, CS, IP), two reads of
+the vector table, 5 clocks, the transfer. INT n works 5 clocks before it,
+INT3 and INTO 6, and the decoder stops at them. A fault's delivery follows
+the faulting instruction's own work, and the decoder had carried on past
+it: #DE comes 4 clocks after a DIV's whole schedule and 6 after IDIV's,
+#UD 7 after decoding, #GP about 17.
 
 ## Not covered yet
 
-- Repeated string instructions (several iterations per vector).
-- Vectors that raise an exception (delivery: pushes, IVT reads, the jump),
-  INT among them.
 - INTO without overflow: the decoder waits for the outcome without a
   transfer, which a schedule does not say yet.
 - ENTER above level 0: work after a variable number of accesses.
 - ESC: the hardware writes the instruction to the coprocessor's ports.
+- A split I/O word write is followed by an idle clock the bus unit does
+  not model (OUTSW to an odd port).
+- After #UD the decoder goes on into the bytes after the instruction,
+  whose lengths the model cannot know.
 - The corner cases behind RET's and IRET's misses (a return to the last
   byte of a segment, where the next fetch wraps), and shifts by a count
   through memory (about 93%).

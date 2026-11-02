@@ -530,6 +530,9 @@ pub struct Instruction {
     /// cycles meaning `schedule(n)`.
     pub schedule_locals: Vec<Local>,
     pub schedule: Option<Expr>,
+    /// `fault <Name> =>` in a `schedules` table: delivering a fault this
+    /// instruction raises, with `vector` (its first param) in scope.
+    pub fault_schedule: Option<TimingExpr>,
     pub implements: Option<String>,
     pub references: Vec<String>,
     /// Variant indices of the isa's mode enum.
@@ -556,8 +559,9 @@ pub struct IsaInfo {
     /// instruction boundary (`fault =>`, `interrupt =>` in a timing table).
     pub fault_cycles: Option<TimingExpr>,
     pub interrupt_cycles: Option<TimingExpr>,
-    /// `interrupt =>` in a `schedules` table.
+    /// `interrupt =>` and `fault =>` (with `vector`) in a `schedules` table.
     pub interrupt_schedule: Option<TimingExpr>,
+    pub fault_schedule: Option<TimingExpr>,
 }
 
 /// A timing expression with its locals.

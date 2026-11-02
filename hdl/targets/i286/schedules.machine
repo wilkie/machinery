@@ -10,10 +10,10 @@
 // work of their own. Instructions
 // without an entry run their `timing` entry as work before their accesses.
 //
-// Not fitted yet: repeated string instructions, INT and exceptions, INTO
-// (its decoder waits for the outcome without a transfer), ENTER above
-// level 0 (work after a variable number of accesses), ESC (the hardware
-// writes the instruction to the coprocessor's ports, which the isa does not).
+// Not fitted yet: INTO without overflow (its decoder waits for the outcome
+// without a transfer), ENTER above level 0 (work after a variable number
+// of accesses), ESC (the hardware writes the instruction to the
+// coprocessor's ports, which the isa does not).
 
 use alu::{AluOp};
 use i286::{I286};
@@ -98,7 +98,9 @@ schedules on I286 {
 
     Mov_r8_rm8 => if src.is_mem { schedule(src.ea, access, 0) } else { schedule(2) };
     Mov_r16_rm16 => if src.is_mem { schedule(src.ea, access, 0) } else { schedule(2) };
-    Mov_sreg_rm16 => if src.is_mem { schedule(src.ea, access, 0) } else { schedule(2) };
+    /// CS and the non-registers are undefined: the instruction does nothing
+    /// before #UD is delivered (likewise LDS, LES and BOUND of a register).
+    Mov_sreg_rm16 => if n == 1 || n > 3 { schedule(0) } else if src.is_mem { schedule(src.ea, access, 0) } else { schedule(2) };
     Mov_rm8_r8 => if dst.is_mem { schedule(dst.ea, access, 0) } else { schedule(2) };
     Mov_rm16_r16 => if dst.is_mem { schedule(dst.ea, access, 0) } else { schedule(2) };
     Mov_rm16_sreg => if dst.is_mem { schedule(dst.ea, access, 0) } else { schedule(2) };
@@ -110,9 +112,9 @@ schedules on I286 {
     Mov_moffs_ax => schedule(3, access, 0);
     Xlat => schedule(3, access, 0);
     Lea => schedule(src.ea);
-    Lds => schedule(src.ea, access, 0, access, 0);
-    Les => schedule(src.ea, access, 0, access, 0);
-    Bound => schedule(lim.ea, access, 0, access, 6);
+    Lds => if src.is_mem { schedule(src.ea, access, 0, access, 0) } else { schedule(0) };
+    Les => if src.is_mem { schedule(src.ea, access, 0, access, 0) } else { schedule(0) };
+    Bound => if lim.is_mem { schedule(lim.ea, access, 0, access, 6) } else { schedule(0) };
 
     In_al_dx => schedule(3, access, 0);
     In_ax_dx => schedule(3, access, 0);
@@ -146,12 +148,12 @@ schedules on I286 {
     Jmp_rel16 => schedule(4, jump, 0);
     Jmp_far => schedule(8, jump, 0);
     Jmp_rm16 => if target.is_mem { schedule(target.ea, access, 3, jump, 0) } else { schedule(4, jump, 0) };
-    Jmp_far_mem => schedule(target.ea, access, 0, access, 5, jump, 0);
+    Jmp_far_mem => if target.is_mem { schedule(target.ea, access, 0, access, 5, jump, 0) } else { schedule(0) };
     Call_rel16 => schedule(4, access, 0, jump, 0);
     Call_rm16 => if target.is_mem { schedule(target.ea, access, 0, access, 4, jump, 0) } else { schedule(4, access, 0, jump, 0) };
     /// A far CALL pushes CS, transfers, then pushes IP.
     Call_far => schedule(5, access, 5, jump, 0, access, 0);
-    Call_far_mem => schedule(target.ea, access, 0, access, 0, access, 5, jump, 0, access, 0);
+    Call_far_mem => if target.is_mem { schedule(target.ea, access, 0, access, 0, access, 5, jump, 0, access, 0) } else { schedule(0) };
     Ret => schedule(3, access, 4, jump, 0);
     Ret_imm16 => schedule(3, access, 4, jump, 0);
     Retf => schedule(3, access, 0, access, 5, jump, 0);
@@ -162,4 +164,46 @@ schedules on I286 {
     Loop => if CX != 1 { schedule(5, branch, 0) } else { schedule(4) };
     Loope => if CX != 1 && ZF == 1 { schedule(5, branch, 0) } else { schedule(4) };
     Loopne => if CX != 1 && ZF == 0 { schedule(5, branch, 0) } else { schedule(4) };
+
+    // Strings. A repeated one runs an iteration per step: the first has the
+    // lead-in, each ends with the last iteration's tail, and a later one
+    // starts with the extra gap between iterations, so no entry needs to
+    // know which iteration is the last (REPE and REPNE stop on a flag). An
+    // odd DI splits each word store, which lengthens the tail.
+    Movsb => if !repeating() { schedule(3, access, 2, access, 0) } else if restarted() { schedule(1, access, 0, access, 1) } else if CX == 0 { schedule(7) } else { schedule(7, access, 0, access, 1) };
+    Movsw => if !repeating() { schedule(3, access, 2, access, 0) } else if restarted() { schedule(1, access, 0, access, if DI[0] == 1 { 3 } else { 1 }) } else if CX == 0 { schedule(7) } else { schedule(7, access, 0, access, if DI[0] == 1 { 3 } else { 1 }) };
+    Insb => if !repeating() { schedule(3, access, 2, access, 0) } else if restarted() { schedule(1, access, 0, access, 1) } else if CX == 0 { schedule(7) } else { schedule(7, access, 0, access, 1) };
+    Insw => if !repeating() { schedule(3, access, 2, access, 0) } else if restarted() { schedule(1, access, 0, access, if DI[0] == 1 { 3 } else { 1 }) } else if CX == 0 { schedule(7) } else { schedule(7, access, 0, access, if DI[0] == 1 { 3 } else { 1 }) };
+    Outsb => if !repeating() { schedule(3, access, 0, access, 0) } else if restarted() { schedule(1, access, 0, access, 1) } else if CX == 0 { schedule(7) } else { schedule(7, access, 0, access, 1) };
+    Outsw => if !repeating() { schedule(3, access, 0, access, 0) } else if restarted() { schedule(1, access, 0, access, if DX[0] == 1 { 3 } else { 1 }) } else if CX == 0 { schedule(7) } else { schedule(7, access, 0, access, if DX[0] == 1 { 3 } else { 1 }) };
+    Cmpsb => if !repeating() { schedule(3, access, 0, access, 1) } else if restarted() { schedule(1, access, 0, access, 4) } else if CX == 0 { schedule(5) } else { schedule(6, access, 0, access, 4) };
+    Cmpsw => if !repeating() { schedule(3, access, 0, access, 1) } else if restarted() { schedule(1, access, 0, access, 4) } else if CX == 0 { schedule(5) } else { schedule(6, access, 0, access, 4) };
+    Scasb => if !repeating() { schedule(3, access, 2) } else if restarted() { schedule(1, access, 5) } else if CX == 0 { schedule(5) } else { schedule(6, access, 5) };
+    Scasw => if !repeating() { schedule(3, access, 2) } else if restarted() { schedule(1, access, 5) } else if CX == 0 { schedule(5) } else { schedule(6, access, 5) };
+    Lodsb => if !repeating() { schedule(3, access, 0) } else if restarted() { schedule(1, access, 1) } else if CX == 0 { schedule(5) } else { schedule(6, access, 1) };
+    Lodsw => if !repeating() { schedule(3, access, 0) } else if restarted() { schedule(1, access, 1) } else if CX == 0 { schedule(5) } else { schedule(6, access, 1) };
+    Stosb => if !repeating() { schedule(3, access, 0) } else if restarted() { schedule(2, access, 1) } else if CX == 0 { schedule(6) } else { schedule(7, access, 1) };
+    Stosw => if !repeating() { schedule(3, access, 0) } else if restarted() { schedule(if DI[0] == 1 { 3 } else { 2 }, access, 1) } else if CX == 0 { schedule(6) } else { schedule(7, access, 1) };
+
+    // Interrupts: three pushes (FLAGS, CS, IP), the vector's two words from
+    // the table, the transfer. A fault's delivery follows the work of the
+    // instruction that raised it, after the accesses it made; the decoder
+    // had carried on past it (`branch`).
+    Int_imm8 => schedule(5, access, 0, access, 0, access, 0, access, 0, access, 5, jump, 0);
+    Int3 => schedule(6, access, 0, access, 0, access, 0, access, 0, access, 5, jump, 0);
+    Into => if OF == 1 { schedule(6, access, 0, access, 0, access, 0, access, 0, access, 5, jump, 0) } else { schedule(3) };
+    interrupt => schedule(5, access, 0, access, 0, access, 0, access, 0, access, 5, jump, 0);
+    /// #DE comes 4 clocks after a divide's work (6 after IDIV's, below),
+    /// #BR one after BOUND's second read, #UD 7 after the instruction is
+    /// decoded, #GP (a word at offset FFFF) 17 after the work before the
+    /// access.
+    fault => match vector {
+        0 => schedule(4, access, 0, access, 0, access, 0, access, 0, access, 5, branch, 0),
+        5 => schedule(1, access, 3, access, 0, access, 0, access, 0, access, 5, branch, 0),
+        6 => schedule(7, access, 0, access, 0, access, 0, access, 0, access, 5, branch, 0),
+        13 => schedule(17, access, 0, access, 0, access, 0, access, 0, access, 5, branch, 0),
+        _ => schedule(5, access, 0, access, 0, access, 0, access, 0, access, 5, branch, 0),
+    };
+    fault Idiv_rm8 => schedule(6, access, 0, access, 0, access, 0, access, 0, access, 5, branch, 0);
+    fault Idiv_rm16 => schedule(6, access, 0, access, 0, access, 0, access, 0, access, 5, branch, 0);
 }

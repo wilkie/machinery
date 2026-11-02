@@ -356,8 +356,9 @@ impl Parser {
                     }
                 }
                 // Generic call: `Alu<8>(...)`. Speculative because `<` may be
-                // a comparison.
-                if self.at_punct(Punct::Lt) {
+                // a comparison; the `<` must touch the name (`x < (a) || x > (b)`
+                // is two comparisons).
+                if self.at_punct(Punct::Lt) && self.peek().span.start == path.span.end {
                     let p2 = path.clone();
                     if let Some(e) = self.speculate(|p| {
                         let generics = p.parse_generic_args().ok()?;

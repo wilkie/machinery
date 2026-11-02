@@ -288,6 +288,81 @@ fn i286_target_passes_its_tests_and_hardware_vectors() {
     assert!(pct("within 1") >= 90.0, "{line}");
 }
 
+/// The i386 description (real mode): it generates and compiles, and, when
+/// the SingleStepTests 80386 corpus is present, a subset of hardware vectors
+/// across the operand- and address-size prefixes passes.
+#[test]
+fn i386_target_passes_hardware_vectors() {
+    let root = hdl_root();
+    let read = |dir: &str, name: &str| {
+        let path = root.join("targets").join(dir).join(name);
+        SourceFile::new(name, std::fs::read_to_string(&path).unwrap())
+    };
+    let checked = check_files(vec![read("i286", "alu.machine"), read("i386", "i386.machine")]);
+    assert!(!checked.has_errors());
+    let src = generate_isa(&checked, "I386").unwrap_or_else(|e| panic!("{e}"));
+    let crate_ = package(
+        &crate_name("I386"),
+        src,
+        &root.join("crates").join("machine-runtime"),
+    );
+    let dir = root.join("target").join("gen-tests").join("i386");
+    write_crate(&dir, &crate_).unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let target_dir = root.join("target").join("gen-target");
+    let output = Command::new(&cargo)
+        .args(["test", "--quiet", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("run cargo");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "i386 tests failed:\n{stdout}\n{stderr}");
+
+    let vectors = root
+        .join("..")
+        .join("simulators")
+        .join("test")
+        .join("i386")
+        .join("SingleStepTests")
+        .join("v1_ex_real_mode");
+    if !vectors.join("00.MOO.gz").exists() {
+        eprintln!(
+            "SingleStepTests 80386 corpus not found at {}; skipping hardware vectors",
+            vectors.display()
+        );
+        return;
+    }
+    let output = Command::new(&cargo)
+        .args([
+            "run",
+            "--quiet",
+            "--features",
+            "vectors",
+            "--bin",
+            "vectors",
+            "--manifest-path",
+        ])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .arg("--")
+        .arg("--dir")
+        .arg(&vectors)
+        .args([
+            "--filter",
+            "00,6601,6703,676629,80.4,6683.5,0F8E,660F85,E8,66E8,C3,66CF,9A,66EA,FF.3,668F,6660,6661,C8,66C8,A4,66A5,67AD,67AE,D3.5,66C1.7,F7.4,66F7.6,6687,8D,678D,0FA3,660FBA.5,0FBC,0FA4,660FAD,0FB6,660FBF,0F94,62,CC,CF,E4,66ED,27,D5,9C,8E,0FA1,660FB2,F4",
+            "--max-failures",
+            "5",
+        ])
+        .output()
+        .expect("run vectors");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "hardware vectors failed:\n{stdout}\n{stderr}");
+    assert!(stdout.contains(" 0 failed"), "{stdout}");
+}
+
 /// The model backend: the i286 board system generates, compiles, boots a
 /// ROM program (`targets/i286/board_test.rs`) and charges bus time.
 #[test]

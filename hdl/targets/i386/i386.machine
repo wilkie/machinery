@@ -172,15 +172,17 @@ isa I386 {
         interrupt(vector);
     }
 
+    /// The vector is read before the frame is pushed (which may overwrite it).
     fn interrupt(vector: u8) {
+        let entry = IDTR.base + (vector as u32) * 4;
+        let ip = mem.read_u16(entry);
+        let cs = mem.read_u16(entry + 2);
         push<16>(FLAGS);
         push<16>(CS.selector);
         push<16>(IP);
         EFLAGS.IF = 0;
         EFLAGS.TF = 0;
-        let entry = IDTR.base + (vector as u32) * 4;
-        let ip = mem.read_u16(entry);
-        CS = load_segment(mem.read_u16(entry + 2));
+        CS = load_segment(cs);
         EIP = ip as u32;
     }
 
@@ -257,6 +259,9 @@ isa I386 {
     /// A direct memory offset (A0-A3) at each address size.
     operand Moffs<16> { size 2; fields { off: u16 @ 0; } }
     operand Moffs<32> { size 4; fields { off: u32 @ 0; } }
+    /// A direct far pointer (9A, EA): the offset, then the selector.
+    operand FarPtr<16> { size 4; fields { off: u16 @ 0; seg: u16 @ 16; } }
+    operand FarPtr<32> { size 6; fields { off: u32 @ 0; seg: u16 @ 32; } }
 
     fn reg32(n: u3) -> u32 {
         return match n { 0 => EAX, 1 => ECX, 2 => EDX, 3 => EBX, 4 => ESP, 5 => EBP, 6 => ESI, _ => EDI };
@@ -317,6 +322,29 @@ isa I386 {
         return (s, off);
     }
 
+    fn ea_fits(m: ModRM, size: u8) -> bool {
+        let (s, o) = effective_address(m);
+        return (o as u64) + (size as u64) - 1 <= (s.limit as u64);
+    }
+
+    fn pop_store<const W: width> in [16, 32](m: ModRM, v: u<W>) {
+        SP = SP + ((W / 8) as u16);
+        if m.mod == 3 { r<W>.select(m.rm) = v; return; }
+        let (s, o) = effective_address(m);
+        if (o as u64) + ((W / 8) as u64) - 1 > (s.limit as u64) {
+            SP = SP - ((W / 8) as u16);
+            if s.stack { raise StackFault(0); }
+            raise GP(0);
+        }
+        mem.write<W>(s.base + o, v);
+    }
+
+    /// An offset `n` bytes on from `o`, wrapping as the address size does.
+    fn ea_next(o: u32, n: u32) -> u32 {
+        let a = o + n;
+        return if address_size() == 16 { a & 0xFFFF } else { a };
+    }
+
     fn ea(m: ModRM, size: u8, access: Access) -> u32 {
         let (s, o) = effective_address(m);
         return translate(s, o, size, access);
@@ -335,8 +363,17 @@ isa I386 {
     }
     operand_kind rm<const W: width> in [8, 16, 32] : u<W> from m: ModRM {
         is_mem => m.mod != 3;
+        /// The register a register form names.
+        index => m.rm;
         read => if m.mod == 3 { r<W>.select(m.rm) } else { mem.read<W>(ea(m, (W / 8) as u8, Access::Read)) };
         write(v: u<W>) => if m.mod == 3 { r<W>.select(m.rm) = v; } else { mem.write<W>(ea(m, (W / 8) as u8, Access::Write), v); };
+    }
+    /// POP's destination: writing it pops the stack first, as an ESP-based
+    /// address sees the popped ESP, but a store that faults leaves SP
+    /// where it was.
+    operand_kind pop_rm<const W: width> in [16, 32] : u<W> from m: ModRM {
+        read => unreachable("POP's destination is not read");
+        write(v: u<W>) => pop_store<W>(m, v);
     }
     operand_kind imm<const W: width> in [8, 16, 32] : u<W> from i: Imm<W> { read => i.value; }
     /// An 8-bit immediate or displacement, sign-extended.
@@ -641,6 +678,1346 @@ isa I386 {
         }
     }
 
+    // -- shifts and rotates --------------------------------------------------------------------
+    //
+    // The count is masked to 5 bits; a zero count changes nothing (and a
+    // memory operand is read but not written). One routine serves every
+    // width, on a 64-bit working value.
+
+    enum ShiftOp : u3 { Rol, Ror, Rcl, Rcr, Shl, Shr, Sal, Sar }
+    operand_kind shift_op : ShiftOp { value(n: u3) => n as ShiftOp; }
+
+    fn shift_name(op: ShiftOp) -> str {
+        return match op {
+            ShiftOp::Rol => "rol", ShiftOp::Ror => "ror", ShiftOp::Rcl => "rcl", ShiftOp::Rcr => "rcr",
+            ShiftOp::Shl => "shl", ShiftOp::Shr => "shr", ShiftOp::Sal => "sal", ShiftOp::Sar => "sar",
+        };
+    }
+
+    fn is_shift(op: ShiftOp) -> bool {
+        return op == ShiftOp::Shl || op == ShiftOp::Sal || op == ShiftOp::Shr || op == ShiftOp::Sar;
+    }
+
+    /// `v` (its low `w` bits) shifted or rotated by `count`; sets the flags.
+    fn shift(op: ShiftOp, v: u32, w: u8, count: u8) -> u32 {
+        let n = (count & 0x1F) as u64;
+        if n == 0 { return v; }
+        let wd = w as u64;
+        let mask = (1_u64 << wd) - 1;
+        let x = (v as u64) & mask;
+        let msb = wd - 1;
+        let c = CF as u64;
+        let sx = ((x << (64 - wd)) as i64) >> (64 - wd);
+        let (r, cf): (u64, u64) = match op {
+            ShiftOp::Rol => {
+                let k = n % wd;
+                let r = ((x << k) | (x >> (wd - k))) & mask;
+                (r, r & 1)
+            },
+            ShiftOp::Ror => {
+                let k = n % wd;
+                let r = ((x >> k) | (x << (wd - k))) & mask;
+                (r, (r >> msb) & 1)
+            },
+            ShiftOp::Rcl => {
+                let k = n % (wd + 1);
+                let y = x | (c << wd);
+                let wide = (mask << 1) | 1;
+                let r = ((y << k) | (y >> (wd + 1 - k))) & wide;
+                (r & mask, (r >> wd) & 1)
+            },
+            ShiftOp::Rcr => {
+                let k = n % (wd + 1);
+                let y = x | (c << wd);
+                let wide = (mask << 1) | 1;
+                let r = ((y >> k) | (y << (wd + 1 - k))) & wide;
+                (r & mask, (r >> wd) & 1)
+            },
+            ShiftOp::Shl | ShiftOp::Sal => {
+                let t = x << n;
+                (t & mask, (t >> wd) & 1)
+            },
+            ShiftOp::Shr => ((x >> n) & mask, (x >> (n - 1)) & 1),
+            ShiftOp::Sar => (((sx >> n) as u64) & mask, ((sx >> (n - 1)) as u64) & 1),
+        };
+        EFLAGS.CF = cf as u1;
+        let top = (r >> msb) & 1;
+        let next = (r >> (msb - 1)) & 1;
+        let of: u64 = match op {
+            ShiftOp::Rol | ShiftOp::Rcl | ShiftOp::Shl | ShiftOp::Sal => top ^ cf,
+            ShiftOp::Ror | ShiftOp::Rcr => top ^ next,
+            ShiftOp::Shr => (x >> msb) & 1,
+            ShiftOp::Sar => 0,
+        };
+        EFLAGS.OF = of as u1;
+        if is_shift(op) {
+            EFLAGS.SF = top as u1;
+            EFLAGS.ZF = (r == 0) as u1;
+            EFLAGS.PF = Parity8(r as u8);
+        }
+        return r as u32;
+    }
+
+    instruction Shift_rm8_1 {
+        mnemonic shift_name(op);
+        encoding { opcode 0xD0; ModRM { reg: shift_op } }
+        operands (op: shift_op, dst: rm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_shift(op)]; }
+        semantics { dst = shift(op, dst as u32, 8, 1) as u8; }
+    }
+    instruction Shift_rm_1<const W: width> in [16, 32] {
+        mnemonic shift_name(op);
+        encoding { when operand_size() == W; opcode 0xD1; ModRM { reg: shift_op } }
+        operands (op: shift_op, dst: rm<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF if is_shift(op)]; }
+        semantics { dst = shift(op, dst as u32, W, 1) as u<W>; }
+    }
+    instruction Shift_rm8_cl {
+        mnemonic shift_name(op);
+        encoding { opcode 0xD2; ModRM { reg: shift_op } }
+        operands (op: shift_op, dst: rm<8>);
+        flags {
+            modifies: [OF, SF, ZF, AF, PF, CF];
+            undefined: [OF if (CL & 0x1F) != 1, AF if is_shift(op) && (CL & 0x1F) != 0, CF if is_shift(op) && (CL & 0x1F) > 8];
+        }
+        semantics { let v = shift(op, dst as u32, 8, CL) as u8; if (CL & 0x1F) != 0 { dst = v; } }
+    }
+    instruction Shift_rm_cl<const W: width> in [16, 32] {
+        mnemonic shift_name(op);
+        encoding { when operand_size() == W; opcode 0xD3; ModRM { reg: shift_op } }
+        operands (op: shift_op, dst: rm<W>);
+        flags {
+            modifies: [OF, SF, ZF, AF, PF, CF];
+            undefined: [OF if (CL & 0x1F) != 1, AF if is_shift(op) && (CL & 0x1F) != 0, CF if is_shift(op) && (CL & 0x1F) > W];
+        }
+        semantics { let v = shift(op, dst as u32, W, CL) as u<W>; if (CL & 0x1F) != 0 { dst = v; } }
+    }
+    instruction Shift_rm8_imm8 {
+        mnemonic shift_name(op);
+        encoding { opcode 0xC0; ModRM { reg: shift_op } Imm<8> }
+        operands (op: shift_op, dst: rm<8>, n: imm<8>);
+        flags {
+            modifies: [OF, SF, ZF, AF, PF, CF];
+            undefined: [OF if (n & 0x1F) != 1, AF if is_shift(op) && (n & 0x1F) != 0, CF if is_shift(op) && (n & 0x1F) > 8];
+        }
+        semantics { let v = shift(op, dst as u32, 8, n) as u8; if (n & 0x1F) != 0 { dst = v; } }
+    }
+    instruction Shift_rm_imm8<const W: width> in [16, 32] {
+        mnemonic shift_name(op);
+        encoding { when operand_size() == W; opcode 0xC1; ModRM { reg: shift_op } Imm<8> }
+        operands (op: shift_op, dst: rm<W>, n: imm<8>);
+        flags {
+            modifies: [OF, SF, ZF, AF, PF, CF];
+            undefined: [OF if (n & 0x1F) != 1, AF if is_shift(op) && (n & 0x1F) != 0, CF if is_shift(op) && (n & 0x1F) > W];
+        }
+        semantics { let v = shift(op, dst as u32, W, n) as u<W>; if (n & 0x1F) != 0 { dst = v; } }
+    }
+
+    // -- TEST, NOT, NEG, MUL, DIV ------------------------------------------------------------------
+
+    instruction Test_rm8_r8 {
+        mnemonic "test";
+        encoding { opcode 0x84; ModRM { reg: r<8> } }
+        operands (a: rm<8>, b: r<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu<8>(AluOp::And, a, b); }
+    }
+    instruction Test_rm_r<const W: width> in [16, 32] {
+        mnemonic "test";
+        encoding { when operand_size() == W; opcode 0x85; ModRM { reg: r<W> } }
+        operands (a: rm<W>, b: r<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu<W>(AluOp::And, a, b); }
+    }
+    instruction Test_al_imm8 {
+        mnemonic "test";
+        encoding { opcode 0xA8; Imm<8> }
+        operands (b: imm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu<8>(AluOp::And, AL, b); }
+    }
+    instruction Test_ax_imm<const W: width> in [16, 32] {
+        mnemonic "test";
+        encoding { when operand_size() == W; opcode 0xA9; Imm<W> }
+        operands (b: imm<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu<W>(AluOp::And, r<W>.select(0), b); }
+    }
+    /// F6 /1 and F7 /1 are undocumented aliases of /0.
+    instruction Test_rm8_imm8 {
+        mnemonic "test";
+        encoding { opcode 0xF6; ModRM { reg: 0 } Imm<8> }
+        operands (a: rm<8>, b: imm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu<8>(AluOp::And, a, b); }
+    }
+    instruction Test_rm8_imm8_alias {
+        mnemonic "test";
+        encoding { opcode 0xF6; ModRM { reg: 1 } Imm<8> }
+        operands (a: rm<8>, b: imm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu<8>(AluOp::And, a, b); }
+    }
+    instruction Not_rm8 {
+        mnemonic "not";
+        encoding { opcode 0xF6; ModRM { reg: 2 } }
+        operands (dst: rm<8>);
+        lock if dst.is_mem;
+        semantics { dst = ~dst; }
+    }
+    instruction Neg_rm8 {
+        mnemonic "neg";
+        encoding { opcode 0xF6; ModRM { reg: 3 } }
+        operands (dst: rm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        lock if dst.is_mem;
+        semantics { dst = alu<8>(AluOp::Sub, 0, dst); }
+    }
+    instruction Mul_rm8 {
+        mnemonic "mul";
+        encoding { opcode 0xF6; ModRM { reg: 4 } }
+        operands (src: rm<8>);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics {
+            AX = (AL as u16) * (src as u16);
+            EFLAGS.CF = (AH != 0) as u1;
+            EFLAGS.OF = (AH != 0) as u1;
+        }
+    }
+    instruction Imul_rm8 {
+        mnemonic "imul";
+        encoding { opcode 0xF6; ModRM { reg: 5 } }
+        operands (src: rm<8>);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics {
+            let p = ((AL as i8) as i16) * ((src as i8) as i16);
+            AX = p as u16;
+            let wide = p != ((p as i8) as i16);
+            EFLAGS.CF = wide as u1;
+            EFLAGS.OF = wide as u1;
+        }
+    }
+    instruction Div_rm8 {
+        mnemonic "div";
+        encoding { opcode 0xF6; ModRM { reg: 6 } }
+        operands (src: rm<8>);
+        flags { undefined: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            let d = src as u16;
+            if d == 0 { raise DE; }
+            let q = AX / d;
+            if q > 0xFF { raise DE; }
+            let r = AX % d;
+            AL = q as u8;
+            AH = r as u8;
+        }
+    }
+    instruction Idiv_rm8 {
+        mnemonic "idiv";
+        encoding { opcode 0xF6; ModRM { reg: 7 } }
+        operands (src: rm<8>);
+        flags { undefined: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            let a = (AX as i16) as i32;
+            let d = ((src as i8) as i16) as i32;
+            if d == 0 { raise DE; }
+            let q = a / d;
+            if q > 127 || q < -128 { raise DE; }
+            let r = a % d;
+            AL = q as u8;
+            AH = r as u8;
+        }
+    }
+    instruction Test_rm_imm<const W: width> in [16, 32] {
+        mnemonic "test";
+        encoding { when operand_size() == W; opcode 0xF7; ModRM { reg: 0 } Imm<W> }
+        operands (a: rm<W>, b: imm<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu<W>(AluOp::And, a, b); }
+    }
+    instruction Test_rm_imm_alias<const W: width> in [16, 32] {
+        mnemonic "test";
+        encoding { when operand_size() == W; opcode 0xF7; ModRM { reg: 1 } Imm<W> }
+        operands (a: rm<W>, b: imm<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [AF]; }
+        semantics { let _ = alu<W>(AluOp::And, a, b); }
+    }
+    instruction Not_rm<const W: width> in [16, 32] {
+        mnemonic "not";
+        encoding { when operand_size() == W; opcode 0xF7; ModRM { reg: 2 } }
+        operands (dst: rm<W>);
+        lock if dst.is_mem;
+        semantics { dst = ~dst; }
+    }
+    instruction Neg_rm<const W: width> in [16, 32] {
+        mnemonic "neg";
+        encoding { when operand_size() == W; opcode 0xF7; ModRM { reg: 3 } }
+        operands (dst: rm<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; }
+        lock if dst.is_mem;
+        semantics { dst = alu<W>(AluOp::Sub, 0, dst); }
+    }
+    instruction Mul_rm<const W: width> in [16, 32] {
+        mnemonic "mul";
+        encoding { when operand_size() == W; opcode 0xF7; ModRM { reg: 4 } }
+        operands (src: rm<W>);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics {
+            let hi = if W == 32 {
+                let p = (EAX as u64) * (src as u64);
+                EAX = p as u32;
+                EDX = (p >> 32) as u32;
+                EDX != 0
+            } else {
+                let p = (AX as u32) * (src as u32);
+                AX = p as u16;
+                DX = (p >> 16) as u16;
+                DX != 0
+            };
+            EFLAGS.CF = hi as u1;
+            EFLAGS.OF = hi as u1;
+        }
+    }
+    instruction Imul_rm<const W: width> in [16, 32] {
+        mnemonic "imul";
+        encoding { when operand_size() == W; opcode 0xF7; ModRM { reg: 5 } }
+        operands (src: rm<W>);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics {
+            let wide = if W == 32 {
+                let p = ((EAX as i32) as i64) * ((src as i32) as i64);
+                EAX = p as u32;
+                EDX = (p >> 32) as u32;
+                p != ((p as i32) as i64)
+            } else {
+                let p = ((AX as i16) as i32) * ((src as i16) as i32);
+                AX = p as u16;
+                DX = (p >> 16) as u16;
+                p != ((p as i16) as i32)
+            };
+            EFLAGS.CF = wide as u1;
+            EFLAGS.OF = wide as u1;
+        }
+    }
+    instruction Div_rm<const W: width> in [16, 32] {
+        mnemonic "div";
+        encoding { when operand_size() == W; opcode 0xF7; ModRM { reg: 6 } }
+        operands (src: rm<W>);
+        flags { undefined: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            let d = src as u64;
+            if d == 0 { raise DE; }
+            if W == 32 {
+                let n = ((EDX as u64) << 32) | (EAX as u64);
+                let q = n / d;
+                if q > 0xFFFFFFFF { raise DE; }
+                EAX = q as u32;
+                EDX = (n % d) as u32;
+            } else {
+                let n = ((DX as u64) << 16) | (AX as u64);
+                let q = n / d;
+                if q > 0xFFFF { raise DE; }
+                AX = q as u16;
+                DX = (n % d) as u16;
+            }
+        }
+    }
+    instruction Idiv_rm<const W: width> in [16, 32] {
+        mnemonic "idiv";
+        encoding { when operand_size() == W; opcode 0xF7; ModRM { reg: 7 } }
+        operands (src: rm<W>);
+        flags { undefined: [OF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            if W == 32 {
+                let n = ((((EDX as u64) << 32) | (EAX as u64)) as i64) as i128;
+                let d = ((src as i32) as i64) as i128;
+                if d == 0 { raise DE; }
+                let q = n / d;
+                if q > 2147483647 || q < -2147483648 { raise DE; }
+                EAX = q as u32;
+                EDX = (n % d) as u32;
+            } else {
+                let n = ((((DX as u32) << 16) | (AX as u32)) as i32) as i64;
+                let d = ((src as i16) as i32) as i64;
+                if d == 0 { raise DE; }
+                let q = n / d;
+                if q > 32767 || q < -32768 { raise DE; }
+                AX = q as u16;
+                DX = (n % d) as u16;
+            }
+        }
+    }
+
+    // -- XCHG, sign extension, LEA ---------------------------------------------------------------
+
+    /// XCHG with memory locks the bus by itself, and accepts LOCK.
+    instruction Xchg_rm8_r8 {
+        mnemonic "xchg";
+        encoding { opcode 0x86; ModRM { reg: r<8> } }
+        operands (a: rm<8>, b: r<8>);
+        lock if a.is_mem;
+        semantics { let x = a; let y = b; a = y; b = x; }
+    }
+    instruction Xchg_rm_r<const W: width> in [16, 32] {
+        mnemonic "xchg";
+        encoding { when operand_size() == W; opcode 0x87; ModRM { reg: r<W> } }
+        operands (a: rm<W>, b: r<W>);
+        lock if a.is_mem;
+        semantics { let x = a; let y = b; a = y; b = x; }
+    }
+    /// 90 is `xchg ax, ax`: NOP.
+    instruction Xchg_ax_r<const W: width> in [16, 32] {
+        mnemonic "xchg";
+        encoding { when operand_size() == W; opcode "10010rrr" { r: r<W> } }
+        operands (b: r<W>);
+        semantics { let x = r<W>.select(0); let y = b; r<W>.select(0) = y; b = x; }
+    }
+    /// CBW and CWDE.
+    instruction Cbw<const W: width> in [16, 32] {
+        mnemonic "cbw";
+        encoding { when operand_size() == W; opcode 0x98; }
+        semantics { if W == 32 { EAX = (AX as i16 as i32) as u32; } else { AX = (AL as i8) as u16; } }
+    }
+    /// CWD and CDQ.
+    instruction Cwd<const W: width> in [16, 32] {
+        mnemonic "cwd";
+        encoding { when operand_size() == W; opcode 0x99; }
+        semantics {
+            if W == 32 { EDX = if EAX[31] == 1 { 0xFFFFFFFF } else { 0 }; }
+            else { DX = if AX[15] == 1 { 0xFFFF } else { 0 }; }
+        }
+    }
+    /// The offset of a ModRM memory form, at the address size.
+    operand_kind mem_offset : u32 from m: ModRM {
+        is_mem => m.mod != 3;
+        read => effective_address(m).off;
+    }
+    /// The register form is #UD.
+    instruction Lea<const W: width> in [16, 32] {
+        mnemonic "lea";
+        encoding { when operand_size() == W; opcode 0x8D; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: mem_offset);
+        semantics { if !src.is_mem { raise UD; } dst = src as u<W>; }
+    }
+
+    // -- FE/FF groups, 8F -----------------------------------------------------------------------------
+
+    instruction Inc_rm8 {
+        mnemonic "inc";
+        encoding { opcode 0xFE; ModRM { reg: 0 } }
+        operands (dst: rm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        lock if dst.is_mem;
+        semantics { let c = CF; dst = alu<8>(AluOp::Add, dst, 1); EFLAGS.CF = c; }
+    }
+    instruction Dec_rm8 {
+        mnemonic "dec";
+        encoding { opcode 0xFE; ModRM { reg: 1 } }
+        operands (dst: rm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        lock if dst.is_mem;
+        semantics { let c = CF; dst = alu<8>(AluOp::Sub, dst, 1); EFLAGS.CF = c; }
+    }
+    instruction Inc_rm<const W: width> in [16, 32] {
+        mnemonic "inc";
+        encoding { when operand_size() == W; opcode 0xFF; ModRM { reg: 0 } }
+        operands (dst: rm<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        lock if dst.is_mem;
+        semantics { let c = CF; dst = alu<W>(AluOp::Add, dst, 1); EFLAGS.CF = c; }
+    }
+    instruction Dec_rm<const W: width> in [16, 32] {
+        mnemonic "dec";
+        encoding { when operand_size() == W; opcode 0xFF; ModRM { reg: 1 } }
+        operands (dst: rm<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF]; }
+        lock if dst.is_mem;
+        semantics { let c = CF; dst = alu<W>(AluOp::Sub, dst, 1); EFLAGS.CF = c; }
+    }
+    instruction Call_rm<const W: width> in [16, 32] {
+        mnemonic "call";
+        encoding { when operand_size() == W; opcode 0xFF; ModRM { reg: 2 } }
+        operands (target: rm<W>);
+        semantics {
+            let t = near_target(target as u32);
+            if W == 32 { push<32>(EIP); } else { push<16>(IP); }
+            EIP = t;
+        }
+    }
+    instruction Jmp_rm<const W: width> in [16, 32] {
+        mnemonic "jmp";
+        encoding { when operand_size() == W; opcode 0xFF; ModRM { reg: 4 } }
+        operands (target: rm<W>);
+        semantics { jump_near(target as u32); }
+    }
+    instruction Push_rm<const W: width> in [16, 32] {
+        mnemonic "push";
+        encoding { when operand_size() == W; opcode 0xFF; ModRM { reg: 6 } }
+        operands (src: rm<W>);
+        semantics { let v = src; push<W>(v); }
+    }
+    instruction Pop_rm<const W: width> in [16, 32] {
+        mnemonic "pop";
+        encoding { when operand_size() == W; opcode 0x8F; ModRM { reg: 0 } }
+        operands (dst: pop_rm<W>);
+        semantics { dst = peek<W>(0); }
+    }
+
+    // -- more stack, three-operand IMUL ------------------------------------------------------------
+
+    instruction Push_imm<const W: width> in [16, 32] {
+        mnemonic "push";
+        encoding { when operand_size() == W; opcode 0x68; Imm<W> }
+        operands (v: imm<W>);
+        semantics { push<W>(v); }
+    }
+    instruction Push_simm8<const W: width> in [16, 32] {
+        mnemonic "push";
+        encoding { when operand_size() == W; opcode 0x6A; Disp8 }
+        operands (v: simm8<W>);
+        semantics { push<W>(v); }
+    }
+
+    fn imul<const W: width> in [16, 32](a: u<W>, b: u<W>) -> u<W> {
+        let p = ((a as i<W>) as i64) * ((b as i<W>) as i64);
+        let wide = p != ((p as i<W>) as i64);
+        EFLAGS.CF = wide as u1;
+        EFLAGS.OF = wide as u1;
+        return p as u<W>;
+    }
+    instruction Imul_r_rm_imm<const W: width> in [16, 32] {
+        mnemonic "imul";
+        encoding { when operand_size() == W; opcode 0x69; ModRM { reg: r<W> } Imm<W> }
+        operands (dst: r<W>, src: rm<W>, k: imm<W>);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics { dst = imul<W>(src, k); }
+    }
+    instruction Imul_r_rm_simm8<const W: width> in [16, 32] {
+        mnemonic "imul";
+        encoding { when operand_size() == W; opcode 0x6B; ModRM { reg: r<W> } Disp8 }
+        operands (dst: r<W>, src: rm<W>, k: simm8<W>);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics { dst = imul<W>(src, k); }
+    }
+    instruction Imul_r_rm<const W: width> in [16, 32] {
+        mnemonic "imul";
+        encoding { when operand_size() == W; opcode [0x0F, 0xAF]; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: rm<W>);
+        flags { modifies: [OF, CF]; undefined: [SF, ZF, AF, PF]; }
+        semantics { dst = imul<W>(dst, src); }
+    }
+
+    // -- direct memory offsets, loops, XLAT --------------------------------------------------------
+
+    operand_kind moffs<16> : u32 from m: Moffs<16> { read => m.off as u32; }
+    operand_kind moffs<32> : u32 from m: Moffs<32> { read => m.off; }
+
+    instruction Mov_al_moffs<const A: width> in [16, 32] {
+        mnemonic "mov";
+        encoding { when address_size() == A; opcode 0xA0; Moffs<A> }
+        operands (o: moffs<A>);
+        semantics { AL = mem.read_u8(translate(src_seg(), o, 1, Access::Read)); }
+    }
+    instruction Mov_ax_moffs<const A: width> in [16, 32] {
+        mnemonic "mov";
+        encoding { when address_size() == A; opcode 0xA1; Moffs<A> }
+        operands (o: moffs<A>);
+        semantics {
+            if operand_size() == 32 { EAX = mem.read_u32(translate(src_seg(), o, 4, Access::Read)); }
+            else { AX = mem.read_u16(translate(src_seg(), o, 2, Access::Read)); }
+        }
+    }
+    instruction Mov_moffs_al<const A: width> in [16, 32] {
+        mnemonic "mov";
+        encoding { when address_size() == A; opcode 0xA2; Moffs<A> }
+        operands (o: moffs<A>);
+        semantics { mem.write_u8(translate(src_seg(), o, 1, Access::Write), AL); }
+    }
+    instruction Mov_moffs_ax<const A: width> in [16, 32] {
+        mnemonic "mov";
+        encoding { when address_size() == A; opcode 0xA3; Moffs<A> }
+        operands (o: moffs<A>);
+        semantics {
+            if operand_size() == 32 { mem.write_u32(translate(src_seg(), o, 4, Access::Write), EAX); }
+            else { mem.write_u16(translate(src_seg(), o, 2, Access::Write), AX); }
+        }
+    }
+
+    /// The count register is CX or ECX by the address size.
+    fn count_zero() -> bool { return if address_size() == 32 { ECX == 0 } else { CX == 0 }; }
+    /// Decrements the count register; whether it is still nonzero.
+    fn count_down() -> bool {
+        if address_size() == 32 { ECX = ECX - 1; return ECX != 0; }
+        CX = CX - 1;
+        return CX != 0;
+    }
+
+    instruction Loopne {
+        mnemonic "loopne";
+        encoding { opcode 0xE0; Disp8 }
+        operands (rel: rel8);
+        semantics { let t = EIP + rel; if count_down() && ZF == 0 { jump_near(t); } }
+    }
+    instruction Loope {
+        mnemonic "loope";
+        encoding { opcode 0xE1; Disp8 }
+        operands (rel: rel8);
+        semantics { let t = EIP + rel; if count_down() && ZF == 1 { jump_near(t); } }
+    }
+    instruction Loop {
+        mnemonic "loop";
+        encoding { opcode 0xE2; Disp8 }
+        operands (rel: rel8);
+        semantics { let t = EIP + rel; if count_down() { jump_near(t); } }
+    }
+    instruction Jcxz {
+        mnemonic "jcxz";
+        encoding { opcode 0xE3; Disp8 }
+        operands (rel: rel8);
+        semantics { if count_zero() { jump_near(EIP + rel); } }
+    }
+    instruction Xlat {
+        mnemonic "xlat";
+        encoding { opcode 0xD7; }
+        semantics {
+            let o = if address_size() == 32 { EBX + (AL as u32) } else { (BX + (AL as u16)) as u32 };
+            AL = mem.read_u8(translate(src_seg(), o, 1, Access::Read));
+        }
+    }
+    instruction Lahf { mnemonic "lahf"; encoding { opcode 0x9F; } semantics { AH = FLAGS as u8; } }
+    instruction Sahf {
+        mnemonic "sahf";
+        encoding { opcode 0x9E; }
+        flags { modifies: [SF, ZF, AF, PF, CF]; }
+        semantics { FLAGS = (FLAGS & 0xFF00) | ((AH as u16) & 0x00D5) | 0x0002; }
+    }
+    /// Undocumented: AL = CF ? FF : 00.
+    instruction Salc { mnemonic "salc"; encoding { opcode 0xD6; } semantics { AL = if CF == 1 { 0xFF } else { 0x00 }; } }
+
+    // -- BCD adjustment ----------------------------------------------------------------------------
+
+    instruction Daa {
+        mnemonic "daa";
+        encoding { opcode 0x27; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF]; }
+        semantics {
+            let old_al = AL;
+            let old_cf = CF;
+            let lo = (AL & 0x0F) > 9 || AF == 1;
+            let a1 = if lo { AL + 6 } else { AL };
+            let hi = old_al > 0x99 || old_cf == 1;
+            AL = if hi { a1 + 0x60 } else { a1 };
+            EFLAGS.AF = lo as u1;
+            EFLAGS.CF = hi as u1;
+            EFLAGS.SF = AL[7];
+            EFLAGS.ZF = (AL == 0) as u1;
+            EFLAGS.PF = Parity8(AL);
+        }
+    }
+    instruction Das {
+        mnemonic "das";
+        encoding { opcode 0x2F; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF]; }
+        semantics {
+            let old_al = AL;
+            let old_cf = CF;
+            let lo = (AL & 0x0F) > 9 || AF == 1;
+            let a1 = if lo { AL - 6 } else { AL };
+            let hi = old_al > 0x99 || old_cf == 1;
+            AL = if hi { a1 - 0x60 } else { a1 };
+            EFLAGS.AF = lo as u1;
+            EFLAGS.CF = (hi || (lo && old_al < 6)) as u1;
+            EFLAGS.SF = AL[7];
+            EFLAGS.ZF = (AL == 0) as u1;
+            EFLAGS.PF = Parity8(AL);
+        }
+    }
+    instruction Aaa {
+        mnemonic "aaa";
+        encoding { opcode 0x37; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF, SF, ZF, PF]; }
+        semantics {
+            let adj = (AL & 0x0F) > 9 || AF == 1;
+            if adj { AX = AX + 0x0106; }
+            AL = AL & 0x0F;
+            EFLAGS.AF = adj as u1;
+            EFLAGS.CF = adj as u1;
+        }
+    }
+    instruction Aas {
+        mnemonic "aas";
+        encoding { opcode 0x3F; }
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF, SF, ZF, PF]; }
+        semantics {
+            let adj = (AL & 0x0F) > 9 || AF == 1;
+            if adj { AX = AX - 0x0106; }
+            AL = AL & 0x0F;
+            EFLAGS.AF = adj as u1;
+            EFLAGS.CF = adj as u1;
+        }
+    }
+    instruction Aam {
+        mnemonic "aam";
+        encoding { opcode 0xD4; Imm<8> }
+        operands (base: imm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF, AF, CF]; }
+        semantics {
+            if base == 0 { raise DE; }
+            let a = AL;
+            AH = a / base;
+            AL = a % base;
+            EFLAGS.SF = AL[7];
+            EFLAGS.ZF = (AL == 0) as u1;
+            EFLAGS.PF = Parity8(AL);
+        }
+    }
+    instruction Aad {
+        mnemonic "aad";
+        encoding { opcode 0xD5; Imm<8> }
+        operands (base: imm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF, AF, CF]; }
+        semantics {
+            AL = AL + AH * base;
+            AH = 0;
+            EFLAGS.SF = AL[7];
+            EFLAGS.ZF = (AL == 0) as u1;
+            EFLAGS.PF = Parity8(AL);
+        }
+    }
+
+    // -- segment registers ----------------------------------------------------------------------------
+
+    /// The segment register number in a ModRM `reg` (8C/8E): ES, CS, SS,
+    /// DS, FS, GS; 6 and 7 are #UD.
+    operand_kind sreg_n : u3 { value(n: u3) => n; }
+
+    fn read_sreg(n: u3) -> u16 {
+        return match n {
+            0 => ES.selector, 1 => CS.selector, 2 => SS.selector, 3 => DS.selector,
+            4 => FS.selector, 5 => GS.selector, _ => { raise UD; },
+        };
+    }
+
+    /// Loading CS this way is #UD, as are 6 and 7. Loading SS inhibits
+    /// interrupts for an instruction.
+    fn write_sreg(n: u3, v: u16) {
+        match n {
+            0 => { ES = load_segment(v); }
+            2 => { SS = load_stack_segment(v); INHIBIT = 1; }
+            3 => { DS = load_segment(v); }
+            4 => { FS = load_segment(v); }
+            5 => { GS = load_segment(v); }
+            _ => { raise UD; }
+        }
+    }
+
+    /// To memory the selector is a word at any operand size; to a 32-bit
+    /// register it is zero-extended.
+    instruction Mov_rm_sreg {
+        mnemonic "mov";
+        encoding { opcode 0x8C; ModRM { reg: sreg_n } }
+        operands (n: sreg_n, dst: rm<16>);
+        semantics {
+            let v = read_sreg(n);
+            if operand_size() == 32 && !dst.is_mem { r<32>.select(dst.index) = v as u32; } else { dst = v; }
+        }
+    }
+    instruction Mov_sreg_rm {
+        mnemonic "mov";
+        encoding { opcode 0x8E; ModRM { reg: sreg_n } }
+        operands (n: sreg_n, src: rm<16>);
+        semantics { if n == 1 || n > 5 { raise UD; } write_sreg(n, src); }
+    }
+    /// A 32-bit push writes the selector zero-extended.
+    fn push_sreg(n: u3) {
+        let v = read_sreg(n);
+        if operand_size() == 32 { push<32>(v as u32); } else { push<16>(v); }
+    }
+    /// The register is loaded before SP moves; a 32-bit pop reads only the
+    /// selector's word.
+    fn pop_sreg(n: u3) {
+        let v = peek<16>(0);
+        write_sreg(n, v);
+        SP = SP + (if operand_size() == 32 { 4_u16 } else { 2_u16 });
+    }
+    instruction Push_es { mnemonic "push"; encoding { opcode 0x06; } semantics { push_sreg(0); } }
+    instruction Push_cs { mnemonic "push"; encoding { opcode 0x0E; } semantics { push_sreg(1); } }
+    instruction Push_ss { mnemonic "push"; encoding { opcode 0x16; } semantics { push_sreg(2); } }
+    instruction Push_ds { mnemonic "push"; encoding { opcode 0x1E; } semantics { push_sreg(3); } }
+    instruction Push_fs { mnemonic "push"; encoding { opcode [0x0F, 0xA0]; } semantics { push_sreg(4); } }
+    instruction Push_gs { mnemonic "push"; encoding { opcode [0x0F, 0xA8]; } semantics { push_sreg(5); } }
+    instruction Pop_es { mnemonic "pop"; encoding { opcode 0x07; } semantics { pop_sreg(0); } }
+    instruction Pop_ss { mnemonic "pop"; encoding { opcode 0x17; } semantics { pop_sreg(2); } }
+    instruction Pop_ds { mnemonic "pop"; encoding { opcode 0x1F; } semantics { pop_sreg(3); } }
+    instruction Pop_fs { mnemonic "pop"; encoding { opcode [0x0F, 0xA1]; } semantics { pop_sreg(4); } }
+    instruction Pop_gs { mnemonic "pop"; encoding { opcode [0x0F, 0xA9]; } semantics { pop_sreg(5); } }
+
+    // -- 386: SETcc, MOVZX, MOVSX ---------------------------------------------------------------------
+
+    instruction Setcc {
+        mnemonic "setcc";
+        encoding { opcode [0x0F, "1001cccc"] { c: cond }; ModRM }
+        operands (c: cond, dst: rm<8>);
+        semantics { dst = if condition(c) { 1 } else { 0 }; }
+    }
+    instruction Movzx_r_rm8<const W: width> in [16, 32] {
+        mnemonic "movzx";
+        encoding { when operand_size() == W; opcode [0x0F, 0xB6]; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: rm<8>);
+        semantics { dst = src as u<W>; }
+    }
+    instruction Movzx_r_rm16<const W: width> in [16, 32] {
+        mnemonic "movzx";
+        encoding { when operand_size() == W; opcode [0x0F, 0xB7]; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: rm<16>);
+        semantics { dst = src as u<W>; }
+    }
+    instruction Movsx_r_rm8<const W: width> in [16, 32] {
+        mnemonic "movsx";
+        encoding { when operand_size() == W; opcode [0x0F, 0xBE]; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: rm<8>);
+        semantics { dst = ((src as i8) as i<W>) as u<W>; }
+    }
+    instruction Movsx_r_rm16<const W: width> in [16, 32] {
+        mnemonic "movsx";
+        encoding { when operand_size() == W; opcode [0x0F, 0xBF]; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: rm<16>);
+        semantics { dst = ((src as i16) as i<W>) as u<W>; }
+    }
+
+    // -- far transfers, interrupts ---------------------------------------------------------------
+    //
+    // In real mode a far target only loads CS's selector and base; the
+    // offset is checked against CS's limit (which stays 0xFFFF), so a
+    // 32-bit offset past it is #GP(0) before anything is pushed. Interrupts
+    // push a 16-bit frame whatever the operand size.
+
+    operand_kind far_ptr<16> : (off: u32, seg: u16) from p: FarPtr<16> { read => (off: p.off as u32, seg: p.seg); }
+    operand_kind far_ptr<32> : (off: u32, seg: u16) from p: FarPtr<32> { read => (off: p.off, seg: p.seg); }
+    /// A far pointer in memory (`m16:16`, `m16:32`): the offset, then the
+    /// selector's word.
+    operand_kind far_mem<const W: width> in [16, 32] : (off: u32, seg: u16) from m: ModRM {
+        is_mem => m.mod != 3;
+        read => {
+            let (s, o) = effective_address(m);
+            let off = mem.read<W>(translate(s, o, (W / 8) as u8, Access::Read));
+            let seg = mem.read_u16(translate(s, ea_next(o, W / 8), 2, Access::Read));
+            (off: off as u32, seg: seg)
+        };
+    }
+
+    fn far_offset(off: u32) -> u32 {
+        if off > 0xFFFF { raise GP(0); }
+        return off;
+    }
+
+    fn jump_far(sel: u16, off: u32) {
+        let o = far_offset(off);
+        CS = load_segment(sel);
+        EIP = o;
+    }
+
+    fn call_far<const W: width> in [16, 32](sel: u16, off: u32) {
+        let o = far_offset(off);
+        push<W>(CS.selector as u<W>);
+        push<W>(EIP as u<W>);
+        CS = load_segment(sel);
+        EIP = o;
+    }
+
+    /// Reads both words before releasing the stack.
+    fn return_far<const W: width> in [16, 32](n: u16) {
+        let ip = peek<W>(0) as u32;
+        let cs = peek<W>((W / 8) as u16) as u16;
+        let o = far_offset(ip);
+        SP = SP + ((W / 4) as u16) + n;
+        CS = load_segment(cs);
+        EIP = o;
+    }
+
+    instruction Call_far<const W: width> in [16, 32] {
+        mnemonic "call";
+        encoding { when operand_size() == W; opcode 0x9A; FarPtr<W> }
+        operands (target: far_ptr<W>);
+        semantics { let t = target; call_far<W>(t.seg, t.off); }
+    }
+    instruction Jmp_far<const W: width> in [16, 32] {
+        mnemonic "jmp";
+        encoding { when operand_size() == W; opcode 0xEA; FarPtr<W> }
+        operands (target: far_ptr<W>);
+        semantics { let t = target; jump_far(t.seg, t.off); }
+    }
+    instruction Call_far_mem<const W: width> in [16, 32] {
+        mnemonic "call";
+        encoding { when operand_size() == W; opcode 0xFF; ModRM { reg: 3 } }
+        operands (target: far_mem<W>);
+        semantics { if !target.is_mem { raise UD; } let t = target; call_far<W>(t.seg, t.off); }
+    }
+    instruction Jmp_far_mem<const W: width> in [16, 32] {
+        mnemonic "jmp";
+        encoding { when operand_size() == W; opcode 0xFF; ModRM { reg: 5 } }
+        operands (target: far_mem<W>);
+        semantics { if !target.is_mem { raise UD; } let t = target; jump_far(t.seg, t.off); }
+    }
+    instruction Retf<const W: width> in [16, 32] {
+        mnemonic "retf";
+        encoding { when operand_size() == W; opcode 0xCB; }
+        semantics { return_far<W>(0); }
+    }
+    instruction Retf_imm<const W: width> in [16, 32] {
+        mnemonic "retf";
+        encoding { when operand_size() == W; opcode 0xCA; Imm<16> }
+        operands (n: imm<16>);
+        semantics { return_far<W>(n); }
+    }
+
+    /// Reads the whole frame before changing anything.
+    instruction Iret<const W: width> in [16, 32] {
+        mnemonic "iret";
+        encoding { when operand_size() == W; opcode 0xCF; }
+        flags { modifies: [OF, DF, IF, TF, SF, ZF, AF, PF, CF]; }
+        semantics {
+            let n = (W / 8) as u16;
+            let ip = peek<W>(0) as u32;
+            let cs = peek<W>(n) as u16;
+            let fl = peek<W>(2 * n);
+            let o = far_offset(ip);
+            SP = SP + 3 * n;
+            CS = load_segment(cs);
+            EIP = o;
+            if W == 32 { load_flags32(fl as u32); } else { load_flags16(fl as u16); }
+        }
+    }
+    instruction Int3 { mnemonic "int3"; encoding { opcode 0xCC; } semantics { interrupt(3); } }
+    instruction Int_imm8 {
+        mnemonic "int";
+        encoding { opcode 0xCD; Imm<8> }
+        operands (n: imm<8>);
+        semantics { interrupt(n); }
+    }
+    instruction Into { mnemonic "into"; encoding { opcode 0xCE; } semantics { if OF == 1 { interrupt(4); } } }
+
+    /// The signed bounds pair of BOUND.
+    operand_kind bounds<const W: width> in [16, 32] : (lo: u<W>, hi: u<W>) from m: ModRM {
+        is_mem => m.mod != 3;
+        read => {
+            let (s, o) = effective_address(m);
+            let lo = mem.read<W>(translate(s, o, (W / 8) as u8, Access::Read));
+            let hi = mem.read<W>(translate(s, ea_next(o, W / 8), (W / 8) as u8, Access::Read));
+            (lo: lo, hi: hi)
+        };
+    }
+    /// #BR when the index is outside the signed pair; the register form is #UD.
+    instruction Bound<const W: width> in [16, 32] {
+        mnemonic "bound";
+        encoding { when operand_size() == W; opcode 0x62; ModRM { reg: r<W> } }
+        operands (idx: r<W>, lim: bounds<W>);
+        semantics {
+            if !lim.is_mem { raise UD; }
+            let b = lim;
+            let x = idx as i<W>;
+            if x < (b.lo as i<W>) || x > (b.hi as i<W>) { raise BR; }
+        }
+    }
+
+    // -- PUSHA, POPA, ENTER, LEAVE ---------------------------------------------------------------
+
+    /// Pushes the SP value from before the first push. The 386 stores from
+    /// the lowest address up (DI first); SP moves only once every store has
+    /// succeeded.
+    instruction Pusha<const W: width> in [16, 32] {
+        mnemonic "pusha";
+        encoding { when operand_size() == W; opcode 0x60; }
+        semantics {
+            let n = (W / 8) as u16;
+            let sp = SP;
+            mem.write<W>(translate_stack((sp - 8 * n) as u32, n as u8), r<W>.select(7));
+            mem.write<W>(translate_stack((sp - 7 * n) as u32, n as u8), r<W>.select(6));
+            mem.write<W>(translate_stack((sp - 6 * n) as u32, n as u8), r<W>.select(5));
+            mem.write<W>(translate_stack((sp - 5 * n) as u32, n as u8), r<W>.select(4));
+            mem.write<W>(translate_stack((sp - 4 * n) as u32, n as u8), r<W>.select(3));
+            mem.write<W>(translate_stack((sp - 3 * n) as u32, n as u8), r<W>.select(2));
+            mem.write<W>(translate_stack((sp - 2 * n) as u32, n as u8), r<W>.select(1));
+            mem.write<W>(translate_stack((sp - n) as u32, n as u8), r<W>.select(0));
+            SP = sp - 8 * n;
+        }
+    }
+    /// Pops into each register in turn (a fault part-way leaves the ones
+    /// already popped, but not SP); the saved SP is skipped, except that
+    /// POPAD on the 16-bit stack takes ESP's upper half from it.
+    instruction Popa<const W: width> in [16, 32] {
+        mnemonic "popa";
+        encoding { when operand_size() == W; opcode 0x61; }
+        semantics {
+            let n = (W / 8) as u16;
+            r<W>.select(7) = peek<W>(0);
+            r<W>.select(6) = peek<W>(n);
+            r<W>.select(5) = peek<W>(2 * n);
+            let sp = peek<W>(3 * n);
+            r<W>.select(3) = peek<W>(4 * n);
+            r<W>.select(2) = peek<W>(5 * n);
+            r<W>.select(1) = peek<W>(6 * n);
+            r<W>.select(0) = peek<W>(7 * n);
+            let top = SP + 8 * n;
+            if W == 32 { ESP = ((sp as u32) & 0xFFFF0000) | (top as u32); } else { SP = top; }
+        }
+    }
+    /// The nesting level is masked to 5 bits; level - 1 frame pointers are
+    /// copied from the enclosing frame. SP and BP change only at the end.
+    /// The stack is 16-bit, but a 32-bit frame pointer keeps ESP's upper half.
+    instruction Enter<const W: width> in [16, 32] {
+        mnemonic "enter";
+        encoding { when operand_size() == W; opcode 0xC8; Imm<16>; Imm<8> }
+        operands (size: imm<16>, level: imm<8>);
+        semantics {
+            let n = (W / 8) as u16;
+            let lvl = level & 0x1F;
+            let frame = SP - n;
+            let fp = ((ESP & 0xFFFF0000) | (frame as u32)) as u<W>;
+            mem.write<W>(translate_stack(frame as u32, n as u8), r<W>.select(5));
+            for i in 1..32 {
+                if (i as u8) < lvl {
+                    let off = n * (i as u16);
+                    let v = mem.read<W>(translate_stack((BP - off) as u32, n as u8));
+                    mem.write<W>(translate_stack((frame - off) as u32, n as u8), v);
+                }
+            }
+            let depth = n * (lvl as u16);
+            if lvl > 0 { mem.write<W>(translate_stack((frame - depth) as u32, n as u8), fp); }
+            r<W>.select(5) = fp;
+            SP = frame - depth - size;
+        }
+    }
+    /// Reads the saved frame pointer before releasing the frame.
+    instruction Leave<const W: width> in [16, 32] {
+        mnemonic "leave";
+        encoding { when operand_size() == W; opcode 0xC9; }
+        semantics {
+            let v = mem.read<W>(translate_stack(BP as u32, (W / 8) as u8));
+            SP = BP + ((W / 8) as u16);
+            r<W>.select(5) = v;
+        }
+    }
+
+    // -- far pointer loads ---------------------------------------------------------------------------
+
+    instruction Les<const W: width> in [16, 32] {
+        mnemonic "les";
+        encoding { when operand_size() == W; opcode 0xC4; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: far_mem<W>);
+        semantics { if !src.is_mem { raise UD; } let p = src; ES = load_segment(p.seg); dst = p.off as u<W>; }
+    }
+    instruction Lds<const W: width> in [16, 32] {
+        mnemonic "lds";
+        encoding { when operand_size() == W; opcode 0xC5; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: far_mem<W>);
+        semantics { if !src.is_mem { raise UD; } let p = src; DS = load_segment(p.seg); dst = p.off as u<W>; }
+    }
+    instruction Lss<const W: width> in [16, 32] {
+        mnemonic "lss";
+        encoding { when operand_size() == W; opcode [0x0F, 0xB2]; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: far_mem<W>);
+        semantics { if !src.is_mem { raise UD; } let p = src; SS = load_stack_segment(p.seg); dst = p.off as u<W>; }
+    }
+    instruction Lfs<const W: width> in [16, 32] {
+        mnemonic "lfs";
+        encoding { when operand_size() == W; opcode [0x0F, 0xB4]; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: far_mem<W>);
+        semantics { if !src.is_mem { raise UD; } let p = src; FS = load_segment(p.seg); dst = p.off as u<W>; }
+    }
+    instruction Lgs<const W: width> in [16, 32] {
+        mnemonic "lgs";
+        encoding { when operand_size() == W; opcode [0x0F, 0xB5]; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: far_mem<W>);
+        semantics { if !src.is_mem { raise UD; } let p = src; GS = load_segment(p.seg); dst = p.off as u<W>; }
+    }
+
+    // -- I/O --------------------------------------------------------------------------------------------
+
+    instruction In_al_imm8 { mnemonic "in"; encoding { opcode 0xE4; Imm<8> } operands (p: imm<8>); semantics { AL = io.read_u8(p as u16); } }
+    instruction In_ax_imm8<const W: width> in [16, 32] {
+        mnemonic "in";
+        encoding { when operand_size() == W; opcode 0xE5; Imm<8> }
+        operands (p: imm<8>);
+        semantics { r<W>.select(0) = io.read<W>(p as u16); }
+    }
+    instruction Out_imm8_al { mnemonic "out"; encoding { opcode 0xE6; Imm<8> } operands (p: imm<8>); semantics { io.write_u8(p as u16, AL); } }
+    instruction Out_imm8_ax<const W: width> in [16, 32] {
+        mnemonic "out";
+        encoding { when operand_size() == W; opcode 0xE7; Imm<8> }
+        operands (p: imm<8>);
+        semantics { io.write<W>(p as u16, r<W>.select(0)); }
+    }
+    instruction In_al_dx { mnemonic "in"; encoding { opcode 0xEC; } semantics { AL = io.read_u8(DX); } }
+    instruction In_ax_dx<const W: width> in [16, 32] {
+        mnemonic "in";
+        encoding { when operand_size() == W; opcode 0xED; }
+        semantics { r<W>.select(0) = io.read<W>(DX); }
+    }
+    instruction Out_dx_al { mnemonic "out"; encoding { opcode 0xEE; } semantics { io.write_u8(DX, AL); } }
+    instruction Out_dx_ax<const W: width> in [16, 32] {
+        mnemonic "out";
+        encoding { when operand_size() == W; opcode 0xEF; }
+        semantics { io.write<W>(DX, r<W>.select(0)); }
+    }
+
+    // -- strings ---------------------------------------------------------------------------------------
+    //
+    // One element per execution. The pointers (SI/DI or ESI/EDI) and the
+    // count (CX or ECX) follow the address size. Under a repeat prefix an
+    // iteration that is not the last sets EIP back to the prefix, so REP is
+    // interruptible; registers change only once an element's accesses have
+    // succeeded, so a fault mid-REP restarts that element.
+
+    fn delta(size: u8) -> u32 { return if DF == 1 { 0 - (size as u32) } else { size as u32 }; }
+    fn repeating() -> bool { return rep != Rep::None; }
+    /// Whether REPE/REPNE continue after a comparison.
+    fn rep_continues() -> bool { return if rep == Rep::E { ZF == 1 } else { ZF == 0 }; }
+    fn source_offset() -> u32 { return if address_size() == 32 { ESI } else { SI as u32 }; }
+    fn dest_offset() -> u32 { return if address_size() == 32 { EDI } else { DI as u32 }; }
+    fn advance_source(size: u8) {
+        if address_size() == 32 { ESI = ESI + delta(size); } else { SI = SI + (delta(size) as u16); }
+    }
+    fn advance_dest(size: u8) {
+        if address_size() == 32 { EDI = EDI + delta(size); } else { DI = DI + (delta(size) as u16); }
+    }
+    /// Ends a repeated element: counts it, and repeats unless that was the last.
+    fn rep_next(compares: bool) {
+        if !repeating() { return; }
+        let more = count_down();
+        if more && (!compares || rep_continues()) { EIP = start_ip; }
+    }
+    /// Whether a repeated instruction has nothing left to do.
+    fn rep_done() -> bool { return repeating() && count_zero(); }
+
+    fn movs<const W: width> in [8, 16, 32]() {
+        if rep_done() { return; }
+        let v = mem.read<W>(translate(src_seg(), source_offset(), (W / 8) as u8, Access::Read));
+        mem.write<W>(translate(ES, dest_offset(), (W / 8) as u8, Access::Write), v);
+        advance_source((W / 8) as u8);
+        advance_dest((W / 8) as u8);
+        rep_next(false);
+    }
+    fn cmps<const W: width> in [8, 16, 32]() {
+        if rep_done() { return; }
+        let a = mem.read<W>(translate(src_seg(), source_offset(), (W / 8) as u8, Access::Read));
+        let b = mem.read<W>(translate(ES, dest_offset(), (W / 8) as u8, Access::Read));
+        let _ = alu<W>(AluOp::Cmp, a, b);
+        advance_source((W / 8) as u8);
+        advance_dest((W / 8) as u8);
+        rep_next(true);
+    }
+    fn stos<const W: width> in [8, 16, 32]() {
+        if rep_done() { return; }
+        mem.write<W>(translate(ES, dest_offset(), (W / 8) as u8, Access::Write), r<W>.select(0));
+        advance_dest((W / 8) as u8);
+        rep_next(false);
+    }
+    fn lods<const W: width> in [8, 16, 32]() {
+        if rep_done() { return; }
+        r<W>.select(0) = mem.read<W>(translate(src_seg(), source_offset(), (W / 8) as u8, Access::Read));
+        advance_source((W / 8) as u8);
+        rep_next(false);
+    }
+    fn scas<const W: width> in [8, 16, 32]() {
+        if rep_done() { return; }
+        let b = mem.read<W>(translate(ES, dest_offset(), (W / 8) as u8, Access::Read));
+        let _ = alu<W>(AluOp::Cmp, r<W>.select(0), b);
+        advance_dest((W / 8) as u8);
+        rep_next(true);
+    }
+    fn ins<const W: width> in [8, 16, 32]() {
+        if rep_done() { return; }
+        let v = io.read<W>(DX);
+        mem.write<W>(translate(ES, dest_offset(), (W / 8) as u8, Access::Write), v);
+        advance_dest((W / 8) as u8);
+        rep_next(false);
+    }
+    fn outs<const W: width> in [8, 16, 32]() {
+        if rep_done() { return; }
+        let v = mem.read<W>(translate(src_seg(), source_offset(), (W / 8) as u8, Access::Read));
+        io.write<W>(DX, v);
+        advance_source((W / 8) as u8);
+        rep_next(false);
+    }
+
+    instruction Movsb { mnemonic "movsb"; encoding { opcode 0xA4; } semantics { movs<8>(); } }
+    instruction Movs<const W: width> in [16, 32] { mnemonic "movs"; encoding { when operand_size() == W; opcode 0xA5; } semantics { movs<W>(); } }
+    instruction Cmpsb { mnemonic "cmpsb"; encoding { opcode 0xA6; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } semantics { cmps<8>(); } }
+    instruction Cmps<const W: width> in [16, 32] { mnemonic "cmps"; encoding { when operand_size() == W; opcode 0xA7; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } semantics { cmps<W>(); } }
+    instruction Stosb { mnemonic "stosb"; encoding { opcode 0xAA; } semantics { stos<8>(); } }
+    instruction Stos<const W: width> in [16, 32] { mnemonic "stos"; encoding { when operand_size() == W; opcode 0xAB; } semantics { stos<W>(); } }
+    instruction Lodsb { mnemonic "lodsb"; encoding { opcode 0xAC; } semantics { lods<8>(); } }
+    instruction Lods<const W: width> in [16, 32] { mnemonic "lods"; encoding { when operand_size() == W; opcode 0xAD; } semantics { lods<W>(); } }
+    instruction Scasb { mnemonic "scasb"; encoding { opcode 0xAE; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } semantics { scas<8>(); } }
+    instruction Scas<const W: width> in [16, 32] { mnemonic "scas"; encoding { when operand_size() == W; opcode 0xAF; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } semantics { scas<W>(); } }
+    instruction Insb { mnemonic "insb"; encoding { opcode 0x6C; } semantics { ins<8>(); } }
+    instruction Ins<const W: width> in [16, 32] { mnemonic "ins"; encoding { when operand_size() == W; opcode 0x6D; } semantics { ins<W>(); } }
+    instruction Outsb { mnemonic "outsb"; encoding { opcode 0x6E; } semantics { outs<8>(); } }
+    instruction Outs<const W: width> in [16, 32] { mnemonic "outs"; encoding { when operand_size() == W; opcode 0x6F; } semantics { outs<W>(); } }
+
+    // -- 386: bit tests and scans, double shifts --------------------------------------------------------
+
+    /// A ModRM operand as a place: the register it names or the memory
+    /// address it forms. The bit tests address memory by a bit offset.
+    operand_kind place : (seg: Segment, off: u32) from m: ModRM {
+        is_mem => m.mod != 3;
+        index => m.rm;
+        read => effective_address(m);
+    }
+
+    enum BitOp : u2 { Test, Set, Reset, Complement }
+    operand_kind bit_op : BitOp { value(n: u2) => n as BitOp; }
+    /// 0FBA's `reg`: /4-/7 are BT, BTS, BTR, BTC; /0-/3 are #UD.
+    operand_kind bit_op_imm : u3 { value(n: u3) => n; }
+
+    fn bit_name(op: BitOp) -> str {
+        return match op { BitOp::Test => "bt", BitOp::Set => "bts", BitOp::Reset => "btr", BitOp::Complement => "btc" };
+    }
+
+    fn bit_apply<const W: width> in [16, 32](op: BitOp, v: u<W>, k: u32) -> u<W> {
+        let m = (1 as u<W>) << (k as u<W>);
+        EFLAGS.CF = ((v >> (k as u<W>)) & 1) as u1;
+        return match op { BitOp::Test => v, BitOp::Set => v | m, BitOp::Reset => v & ~m, BitOp::Complement => v ^ m };
+    }
+
+    /// The bit test at `bit` of a register or of memory. A register bit
+    /// offset reaches memory beyond the operand (signed, in operand-sized
+    /// steps); an immediate one stays within it.
+    fn bit_test<const W: width> in [16, 32](op: BitOp, is_mem: bool, n: u3, s: Segment, o: u32, bit: u32, far: bool) {
+        let k = bit & (W - 1);
+        if !is_mem {
+            let v = bit_apply<W>(op, r<W>.select(n), k);
+            if op != BitOp::Test { r<W>.select(n) = v; }
+            return;
+        }
+        let step = if far { ((((bit as u<W>) as i<W>) >> (if W == 32 { 5_u8 } else { 4_u8 })) as i32) * ((W / 8) as i32) } else { 0 };
+        let a = o + (step as u32);
+        let off = if address_size() == 16 { a & 0xFFFF } else { a };
+        let v = mem.read<W>(translate(s, off, (W / 8) as u8, Access::Read));
+        let nv = bit_apply<W>(op, v, k);
+        if op != BitOp::Test { mem.write<W>(translate(s, off, (W / 8) as u8, Access::Write), nv); }
+    }
+
+    instruction Bt_rm_r<const W: width> in [16, 32] {
+        mnemonic bit_name(op);
+        encoding { when operand_size() == W; opcode [0x0F, "101oo011"] { o: bit_op }; ModRM { reg: r<W> } }
+        operands (op: bit_op, dst: place, b: r<W>);
+        flags { modifies: [CF]; undefined: [OF, SF, ZF, AF, PF]; }
+        lock if dst.is_mem && op != BitOp::Test;
+        semantics {
+            let p = if dst.is_mem { dst } else { (seg: DS, off: 0) };
+            bit_test<W>(op, dst.is_mem, dst.index, p.seg, p.off, b as u32, true);
+        }
+    }
+    instruction Bt_rm_imm<const W: width> in [16, 32] {
+        mnemonic bit_name(((op as u2) & 3) as BitOp);
+        encoding { when operand_size() == W; opcode [0x0F, 0xBA]; ModRM { reg: bit_op_imm } Imm<8> }
+        operands (op: bit_op_imm, dst: place, b: imm<8>);
+        flags { modifies: [CF]; undefined: [OF, SF, ZF, AF, PF]; }
+        lock if dst.is_mem && op != 4;
+        semantics {
+            if op < 4 { raise UD; }
+            let p = if dst.is_mem { dst } else { (seg: DS, off: 0) };
+            bit_test<W>(((op as u2) & 3) as BitOp, dst.is_mem, dst.index, p.seg, p.off, b as u32, false);
+        }
+    }
+
+    /// BSF and BSR: a zero source sets ZF and leaves the destination.
+    instruction Bsf<const W: width> in [16, 32] {
+        mnemonic "bsf";
+        encoding { when operand_size() == W; opcode [0x0F, 0xBC]; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: rm<W>);
+        flags { modifies: [ZF]; undefined: [OF, SF, AF, PF, CF]; }
+        semantics {
+            let v = src;
+            if v == 0 { EFLAGS.ZF = 1; return; }
+            EFLAGS.ZF = 0;
+            let mut at: u<W> = 0;
+            for i in 0..W {
+                let k = (W - 1 - i) as u<W>;
+                if ((v >> k) & 1) == 1 { at = k; }
+            }
+            dst = at;
+        }
+    }
+    instruction Bsr<const W: width> in [16, 32] {
+        mnemonic "bsr";
+        encoding { when operand_size() == W; opcode [0x0F, 0xBD]; ModRM { reg: r<W> } }
+        operands (dst: r<W>, src: rm<W>);
+        flags { modifies: [ZF]; undefined: [OF, SF, AF, PF, CF]; }
+        semantics {
+            let v = src;
+            if v == 0 { EFLAGS.ZF = 1; return; }
+            EFLAGS.ZF = 0;
+            let mut at: u<W> = 0;
+            for i in 0..W {
+                let k = i as u<W>;
+                if ((v >> k) & 1) == 1 { at = k; }
+            }
+            dst = at;
+        }
+    }
+
+    /// SHLD and SHRD: `dst` shifted by `count` (masked to 5 bits), filled
+    /// from `src`. Past the width (16-bit forms) the result is undefined.
+    ///
+    /// The 386 shifts the pattern dst:src:src (SHRD src:src:dst), so a
+    /// 16-bit count past 16 brings `src` in again.
+    fn double_shift<const W: width> in [16, 32](left: bool, dst: u<W>, src: u<W>, count: u8) -> u<W> {
+        let n = (count & 0x1F) as u128;
+        let wd = W as u128;
+        let mask = (1_u128 << wd) - 1;
+        let d = dst as u128;
+        let r: u128 = if left {
+            let t = ((d << (2 * wd)) | ((src as u128) << wd) | (src as u128)) << n;
+            EFLAGS.CF = ((t >> (3 * wd)) & 1) as u1;
+            (t >> (2 * wd)) & mask
+        } else {
+            let x = ((src as u128) << (2 * wd)) | ((src as u128) << wd) | d;
+            EFLAGS.CF = ((x >> (n - 1)) & 1) as u1;
+            (x >> n) & mask
+        };
+        let top = (r >> (wd - 1)) & 1;
+        EFLAGS.OF = (top ^ ((d >> (wd - 1)) & 1)) as u1;
+        EFLAGS.SF = top as u1;
+        EFLAGS.ZF = (r == 0) as u1;
+        EFLAGS.PF = Parity8(r as u8);
+        return r as u<W>;
+    }
+
+    instruction Shld_imm<const W: width> in [16, 32] {
+        mnemonic "shld";
+        encoding { when operand_size() == W; opcode [0x0F, 0xA4]; ModRM { reg: r<W> } Imm<8> }
+        operands (dst: rm<W>, src: r<W>, n: imm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF if (n & 0x1F) != 1, AF, CF if (n & 0x1F) > W]; }
+        semantics { let v = dst; if (n & 0x1F) != 0 { dst = double_shift<W>(true, v, src, n); } }
+    }
+    instruction Shld_cl<const W: width> in [16, 32] {
+        mnemonic "shld";
+        encoding { when operand_size() == W; opcode [0x0F, 0xA5]; ModRM { reg: r<W> } }
+        operands (dst: rm<W>, src: r<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF if (CL & 0x1F) != 1, AF, CF if (CL & 0x1F) > W]; }
+        semantics { let v = dst; if (CL & 0x1F) != 0 { dst = double_shift<W>(true, v, src, CL); } }
+    }
+    instruction Shrd_imm<const W: width> in [16, 32] {
+        mnemonic "shrd";
+        encoding { when operand_size() == W; opcode [0x0F, 0xAC]; ModRM { reg: r<W> } Imm<8> }
+        operands (dst: rm<W>, src: r<W>, n: imm<8>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF if (n & 0x1F) != 1, AF, CF if (n & 0x1F) > W]; }
+        semantics { let v = dst; if (n & 0x1F) != 0 { dst = double_shift<W>(false, v, src, n); } }
+    }
+    instruction Shrd_cl<const W: width> in [16, 32] {
+        mnemonic "shrd";
+        encoding { when operand_size() == W; opcode [0x0F, 0xAD]; ModRM { reg: r<W> } }
+        operands (dst: rm<W>, src: r<W>);
+        flags { modifies: [OF, SF, ZF, AF, PF, CF]; undefined: [OF if (CL & 0x1F) != 1, AF, CF if (CL & 0x1F) > W]; }
+        semantics { let v = dst; if (CL & 0x1F) != 0 { dst = double_shift<W>(false, v, src, CL); } }
+    }
+
+    instruction Clts { mnemonic "clts"; encoding { opcode [0x0F, 0x06]; } semantics { CR0.TS = 0; } }
+    instruction Wait { mnemonic "wait"; encoding { opcode 0x9B; } semantics { if CR0.TS == 1 && CR0.MP == 1 { raise NM; } } }
+
     // -- flags and miscellany -----------------------------------------------------------------
 
     instruction Clc { mnemonic "clc"; encoding { opcode 0xF8; } flags { modifies: [CF]; } semantics { EFLAGS.CF = 0; } }
@@ -651,9 +2028,19 @@ isa I386 {
     instruction Cli { mnemonic "cli"; encoding { opcode 0xFA; } flags { modifies: [IF]; } semantics { EFLAGS.IF = 0; } }
     instruction Sti { mnemonic "sti"; encoding { opcode 0xFB; } flags { modifies: [IF]; } semantics { if EFLAGS.IF == 0 { INHIBIT = 1; } EFLAGS.IF = 1; } }
     instruction Hlt { mnemonic "hlt"; encoding { opcode 0xF4; } semantics { halt; } }
-    instruction Nop { mnemonic "nop"; encoding { opcode 0x90; } }
 }
 
+// All 941 files: 1,758,700 vectors, of which 29 differ, each a quirk of
+// the hardware this description does not model:
+// - AAM 0 (D4, 10 vectors): the #DE leaves SF and ZF clear and PF set
+//   without a pattern in AL or AH, where most #DE vectors keep the flags.
+// - IDIV r/m8 (F6.7, 67F6.7; 9): some overflowing quotients give AL = 80
+//   with a remainder rather than #DE.
+// - IN AX/EAX (E5, 66E5; 6): ports 1F and 21 read 7FFF, the 386EX's own
+//   peripherals answering in place of the floating bus.
+// - A32 REP MOVSW/STOSW (67A5, 67AB, 6766A5, 6766AB; 4): the store
+//   overwrites the instruction itself; the 386 repeats from what it
+//   fetched, where restarting at the prefix fetches the new bytes.
 vectors "../../../simulators/test/i386/SingleStepTests/v1_ex_real_mode/*.MOO.gz" on I386 {
     format moo;
     memory mem;

@@ -215,6 +215,9 @@ fn generic_call_versus_comparison() {
     check("a < b", "(Lt a b)");
     check("a < b > c", "(Gt (Lt a b) c)");
     check("x < y && (z)", "(And (Lt x y) z)");
+    // A `<` set apart from the name is a comparison, even when a `>` and a
+    // parenthesis follow.
+    check("x < (lo) || x > (hi)", "(Or (Lt x lo) (Gt x hi))");
 }
 
 #[test]

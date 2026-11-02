@@ -1226,9 +1226,11 @@ instruction Alu_rm_r<const W: width> in [16, 32] {
   `Name<32>` (in tables, the assembler and diagnostics). `W` is a
   compile-time constant inside: in types (`u<W>`), unit instantiations
   (`Alu<W>`), fn instantiations (`push<W>(v)`), kind references
-  (`rm<W>`) and expressions; `if W == 32 { ... }` is resolved per
-  instance and only the taken branch is checked against that instance's
-  types. A timing or schedules entry may name one instance (`Alu_rm_r<32>
+  (`rm<W>`) and expressions; `if W == 32 { ... }` is an ordinary
+  `if` on a constant (the generated code folds it), so both branches are
+  checked in every instance: each branch names the registers of its own
+  width (`EAX` in one, `AX` in the other) rather than relying on the
+  other branch being discarded. A timing or schedules entry may name one instance (`Alu_rm_r<32>
   => ...`) or the family (`Alu_rm_r => ...`, with `W` in scope); an
   instance's own entry wins.
 - **Kind families.** An operand kind is declared per width with the width

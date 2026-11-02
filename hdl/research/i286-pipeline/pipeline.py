@@ -5,7 +5,7 @@ Time is in processor clocks from the jump that starts a vector. One vector
 is an instruction followed by an injected HLT.
 """
 
-def simulate(L, start, seq, pre, posts, target=None, extra=None, Q=6, hc=3, lat=2, jl=1, limit=600, uncond=False):
+def simulate(L, start, seq, pre, posts, target=None, extra=None, Q=6, hc=3, lat=2, jl=1, limit=600, uncond=False, hold=None):
     """The bus cycles [(start, kind)] of one vector.
 
     L: instruction length (prefixes included); start: its linear address.
@@ -16,6 +16,10 @@ def simulate(L, start, seq, pre, posts, target=None, extra=None, Q=6, hc=3, lat=
       cycles after that byte} (a ModRM followed by a displacement).
     uncond: the decoder stops after this instruction (an unconditional
       transfer).
+    hold: {byte index: 'stall' | 'late'} for an 8-bit displacement, which
+      starts the instruction a clock later: when it starts a word the
+      decoder stalls a clock before it ('stall', delaying later bytes too);
+      otherwise only the start is late ('late').
     Q: queue bytes; hc: HLT's cycles before its HALT request; lat: cycles
     from an execution-unit request to its bus cycle; jl: from a jump to the
     target's fetch decision.
@@ -34,6 +38,7 @@ def simulate(L, start, seq, pre, posts, target=None, extra=None, Q=6, hc=3, lat=
     hlt_start = halt_req = None
     fetch_block_until = -1
     has_jump = any(st[0] == 'J' for st in seq)
+    stalled = 0
     t = -1
     def real_count(pr):
         return sum(1 for _, d in pr if not d)
@@ -76,10 +81,13 @@ def simulate(L, start, seq, pre, posts, target=None, extra=None, Q=6, hc=3, lat=
             p = max(last_proc + 1, at + 1)
             if not jumped and k - 1 in extra:
                 p += extra[k - 1]
+            if not jumped and hold and k in hold and hold[k] == 'stall':
+                p += 1
             if p > t: break
             proc.append((p, False)); last_proc = p
             r = real_count(proc)
-            if not jumped and r == L: ins_ready = p
+            if not jumped and r == L:
+                ins_ready = p + (1 if hold and 'late' in hold.values() else 0)
             if r == seg_len: hlt_ready = p
         # A dead byte holds its place until the next flush.
         consumed = sum(1 for p, d in proc if p < t and not d)

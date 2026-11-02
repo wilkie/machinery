@@ -42,14 +42,19 @@ def form(t):
 def run(t, P, partial=False):
     L = len(t['bytes']) - 1
     p, mpos, ea, mod = form(t)
-    extra = {mpos: P['x']} if mpos is not None and (mod in (1, 2) or ea == 'd16') else {}
+    extra = {}
+    # An 8-bit displacement that starts a word stays a clock longer in the
+    # queue (the address work itself is in the schedule).
+    hold = {}
+    if mpos is not None and mod == 1:
+        hold = {mpos + 1: 'stall' if (start_address(t) + mpos + 1) % 2 == 0 else 'late'}
     seq = list(accesses(t))
     tgt = jump_target(t)
     if tgt is not None:
         seq.insert(P['jpos'], ('J',))
     op = t['bytes'][p]
     sim = simulate(L, start_address(t), seq, P['pre'], P['posts'][:len(seq)], tgt, extra,
-                   uncond=tgt is not None and op not in CONDITIONAL)
+                   uncond=tgt is not None and op not in CONDITIONAL, hold=hold)
     tr = bus_cycles(t)
     if not partial:
         return sim == tr
@@ -72,7 +77,7 @@ def fit_group(vs, rounds=3, top=26):
         sc = score(Q)
         if best is None or sc > best:
             best, P = sc, Q
-    keys = [('pre', None), ('x', None)] + ([('jpos', None)] if jumps else []) + [('posts', i) for i in range(n)]
+    keys = [('pre', None)] + ([('jpos', None)] if jumps else []) + [('posts', i) for i in range(n)]
     for _ in range(rounds):
         improved = False
         for k, i in keys:

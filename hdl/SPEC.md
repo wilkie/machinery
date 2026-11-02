@@ -1003,6 +1003,99 @@ cycle or two around their entry with how operand transfers overlap the
 refill; modelling the queue (cycle-accurate bus timing, tier 2) would
 remove that, and is the processor model's business, not the table's.
 
+### 11.2c Schedules: cycle-accurate timing
+
+A timing-table number (section 11.2b) is enough for an emulator's sense
+of time. To reproduce a processor's bus activity cycle for cycle, an entry
+can instead be a **schedule**: the execution unit's work between the
+instruction's steps.
+
+```
+timing on I286 {
+    Mov_rm16_r16 => if dst.is_mem { schedule(3 + dst.ea_extra, access, 0, decode: dst.disp8 as u4) } else { schedule(2) };
+    Alu_rm16_r16 => if dst.is_mem { schedule(3 + dst.ea_extra, access, 2, access, 0, decode: dst.disp8 as u4) } else { schedule(2) };
+    Mul_rm16     => if src.is_mem { schedule(3 + src.ea_extra, access, 20, decode: src.disp8 as u4) } else { schedule(21) };
+    Call_rel16   => schedule(4, jump, 0, access, 0);
+    Ret          => schedule(3, access, 4, jump, 0);
+    Jcc          => if condition(c) { schedule(5, branch, 0) } else { schedule(4) };
+}
+```
+
+`schedule(w0, step1, w1, ..., stepN, wN)` alternates execution cycles
+(`u32` expressions) and steps, starting and ending with cycles; at most 8
+steps. The steps are:
+
+- `access`: the instruction's next data access, in the order its semantics
+  perform them (a read, a write, an I/O transfer; a word split into two
+  bus cycles is one access). If the instruction performs more accesses than
+  the schedule names, the rest follow with no work between them; if fewer,
+  the unmatched `access` steps are skipped.
+- `jump`: an unconditional control transfer (JMP, CALL, RET, INT). The
+  queue is flushed and refilled from where execution continues, and a
+  decoder that knows the instruction transfers stops decoding past it.
+- `branch`: a conditional transfer that was taken. The same flush, but the
+  decoder had carried on past the instruction, not knowing the outcome.
+
+`decode: n` attaches `n` clocks of decoding to the instruction's operand
+tail (the 286's 8-bit displacement); what they do is the processor
+model's rule. A plain number `n` in a table is the schedule `schedule(n)`.
+
+A schedule is a value of the prelude bundle `Schedule`:
+
+```
+bundle Schedule {
+    /// work[0] before the first step, work[i] after step i.
+    work: [u16; 9],
+    /// 1 access, 2 jump, 3 branch; 0 past the last step.
+    step: [u2; 8],
+    steps: u4,
+    decode: u4,
+    // Filled by the interpreter for each instruction:
+    /// Bytes decoded, prefixes included, and the index of the first
+    /// operand-tail byte (`length` when there is none).
+    length: u8,
+    tail: u8,
+    /// Where the instruction started and where execution continues
+    /// (istream addresses), and whether it halted.
+    start: u64,
+    next: u64,
+    halted: bool,
+}
+```
+
+The **prelude** is a module every program sees without a `use`; names are
+looked up in a module, then its imports, then the prelude.
+
+**Who runs the schedule.** A processor model that declares
+
+```
+on retire(s: Schedule) -> u32 { ... }
+```
+
+owns its instruction timing. After every instruction (and every interrupt
+taken at a boundary, with the `interrupt` entry's schedule) the interpreter
+calls it with the instruction's schedule, and the handler returns the
+clocks the instruction took; the model build advances time by that, and
+charges the processor's own bus transactions only their wait states. The
+handler sees the instruction's data accesses through its own space
+handlers, which it can log. The bus unit, the decoder and the execution
+unit are model code in the processor description; the language provides
+the schedule and the hook, not a pipeline.
+
+The i286 description's processor model (`targets/i286/board.machine`)
+implements the rules found in the SingleStepTests traces
+(`research/i286-pipeline`): a 6-byte queue refilled a word at a time when
+a word fits; a decoder taking one byte per clock, each the clock after it
+arrives; execution starting when the last byte is decoded; requests
+reaching the bus two clocks after the execution unit makes them, ahead of
+prefetch; reads waiting for their last bus cycle to start, writes posted;
+an 8-bit displacement starting the instruction a clock late and, when it
+starts a word, stalling the decoder that clock; an odd jump target's word
+slot holding a dead byte until the next flush; no prefetch once HLT runs.
+It records its bus cycles, and the rig system `targets/i286/rig.machine`
+runs each vector through it to compare that record with the trace: the
+processor's conformance at transaction boundaries (section 13).
+
 ### 11.3 Operand kinds and `fetch`
 
 ```
@@ -1037,7 +1130,19 @@ AluOp; }`); its operands are read-only. A from kind is built from a
 fetched operand bound to a name (`m`) and has `read`, optionally `write` (a
 kind without `write` is read-only, e.g. immediates) and `is_mem`. In the ISA,
 `rm8` resolves through `ModRM` to a register or a `translate`d memory
-access. In rtl routines, `let m = fetch ModRM;` consumes the operand's bytes
+access. Any other rule without parameters is a **query**: a pure
+expression over the fetched operand that instructions, flag conditions and
+timing entries read as `operand.name`, e.g. on the 286
+
+```
+    /// Base plus index plus a displacement: one more clock of address work.
+    ea_extra => if m.mod != 0 && m.mod != 3 && m.rm < 4 { 1 } else { 0 };
+    /// An 8-bit displacement follows the ModRM.
+    disp8 => m.mod == 1;
+```
+
+A query may not read memory or call an isa fn (E1037). In rtl routines,
+`let m = fetch ModRM;` consumes the operand's bytes
 from the instruction stream via the component's `istream` (a routine the
 component designates), taking the cycles that costs. Because `fetch`
 sequences are typed by the same declarations, the compiler can derive the

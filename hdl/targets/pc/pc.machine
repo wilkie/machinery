@@ -554,15 +554,22 @@ component HostLink {
 /// clock; as the beam finishes each scanline of the display area it renders
 /// that line into `frame`, 640 dots wide, one colour index (0-15, IRGB)
 /// per dot, so low-resolution modes draw every pixel twice. The host reads
-/// `frame`, `frame_width`, `frame_height` and the `frames` counter. The
-/// character generator's 8x8 font is in `font` (eight rows per character,
-/// most significant bit leftmost), which the host fills, as it fills the
-/// boot ROM.
+/// `frame`, `frame_width`, `frame_height` and the `frames` counter.
+///
+/// The glyphs come from the card's character ROM (`charrom`, the 8 KB
+/// IBM 5788005 the MDA shares, which the host fills as it fills the boot
+/// ROM; `fonts/README.md`): its 8x8 fonts at 1000 (thin) and 1800 (thick),
+/// eight rows a character, the most significant bit leftmost. A jumper on
+/// the card picks the thin one (`thin_font`, a strap on the board).
 component Cga {
-    ports { bus port: IsaBus::Slave; }
+    ports {
+        bus port: IsaBus::Slave;
+        /// The font jumper: set for the thin font.
+        in thin_font: bool;
+    }
     model {
         mem vram: [u8; 0x4000];
-        mem font: [u8; 2048];
+        mem charrom: [u8; 8192];
         mem frame: [u8; 163840];
         state frame_width: u32 = 0;
         state frame_height: u32 = 0;
@@ -625,7 +632,8 @@ component Cga {
                         let a = (ma * 2) & 0x3FFF;
                         let ch = vram[a];
                         let attr = vram[a + 1];
-                        let mut glyph = font[ch as u32 * 8 + (ra & 7)];
+                        let bank: u32 = if thin_font { 0x1000 } else { 0x1800 };
+                        let mut glyph = charrom[bank + ch as u32 * 8 + (ra & 7)];
                         let mut fg = attr & 15;
                         let bg = if mode[5] == 1 { (attr >> 4) & 7 } else { attr >> 4 };
                         if mode[5] == 1 && attr[7] == 1 && frames[4] == 1 {
@@ -1118,13 +1126,16 @@ component Ega {
 /// answered at all, so a colour card can sit there (the two-monitor PC).
 ///
 /// Text is the MDA's: 80x25 characters of 9x14 dots, the character in the
-/// even byte and the attribute in the odd one, glyphs from the card's
-/// character ROM (`font`, 16 bytes a character, rows 0-13 used, most
-/// significant bit leftmost, which the host fills). The ninth dot repeats
-/// the eighth for the line-drawing characters C0-DF. Attributes: bit 3
-/// intensity, bit 7 blink (when the mode register enables blinking; else
-/// an intense background), foreground 1 underlined (on row 12), 70 reverse
-/// video, 00 and 77's background-only forms invisible.
+/// even byte and the attribute in the odd one. The glyphs come from the
+/// card's character ROM (`charrom`, which the host fills as it fills the
+/// boot ROM), in the MDA's layout (the IBM 5788005; `fonts/README.md`):
+/// rows 0-7 of each character in the first 2 KB and rows 8-15 in the next,
+/// eight bytes a character in each, the most significant bit leftmost. The
+/// ninth dot repeats the eighth for the line-drawing characters C0-DF.
+/// Attributes: bit 3 intensity, bit 7 blink (when the mode register
+/// enables blinking; else an intense background), foreground 1 underlined
+/// (on row 12), 70 reverse video, 00 and 77's background-only forms
+/// invisible.
 ///
 /// Graphics: each character clock is 16 dots from two bytes, one bit a dot;
 /// a dot row is in one of four 8 KB banks by the 6845's row scan (the
@@ -1137,7 +1148,7 @@ component Hercules {
     ports { bus port: IsaBus::Slave; }
     model {
         mem vram: [u8; 0x10000];
-        mem font: [u8; 4096];
+        mem charrom: [u8; 8192];
         mem frame: [u8; 252000];
         state frame_width: u32 = 0;
         state frame_height: u32 = 0;
@@ -1199,7 +1210,9 @@ component Hercules {
                         let a = page | ((ma * 2) & 0x7FFF);
                         let ch = vram[a];
                         let at = vram[a + 1];
-                        let mut glyph = if ra < 16 { font[(ch as u32) * 16 + ra] } else { 0 };
+                        let mut glyph = if ra < 8 { charrom[(ch as u32) * 8 + ra] }
+                            else if ra < 16 { charrom[0x800 + (ch as u32) * 8 + (ra - 8)] }
+                            else { 0 };
                         let reverse = (at & 0x77) == 0x70;
                         let blinking = mode[5] == 1;
                         let mut fg: u8 = if reverse { 0 } else if at[3] == 1 { 2 } else { 1 };

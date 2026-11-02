@@ -857,6 +857,8 @@ system Board286 {
     wire pic1.sp = true;
     wire pic2.sp = false;
     wire pic2.cas_in = pic1.cas_out;
+    /// The CGA's font jumper left off: the thick font.
+    wire cga.thin_font = false;
     wire cpu.intr_line = pic1.int;
 
     profile fast { default: model; }

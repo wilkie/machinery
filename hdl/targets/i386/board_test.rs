@@ -227,6 +227,19 @@ fn dma_reads_memory_out_to_the_host() {
     assert_eq!(&b.link.outbox[..b.link.out_len as usize], b"Hello, 386!");
 }
 
+/// A font extracted from the cards' ROMs (`targets/pc/fonts`).
+fn font(name: &str) -> Vec<u8> {
+    let here = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut dir = here.as_path();
+    loop {
+        let f = dir.join("targets/pc/fonts").join(name);
+        if f.exists() {
+            return std::fs::read(f).unwrap();
+        }
+        dir = dir.parent().expect("targets/pc/fonts not found");
+    }
+}
+
 /// `out port, value` for each pair: mov dx, port; mov al, value; out dx, al.
 fn outs(regs: &[(u16, u8)]) -> Vec<u8> {
     let mut code = Vec::new();
@@ -307,17 +320,25 @@ fn ega_text_mode_draws_characters() {
         0xF4, // hlt
     ]);
     let mut sys = boot(rom(&code, &[]));
-    // The font, as the BIOS would load it: 'H' row 0 is 11000011.
-    sys.board().ega.planes[0x20000 + b'H' as usize * 32] = 0xC3;
+    // The EGA BIOS's 8x8 font, loaded into plane 2 as its mode set does:
+    // 32 bytes a character.
+    let font8 = font("ega_8x8.bin");
+    for c in 0..256 {
+        let at = 0x20000 + c * 32;
+        sys.board().ega.planes[at..at + 8].copy_from_slice(&font8[c * 8..c * 8 + 8]);
+    }
     frames(&mut sys, 2);
     let b = sys.board();
     assert_eq!((b.ega.frame_width, b.ega.frame_height), (640, 200));
     // Odd/even: the character in plane 0, the attribute in plane 1.
     assert_eq!((b.ega.planes[2], b.ega.planes[0x10002]), (b'H', 0x1E));
-    // The second character cell, scanline 0.
-    let fg = 0x16; // palette[14]
-    let bg = 0x01; // palette[1]
-    assert_eq!(&b.ega.frame[8..16], &[fg, fg, bg, bg, bg, bg, fg, fg]);
+    // The second character cell: 'H' in yellow (palette[14]) on blue
+    // (palette[1]).
+    for r in 0..8 {
+        let row = font8[b'H' as usize * 8 + r];
+        let want: Vec<u8> = (0..8).map(|d| if row >> (7 - d) & 1 == 1 { 0x16 } else { 0x01 }).collect();
+        assert_eq!(&b.ega.frame[r * 720 + 8..r * 720 + 16], &want[..], "row {r}");
+    }
 }
 
 /// 320x200 in 16 colours (the BIOS's mode 0Dh): writes through each write

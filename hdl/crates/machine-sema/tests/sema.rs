@@ -1602,8 +1602,8 @@ fn i286_board_system_checks_clean() {
     // the Hercules; mastered by the bus controller and the DMA controller.
     assert_eq!(isa.slaves.len(), 10);
     assert_eq!(isa.masters.len(), 2);
-    // SP straps, CAS, and INTR.
-    assert_eq!(sys.wires.len(), 4);
+    // SP straps, CAS, INTR, and the CGA's font jumper.
+    assert_eq!(sys.wires.len(), 5);
 }
 
 #[test]

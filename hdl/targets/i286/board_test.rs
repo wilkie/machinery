@@ -403,9 +403,11 @@ const GRAPHICS_320X200: [u8; 16] = [
     0x38, 0x28, 0x2D, 0x0A, 0x7F, 0x06, 0x64, 0x70, 0x02, 0x01, 0x06, 0x07, 0, 0, 0, 0,
 ];
 
+/// Boots `code` with two made-up glyphs in the CGA's thick font, so the
+/// tests can see every dot.
 fn boot_cga(code: &[u8]) -> System {
     let mut sys = boot(rom(code, &[]));
-    let font = &mut sys.board().cga.font;
+    let font = &mut sys.board().cga.charrom[0x1800..];
     font[0x41 * 8..0x41 * 8 + 8].copy_from_slice(&[0xFF, 0x81, 0, 0, 0, 0, 0, 0x18]); // 'A'
     font[0x42 * 8..0x42 * 8 + 8].copy_from_slice(&[0xF0; 8]); // 'B'
     sys
@@ -500,7 +502,7 @@ fn bench_cga(name: &str, regs: &[u8], mode: u8) {
     }
     cga.on_port_write(&mut c, 1, 0x3D8, 0, mode as u16);
     let mut x: u32 = 12345;
-    for b in cga.vram.iter_mut().chain(cga.font.iter_mut()) {
+    for b in cga.vram.iter_mut().chain(cga.charrom.iter_mut()) {
         x = x.wrapping_mul(1103515245).wrapping_add(12345);
         *b = (x >> 16) as u8;
     }
@@ -568,7 +570,7 @@ fn hercules_renders_mda_text() {
     }
     code.push(0xF4);
     let mut sys = boot(rom(&code, &[]));
-    sys.board().herc.font[b'A' as usize * 16] = 0x81;
+    sys.board().herc.charrom[b'A' as usize * 8] = 0x81;
     herc_frames(&mut sys, 2);
     let h = &sys.board().herc;
     assert_eq!((h.frame_width, h.frame_height), (720, 350));
@@ -645,7 +647,7 @@ fn bench_herc(name: &str, regs: &[u8], config: u8, mode: u8) {
     }
     h.on_port_write(&mut c, 1, 0x3B8, 0, mode as u16);
     let mut x: u32 = 12345;
-    for b in h.vram.iter_mut().chain(h.font.iter_mut()) {
+    for b in h.vram.iter_mut().chain(h.charrom.iter_mut()) {
         x = x.wrapping_mul(1103515245).wrapping_add(12345);
         *b = (x >> 16) as u8;
     }
@@ -664,4 +666,118 @@ fn bench_herc(name: &str, regs: &[u8], config: u8, mode: u8) {
 fn bench_hercules_modes() {
     bench_herc("80x25 text", &HERC_TEXT, 0x00, 0x08);
     bench_herc("720x348 graphics", &HERC_GRAPHICS, 0x01, 0x0A);
+}
+
+// --- the character ROM ---
+
+/// The fonts extracted from the cards' ROMs (`targets/pc/fonts`).
+fn font(name: &str) -> Vec<u8> {
+    let here = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut dir = here.as_path();
+    loop {
+        let f = dir.join("targets/pc/fonts").join(name);
+        if f.exists() {
+            return std::fs::read(f).unwrap();
+        }
+        dir = dir.parent().expect("targets/pc/fonts not found");
+    }
+}
+
+/// The MDA/CGA character ROM (the IBM 5788005's layout), built from the
+/// fonts: the MDA font's rows 0-7 at 0000 and rows 8-13 at 0800, the CGA's
+/// thin font at 1000 and thick at 1800.
+fn char_rom() -> Vec<u8> {
+    let mda = font("mda_9x14.bin");
+    let mut rom = vec![0u8; 0x2000];
+    for c in 0..256 {
+        rom[c * 8..c * 8 + 8].copy_from_slice(&mda[c * 14..c * 14 + 8]);
+        rom[0x800 + c * 8..0x800 + c * 8 + 6].copy_from_slice(&mda[c * 14 + 8..c * 14 + 14]);
+    }
+    rom[0x1000..0x1800].copy_from_slice(&font("cga_8x8_thin.bin"));
+    rom[0x1800..0x2000].copy_from_slice(&font("cga_8x8_thick.bin"));
+    rom
+}
+
+/// A glyph row as dots: `on` where the row's bit is set, else `off`.
+fn dots(row: u8, n: usize, on: u8, off: u8) -> Vec<u8> {
+    (0..n).map(|d| if d < 8 && row >> (7 - d) & 1 == 1 { on } else { off }).collect()
+}
+
+/// The CGA draws text from the character ROM's thick font, which its
+/// jumper (strapped off on the board) selects.
+#[test]
+fn cga_draws_from_the_character_rom() {
+    let code = cga_program(&TEXT_80X25, 0x09, 0x00, &[0xC7, 0x06, 0x00, 0x00, b'g', 0x07]); // 'g' at row 0, column 0
+    let mut sys = boot(rom(&code, &[]));
+    sys.board().cga.charrom = char_rom();
+    sys.run(200_000).unwrap();
+    assert!(sys.cpu.halted);
+    let thick = font("cga_8x8_thick.bin");
+    let f = &sys.board().cga.frame;
+    for r in 0..8 {
+        assert_eq!(&f[r * 640..r * 640 + 8], &dots(thick[b'g' as usize * 8 + r], 8, 7, 0)[..], "row {r}");
+    }
+}
+
+/// With the jumper on, the thin font.
+#[test]
+fn cga_font_jumper_selects_the_thin_font() {
+    struct Thin;
+    impl machine_board286::CgaPorts for Thin {
+        fn read_thin_font(&mut self) -> bool {
+            true
+        }
+    }
+    let mut cga = machine_board286::Cga::new();
+    let mut c = Thin;
+    cga.charrom = char_rom();
+    for (i, &v) in TEXT_80X25.iter().enumerate() {
+        cga.on_port_write(&mut c, 1, 0x3D4, 0, i as u16);
+        cga.on_port_write(&mut c, 1, 0x3D5, 0, v as u16);
+    }
+    cga.on_port_write(&mut c, 1, 0x3D8, 0, 0x09);
+    cga.vram[0] = b'g';
+    cga.vram[1] = 0x07;
+    while cga.frames < 1 {
+        cga.on_tick(&mut c, 1_000_000);
+    }
+    let thin = font("cga_8x8_thin.bin");
+    for r in 0..8 {
+        assert_eq!(&cga.frame[r * 640..r * 640 + 8], &dots(thin[b'g' as usize * 8 + r], 8, 7, 0)[..], "row {r}");
+    }
+}
+
+/// The Hercules draws MDA text from the character ROM: all fourteen rows
+/// (rows 8-13 from the ROM's second half, as 'g' shows), the ninth dot
+/// blank for a letter and a copy of the eighth for a line-drawing
+/// character.
+#[test]
+fn hercules_draws_from_the_character_rom() {
+    let mut code = SETUP.to_vec();
+    herc_crtc(&mut code, &HERC_TEXT);
+    out8(&mut code, 0x3B8, 0x08);
+    code.extend_from_slice(&[0xB8, 0x00, 0xB0, 0x8E, 0xD8]); // mov ax, 0xB000; mov ds, ax
+    for (i, ch) in [b'A', b'g', 0xC4].iter().enumerate() {
+        let off = 2 * i as u16;
+        code.extend_from_slice(&[0xC7, 0x06, off as u8, (off >> 8) as u8, *ch, 0x07]);
+    }
+    code.push(0xF4);
+    let mut sys = boot(rom(&code, &[]));
+    sys.board().herc.charrom = char_rom();
+    herc_frames(&mut sys, 2);
+    let mda = font("mda_9x14.bin");
+    let f = &sys.board().herc.frame;
+    for (col, ch) in [b'A', b'g'].iter().enumerate() {
+        for r in 0..14 {
+            let at = r * 720 + col * 9;
+            assert_eq!(&f[at..at + 9], &dots(mda[*ch as usize * 14 + r], 9, 1, 0)[..], "{} row {r}", *ch as char);
+        }
+    }
+    for r in 0..14 {
+        let row = mda[0xC4 * 14 + r];
+        let mut want = dots(row, 9, 1, 0);
+        want[8] = row & 1;
+        let at = r * 720 + 2 * 9;
+        assert_eq!(&f[at..at + 9], &want[..], "C4 row {r}");
+    }
 }

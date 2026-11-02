@@ -2640,7 +2640,11 @@ impl<'a> Gen<'a> {
                         ident(&kind.name),
                         ident(&b.name)
                     ));
-                    if kind.rules.iter().any(|r| r.kind == hir::RuleKind::Query && r.name == "ea") {
+                    if kind
+                        .rules
+                        .iter()
+                        .any(|r| r.kind == hir::RuleKind::Query && r.name == "ea")
+                    {
                         fs.push(format!(
                             "({:?}, if self.kind_{1}_is_mem(ops.{2}).unwrap_or(false) {{ self.kind_{1}_ea(ops.{2}).map(|v| v as i64).unwrap_or(0) }} else {{ 0 }})",
                             format!("{}.ea", b.name),

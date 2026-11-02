@@ -718,7 +718,11 @@ impl<'a> Gen<'a> {
                 return String::new();
             }
             let n = ident(&insts[ii].name);
-            if full(ii) && reach[ii].iter().any(|j| *j == from || !reach[from].contains(j)) {
+            if full(ii)
+                && reach[ii]
+                    .iter()
+                    .any(|j| *j == from || !reach[from].contains(j))
+            {
                 return String::new();
             }
             if full(ii) {

@@ -481,3 +481,42 @@ fn cga_frame_rate() {
     let expected = 912.0 * 262.0 / 14_318_180.0;
     assert!(((t2 - t1) - expected).abs() < 20e-6, "frame took {} s, expected {expected}", t2 - t1);
 }
+
+// --- emulation speed (`cargo test --release --test board -- --ignored --nocapture`) ---
+
+/// A context for driving the CGA model directly: no signals to emit.
+struct Quiet;
+impl machine_board286::CgaPorts for Quiet {}
+
+/// Frames a second the CGA model renders in a mode, driven directly, with
+/// video memory filled with a pattern.
+fn bench_cga(name: &str, regs: &[u8], mode: u8) {
+    use machine_board286::Cga;
+    let mut cga = Cga::new();
+    let mut c = Quiet;
+    for (i, &v) in regs.iter().enumerate() {
+        cga.on_port_write(&mut c, 1, 0x3D4, 0, i as u16);
+        cga.on_port_write(&mut c, 1, 0x3D5, 0, v as u16);
+    }
+    cga.on_port_write(&mut c, 1, 0x3D8, 0, mode as u16);
+    let mut x: u32 = 12345;
+    for b in cga.vram.iter_mut().chain(cga.font.iter_mut()) {
+        x = x.wrapping_mul(1103515245).wrapping_add(12345);
+        *b = (x >> 16) as u8;
+    }
+    let n = 600;
+    let t = std::time::Instant::now();
+    let f0 = cga.frames;
+    while cga.frames < f0 + n {
+        cga.on_tick(&mut c, 1_000_000);
+    }
+    let s = t.elapsed().as_secs_f64();
+    eprintln!("CGA {name}: {:.0} frames/s ({:.1} us a frame)", n as f64 / s, s * 1e6 / n as f64);
+}
+
+#[test]
+#[ignore]
+fn bench_cga_modes() {
+    bench_cga("80x25 text", &TEXT_80X25, 0x09);
+    bench_cga("320x200 graphics", &GRAPHICS_320X200, 0x0A);
+}

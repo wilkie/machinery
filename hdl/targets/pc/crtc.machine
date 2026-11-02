@@ -1,0 +1,150 @@
+// The CRT controllers of the PC's display cards, as units: the logic that
+// turns a controller's registers into the beam's timing, and a character
+// position into the memory address the controller puts out. A card keeps
+// the controller's registers and counts the beam itself; it derives the
+// timing (`*Timing`) when a register is written and keeps it, and calls the
+// address and cursor units for each character it draws.
+//
+// - The Motorola MC6845, on the CGA, the MDA and the Hercules cards.
+// - The EGA's CRTC, IBM's own: 6845-like, with vertical timing counted in
+//   scanlines, an overflow register for the ninth bits, byte or word
+//   addressing, and the compatibility bits that put the row scan counter
+//   into the address.
+
+/// What an MC6845's registers make of a frame. Character clocks a scanline
+/// (R0 + 1) and of them displayed (R1); scanlines a character row (R9 + 1);
+/// scanlines a frame (R4 + 1 rows, plus the R5 adjust) and of them
+/// displayed (R6 rows); the scanline vertical sync starts on (R7 rows),
+/// which lasts 16 scanlines. The start address (R12, R13) and the cursor
+/// (R14, R15; rows R10 to R11; R10 bits 6-5 its blink: 0 steady, 1 off, 2
+/// every 16 frames, 3 every 32) are 14 bits.
+bundle Mc6845Frame {
+    line_chars: u32,
+    shown_chars: u32,
+    row_lines: u32,
+    frame_lines: u32,
+    shown_lines: u32,
+    vsync_line: u32,
+    start: u32,
+    cursor: u32,
+    cursor_first: u32,
+    cursor_last: u32,
+    cursor_blink: u32,
+}
+
+unit Mc6845Timing(r: [u8; 18]) -> Mc6845Frame {
+    let rows = (r[9] & 31) as u32 + 1;
+    return Mc6845Frame {
+        line_chars: r[0] as u32 + 1,
+        shown_chars: r[1] as u32,
+        row_lines: rows,
+        frame_lines: ((r[4] & 127) as u32 + 1) * rows + (r[5] & 31) as u32,
+        shown_lines: (r[6] & 127) as u32 * rows,
+        vsync_line: (r[7] & 127) as u32 * rows,
+        start: concat(r[12] & 0x3F, r[13]) as u32,
+        cursor: concat(r[14] & 0x3F, r[15]) as u32,
+        cursor_first: (r[10] & 31) as u32,
+        cursor_last: (r[11] & 31) as u32,
+        cursor_blink: ((r[10] >> 5) & 3) as u32,
+    };
+}
+
+/// The memory address (MA) of character `col` of character row `row`: the
+/// 6845 counts on from the start address, a row R1 characters on.
+unit Mc6845Address(f: Mc6845Frame, row: u32, col: u32) -> u32 {
+    return (f.start + row * f.shown_chars + col) & 0x3FFF;
+}
+
+/// Whether the cursor shows at address `ma` on row scan `ra` of frame
+/// number `frame`.
+unit Mc6845Cursor(f: Mc6845Frame, ma: u32, ra: u32, frame: u32) -> bool {
+    let on = if f.cursor_blink == 0 { true }
+        else if f.cursor_blink == 1 { false }
+        else if f.cursor_blink == 2 { ((frame >> 3) & 1) == 1 }
+        else { ((frame >> 4) & 1) == 1 };
+    return on && ma == f.cursor && ra >= f.cursor_first && ra <= f.cursor_last;
+}
+
+/// The 6845's DISPEN and VSYNC at character clock `ch` of scanline `line`.
+unit Mc6845Outputs(f: Mc6845Frame, line: u32, ch: u32) -> (display: bool, vsync: bool) {
+    return (
+        display: ch < f.shown_chars && line < f.shown_lines,
+        vsync: line >= f.vsync_line && line < f.vsync_line + 16,
+    );
+}
+
+/// What the EGA CRTC's registers make of a frame. Character clocks a
+/// scanline (R0 + 2) and of them displayed (R1 + 1); scanlines a character
+/// row (R9 + 1); scanlines a frame (R6 + 1) and displayed (R12h + 1), and
+/// the line vertical retrace starts on (R10h) and how long it lasts (to
+/// R11h's low four bits), each with its ninth bit from the overflow
+/// register (R7). The start address (R0Ch, R0Dh) and cursor (R0Eh, R0Fh;
+/// rows R0Ah to R0Bh; off when R0Ah bit 5 is set) are 16 bits; a row is
+/// the Offset register (R13h) times two characters on. `mode` is the Mode
+/// Control register (R17h): bit 6 byte (else word) addressing, bits 0 and
+/// 1 clear put row scan bits 0 and 1 into address bits 13 and 14.
+bundle EgaCrtcFrame {
+    line_chars: u32,
+    shown_chars: u32,
+    row_lines: u32,
+    frame_lines: u32,
+    shown_lines: u32,
+    retrace_line: u32,
+    retrace_lines: u32,
+    stride: u32,
+    start: u32,
+    cursor: u32,
+    cursor_first: u32,
+    cursor_last: u32,
+    cursor_off: bool,
+    mode: u8,
+}
+
+unit EgaCrtcTiming(r: [u8; 25]) -> EgaCrtcFrame {
+    let vs = r[16] as u32 | ((r[7][2] as u32) << 8);
+    let len = ((r[17] & 15) as u32 + 16 - (vs & 15)) % 16;
+    return EgaCrtcFrame {
+        line_chars: r[0] as u32 + 2,
+        shown_chars: r[1] as u32 + 1,
+        row_lines: (r[9] & 31) as u32 + 1,
+        frame_lines: (r[6] as u32 | ((r[7][0] as u32) << 8)) + 1,
+        shown_lines: (r[18] as u32 | ((r[7][1] as u32) << 8)) + 1,
+        retrace_line: vs,
+        retrace_lines: if len == 0 { 16 } else { len },
+        stride: r[19] as u32 * 2,
+        start: concat(r[12], r[13]) as u32,
+        cursor: concat(r[14], r[15]) as u32,
+        cursor_first: (r[10] & 31) as u32,
+        cursor_last: (r[11] & 31) as u32,
+        cursor_off: r[10][5] == 1,
+        mode: r[23],
+    };
+}
+
+/// The memory address of character `col` of character row `row` on row
+/// scan `ra`, as the CRTC puts it out (the plane offset): the character
+/// address doubled in word mode, then row scan bits in address bits 13 and
+/// 14 when the compatibility bits ask for them.
+unit EgaCrtcAddress(f: EgaCrtcFrame, row: u32, col: u32, ra: u32) -> u32 {
+    let ma = (f.start + row * f.stride + col) & 0xFFFF;
+    let mut a = if f.mode[6] == 0 { ma << 1 } else { ma };
+    if f.mode[0] == 0 { a = (a & 0xDFFF) | ((ra & 1) << 13); }
+    if f.mode[1] == 0 { a = (a & 0xBFFF) | (((ra >> 1) & 1) << 14); }
+    return a & 0xFFFF;
+}
+
+/// Whether the cursor shows at character `col` of character row `row` on
+/// row scan `ra` of frame number `frame` (it blinks every 16 frames).
+unit EgaCrtcCursor(f: EgaCrtcFrame, row: u32, col: u32, ra: u32, frame: u32) -> bool {
+    let ma = (f.start + row * f.stride + col) & 0xFFFF;
+    return !f.cursor_off && ((frame >> 3) & 1) == 1 && ma == f.cursor && ra >= f.cursor_first && ra <= f.cursor_last;
+}
+
+/// The CRTC's display enable and vertical retrace at character clock `ch`
+/// of scanline `line`.
+unit EgaCrtcOutputs(f: EgaCrtcFrame, line: u32, ch: u32) -> (display: bool, retrace: bool) {
+    return (
+        display: ch < f.shown_chars && line < f.shown_lines,
+        retrace: line >= f.retrace_line && line < f.retrace_line + f.retrace_lines,
+    );
+}

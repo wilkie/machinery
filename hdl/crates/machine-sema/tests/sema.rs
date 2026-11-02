@@ -1576,6 +1576,7 @@ fn i286_board_system_checks_clean() {
         .join("targets");
     let files = [
         ("pc", "isabus.machine"),
+        ("pc", "crtc.machine"),
         ("pc", "pc.machine"),
         ("i286", "alu.machine"),
         ("i286", "i286.machine"),

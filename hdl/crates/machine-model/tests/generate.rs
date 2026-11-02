@@ -330,7 +330,10 @@ fn i386_target_passes_hardware_vectors() {
         .expect("run cargo");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "i386 tests failed:\n{stdout}\n{stderr}");
+    assert!(
+        output.status.success(),
+        "i386 tests failed:\n{stdout}\n{stderr}"
+    );
 
     // The self-checking programs: the 286's suites, and the 386's own
     // (protected mode, paging, virtual-8086 mode). Each suite is skipped
@@ -342,7 +345,14 @@ fn i386_target_passes_hardware_vectors() {
     )
     .unwrap();
     let output = Command::new(&cargo)
-        .args(["test", "--quiet", "--release", "--test", "programs", "--manifest-path"])
+        .args([
+            "test",
+            "--quiet",
+            "--release",
+            "--test",
+            "programs",
+            "--manifest-path",
+        ])
         .arg(dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", &target_dir)
         .arg("--")
@@ -351,7 +361,10 @@ fn i386_target_passes_hardware_vectors() {
         .expect("run programs");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "programs failed:\n{stdout}\n{stderr}");
+    assert!(
+        output.status.success(),
+        "programs failed:\n{stdout}\n{stderr}"
+    );
 
     let vectors = root
         .join("..")
@@ -392,7 +405,10 @@ fn i386_target_passes_hardware_vectors() {
         .expect("run vectors");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "hardware vectors failed:\n{stdout}\n{stderr}");
+    assert!(
+        output.status.success(),
+        "hardware vectors failed:\n{stdout}\n{stderr}"
+    );
     assert!(stdout.contains(" 0 failed"), "{stdout}");
 
     // The timing table against the same vectors' cycle traces. Tier 1
@@ -422,7 +438,14 @@ fn i386_target_passes_hardware_vectors() {
         .unwrap_or_else(|| panic!("{stdout}"));
     let pct = |label: &str| -> f64 {
         let i = line.find(label).unwrap_or_else(|| panic!("{line}"));
-        line[..i].trim_end().trim_end_matches('%').rsplit(' ').next().unwrap().parse().unwrap()
+        line[..i]
+            .trim_end()
+            .trim_end_matches('%')
+            .rsplit(' ')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
     };
     assert!(pct("% exact") >= 45.0, "{line}");
     assert!(pct("% within 1") >= 75.0, "{line}");
@@ -438,6 +461,7 @@ fn i286_board_system_boots() {
         target("timing.machine"),
         target("schedules.machine"),
         pc("isabus.machine"),
+        pc("crtc.machine"),
         pc("pc.machine"),
         target("board.machine"),
     ]);
@@ -486,6 +510,7 @@ fn i386_board_system_boots() {
     };
     let checked = check_files(vec![
         pc("isabus.machine"),
+        pc("crtc.machine"),
         pc("pc.machine"),
         read("i286", "alu.machine"),
         read("i386", "i386.machine"),
@@ -516,7 +541,10 @@ fn i386_board_system_boots() {
         .expect("run cargo");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "board tests failed:\n{stdout}\n{stderr}");
+    assert!(
+        output.status.success(),
+        "board tests failed:\n{stdout}\n{stderr}"
+    );
     assert!(stdout.contains("9 passed"), "expected 9 tests:\n{stdout}");
 }
 
@@ -533,6 +561,7 @@ fn i286_pipeline_reproduces_bus_traces() {
         target("timing.machine"),
         target("schedules.machine"),
         pc("isabus.machine"),
+        pc("crtc.machine"),
         pc("pc.machine"),
         target("board.machine"),
         target("rig.machine"),

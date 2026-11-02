@@ -432,3 +432,84 @@ fn ega_350_line_mode_uses_the_fast_clock() {
     let expect = 744.0 * 365.0 / 16.257e6;
     assert!((period - expect).abs() < 1e-4, "a frame took {period} s, expected {expect}");
 }
+
+// --- emulation speed (`cargo test --release --test board -- --ignored --nocapture`) ---
+
+/// A context for driving the EGA model directly: no signals to emit.
+struct Quiet;
+impl machine_board386::EgaPorts for Quiet {}
+
+/// Frames a second the EGA model renders in a mode, driven directly (the
+/// processor and the rest of the board take no part), with every plane
+/// filled with a pattern so text and graphics both have work.
+fn bench_ega(name: &str, misc: u8, seq: &[u8], crtc: &[u8], gc: &[u8], attr: &[u8]) {
+    use machine_board386::Ega;
+    let mut ega = Ega::new();
+    let mut c = Quiet;
+    let mut out = |ega: &mut Ega, port: u32, v: u8| {
+        ega.on_port_write(&mut c, 1, port, 0, v as u16);
+    };
+    out(&mut ega, 0x3C2, misc);
+    for (i, &v) in seq.iter().enumerate() {
+        out(&mut ega, 0x3C4, i as u8);
+        out(&mut ega, 0x3C5, v);
+    }
+    for (i, &v) in crtc.iter().enumerate() {
+        out(&mut ega, 0x3D4, i as u8);
+        out(&mut ega, 0x3D5, v);
+    }
+    for (i, &v) in gc.iter().enumerate() {
+        out(&mut ega, 0x3CE, i as u8);
+        out(&mut ega, 0x3CF, v);
+    }
+    for (i, &v) in attr.iter().enumerate() {
+        out(&mut ega, 0x3C0, i as u8);
+        out(&mut ega, 0x3C0, v);
+    }
+    let mut x: u32 = 12345;
+    for b in ega.planes.iter_mut() {
+        x = x.wrapping_mul(1103515245).wrapping_add(12345);
+        *b = (x >> 16) as u8;
+    }
+    let mut c = Quiet;
+    let n = 600;
+    let t = std::time::Instant::now();
+    let f0 = ega.frames;
+    while ega.frames < f0 + n {
+        let left = ega.on_tick_dot14(&mut c, 1_000_000);
+        let _ = ega.on_tick_dot16(&mut c, 1_000_000.min(left));
+    }
+    let s = t.elapsed().as_secs_f64();
+    eprintln!("EGA {name}: {:.0} frames/s ({:.1} us a frame)", n as f64 / s, s * 1e6 / n as f64);
+}
+
+#[test]
+#[ignore]
+fn bench_ega_modes() {
+    let mut text = PAL200.to_vec();
+    text.extend_from_slice(&[0x08, 0x00, 0x0F, 0x00]);
+    bench_ega(
+        "80x25 text",
+        0x23,
+        &[0x03, 0x01, 0x03, 0x00, 0x03],
+        &[
+            0x70, 0x4F, 0x5C, 0x2F, 0x5F, 0x07, 0x04, 0x11, 0x00, 0x07, 0x06, 0x07, 0x00, 0x00,
+            0x00, 0x00, 0xE1, 0x24, 0xC7, 0x28, 0x08, 0xE0, 0xF0, 0xA3, 0xFF,
+        ],
+        &[0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0E, 0x00, 0xFF],
+        &text,
+    );
+    let mut graphics = PAL200.to_vec();
+    graphics.extend_from_slice(&[0x01, 0x00, 0x0F, 0x00]);
+    bench_ega(
+        "320x200x16",
+        0x23,
+        &[0x03, 0x0B, 0x0F, 0x00, 0x06],
+        &[
+            0x37, 0x27, 0x2D, 0x37, 0x30, 0x14, 0x04, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xE1, 0x24, 0xC7, 0x14, 0x00, 0xE0, 0xF0, 0xE3, 0xFF,
+        ],
+        &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x0F, 0xFF],
+        &graphics,
+    );
+}

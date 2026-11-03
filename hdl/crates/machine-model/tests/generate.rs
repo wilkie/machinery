@@ -524,7 +524,8 @@ fn i286_at_boots_its_bios() {
     std::fs::copy(root.join("targets").join("i286").join("at_test.rs"), dir.join("tests").join("at.rs")).unwrap();
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let output = Command::new(&cargo)
-        .args(["test", "--quiet", "--test", "at", "--manifest-path"])
+        // Release: the BIOS runs a minute of the AT's time.
+        .args(["test", "--release", "--quiet", "--test", "at", "--manifest-path"])
         .arg(dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
         .output()

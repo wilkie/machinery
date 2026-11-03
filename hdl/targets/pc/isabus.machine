@@ -74,9 +74,11 @@ bus IsaBus {
     /// channel supplies (`dack_read`) or takes (`dack_write`) the byte while
     /// the DMA controller drives the memory side, which carries the bus
     /// time; the acknowledge itself costs no cycles. Not address-decoded:
-    /// the device on the channel answers, the others decline.
-    transaction dack_read(channel: u2) -> (data: u8) { Master { } }
-    transaction dack_write(channel: u2, data: u8) { Master { } }
+    /// the device on the channel answers, the others decline. `tc` is the
+    /// T/C line: this is the block's last transfer (a diskette controller
+    /// ends its command on it).
+    transaction dack_read(channel: u2, tc: bool) -> (data: u8) { Master { } }
+    transaction dack_write(channel: u2, data: u8, tc: bool) { Master { } }
 
     signal dreq(channel: u2) = drq[channel];
 }

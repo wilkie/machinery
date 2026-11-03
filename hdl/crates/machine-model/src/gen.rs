@@ -378,7 +378,8 @@ impl<'a> Gen<'a> {
                 let bt = self.expr(cx, base)?;
                 let it = self.expr(cx, idx)?;
                 match &base.ty {
-                    Ty::Array(..) => format!("{bt}[({it}) as usize]"),
+                    // The index first: it may call into the component.
+                    Ty::Array(..) => format!("({{ let i = ({it}) as usize; {bt}[i] }})"),
                     _ => format!("((({bt}).checked_shr(({it}) as u32).unwrap_or(0) & 1) as u8)"),
                 }
             }
@@ -1135,10 +1136,29 @@ impl<'a> Gen<'a> {
         self.memo_cur.borrow().as_ref().and_then(|m| m.mems.get(&i).copied())
     }
 
-    /// The place expression itself (never recorded as a read).
+    /// The place expression itself (never recorded as a read). An indexed
+    /// array stays a place here (`base[i]`), where a read evaluates the
+    /// index into a temporary first.
     fn lvalue(&self, cx: &Cx, e: &Expr) -> R<String> {
         let rec = self.memo_rec.replace(false);
-        let r = self.expr(cx, e);
+        let r = match &e.kind {
+            H::Index(base, idx) if matches!(base.ty, Ty::Array(..)) => {
+                self.memo_rec.set(rec);
+                let it = self.expr(cx, idx);
+                self.memo_rec.set(false);
+                let bt = self.lvalue(cx, base);
+                match (bt, it) {
+                    (Ok(b), Ok(i)) => Ok(format!("{b}[({i}) as usize]")),
+                    (Err(x), _) | (_, Err(x)) => Err(x),
+                }
+            }
+            H::Field(base, i) if Self::is_lvalue(base) => {
+                let Ty::Bundle(d) = &base.ty else { unreachable!() };
+                let bd = self.bundles[d];
+                self.lvalue(cx, base).map(|b| format!("{b}.{}", ident(&bd.fields[*i as usize].name)))
+            }
+            _ => self.expr(cx, e),
+        };
         self.memo_rec.set(rec);
         r
     }

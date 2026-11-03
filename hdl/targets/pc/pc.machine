@@ -392,12 +392,14 @@ component Dma8237 {
         fn transfer(c: u2) {
             let a = concat(ch[c].page, ch[c].addr);
             let kind = ch[c].mode[3:2];
+            // T/C with the block's last transfer.
+            let tc = ch[c].count == 0;
             if kind == 1 {
-                let b = dma.dack_read(channel: c).data;
+                let b = dma.dack_read(channel: c, tc: tc).data;
                 dma.write(space: Space::Mem, addr: a, size: BusSize::Byte, data: b as u16);
             } else if kind == 2 {
                 let b = dma.read(space: Space::Mem, addr: a, size: BusSize::Byte).data as u8;
-                dma.dack_write(channel: c, data: b);
+                dma.dack_write(channel: c, data: b, tc: tc);
             }
             ch[c].addr = if ch[c].mode[5] == 1 { ch[c].addr - 1 } else { ch[c].addr + 1 };
             // Terminal count is the count rolling over from 0 to FFFF.
@@ -568,7 +570,7 @@ component HostLink {
             update_dreq();
         }
 
-        on port.dack_read(channel: u2) -> (data: u8, wait: u8) {
+        on port.dack_read(channel: u2, tc: bool) -> (data: u8, wait: u8) {
             if channel != 1 || head == tail {
                 decline;
             }
@@ -578,7 +580,7 @@ component HostLink {
             return (data: b, wait: 0);
         }
 
-        on port.dack_write(channel: u2, data: u8) -> (wait: u8) {
+        on port.dack_write(channel: u2, data: u8, tc: bool) -> (wait: u8) {
             if channel != 1 || wanted == 0 {
                 decline;
             }
@@ -1852,6 +1854,404 @@ component Kbc8042 {
                 }
             }
             return (wait: 1);
+        }
+    }
+}
+
+/// How many bytes a uPD765 command takes, by its first (invalid ones: 1).
+unit Upd765CommandBytes(op: u8) -> u8 {
+    let o = op & 0x1F;
+    if o == 0x03 { return 3; }
+    if o == 0x04 || o == 0x07 || o == 0x0A { return 2; }
+    if o == 0x08 { return 1; }
+    if o == 0x0D { return 6; }
+    if o == 0x0F { return 3; }
+    if o == 0x02 || o == 0x05 || o == 0x06 || o == 0x09 || o == 0x0C { return 9; }
+    return 1;
+}
+
+/// The AT's diskette controller: an NEC uPD765 behind the fixed disk and
+/// diskette adapter's glue, on DMA channel 2 and IRQ 6, with one drive (A)
+/// and the disk in it.
+///
+/// 3F1h reads 50h: the adapter has no fixed-disk controller (the BIOS
+/// looks there before testing one at 1F0h).
+/// 3F2h, the digital output register: bits 0-1 select a drive, bit 2 low
+/// holds the controller in reset, bit 3 enables its DMA request and
+/// interrupt, bits 4-7 turn the motors on. 3F4h, the main status register:
+/// bit 7 ready for a byte, 6 the byte goes to the processor, 4 a command
+/// is in progress. 3F5h, the data register: a command's bytes in, its
+/// result's out. 3F7h: read, bit 7 the disk-change line; written, the data
+/// rate (0: 500, 1: 300, 2: 250 kbit/s).
+///
+/// The disk is `image` with its geometry (`cylinders`, `heads`, `sectors`
+/// of 512 bytes a track) and the data rate its media is recorded at
+/// (`rate`); `present` when there is one. The drive (an 80-track one) is
+/// there with or without a disk: its head stops at track 82, and its
+/// track-0 sensor reports where it really is (the BIOS finds 80-track
+/// drives that way). Recalibrate gives up after 77 steps, as the 765 does.
+/// Sector reads and writes go through DMA a byte at a time until the DMA
+/// controller's terminal count, across sectors and (multi-track) heads; a
+/// track read at the wrong rate, or a cylinder or sector not on it, fails
+/// as the 765 reports it; with no disk a read never ends (no index
+/// pulses), until the BIOS gives up and resets the controller. Seeks take
+/// a millisecond a track (`on tick` at 1.19 MHz) and then interrupt.
+component Fdc765 {
+    ports {
+        bus port: IsaBus::Slave;
+        bus irq: IrqLines::Device;
+    }
+    model {
+        mem image: [u8; 1474560];
+        state present: bool = false;
+        state cylinders: u32 = 80;
+        state heads: u32 = 2;
+        state sectors: u32 = 15;
+        state rate: u8 = 0;
+        state changed: bool = true;
+
+        state dor: u8 = 0;
+        state ccr: u8 = 0;
+        /// 0 command, 1 execution, 2 result.
+        state phase: u8 = 0;
+        state cmd: [u8; 9];
+        state cmd_n: u8 = 0;
+        state res: [u8; 7];
+        state res_n: u8 = 0;
+        state res_i: u8 = 0;
+        /// The controller's present cylinder number, where the head really
+        /// is, and the seek under way (clocks left).
+        state pcn: u8 = 0;
+        state head_pos: u8 = 0;
+        state target: u8 = 0;
+        state seek_left: u32 = 0;
+        /// Interrupts for Sense Interrupt Status: ST0 and PCN.
+        state pend_st0: [u8; 4];
+        state pend_pcn: [u8; 4];
+        state pend_n: u8 = 0;
+        /// A transfer: the sector, its byte, writing, the track's head.
+        state xr: u8 = 0;
+        state xh: u8 = 0;
+        state xpos: u32 = 0;
+        state xwrite: bool = false;
+        state xformat: bool = false;
+        state xrecal: bool = false;
+        state fmt_bytes: u8 = 0;
+        state fmt_left: u8 = 0;
+        state fmt_id: [u8; 4];
+        state fmt_fill: u8 = 0;
+
+        fn reset_controller() {
+            phase = 0;
+            cmd_n = 0;
+            res_n = 0;
+            res_i = 0;
+            seek_left = 0;
+            pend_n = 0;
+            dreq_level(false);
+            // After a reset the controller reports a ready change for each
+            // of its four drives.
+            for d in 0..4 {
+                pend_st0[d] = 0xC0 | d as u8;
+                pend_pcn[d] = 0;
+            }
+            pend_n = 4;
+            interrupt();
+        }
+
+        fn dreq_level(on: bool) {
+            emit port.dreq(2) = on && dor[3] == 1;
+        }
+        fn interrupt() {
+            emit irq.request(6) = dor[3] == 1;
+        }
+        fn quiet() {
+            emit irq.request(6) = false;
+        }
+
+
+        /// The drive is selected with its motor on (there is only A).
+        fn ready(d: u8) -> bool {
+            return d == 0 && (dor & 3) == d && dor[4] == 1;
+        }
+
+        /// The cylinder recorded on the track under the head, if the disk
+        /// can be read at the selected rate there: a 40-track disk in this
+        /// 80-track drive is read double-stepped.
+        fn track_cylinder() -> u32 {
+            if !present || (ccr & 3) != rate { return 0xFFFF; }
+            if cylinders <= 40 {
+                return if head_pos % 2 == 0 { (head_pos / 2) as u32 } else { 0xFFFF };
+            }
+            return if (head_pos as u32) < cylinders { head_pos as u32 } else { 0xFFFF };
+        }
+
+        fn result(st0: u8, st1: u8, st2: u8) {
+            res[0] = st0;
+            res[1] = st1;
+            res[2] = st2;
+            res[3] = cmd[2];
+            res[4] = xh;
+            res[5] = xr;
+            res[6] = cmd[5];
+            res_n = 7;
+            res_i = 0;
+            phase = 2;
+            dreq_level(false);
+            interrupt();
+        }
+
+        fn st0_of(code: u8) -> u8 {
+            return code | (xh << 2) | (cmd[1] & 3);
+        }
+
+        /// The offset of the sector with ID (`c`, head `h`, `r`, size `n`)
+        /// if it is on the track under the head (else all ones).
+        fn sector_offset(c: u8, h: u8, r: u8, n: u8) -> u32 {
+            let t = track_cylinder();
+            if t == 0xFFFF || t != c as u32 || (h as u32) >= heads
+                || r == 0 || (r as u32) > sectors || n != 2 {
+                return 0xFFFFFFFF;
+            }
+            return ((t * heads + h as u32) * sectors + (r as u32 - 1)) * 512;
+        }
+        /// The transfer's sector: `xr` on head `xh` of the cylinder in
+        /// `cmd[2]`.
+        fn sector_at() -> u32 { return sector_offset(cmd[2], xh, xr, cmd[5]); }
+
+        /// Read or write data: the transfer starts, or fails at once.
+        fn start_transfer(write: bool) {
+            xh = (cmd[1] >> 2) & 1;
+            xr = cmd[4];
+            xpos = 0;
+            xwrite = write;
+            xformat = false;
+            if !ready(cmd[1] & 3) {
+                result(st0_of(0x48), 0, 0);
+                return;
+            }
+            if !present {
+                // No disk, no index pulses: the command never ends.
+                phase = 1;
+                return;
+            }
+            if track_cylinder() == 0xFFFF {
+                result(st0_of(0x40), 0x01, 0);
+                return;
+            }
+            if sector_at() == 0xFFFFFFFF {
+                let st2: u8 = if track_cylinder() != cmd[2] as u32 { 0x10 } else { 0 };
+                result(st0_of(0x40), 0x04, st2);
+                return;
+            }
+            phase = 1;
+            dreq_level(true);
+        }
+
+        /// The sector is done: on to the next, or the command ends
+        /// (past the end of the track without a terminal count, an error).
+        fn next_sector(tc: bool) {
+            xpos = 0;
+            let last = xr == cmd[6];
+            if last {
+                if (cmd[0] & 0x80) != 0 && xh == 0 && heads > 1 {
+                    xh = 1;
+                    xr = 1;
+                } else {
+                    xr = 1;
+                    cmd[2] = cmd[2] + 1;
+                    if !tc { result(st0_of(0x40), 0x80, 0); return; }
+                }
+            } else {
+                xr = xr + 1;
+            }
+            if tc { result(st0_of(0), 0, 0); return; }
+            if sector_at() == 0xFFFFFFFF { result(st0_of(0x40), 0x04, 0); }
+        }
+
+        fn execute() {
+            let o = cmd[0] & 0x1F;
+            let d = cmd[1] & 3;
+            if o == 0x03 {
+                phase = 0;
+            } else if o == 0x04 {
+                let st3: u8 = d | (cmd[1] & 4) | (if ready(d) { 0x20 } else { 0 })
+                    | (if d == 0 && head_pos == 0 { 0x10 } else { 0 }) | (if d == 0 { 0x08 } else { 0 });
+                res[0] = st3;
+                res_n = 1;
+                res_i = 0;
+                phase = 2;
+            } else if o == 0x07 || o == 0x0F {
+                target = if o == 0x07 { 0 } else { cmd[2] };
+                xh = (cmd[1] >> 2) & 1;
+                xrecal = o == 0x07;
+                let steps = if xrecal { if head_pos > 77 { 77 } else { head_pos } }
+                    else if target > pcn { target - pcn } else { pcn - target };
+                seek_left = 1 + (steps as u32) * 1193;
+                phase = 0;
+            } else if o == 0x08 {
+                if pend_n == 0 {
+                    res[0] = 0x80;
+                    res_n = 1;
+                } else {
+                    res[0] = pend_st0[0];
+                    res[1] = pend_pcn[0];
+                    for i in 0..3 {
+                        pend_st0[i] = pend_st0[i + 1];
+                        pend_pcn[i] = pend_pcn[i + 1];
+                    }
+                    pend_n = pend_n - 1;
+                    res_n = 2;
+                }
+                res_i = 0;
+                phase = 2;
+                quiet();
+            } else if o == 0x0A {
+                xh = (cmd[1] >> 2) & 1;
+                xr = 1;
+                let c = track_cylinder();
+                if !ready(d) {
+                    result(st0_of(0x48), 0, 0);
+                } else if !present {
+                    phase = 1;
+                } else if c == 0xFFFF {
+                    result(st0_of(0x40), 0x01, 0);
+                } else {
+                    cmd[2] = c as u8;
+                    cmd[5] = 2;
+                    result(st0_of(0), 0, 0);
+                }
+            } else if o == 0x06 || o == 0x0C {
+                start_transfer(false);
+            } else if o == 0x05 || o == 0x09 {
+                start_transfer(true);
+            } else if o == 0x0D {
+                // Format: four ID bytes a sector come by DMA; the
+                // sectors are filled with the given byte.
+                xh = (cmd[1] >> 2) & 1;
+                if !ready(d) {
+                    result(st0_of(0x48), 0, 0);
+                } else {
+                    xformat = true;
+                    fmt_left = cmd[3];
+                    fmt_fill = cmd[5];
+                    fmt_bytes = 0;
+                    phase = 1;
+                    dreq_level(true);
+                }
+            } else {
+                res[0] = 0x80;
+                res_n = 1;
+                res_i = 0;
+                phase = 2;
+            }
+        }
+
+        on tick(n: u32) -> u32 {
+            if seek_left == 0 { return 0xFFFFFFFF; }
+            seek_left = if n >= seek_left { 0 } else { seek_left - n };
+            if seek_left == 0 {
+                let d = cmd[1] & 3;
+                // Seek end; equipment check when a recalibrate didn't
+                // reach track 0 (or there is no drive).
+                let mut st0: u8 = 0x20 | (xh << 2) | d;
+                if d == 0 {
+                    if xrecal {
+                        if head_pos > 77 { head_pos = head_pos - 77; st0 = st0 | 0x50; } else { head_pos = 0; }
+                        pcn = 0;
+                    } else {
+                        let moved = (head_pos as i32) + (target as i32) - (pcn as i32);
+                        head_pos = if moved < 0 { 0 } else if moved > 82 { 82 } else { moved as u8 };
+                        pcn = target;
+                    }
+                    if present && target != 0xFF { changed = false; }
+                } else if xrecal {
+                    st0 = st0 | 0x50;
+                }
+                if pend_n < 4 {
+                    pend_st0[pend_n] = st0;
+                    pend_pcn[pend_n] = if d == 0 { pcn } else { target };
+                    pend_n = pend_n + 1;
+                }
+                interrupt();
+                return 0xFFFFFFFF;
+            }
+            return seek_left;
+        }
+
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            let r = addr[2:0];
+            if r == 4 {
+                let busy = phase != 0 || cmd_n != 0;
+                let v: u8 = if phase == 1 { 0x10 | 0x20 } else if phase == 2 { 0xD0 } else { 0x80 | (if busy { 0x10 } else { 0 }) };
+                return (data: v as u16, wait: 1);
+            }
+            if r == 5 {
+                if phase != 2 { return (data: 0xFF, wait: 1); }
+                let v = res[res_i];
+                if res_i == 0 { quiet(); }
+                res_i = res_i + 1;
+                if res_i >= res_n { phase = 0; }
+                return (data: v as u16, wait: 1);
+            }
+            if r == 7 { return (data: (if changed { 0x80 } else { 0 }) | 0x7F, wait: 1); }
+            // A diskette-only adapter: the BIOS reads 3F1h and, seeing 50h
+            // in its top five bits, doesn't look for a fixed disk on it.
+            if r == 1 { return (data: 0x50, wait: 1); }
+            return (data: 0xFF, wait: 1);
+        }
+
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            let d = data as u8;
+            let r = addr[2:0];
+            if r == 2 {
+                let was = dor;
+                dor = d;
+                if d[2] == 1 && was[2] == 0 { reset_controller(); }
+                if d[2] == 0 { phase = 0; cmd_n = 0; quiet(); }
+                return (wait: 1);
+            }
+            if r == 7 { ccr = d & 3; return (wait: 1); }
+            if r == 5 && dor[2] == 1 && phase == 0 {
+                cmd[cmd_n] = d;
+                cmd_n = cmd_n + 1;
+                if cmd_n >= Upd765CommandBytes(cmd[0]) {
+                    cmd_n = 0;
+                    execute();
+                }
+            }
+            return (wait: 1);
+        }
+
+        on port.dack_read(channel: u2, tc: bool) -> (data: u8, wait: u8) {
+            if channel != 2 || phase != 1 || xwrite || xformat { decline; }
+            let b = image[sector_at() + xpos];
+            xpos = xpos + 1;
+            if tc || xpos == 512 { next_sector(tc); }
+            return (data: b, wait: 0);
+        }
+
+        on port.dack_write(channel: u2, data: u8, tc: bool) -> (wait: u8) {
+            if channel != 2 || phase != 1 || !(xwrite || xformat) { decline; }
+            if xformat {
+                fmt_id[fmt_bytes] = data;
+                fmt_bytes = fmt_bytes + 1;
+                if fmt_bytes == 4 {
+                    fmt_bytes = 0;
+                    xr = fmt_id[2];
+                    let at = sector_offset(fmt_id[0], xh, fmt_id[2], fmt_id[3]);
+                    if at != 0xFFFFFFFF {
+                        for i in 0..512 { image[at + i as u32] = fmt_fill; }
+                    }
+                    fmt_left = fmt_left - 1;
+                    if fmt_left == 0 || tc { result(st0_of(0), 0, 0); }
+                }
+                return (wait: 0);
+            }
+            image[sector_at() + xpos] = data;
+            xpos = xpos + 1;
+            if tc || xpos == 512 { next_sector(tc); }
+            return (wait: 0);
         }
     }
 }

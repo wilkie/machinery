@@ -13,7 +13,7 @@
 
 use i286::{I286};
 use isabus::{Space, BusSize, IsaBus, IrqLines};
-use pc::{Pic8259, Pit8254, Dma8237, HostLink, Cga, Hercules, Console, PostCard, Mc146818, Kbc8042};
+use pc::{Pic8259, Pit8254, Dma8237, HostLink, Cga, Hercules, Console, PostCard, Mc146818, Kbc8042, Fdc765};
 
 /// The 286 local bus at the transaction level. A word transfer is aligned;
 /// the processor splits an odd-address word into two byte transfers, as
@@ -895,6 +895,7 @@ system At286 {
     component post: PostCard;
     component rtc: Mc146818 @ rtc_clk;
     component kbc: Kbc8042 @ pit_clk;
+    component fdc: Fdc765 @ pit_clk;
 
     bus local: LocalBus @ cpu_clk {
         master cpu.local;
@@ -920,6 +921,7 @@ system At286 {
         slave post.port @ io 0x80..=0x80;
         slave rtc.port @ io 0x70..=0x71;
         slave kbc.port @ io 0x60..=0x60, io 0x64..=0x64;
+        slave fdc.port @ io 0x3F1..=0x3F2, io 0x3F4..=0x3F5, io 0x3F7..=0x3F7;
         slave cga.port @ mem 0xB8000..=0xBFFFF, io 0x3D0..=0x3DF;
     }
 
@@ -927,6 +929,7 @@ system At286 {
         master pic1.ir;
         slave pit.irq;
         slave kbc.irq;
+        slave fdc.irq;
         slave pic2.cascade;
     }
     bus irq_slave: IrqLines @ cpu_clk {

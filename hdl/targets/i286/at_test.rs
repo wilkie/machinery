@@ -72,46 +72,123 @@ fn screen(sys: &mut System) -> Vec<String> {
         .collect()
 }
 
-/// IBM's BIOS runs its power-on self test on the model up to its prompt
-/// for F1: the processor, the CMOS, both DMA controllers and the page
-/// registers, the timer and the refresh flip-flop, 640 KB of memory
-/// (tested from protected mode, and back through the keyboard
-/// controller's processor reset), the keyboard controller and the
-/// keyboard. With no diskette controller yet, it reports that (601), and
-/// so the configuration (162).
-#[test]
-fn ibm_at_bios_posts() {
-    let Some(image) = bios() else {
-        eprintln!("the IBM 5170 BIOS images are not in ~/roms; skipping");
-        return;
-    };
+/// An AT with IBM's BIOS and a configured CMOS, after reset; None without
+/// the ROM images.
+fn at() -> Option<System> {
+    let image = bios()?;
     let mut sys = System::new();
     sys.board().rom.cells = image;
     sys.board().rtc.cmos.copy_from_slice(&cmos());
     sys.reset();
-    sys.run_until(60_000_000, |s| {
-        s.board().post.last == 0x3F && s.board().cga.vram.windows(2).any(|w| w == b"F\x07")
+    Some(sys)
+}
+
+fn skip() {
+    eprintln!("the IBM 5170 BIOS images are not in ~/roms; skipping");
+}
+
+/// Runs until the screen shows `text` (looking every 10,000
+/// instructions), or `steps` instructions.
+fn until_screen(sys: &mut System, text: &str, steps: u64) {
+    let probe = text.as_bytes().to_vec();
+    let mut n = 0u32;
+    sys.run_until(steps, |s| {
+        n += 1;
+        if !n.is_multiple_of(10_000) {
+            return false;
+        }
+        let chars: Vec<u8> = s.board().cga.vram.iter().step_by(2).take(2000).copied().collect();
+        chars.windows(probe.len()).any(|w| w == probe.as_slice())
     })
     .unwrap();
+    assert!(screen(sys).iter().any(|l| l.contains(text)), "no {text:?} on the screen: {:#?}", screen(sys));
+}
+
+/// Presses and releases a key (set-1 make code), and gives the BIOS time
+/// to take both bytes.
+fn press(sys: &mut System, code: u8) {
+    for c in [code, code | 0x80] {
+        sys.with_kbc(|k, ctx| k.fn_key(ctx, c));
+        let t = sys.seconds() + 0.005;
+        sys.run_until(1_000_000, |s| s.seconds() >= t).unwrap();
+    }
+}
+
+/// IBM's BIOS runs its power-on self test on the model: the processor,
+/// the CMOS, both DMA controllers and the page registers, the timer and the
+/// refresh flip-flop, 640 KB of memory (tested from protected mode, and
+/// back through the keyboard controller's processor reset), the keyboard
+/// controller and keyboard, and the diskette controller and drive, with no
+/// errors. With no disk to boot, it starts its ROM BASIC, which takes
+/// typing through the keyboard controller.
+#[test]
+fn ibm_at_bios_posts_and_starts_basic() {
+    let Some(mut sys) = at() else { return skip() };
+    until_screen(&mut sys, "Bytes free", 150_000_000);
     let post = sys.board().post.clone();
     let codes = &post.codes[..(post.count as usize).min(4096)];
-    assert_eq!(post.last, 0x3F, "POST reached its prompt");
     // The memory test in protected mode (81h, 85h), and POST going on
     // after the keyboard controller's reset brought the processor back.
     assert!(codes.windows(3).any(|w| w == [0x81, 0x85, 0x1A]), "{codes:02X?}");
+    assert_eq!(sys.board().ram.cells[0x416], 0, "POST's error flags");
     let text = screen(&mut sys);
-    assert_eq!(text[0], "00640 KB OK", "{text:#?}");
-    let errors: Vec<&str> = text[1..].iter().map(|l| l.trim()).collect();
-    assert_eq!(
-        errors,
-        [
-            "601-Diskette Error",
-            "601-Diskette Error",
-            "162-System Options Not Set-(Run SETUP)",
-            "(RESUME = \"F1\" KEY)"
-        ],
-        "only the diskette controller is missing"
-    );
+    assert!(text[0].starts_with("The IBM Personal Computer Basic"), "{text:#?}");
+    // PRINT 6*7
+    for k in [0x19, 0x13, 0x17, 0x31, 0x14, 0x39, 0x07] {
+        press(&mut sys, k);
+    }
+    sys.with_kbc(|k, ctx| k.fn_key(ctx, 0x2A)); // shift
+    press(&mut sys, 0x09); // *
+    sys.with_kbc(|k, ctx| k.fn_key(ctx, 0xAA));
+    press(&mut sys, 0x08);
+    press(&mut sys, 0x1C); // enter
+    until_screen(&mut sys, " 42", 20_000_000);
+    assert!(screen(&mut sys).iter().any(|l| l == "print 6*7"), "{:#?}", screen(&mut sys));
+}
+
+/// A boot sector: prints "Booted from A:", reads sectors 2 and 3 with INT
+/// 13h (DMA through the diskette controller) and prints the message that
+/// straddles them, writes itself to sector 5, and halts.
+const BOOT: &[u8] = &[
+    0x31, 0xc0, 0x8e, 0xd8, 0x8e, 0xc0, 0x8e, 0xd0, 0xbc, 0x00, 0x7c, 0xbe, 0x52, 0x7c, 0xe8, 0x32,
+    0x00, 0xb8, 0x02, 0x02, 0xb9, 0x02, 0x00, 0x31, 0xd2, 0xbb, 0x00, 0x80, 0xcd, 0x13, 0x72, 0x1c,
+    0xbe, 0xf4, 0x81, 0xe8, 0x1d, 0x00, 0xb8, 0x01, 0x03, 0xb9, 0x05, 0x00, 0x31, 0xd2, 0xbb, 0x00,
+    0x7c, 0xcd, 0x13, 0x72, 0x07, 0xbe, 0x63, 0x7c, 0xe8, 0x08, 0x00, 0xf4, 0xbe, 0x74, 0x7c, 0xe8,
+    0x01, 0x00, 0xf4, 0xac, 0x08, 0xc0, 0x74, 0x09, 0xb4, 0x0e, 0xbb, 0x07, 0x00, 0xcd, 0x10, 0xeb,
+    0xf2, 0xc3, 0x42, 0x6f, 0x6f, 0x74, 0x65, 0x64, 0x20, 0x66, 0x72, 0x6f, 0x6d, 0x20, 0x41, 0x3a,
+    0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x57, 0x72, 0x6f, 0x74, 0x65, 0x20, 0x73, 0x65, 0x63, 0x74, 0x6f,
+    0x72, 0x20, 0x35, 0x00, 0x44, 0x69, 0x73, 0x6b, 0x20, 0x65, 0x72, 0x72, 0x6f, 0x72,
+];
+
+/// The AT boots from a 1.2 MB disk in drive A: its BIOS reads the boot
+/// sector through the diskette controller and DMA and runs it, and the
+/// boot sector's own reads and write go through them too.
+#[test]
+fn ibm_at_boots_from_a_diskette() {
+    let Some(mut sys) = at() else { return skip() };
+    let mut disk = vec![0u8; 80 * 2 * 15 * 512];
+    disk[..BOOT.len()].copy_from_slice(BOOT);
+    disk[510] = 0x55;
+    disk[511] = 0xAA;
+    disk[512..1024].fill(b'-');
+    let msg = b"read across two sectors";
+    disk[512 + 500..512 + 500 + msg.len()].copy_from_slice(msg);
+    disk[512 + 500 + msg.len()] = 0;
+    {
+        let f = &mut sys.board().fdc;
+        f.image[..disk.len()].copy_from_slice(&disk);
+        f.present = true;
+        f.cylinders = 80;
+        f.heads = 2;
+        f.sectors = 15;
+        f.rate = 0;
+    }
+    until_screen(&mut sys, "Wrote sector 5", 100_000_000);
+    let text = screen(&mut sys);
+    assert!(text.iter().any(|l| l == "Booted from A:"), "{text:#?}");
+    assert!(text.iter().any(|l| l == "read across two sectors"), "{text:#?}");
+    let img = &sys.board().fdc.image;
+    assert_eq!(&img[4 * 512..5 * 512], &img[..512], "the boot sector, written to sector 5");
 }
 
 /// A context for driving a device directly: its emits go nowhere.
@@ -209,4 +286,60 @@ fn pic_withdraws_a_dropped_request() {
     assert_eq!(p.irr & 2, 2);
     p.on_ir_request(&mut Quiet, 1, false);
     assert_eq!(p.irr & 2, 0);
+}
+
+impl machine_at286::Fdc765Ports for Quiet {}
+
+fn fdc_cmd(f: &mut machine_at286::Fdc765, bytes: &[u8]) {
+    for &b in bytes {
+        f.on_port_write(&mut Quiet, 1, 0x3F5, 0, b as u16);
+    }
+}
+
+fn fdc_result(f: &mut machine_at286::Fdc765) -> Vec<u8> {
+    let mut r = Vec::new();
+    while f.on_port_read(&mut Quiet, 1, 0x3F4, 0).unwrap().0 & 0xC0 == 0xC0 {
+        r.push(f.on_port_read(&mut Quiet, 1, 0x3F5, 0).unwrap().0 as u8);
+    }
+    r
+}
+
+/// The diskette controller directly: a reset reports each drive's ready
+/// change; recalibrating from beyond 77 tracks stops short (equipment
+/// check) and a second gets there; the drive's track-0 sensor tells where
+/// its head is; Read ID at the wrong data rate finds no address mark.
+#[test]
+fn fdc_seeks_and_senses() {
+    let mut f = machine_at286::Fdc765::new();
+    f.on_port_write(&mut Quiet, 1, 0x3F2, 0, 0x00);
+    f.on_port_write(&mut Quiet, 1, 0x3F2, 0, 0x1C); // out of reset, drive A's motor
+    for d in 0..4u8 {
+        fdc_cmd(&mut f, &[0x08]);
+        assert_eq!(fdc_result(&mut f), [0xC0 | d, 0]);
+    }
+    fdc_cmd(&mut f, &[0x0F, 0x00, 80]); // seek to 80
+    f.on_tick(&mut Quiet, 100 * 1193);
+    fdc_cmd(&mut f, &[0x08]);
+    assert_eq!(fdc_result(&mut f), [0x20, 80]);
+    fdc_cmd(&mut f, &[0x07, 0x00]); // recalibrate: 77 steps
+    f.on_tick(&mut Quiet, 100 * 1193);
+    fdc_cmd(&mut f, &[0x08]);
+    assert_eq!(fdc_result(&mut f), [0x70, 0], "equipment check");
+    fdc_cmd(&mut f, &[0x04, 0x00]);
+    assert_eq!(fdc_result(&mut f)[0] & 0x10, 0, "not at track 0");
+    fdc_cmd(&mut f, &[0x07, 0x00]);
+    f.on_tick(&mut Quiet, 100 * 1193);
+    fdc_cmd(&mut f, &[0x08]);
+    assert_eq!(fdc_result(&mut f), [0x20, 0]);
+    fdc_cmd(&mut f, &[0x04, 0x00]);
+    assert_eq!(fdc_result(&mut f)[0] & 0x10, 0x10, "track 0");
+    // A 1.2 MB disk (500 kbit/s) read at 250 kbit/s.
+    f.present = true;
+    f.rate = 0;
+    f.on_port_write(&mut Quiet, 1, 0x3F7, 0, 2);
+    fdc_cmd(&mut f, &[0x4A, 0x00]);
+    assert_eq!(&fdc_result(&mut f)[..3], &[0x40, 0x01, 0x00], "missing address mark");
+    f.on_port_write(&mut Quiet, 1, 0x3F7, 0, 0);
+    fdc_cmd(&mut f, &[0x4A, 0x00]);
+    assert_eq!(fdc_result(&mut f), [0x00, 0, 0, 0, 0, 1, 2], "cylinder 0, head 0, sector 1, 512 bytes");
 }

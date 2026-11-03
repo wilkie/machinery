@@ -293,10 +293,10 @@ fn host_link_declines_other_channels() {
     impl HostLinkPorts for Nothing {}
     let mut link = HostLink::new();
     let mut p = Nothing;
-    assert_eq!(link.on_port_dack_read(&mut p, 1), None, "nothing queued");
+    assert_eq!(link.on_port_dack_read(&mut p, 1, false), None, "nothing queued");
     link.fn_push(&mut p, 0x42);
-    assert_eq!(link.on_port_dack_read(&mut p, 2), None, "not its channel");
-    assert_eq!(link.on_port_dack_read(&mut p, 1), Some((0x42, 0)));
+    assert_eq!(link.on_port_dack_read(&mut p, 2, false), None, "not its channel");
+    assert_eq!(link.on_port_dack_read(&mut p, 1, false), Some((0x42, 0)));
 }
 
 /// The AT cascade: the host raises IRQ 12 (the slave controller's IR4). The

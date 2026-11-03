@@ -729,7 +729,9 @@ isa I286 {
         return b;
     }
 
-    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; reset reset_line; double DoubleFault; }
+    /// Code to the end of the segment is at consecutive addresses, and its
+    /// checks do not depend on the offset: translated once a window.
+    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; window code_room; reset reset_line; double DoubleFault; }
 
     /// The INTR pin, and the two interrupt-acknowledge bus cycles that
     /// fetch the vector from the interrupt controller: the processor model

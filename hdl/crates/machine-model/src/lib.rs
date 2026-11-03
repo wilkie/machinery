@@ -100,7 +100,10 @@ pub fn package(name: &str, lib_rs: String, runtime_path: &Path) -> GeneratedCrat
     } else {
         None
     };
-    cargo_toml.push_str("\n[profile.release]\ndebug = 1\n\n[workspace]\n");
+    // Link-time optimisation: the processor (generic over its bus) is
+    // compiled where it is used, the board's bus and device models here;
+    // without it no bus access from the processor can be inlined.
+    cargo_toml.push_str("\n[profile.release]\ndebug = 1\nlto = \"fat\"\ncodegen-units = 1\n\n[workspace]\n");
     GeneratedCrate {
         cargo_toml,
         lib_rs,

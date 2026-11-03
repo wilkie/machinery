@@ -126,6 +126,12 @@ fn target(name: &str) -> SourceFile {
     SourceFile::new(name, std::fs::read_to_string(&path).unwrap())
 }
 
+/// A file of the i386 target (`targets/i386`).
+fn target386(name: &str) -> SourceFile {
+    let path = hdl_root().join("targets").join("i386").join(name);
+    SourceFile::new(name, std::fs::read_to_string(&path).unwrap())
+}
+
 /// A file of the PC library (`targets/pc`): the ISA bus and its devices.
 fn pc(name: &str) -> SourceFile {
     let path = hdl_root().join("targets").join("pc").join(name);
@@ -533,6 +539,42 @@ fn i286_at_boots_its_bios() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "AT tests failed:\n{stdout}\n{stderr}");
+}
+
+/// A 386 AT with a VGA (`At386Vga` in `targets/i386/board.machine`): the
+/// AT's system-board devices on the 386 board, booting AMI's AT BIOS and
+/// MS-DOS from disk images when they are present
+/// (`targets/i386/at386_test.rs`).
+#[test]
+fn i386_at_boots_dos() {
+    let checked = check_files(vec![
+        pc("isabus.machine"),
+        pc("crtc.machine"),
+        pc("pc.machine"),
+        pc("vga.machine"),
+        target("alu.machine"),
+        target386("i386.machine"),
+        target386("timing.machine"),
+        target386("board.machine"),
+    ]);
+    assert!(!checked.has_errors());
+    let src = generate_system(&checked, "At386Vga", Some("fast")).unwrap_or_else(|e| panic!("{e}"));
+    let root = hdl_root();
+    let crate_ = package(&crate_name("At386Vga"), src, &root.join("crates").join("machine-runtime"));
+    let dir = root.join("target").join("gen-tests").join("at386vga");
+    write_crate(&dir, &crate_).unwrap();
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::copy(root.join("targets").join("i386").join("at386_test.rs"), dir.join("tests").join("at386.rs")).unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let output = Command::new(&cargo)
+        .args(["test", "--release", "--quiet", "--test", "at386", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+        .output()
+        .expect("run cargo");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "386 AT tests failed:\n{stdout}\n{stderr}");
 }
 
 /// The 386 board: the i386 on a 32-bit local bus with RAM and a ROM, and

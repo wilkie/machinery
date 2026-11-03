@@ -1123,9 +1123,13 @@ isa I386 {
         return b;
     }
 
-    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; window code_window; double DoubleFault; lock locked; }
+    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; window code_window; reset reset_line; double DoubleFault; lock locked; }
 
     extern fn intr() -> bool;
+    /// The RESET pin: while it is high the processor is held in reset, and
+    /// it starts at FFFFFFF0h when it falls (on an AT, the keyboard
+    /// controller pulses it).
+    extern fn reset_line() -> bool;
     extern fn acknowledge() -> u8;
 
     fn take_interrupt() -> bool {
@@ -3268,6 +3272,32 @@ isa I386 {
 
     instruction Clts { mnemonic "clts"; encoding { opcode [0x0F, 0x06]; } semantics { privileged(); CR0.TS = 0; } }
     instruction Wait { mnemonic "wait"; encoding { opcode 0x9B; } semantics { if CR0.TS == 1 && CR0.MP == 1 { raise NM; } } }
+
+    // -- the coprocessor, absent -----------------------------------------------------------
+    //
+    // ESC (D8h-DFh) with no 387: #NM when CR0 says to emulate it or a task
+    // switch is pending, else nothing answers the processor's coprocessor
+    // cycles, and what it reads from the coprocessor is the floating bus:
+    // FNSTSW AX loads FFFFh, FNSTSW and FNSTCW to memory store it, and the
+    // rest do nothing (the BIOS finds no coprocessor this way).
+
+    operand_kind bits3 : u3 { value(n: u3) => n; }
+
+    operand_kind esc_reg : u3 { value(n: u3) => n; }
+
+    instruction Esc {
+        mnemonic "esc";
+        encoding { opcode "11011eee" { e: bits3 }; ModRM { reg: esc_reg } }
+        operands (e: bits3, m: rm<16>, r: esc_reg);
+        semantics {
+            if CR0.EM == 1 || CR0.TS == 1 { raise NM; }
+            if e == 7 && r == 4 && !m.is_mem {
+                m = 0xFFFF;                 // FNSTSW AX (DF E0)
+            } else if (e == 1 || e == 5) && r == 7 && m.is_mem {
+                m = 0xFFFF;                 // FNSTCW, FNSTSW to memory
+            }
+        }
+    }
 
     // -- flags and miscellany -----------------------------------------------------------------
 

@@ -2275,10 +2275,14 @@ component Fdc765 {
 /// The disk is `image`, `cylinders` by `heads` by `sectors` (17 a track)
 /// of 512 bytes, when `present`: by default the AT's type 2 drive, 615
 /// cylinders and 4 heads (20 MB). A command is busy (80h) for a while
-/// before it completes and interrupts (about 250 us, on a 1.19 MHz
-/// clock): each sector read, and each sector written once the host has
-/// filled the buffer; a write's first data request comes at once. Reading
-/// the status or writing a command clears the interrupt.
+/// before it completes and interrupts, as the drive turns (on a 1.19 MHz
+/// clock): about 2 ms to find its first sector, and a millisecond for
+/// each sector after (the AT's disks are formatted 3:1 interleaved, 17
+/// sectors a track at 3600 rpm), for a sector read or a sector the host
+/// has filled to write; a write's first data request comes at once.
+/// Reading the status or writing a command clears the interrupt (a BIOS
+/// that reads the status with interrupts off loses one that came too
+/// soon).
 component Wd1003 {
     ports {
         bus port: IsaBus::Slave;
@@ -2312,10 +2316,13 @@ component Wd1003 {
         state pending: u8 = 0;
         state busy: u32 = 0;
 
-        fn after(what: u8) {
+        /// Busy for `clocks` until `what` completes. The drive stays ready
+        /// with its seek complete meanwhile (D0h: a BIOS checking status
+        /// between a transfer's sectors expects both).
+        fn after(what: u8, clocks: u32) {
+            busy = clocks;
             pending = what;
-            busy = 300;
-            status = 0x80;
+            status = 0xD0;
         }
 
         on tick(n: u32) -> u32 {
@@ -2393,19 +2400,19 @@ component Wd1003 {
             let op = c >> 4;
             if c == 0x90 {
                 error = 1;
-                after(3);
+                after(3, 2386);
             } else if !here() {
                 fail(0x04);
             } else if c == 0x91 {
-                after(3);
+                after(3, 2386);
             } else if op == 1 {
                 cyl = 0;
-                after(3);
+                after(3, 2386);
             } else if op == 7 {
-                if (cyl as u32) < cylinders { after(3); } else { fail(0x10); }
+                if (cyl as u32) < cylinders { after(3, 2386); } else { fail(0x10); }
             } else if op == 2 {
                 left = if count == 0 { 256 } else { count as u32 };
-                after(1);
+                after(1, 2386);
             } else if op == 3 {
                 left = if count == 0 { 256 } else { count as u32 };
                 if offset() == 0xFFFFFFFF { fail(0x10); return; }
@@ -2413,7 +2420,7 @@ component Wd1003 {
                 pos = 0;
                 status = 0x58;
             } else if op == 4 {
-                after(4);
+                after(4, 2386);
             } else if c == 0x50 {
                 // The interleave table comes as a sector of data first.
                 formatting = true;
@@ -2468,7 +2475,7 @@ component Wd1003 {
             if pos == 512 {
                 advance();
                 left = left - 1;
-                if left == 0 { status = 0x50; } else { after(1); }
+                if left == 0 { status = 0x50; } else { after(1, 1193); }
             }
             return b;
         }
@@ -2477,7 +2484,7 @@ component Wd1003 {
             if status[3] == 0 || !(writing || formatting) { return; }
             buf[pos] = b;
             pos = pos + 1;
-            if pos == 512 { after(if formatting { 5 } else { 2 }); }
+            if pos == 512 { after(if formatting { 5 } else { 2 }, 1193); }
         }
 
         on port.cs16(space: Space, addr: u24) -> (cs16_n: bool, wait: u8) {

@@ -155,6 +155,15 @@ impl<'a> Gen<'a> {
     fn emit_component(&mut self, comp: &hir::ComponentInfo) -> R<()> {
         let name = ident(&comp.name);
         let model = comp.model.as_ref().unwrap();
+        // `memo fn`s (SPEC 8.3b): number the state and memories they read.
+        let memo = model.memo.as_ref();
+        *self.memo_cur.borrow_mut() = memo.map(|m| crate::gen::MemoCur {
+            states: m.states.iter().enumerate().map(|(k, i)| (*i, k as u32)).collect(),
+            mems: m.mems.iter().enumerate().map(|(k, i)| (*i, k as u8)).collect(),
+        });
+        if memo.is_some_and(|m| m.states.len() > 64 || m.mems.len() > 255) {
+            return Err(GenError::new(format!("`{}`: memo fns read more than 64 state variables", comp.name)));
+        }
 
         // The ports trait.
         let mut t = format!(
@@ -232,8 +241,16 @@ impl<'a> Gen<'a> {
         t.push_str("}\n");
         self.out.push_str(&t);
 
-        // The struct.
-        let mut st = format!("#[derive(Clone, Debug)]\npub struct {name} {{\n");
+        // The struct, with the compiler's view of its state: what writes
+        // each piece (SPEC 8.3b).
+        let mut st = format!("/// The `{}` model. Its state, by what writes it:\n", comp.name);
+        for u in &model.state_use {
+            let who = if u.writers.is_empty() { "the host only".to_string() } else { u.writers.join(", ") };
+            let memo = if u.memo_reads { "; read by memo fns" } else { "" };
+            let _ = writeln!(st, "/// - `{}`{}: {who}{memo}", u.name, if u.mem { " (mem)" } else { "" });
+        }
+        st.push_str("#[derive(Clone, Debug)]\n");
+        let _ = writeln!(st, "pub struct {name} {{");
         for s in &model.states {
             let _ = writeln!(st, "    pub {}: {},", ident(&s.name), self.rty(&s.ty)?);
         }
@@ -244,6 +261,22 @@ impl<'a> Gen<'a> {
                 ident(&m.name),
                 self.rty(&m.elem)?
             );
+        }
+        let mut memo_init = String::new();
+        if let Some(mi) = memo {
+            let _ = writeln!(st, "    /// `memo fn`s: the version counter, the versions of the state and\n    /// memory blocks they read, what the running call reads, and each\n    /// fn's calls by arguments.\n    pub memo_epoch: u64,\n    pub memo_ver: [u64; {}],\n    pub memo_blocks: Vec<Vec<u64>>,\n    pub memo_all: Vec<u64>,\n    pub memo_rec: rt::memo::Rec,", mi.states.len());
+            let _ = write!(memo_init, "            memo_epoch: 0,\n            memo_ver: [0; {}],\n            memo_blocks: vec![", mi.states.len());
+            for &m in &mi.mems {
+                let len = model.mems[m as usize].len;
+                let _ = write!(memo_init, "vec![0; {}], ", len.div_ceil(64));
+            }
+            let _ = writeln!(memo_init, "],\n            memo_all: vec![0; {}],\n            memo_rec: rt::memo::Rec::default(),", mi.mems.len());
+            for &f in &mi.fns {
+                let f = &model.fns[f as usize];
+                let key: R<Vec<String>> = f.params.iter().map(|p| self.rty(&f.locals[*p as usize].ty)).collect();
+                let _ = writeln!(st, "    pub memo_{}: std::collections::HashMap<({},), rt::memo::Entry>,", ident(&f.name), key?.join(", "));
+                let _ = writeln!(memo_init, "            memo_{}: std::collections::HashMap::new(),", ident(&f.name));
+            }
         }
         st.push_str("}\n");
         let _ = write!(
@@ -267,6 +300,7 @@ impl<'a> Gen<'a> {
                 m.len
             );
         }
+        st.push_str(&memo_init);
         st.push_str("        };\n");
         let cx = Cx {
             locals: &model.init_locals,
@@ -287,8 +321,20 @@ impl<'a> Gen<'a> {
             }
         }
         st.push_str("        s\n    }\n");
+        if let Some(mi) = memo {
+            let mut clears = String::new();
+            for &f in &mi.fns {
+                let _ = write!(clears, " self.memo_{}.clear();", ident(&model.fns[f as usize].name));
+            }
+            let _ = write!(
+                st,
+                "    /// A new version for a write to state a `memo fn` reads.\n    #[inline]\n    pub fn memo_bump(&mut self) -> u64 {{\n        self.memo_epoch += 1;\n        self.memo_epoch\n    }}\n    /// Forget every `memo fn` call: after the embedding program writes\n    /// state or memory directly.\n    pub fn memo_clear(&mut self) {{{clears} }}\n"
+            );
+        }
 
-        for f in &model.fns {
+        for (fi, f) in model.fns.iter().enumerate() {
+            let is_memo = memo.is_some_and(|m| m.fns.contains(&(fi as u32)));
+            let rec_copy = memo.is_some_and(|m| m.reach.contains(&(fi as u32)));
             let cx = Cx {
                 locals: &f.locals,
                 fallible: false,
@@ -306,17 +352,40 @@ impl<'a> Gen<'a> {
                     self.rty(&f.locals[*p as usize].ty)?
                 );
             }
-            let body = self.block_stmts(&cx, &f.body)?;
             let (ret, tail) = match f.ret {
                 Ty::Unit => (String::new(), ""),
                 ref t => (format!(" -> {}", self.rty(t)?), "        #[allow(unreachable_code)]\n        { unreachable!(\"fn fell off its end\") }\n"),
             };
-            let _ = write!(
-                st,
-                "    /// `fn {}` of the model.\n    pub fn fn_{}<P: {name}Ports>(&mut self, ctx: &mut P{ps}){ret} {{\n{body}{tail}    }}\n",
-                f.name,
-                ident(&f.name)
-            );
+            let fname = ident(&f.name);
+            if !is_memo {
+                let body = self.block_stmts(&cx, &f.body)?;
+                let _ = write!(
+                    st,
+                    "    /// `fn {}` of the model.\n    pub fn fn_{fname}<P: {name}Ports>(&mut self, ctx: &mut P{ps}){ret} {{\n{body}{tail}    }}\n",
+                    f.name
+                );
+            }
+            if rec_copy {
+                self.memo_rec.set(true);
+                let body = self.block_stmts(&cx, &f.body);
+                self.memo_rec.set(false);
+                let body = body?;
+                let _ = write!(
+                    st,
+                    "    /// `fn {}`, recording what it reads for a `memo fn`.\n    #[allow(dead_code)]\n    fn fn_{fname}_rec<P: {name}Ports>(&mut self, ctx: &mut P{ps}){ret} {{\n{body}{tail}    }}\n",
+                    f.name
+                );
+            }
+            if is_memo {
+                let args: Vec<String> = f.params.iter().map(|p| self.local_name(&cx, *p)).collect();
+                let key = format!("({},)", args.join(", "));
+                let pass: String = args.iter().map(|a| format!(", {a}")).collect();
+                let _ = write!(
+                    st,
+                    "    /// `memo fn {0}` of the model: skipped while what its last call with\n    /// these arguments read is unchanged.\n    pub fn fn_{fname}<P: {name}Ports>(&mut self, ctx: &mut P{ps}) {{\n        let key = {key};\n        if let Some(e) = self.memo_{fname}.get(&key) {{\n            let (ver, blocks, all) = (&self.memo_ver, &self.memo_blocks, &self.memo_all);\n            if e.valid(|k| ver[k as usize], |m| (&blocks[m as usize][..], all[m as usize])) {{\n                return;\n            }}\n        }}\n        let outer = std::mem::take(&mut self.memo_rec);\n        self.fn_{fname}_rec(ctx{pass});\n        let rec = std::mem::replace(&mut self.memo_rec, outer);\n        self.memo_{fname}.insert(key, rt::memo::Entry {{ at: self.memo_epoch, vars: rec.vars, ranges: rec.ranges }});\n    }}\n",
+                    f.name
+                );
+            }
         }
         for h in &model.handlers {
             // A transaction handler returns `None` when it declines.
@@ -379,6 +448,7 @@ impl<'a> Gen<'a> {
         }
         st.push_str("}\n");
         self.out.push_str(&st);
+        *self.memo_cur.borrow_mut() = None;
         Ok(())
     }
 

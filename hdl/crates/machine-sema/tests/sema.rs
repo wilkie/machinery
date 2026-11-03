@@ -965,6 +965,25 @@ fn dev(model: &str) -> String {
     format!("{BUS_PRELUDE}\ncomponent D {{ ports {{ clock clk; bus io: B::S; in en: bool; out led: bool; }} model {{ {model} }} }}")
 }
 
+/// `memo fn`: no value, integer arguments, no ports, and outputs that it
+/// doesn't read and nothing else writes.
+#[test]
+fn memo_fns_check() {
+    let ok = "state x: u8 = 0; mem out: [u8; 16]; memo fn draw(i: u8) { out[i & 15] = x; } fn go() { draw(1); }";
+    assert_codes(&dev(ok), &[]);
+    assert_codes(&dev("state x: u8 = 0; memo fn f(i: u8) -> u8 { return x; }"), &["E1057"]);
+    assert_codes(&dev("state x: u8 = 0; memo fn f(i: u8) { x = x + 1; }"), &["E1057"]);
+    assert_codes(&dev("mem out: [u8; 16]; memo fn f(i: u8) { out[i & 15] = if en { 1 } else { 0 }; }"), &["E1057"]);
+    assert_codes(
+        &dev("state x: u8 = 0; mem out: [u8; 16]; memo fn f(i: u8) { out[i & 15] = x; } on reset { out[0] = 1; }"),
+        &["E1057"],
+    );
+    assert_codes(
+        &dev("state x: u8 = 0; mem out: [u8; 16]; fn put(i: u8) { emit io.interrupt(0) = true; } memo fn f(i: u8) { put(i); }"),
+        &["E1057"],
+    );
+}
+
 /// `mem { direct: ... }`: a responding port, `u8` cells, a mask within the
 /// memory; `wait` and `read_only` only with `direct`.
 #[test]

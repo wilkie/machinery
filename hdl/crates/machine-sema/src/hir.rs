@@ -864,6 +864,34 @@ pub struct ModelFn {
     pub span: Span,
     /// It, or a fn it calls, starts a bus transaction.
     pub starts_transaction: bool,
+    /// `memo fn`: a call may be skipped while what the last call with the
+    /// same arguments read is unchanged (SPEC 8.3b).
+    pub memo: bool,
+}
+
+/// What writes a model's state or memory (`reset`, `tick`, `bus <port>`,
+/// `signal <port>`, `processor`, `memo`; none: only the host), and whether
+/// a `memo fn` reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StateUse {
+    pub name: String,
+    pub mem: bool,
+    pub writers: Vec<String>,
+    pub memo_reads: bool,
+}
+
+/// What a component's `memo fn`s read and write (SPEC 8.3b).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct MemoInfo {
+    /// The memo fns, and every fn they reach (their recording copies).
+    pub fns: Vec<u32>,
+    pub reach: Vec<u32>,
+    /// The state and mems read by them: each write to these is versioned.
+    pub states: Vec<u32>,
+    pub mems: Vec<u32>,
+    /// Their outputs (written only by them).
+    pub out_states: Vec<u32>,
+    pub out_mems: Vec<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -874,6 +902,10 @@ pub struct ModelBody {
     pub mems: Vec<ModelMem>,
     pub handlers: Vec<Handler>,
     pub fns: Vec<ModelFn>,
+    /// The `memo fn`s' reads and writes, when there are any.
+    pub memo: Option<MemoInfo>,
+    /// Per state, then per mem: what writes it and whether memo fns read it.
+    pub state_use: Vec<StateUse>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

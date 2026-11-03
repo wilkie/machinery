@@ -353,12 +353,18 @@ impl Checker<'_> {
                 ok &= self.check_space_bindings(module, isa, &handlers, decl.name.span);
             }
             ok &= self.check_model_fn_graph(module, &mut hfns, &handlers);
+            let memo = self.check_memo(module, &hfns, &handlers, &mems, &states);
+            ok &= memo.is_ok();
+            let memo = memo.unwrap_or(None);
+            let state_use = classify_state(&hfns, &handlers, &ports, &states, &mems, memo.as_ref());
             model = Some(hir::ModelBody {
                 init_locals: init_cx.locals,
                 states: hstates,
                 mems: hmems,
                 handlers,
                 fns: hfns,
+                memo,
+                state_use,
             });
         }
 
@@ -838,6 +844,7 @@ impl Checker<'_> {
             body,
             span: d.name.span,
             starts_transaction: false,
+            memo: d.memo,
         }
     }
 
@@ -964,6 +971,95 @@ impl Checker<'_> {
             }
         }
         ok
+    }
+
+    /// `memo fn`s (SPEC 8.3b): what they and the fns they reach read and
+    /// write. They return nothing, take integer or `bool` arguments, touch
+    /// no port, and write only outputs that they do not read and that
+    /// nothing else writes. Err after reporting.
+    #[allow(clippy::type_complexity)]
+    fn check_memo(
+        &mut self,
+        module: crate::program::ModuleId,
+        fns: &[hir::ModelFn],
+        handlers: &[hir::Handler],
+        mems: &[(String, Ty, u64, Option<hir::MemDirect>)],
+        states: &[(String, Ty)],
+    ) -> Result<Option<hir::MemoInfo>, ()> {
+        let memo: Vec<u32> = (0..fns.len() as u32).filter(|&i| fns[i as usize].memo).collect();
+        if memo.is_empty() {
+            return Ok(None);
+        }
+        let fu: Vec<Use> = fns.iter().map(|f| uses(&f.body)).collect();
+        let mut reach: Vec<u32> = memo.clone();
+        let mut i = 0;
+        while i < reach.len() {
+            for &g in &fu[reach[i] as usize].calls {
+                if !reach.contains(&g) {
+                    reach.push(g);
+                }
+            }
+            i += 1;
+        }
+        let name = |k: &(bool, u32)| if k.0 { mems[k.1 as usize].0.clone() } else { states[k.1 as usize].0.clone() };
+        let mut ok = true;
+        let mut reads = std::collections::BTreeSet::new();
+        let mut writes = std::collections::BTreeSet::new();
+        for &f in &reach {
+            let u = &fu[f as usize];
+            if u.port {
+                let msg = format!("`{}` is reached from a `memo fn` and touches a port", fns[f as usize].name);
+                self.error(module, "E1057", fns[f as usize].span, msg);
+                ok = false;
+            }
+            reads.extend(u.reads.iter().copied());
+            writes.extend(u.writes.iter().copied());
+        }
+        for &f in &memo {
+            let mf = &fns[f as usize];
+            if mf.ret != Ty::Unit {
+                self.error(module, "E1057", mf.span, format!("`memo fn {}` returns a value; a memo fn only writes its outputs", mf.name));
+                ok = false;
+            }
+            for p in &mf.params {
+                if !matches!(mf.locals[*p as usize].ty, Ty::UInt(_) | Ty::Bool) {
+                    self.error(module, "E1057", mf.span, format!("`memo fn {}`: arguments are integers or `bool`", mf.name));
+                    ok = false;
+                }
+            }
+        }
+        for k in reads.intersection(&writes) {
+            self.error(module, "E1057", fns[memo[0] as usize].span, format!("a `memo fn` writes `{}`, which it also reads", name(k)));
+            ok = false;
+        }
+        // Nothing else writes the outputs.
+        let mut others: Vec<(String, Use)> = Vec::new();
+        for (i, f) in fns.iter().enumerate() {
+            if !reach.contains(&(i as u32)) {
+                others.push((format!("fn `{}`", f.name), uses(&f.body)));
+            }
+        }
+        for h in handlers {
+            others.push(("a handler".to_string(), uses(&h.body)));
+        }
+        for (who, u) in &others {
+            for k in u.writes.intersection(&writes) {
+                self.error(module, "E1057", fns[memo[0] as usize].span, format!("`{}` is a `memo fn`'s output, but {who} writes it too", name(k)));
+                ok = false;
+            }
+        }
+        if !ok {
+            return Err(());
+        }
+        let pick = |s: &std::collections::BTreeSet<(bool, u32)>, m: bool| s.iter().filter(|k| k.0 == m).map(|k| k.1).collect::<Vec<u32>>();
+        Ok(Some(hir::MemoInfo {
+            fns: memo,
+            reach,
+            states: pick(&reads, false),
+            mems: pick(&reads, true),
+            out_states: pick(&writes, false),
+            out_mems: pick(&writes, true),
+        }))
     }
 
     /// An `extern fn` of the component's isa, by name.
@@ -1271,3 +1367,129 @@ impl Checker<'_> {
         }
     }
 }
+
+/// Per body: the fns it calls, the state and mems it reads and the roots
+/// of what it assigns (`(is a mem, index)`), and whether it touches a port.
+#[derive(Default)]
+struct Use {
+    calls: Vec<u32>,
+    reads: std::collections::BTreeSet<(bool, u32)>,
+    writes: std::collections::BTreeSet<(bool, u32)>,
+    port: bool,
+}
+fn write_root(e: &hir::Expr) -> Option<(bool, u32)> {
+    match &e.kind {
+        H::State(_, i) => Some((false, *i)),
+        H::ModelMem(_, i) => Some((true, *i)),
+        H::Index(b, _) | H::Field(b, _) | H::TupleField(b, _) | H::Slice(b, _, _) => write_root(b),
+        _ => None,
+    }
+}
+fn uses(b: &hir::Block) -> Use {
+    let mut u = Use::default();
+    let mut mentions: HashMap<(bool, u32), u32> = HashMap::new();
+    let mut roots: HashMap<(bool, u32), u32> = HashMap::new();
+    let mut emits = false;
+    hir::visit_block(
+        b,
+        &mut |s| match &s.kind {
+            hir::StmtKind::Assign(place, _) => {
+                if let Some(r) = write_root(place) {
+                    *roots.entry(r).or_default() += 1;
+                }
+            }
+            hir::StmtKind::Emit { .. } => emits = true,
+            _ => {}
+        },
+        &mut |e| match &e.kind {
+            H::ModelFnCall(i, _) => u.calls.push(*i),
+            H::State(_, i) => *mentions.entry((false, *i)).or_default() += 1,
+            H::ModelMem(_, i) => *mentions.entry((true, *i)).or_default() += 1,
+            H::Port(..) | H::SignalLevel(..) | H::BusCall(..) => u.port = true,
+            _ => {}
+        },
+    );
+    u.port |= emits;
+    for (k, n) in mentions {
+        let w = roots.get(&k).copied().unwrap_or(0);
+        if w > 0 {
+            u.writes.insert(k);
+        }
+        if n > w {
+            u.reads.insert(k);
+        }
+    }
+    u
+}
+
+/// Which handlers write each state and memory of a model, through the fns
+/// they call (`reset`, `tick`, `bus <port>`, `signal <port>`, `processor`,
+/// `memo`), and whether a `memo fn` reads it: the compiler's view of what
+/// the state is for (SPEC 8.3b).
+fn classify_state(
+    fns: &[hir::ModelFn],
+    handlers: &[hir::Handler],
+    ports: &[hir::Port],
+    states: &[(String, Ty)],
+    mems: &[(String, Ty, u64, Option<hir::MemDirect>)],
+    memo: Option<&hir::MemoInfo>,
+) -> Vec<hir::StateUse> {
+    let fu: Vec<Use> = fns.iter().map(|f| uses(&f.body)).collect();
+    let reach = |start: &[u32]| {
+        let mut r: Vec<u32> = start.to_vec();
+        let mut i = 0;
+        while i < r.len() {
+            for &g in &fu[r[i] as usize].calls {
+                if !r.contains(&g) {
+                    r.push(g);
+                }
+            }
+            i += 1;
+        }
+        r
+    };
+    let mut out: Vec<hir::StateUse> = states
+        .iter()
+        .map(|(n, _)| hir::StateUse { name: n.clone(), mem: false, writers: Vec::new(), memo_reads: false })
+        .chain(mems.iter().map(|(n, ..)| hir::StateUse { name: n.clone(), mem: true, writers: Vec::new(), memo_reads: false }))
+        .collect();
+    let at = |k: &(bool, u32)| if k.0 { states.len() + k.1 as usize } else { k.1 as usize };
+    let note = |out: &mut Vec<hir::StateUse>, who: String, writes: &std::collections::BTreeSet<(bool, u32)>| {
+        for k in writes {
+            let w = &mut out[at(k)].writers;
+            if !w.contains(&who) {
+                w.push(who.clone());
+            }
+        }
+    };
+    let memo_reach: Vec<u32> = memo.map(|m| m.reach.clone()).unwrap_or_default();
+    for h in handlers {
+        let who = match &h.kind {
+            hir::HandlerKind::Reset => "reset".to_string(),
+            hir::HandlerKind::Tick { .. } => "tick".to_string(),
+            hir::HandlerKind::Transaction { port, .. } => format!("bus {}", ports[*port as usize].name),
+            hir::HandlerKind::Signal { port, .. } => format!("signal {}", ports[*port as usize].name),
+            _ => "processor".to_string(),
+        };
+        let u = uses(&h.body);
+        note(&mut out, who.clone(), &u.writes);
+        for f in reach(&u.calls) {
+            if !memo_reach.contains(&f) {
+                note(&mut out, who.clone(), &fu[f as usize].writes);
+            }
+        }
+    }
+    for &f in &memo_reach {
+        note(&mut out, "memo".to_string(), &fu[f as usize].writes);
+    }
+    if let Some(m) = memo {
+        for &i in &m.states {
+            out[i as usize].memo_reads = true;
+        }
+        for &i in &m.mems {
+            out[states.len() + i as usize].memo_reads = true;
+        }
+    }
+    out
+}
+

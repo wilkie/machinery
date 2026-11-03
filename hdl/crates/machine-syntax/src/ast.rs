@@ -917,6 +917,8 @@ pub struct FnDecl {
     /// `extern fn name(params) -> T;` in an isa: supplied by the processor
     /// model (a bus cycle, an input pin), not by the isa.
     pub external: bool,
+    /// `memo fn` in a component model (SPEC 8.3b).
+    pub memo: bool,
     pub span: Span,
 }
 

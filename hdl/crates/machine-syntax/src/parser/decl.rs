@@ -723,6 +723,7 @@ impl Parser {
                                 ret,
                                 body,
                                 external,
+                                memo: false,
                                 span: start.to(self.prev_span()),
                             }));
                         }
@@ -752,6 +753,7 @@ impl Parser {
                     ret,
                     body,
                     external,
+                    memo: false,
                     span: start.to(self.prev_span()),
                 }))
             }

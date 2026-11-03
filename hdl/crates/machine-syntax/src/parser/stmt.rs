@@ -410,8 +410,15 @@ impl Parser {
                 self.expect_semi()?;
                 Ok(self.mk(StmtKind::Wire { name, ty, init }, start))
             }
-            "fn" if next_is_ident && self.nth_is_punct(2, Punct::LParen) => {
+            "fn" | "memo"
+                if (word == "fn" && next_is_ident && self.nth_is_punct(2, Punct::LParen))
+                    || (word == "memo" && self.nth_is_word(1, "fn")) =>
+            {
+                let memo = word == "memo";
                 self.advance();
+                if memo {
+                    self.advance();
+                }
                 let name = self.expect_ident()?;
                 let params = self.parse_params()?;
                 let ret = if self.eat_punct(Punct::RArrow) {
@@ -429,6 +436,7 @@ impl Parser {
                         ret,
                         body,
                         external: false,
+                        memo,
                         span,
                     })),
                     start,

@@ -113,6 +113,13 @@ struct Cx<'a> {
     opt: bool,
 }
 
+/// A component's `memo fn` bookkeeping while it is emitted (SPEC 8.3b).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MemoCur {
+    pub states: HashMap<u32, u32>,
+    pub mems: HashMap<u32, u8>,
+}
+
 pub struct Gen<'a> {
     prog: &'a Program,
     hir: &'a hir::Hir,
@@ -128,6 +135,11 @@ pub struct Gen<'a> {
     out: String,
     /// Emitting the istream's `next` fn, whose reads are code fetches.
     in_istream_next: std::cell::Cell<bool>,
+    /// The component being emitted, when it has `memo fn`s: its versioned
+    /// state (index to bit) and memories (index to number).
+    pub(crate) memo_cur: std::cell::RefCell<Option<MemoCur>>,
+    /// Emitting a recording copy: reads of versioned state are recorded.
+    pub(crate) memo_rec: std::cell::Cell<bool>,
 }
 
 pub fn generate(prog: &Program, hir: &hir::Hir, isa_def: DefId) -> R<String> {
@@ -183,6 +195,8 @@ impl<'a> Gen<'a> {
             fns: isa.fns.iter().map(|f| (f.def, f)).collect(),
             out: String::new(),
             in_istream_next: std::cell::Cell::new(false),
+            memo_cur: std::cell::RefCell::new(None),
+            memo_rec: std::cell::Cell::new(false),
         })
     }
 }
@@ -353,6 +367,13 @@ impl<'a> Gen<'a> {
                 )
             }
             H::TupleField(base, i) => format!("{}.{i}", self.expr(cx, base)?),
+            H::Index(base, idx) if self.memo_rec.get() && matches!(base.kind, H::ModelMem(_, mi) if self.memo_mem(mi).is_some()) => {
+                let H::ModelMem(_, mi) = base.kind else { unreachable!() };
+                let m = self.memo_mem(mi).unwrap();
+                let bt = self.expr(cx, base)?;
+                let it = self.expr(cx, idx)?;
+                format!("({{ let i = ({it}) as usize; {}.memo_rec.cell({m}, i); {bt}[i] }})", cx.recv)
+            }
             H::Index(base, idx) => {
                 let bt = self.expr(cx, base)?;
                 let it = self.expr(cx, idx)?;
@@ -620,7 +641,13 @@ impl<'a> Gen<'a> {
                     .comp
                     .ok_or_else(|| GenError::new("state outside a component"))?;
                 let m = c.model.as_ref().unwrap();
-                format!("{}.{}", cx.recv, ident(&m.states[*i as usize].name))
+                let name = ident(&m.states[*i as usize].name);
+                match self.memo_var(*i) {
+                    Some(k) if self.memo_rec.get() => {
+                        format!("({{ {0}.memo_rec.var({k}); {0}.{name} }})", cx.recv)
+                    }
+                    _ => format!("{}.{name}", cx.recv),
+                }
             }
             H::ModelMem(_, i) => {
                 let c = cx
@@ -653,9 +680,10 @@ impl<'a> Gen<'a> {
                     let _ = write!(s, "let a{k} = {}; ", self.expr(cx, a)?);
                     names.push(format!(", a{k}"));
                 }
+                let rec = if self.memo_rec.get() { "_rec" } else { "" };
                 let _ = write!(
                     s,
-                    "{}.fn_{}(&mut *ctx{}) }}",
+                    "{}.fn_{}{rec}(&mut *ctx{}) }}",
                     cx.recv,
                     ident(&f.name),
                     names.concat()
@@ -1091,8 +1119,66 @@ impl<'a> Gen<'a> {
         })
     }
 
-    /// Statements that store `rhs` (an expression text) into `place`.
+    /// Versioned state's bit, if `memo fn`s read state `i`.
+    fn memo_var(&self, i: u32) -> Option<u32> {
+        self.memo_cur.borrow().as_ref().and_then(|m| m.states.get(&i).copied())
+    }
+
+    /// Versioned memory's number, if `memo fn`s read mem `i`.
+    fn memo_mem(&self, i: u32) -> Option<u8> {
+        self.memo_cur.borrow().as_ref().and_then(|m| m.mems.get(&i).copied())
+    }
+
+    /// The place expression itself (never recorded as a read).
+    fn lvalue(&self, cx: &Cx, e: &Expr) -> R<String> {
+        let rec = self.memo_rec.replace(false);
+        let r = self.expr(cx, e);
+        self.memo_rec.set(rec);
+        r
+    }
+
+    /// Statements that store `rhs` (an expression text) into `place`, and
+    /// stamp versioned state with a new version (SPEC 8.3b).
     fn assign(&self, cx: &Cx, place: &Expr, rhs: &str) -> R<String> {
+        fn root(e: &Expr) -> Option<&Expr> {
+            match &e.kind {
+                H::State(..) | H::ModelMem(..) => Some(e),
+                H::Index(b, _) | H::Field(b, _) | H::TupleField(b, _) => root(b),
+                _ => None,
+            }
+        }
+        let r = cx.recv;
+        match (&place.kind, root(place).map(|e| &e.kind)) {
+            // A whole state: a new version only when the value changes.
+            (H::State(_, i), _) if self.memo_var(*i).is_some() => {
+                let k = self.memo_var(*i).unwrap();
+                let p = self.lvalue(cx, place)?;
+                Ok(format!("{{ let v = {rhs}; if {p} != v {{ let e = {r}.memo_bump(); {r}.memo_ver[{k}] = e; }} {p} = v; }}\n"))
+            }
+            (_, Some(H::State(_, i))) if self.memo_var(*i).is_some() => {
+                let k = self.memo_var(*i).unwrap();
+                let inner = self.assign_inner(cx, place, rhs)?;
+                Ok(format!("{inner}{{ let e = {r}.memo_bump(); {r}.memo_ver[{k}] = e; }}\n"))
+            }
+            // A cell of a memory: its block.
+            (H::Index(b, idx), Some(H::ModelMem(_, i))) if matches!(b.kind, H::ModelMem(..)) && self.memo_mem(*i).is_some() => {
+                let m = self.memo_mem(*i).unwrap();
+                Ok(format!(
+                    "{{ let v = {rhs}; let i = ({}) as usize; {}[i] = v; let e = {r}.memo_bump(); {r}.memo_blocks[{m}][i >> rt::memo::BLOCK_SHIFT] = e; }}\n",
+                    self.expr(cx, idx)?,
+                    self.lvalue(cx, b)?
+                ))
+            }
+            (_, Some(H::ModelMem(_, i))) if self.memo_mem(*i).is_some() => {
+                let m = self.memo_mem(*i).unwrap();
+                let inner = self.assign_inner(cx, place, rhs)?;
+                Ok(format!("{inner}{{ let e = {r}.memo_bump(); {r}.memo_all[{m}] = e; }}\n"))
+            }
+            _ => self.assign_inner(cx, place, rhs),
+        }
+    }
+
+    fn assign_inner(&self, cx: &Cx, place: &Expr, rhs: &str) -> R<String> {
         Ok(match &place.kind {
             H::Port(_, i, true) => {
                 let c = cx
@@ -1107,10 +1193,10 @@ impl<'a> Gen<'a> {
                 format!(
                     "{{ let v = {rhs}; let i = ({}) as usize; {}[i] = v; }}\n",
                     self.expr(cx, idx)?,
-                    self.expr(cx, b)?
+                    self.lvalue(cx, b)?
                 )
             }
-            H::State(..) | H::Local(_) => format!("{} = {rhs};\n", self.expr(cx, place)?),
+            H::State(..) | H::Local(_) => format!("{} = {rhs};\n", self.lvalue(cx, place)?),
             H::Register(_) | H::Mode(_) | H::Latch(_) => {
                 format!("{} = {rhs};\n", self.expr(cx, place)?)
             }
@@ -1122,7 +1208,7 @@ impl<'a> Gen<'a> {
                     let bd = self.bundles[d];
                     format!(
                         "{}.{} = {rhs};\n",
-                        self.expr(cx, base)?,
+                        self.lvalue(cx, base)?,
                         ident(&bd.fields[*i as usize].name)
                     )
                 } else {

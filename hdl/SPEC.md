@@ -552,6 +552,48 @@ components in an accurate build are adapted.
 A component with an `rtl` body but no `model` body runs its rtl in the
 emulator profile. This is correct and slow; the compiler reports it.
 
+### 8.3b Memoised functions
+
+```
+/// Draw scanline `line` into `frame`.
+memo fn render(line: u32) { ... }
+```
+
+A `memo fn` is a model fn whose call can be skipped. When the last call
+with the same arguments read state that hasn't changed since, the call is
+skipped, and what it wrote then still stands. This is how a display card
+draws only the lines whose memory, registers or blink phase changed,
+without changing a single dot. The rules (E1057):
+
+- It returns nothing and takes integer or `bool` arguments.
+- It, and every fn it calls, touches no port: no transactions, no
+  signal levels, no `emit`.
+- What it writes (its outputs) it doesn't read, and nothing else in the
+  model writes them. Calls with different arguments are taken to write
+  different cells (one scanline each).
+
+The compiler finds the state and memories a memo fn reads, transitively.
+Every write to them, from any handler or fn, stamps a version: a whole
+state assigned a new value, or the 64-cell block of a memory written. A
+call runs a recording copy of the fn that notes each versioned state and
+memory block it reads. A later call with the same arguments is skipped
+while none of those has a newer version. Reads are recorded where they
+happen, so a read whose address depends on data (a text mode's glyph,
+found by its character code) is recorded as precisely as any other.
+Blocks may be recorded a little wider than read, which can only cost a
+redraw.
+
+The embedding program writes `mem`s directly, outside the versioning,
+so after writing state a memo fn reads it calls `memo_clear()` on the
+model.
+
+For every component, the compiler also reports what writes each piece of
+state: `reset`, `tick`, `bus <port>`, `signal <port>`, the processor, or
+`memo`. Nothing at all means it is the host's. The report is a comment
+on the generated model struct, and shows what is configuration (written
+by I/O), content (by memory transactions), time (by `on tick`) and
+derived (by memo fns).
+
 ### 8.4 Processors
 
 A processor component declares its ISA:

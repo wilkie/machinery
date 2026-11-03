@@ -298,12 +298,91 @@ fn vga_chain4_and_write_mode_3() {
     assert_eq!((p(0), p(1), p(2), p(3)), (0x30, 0x00, 0x30, 0x00));
 }
 
+/// `render` is a `memo fn` (SPEC 8.3b): a line whose reads are unchanged
+/// keeps its dots. Two copies of the card, set up by the BIOS, take the
+/// same random writes (memory at random points within frames, the DAC, the
+/// attribute palette, the CRTC's start address); one forgets its memo
+/// before every tick, so every line it draws is drawn afresh. After every
+/// frame both show the same dots, in every mode tried.
+#[test]
+fn vga_memo_matches_drawing_every_line() {
+    let modes: &[(u16, u32)] = &[(0x03, 20), (0x01, 3), (0x13, 3), (0x12, 3), (0x04, 3), (0x06, 3), (0x0D, 3), (0x10, 3)];
+    for &(mode, frames) in modes {
+        let Some(mut sys) = run_vga_bios(&int10(mode, 0, 0, 0)) else { return skip() };
+        let mut a = sys.board().vga.clone();
+        a.memo_clear();
+        let mut b = a.clone();
+        let mut x: u32 = 0x1234_5678 ^ mode as u32;
+        let mut rnd = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        let f0 = a.frames;
+        while a.frames < f0 + frames {
+            let r = rnd();
+            match r % 16 {
+                0 => {
+                    let (i, v) = ((rnd() % 16) as u8, rnd() as u8 & 0x3F);
+                    for v2 in [&mut a, &mut b] {
+                        out(v2, 0x3C8, i);
+                        for _ in 0..3 {
+                            out(v2, 0x3C9, v);
+                        }
+                    }
+                }
+                1 => {
+                    let (i, v) = ((rnd() % 16) as u8, rnd() as u8 & 0x3F);
+                    for v2 in [&mut a, &mut b] {
+                        let _ = inp(v2, 0x3DA);
+                        out(v2, 0x3C0, i | 0x20);
+                        out(v2, 0x3C0, v);
+                    }
+                }
+                2 if rnd() % 8 == 0 => {
+                    let v = (rnd() % 4) as u8;
+                    for v2 in [&mut a, &mut b] {
+                        out(v2, 0x3D4, 0x0C);
+                        out(v2, 0x3D5, v);
+                    }
+                }
+                _ => {
+                    let addr = if r & 0x100 == 0 { 0xA0000 + rnd() % 0x10000 } else { 0xB8000 + rnd() % 0x8000 };
+                    let d = rnd() as u16 & 0xFF;
+                    for v2 in [&mut a, &mut b] {
+                        v2.on_port_write(&mut Quiet, 0, addr, 0, d);
+                    }
+                }
+            }
+            let n = 1 + rnd() % 4000;
+            let _ = a.on_tick_dot25(&mut Quiet, n);
+            let _ = a.on_tick_dot28(&mut Quiet, n);
+            b.memo_clear();
+            let _ = b.on_tick_dot25(&mut Quiet, n);
+            let _ = b.on_tick_dot28(&mut Quiet, n);
+            if a.frames != b.frames {
+                panic!("mode {mode:#x}: the copies' frames differ");
+            }
+            if a.pos < n {
+                assert!(a.frame == b.frame && a.dots == b.dots, "mode {mode:#x}, frame {}: the memo changed the picture", a.frames);
+            }
+        }
+        assert!(a.frame == b.frame && a.dots == b.dots, "mode {mode:#x}: the memo changed the picture");
+    }
+}
+
 /// Frames a second the VGA model renders in modes the BIOS sets, driven
 /// directly once the BIOS has programmed it.
 #[test]
 #[ignore]
 fn bench_vga_modes() {
-    for (name, mode) in [("80x25 text (720x400)", 0x03u16), ("320x200x256 (mode 13h)", 0x13), ("640x480x16 (mode 12h)", 0x12)] {
+    for (name, mode) in [
+        ("80x25 text (720x400)", 0x03u16),
+        ("80x25 text, nothing blinking", 0x03),
+        ("320x200x256 (mode 13h)", 0x13),
+        ("640x480x16 (mode 12h)", 0x12),
+    ] {
         let Some(mut sys) = run_vga_bios(&int10(mode, 0, 0, 0)) else { return skip() };
         let mut v = sys.board().vga.clone();
         let mut x: u32 = 12345;
@@ -311,15 +390,29 @@ fn bench_vga_modes() {
             x = x.wrapping_mul(1103515245).wrapping_add(12345);
             *b = (x >> 16) as u8;
         }
-        let n = 300;
-        let t = std::time::Instant::now();
-        let f0 = v.frames;
-        while v.frames < f0 + n {
-            let left = v.on_tick_dot25(&mut Quiet, 1_000_000);
-            let _ = v.on_tick_dot28(&mut Quiet, 1_000_000.min(left));
+        if name.contains("blinking") {
+            // Attributes (plane 1) without the blink bit.
+            for b in &mut v.planes[0x10000..0x20000] {
+                *b &= 0x7F;
+            }
         }
-        let s = t.elapsed().as_secs_f64();
-        eprintln!("VGA {name}: {:.0} frames/s ({:.1} us a frame)", n as f64 / s, s * 1e6 / n as f64);
+        // Written directly, not through the card: its memo is forgotten.
+        v.memo_clear();
+        for (how, redraw) in [("every line drawn", true), ("static screen", false)] {
+            let mut v = v.clone();
+            let n = 300;
+            let t = std::time::Instant::now();
+            let f0 = v.frames;
+            while v.frames < f0 + n {
+                if redraw {
+                    v.memo_clear();
+                }
+                let left = v.on_tick_dot25(&mut Quiet, 1_000_000);
+                let _ = v.on_tick_dot28(&mut Quiet, 1_000_000.min(left));
+            }
+            let s = t.elapsed().as_secs_f64();
+            eprintln!("VGA {name}, {how}: {:.0} frames/s ({:.1} us a frame)", n as f64 / s, s * 1e6 / n as f64);
+        }
     }
 }
 

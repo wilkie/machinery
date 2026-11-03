@@ -66,6 +66,9 @@ component Vga {
         state frame_height: u32 = 0;
         /// Completed frames.
         state frames: u32 = 0;
+        /// The blink phase: bits 3 and 4 of `frames` (the cursor blinks
+        /// every 16 frames, blinking text every 32), what `render` reads.
+        state blink: u8 = 0;
         /// The beam, in dots from the top left of the frame.
         state pos: u32 = 0;
         state latch: [u8; 4];
@@ -199,8 +202,10 @@ component Vga {
             frame[at + 2] = dac[c + 2];
         }
 
-        /// Draw scanline `line` of the display area into `frame`.
-        fn render(line: u32) {
+        /// Draw scanline `line` of the display area into `frame`. A `memo
+        /// fn`: a line whose memory, registers and blink phase are as when
+        /// it was last drawn keeps its dots.
+        memo fn render(line: u32) {
             let rr = VgaCrtcRow(t, line);
             let row = rr.row;
             let ra = rr.ra;
@@ -232,9 +237,11 @@ component Vga {
                         let mut bg = at >> 4;
                         if attr[16][3] == 1 {
                             bg = bg & 7;
-                            if at[7] == 1 && frames[4] == 1 { fg = bg; }
+                            if at[7] == 1 && blink[1] == 1 { fg = bg; }
                         }
-                        if VgaCrtcCursor(t, row, c, ra, frames) {
+                        // The cursor's place first (frame 8: its blink bit
+                        // set), so only the cursor's cell reads the phase.
+                        if VgaCrtcCursor(t, row, c, ra, 8) && blink[0] == 1 {
                             glyph = 0xFF;
                             fg = at & 15;
                         }
@@ -323,6 +330,7 @@ component Vga {
                     if pos >= total {
                         pos = 0;
                         frames = frames + 1;
+                        blink = ((frames >> 3) & 3) as u8;
                         frame_height = if t.shown_lines < 480 { t.shown_lines } else { 480 };
                     }
                 }

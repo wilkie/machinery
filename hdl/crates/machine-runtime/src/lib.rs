@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+pub mod memo;
 #[cfg(feature = "vectors")]
 pub mod vectors;
 

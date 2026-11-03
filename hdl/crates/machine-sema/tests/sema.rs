@@ -965,6 +965,20 @@ fn dev(model: &str) -> String {
     format!("{BUS_PRELUDE}\ncomponent D {{ ports {{ clock clk; bus io: B::S; in en: bool; out led: bool; }} model {{ {model} }} }}")
 }
 
+/// `mem { direct: ... }`: a responding port, `u8` cells, a mask within the
+/// memory; `wait` and `read_only` only with `direct`.
+#[test]
+fn direct_memories_check() {
+    assert_codes(&dev("mem m: [u8; 16] { direct: io(addr & 0xF), wait: 1 };"), &[]);
+    assert_codes(&dev("mem m: [u8; 16] { direct: io(addr), read_only };"), &[]);
+    assert_codes(&dev("mem m: [u8; 16] { direct: io(addr & 0x1F) };"), &["E1043"]);
+    assert_codes(&dev("mem m: [u16; 16] { direct: io(addr & 0xF) };"), &["E1043"]);
+    assert_codes(&dev("mem m: [u8; 16] { direct: en(addr) };"), &["E1043"]);
+    assert_codes(&dev("mem m: [u8; 16] { direct: io(addr + 1) };"), &["E1043"]);
+    assert_codes(&dev("mem m: [u8; 16] { wait: 1 };"), &["E1043"]);
+    assert_codes(&master("mem m: [u8; 16] { direct: io(addr) };"), &["E1043"]);
+}
+
 /// A master device with a model body.
 fn master(model: &str) -> String {
     format!("{BUS_PRELUDE}\ncomponent M1 {{ ports {{ clock clk; bus io: B::M; }} model {{ state x: u8 = 0; {model} }} }}")

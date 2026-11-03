@@ -1052,9 +1052,9 @@ impl<'a> Gen<'a> {
         let ctx_cpu = |b: &str| ctx_for(proc_idx, b, None);
 
         // The board.
-        let mut fields = String::from("        pub sig: Signals,\n        pub marks: Marks,\n        /// Time the current instruction spent fetching code (overlapped\n        /// with its execution at retire).\n        pub code_time: clock::Time,\n");
+        let mut fields = String::from("        pub sig: Signals,\n        pub marks: Marks,\n        /// Time the current instruction spent fetching code (overlapped\n        /// with its execution at retire).\n        pub code_time: clock::Time,\n        /// The bus unit code was last fetched from directly (`memory: direct`).\n        pub direct_code: u64,\n");
         let mut init = String::from(
-            "            sig: Signals::new(),\n            marks: Marks::default(),\n            code_time: 0,\n",
+            "            sig: Signals::new(),\n            marks: Marks::default(),\n            code_time: 0,\n            direct_code: u64::MAX,\n",
         );
         for i in &insts {
             let _ = writeln!(
@@ -1068,6 +1068,75 @@ impl<'a> Gen<'a> {
                 "            {}: {}::new(),",
                 ident(&i.name),
                 ident(&i.comp.name)
+            );
+        }
+        // Direct memory (`memory: direct`): the processor's accesses in the
+        // ranges of slaves whose memory declares `direct` read and write
+        // the cells, charged a transfer's clocks for each bus-width unit
+        // they touch; code is charged once a unit, as a one-unit buffer.
+        let mut direct = String::new();
+        let mut direct_hooks = (String::new(), String::new(), String::new());
+        if prof.is_some_and(|p| p.direct_memory) {
+            if cpu_retire {
+                return Err(GenError::new(format!(
+                    "profile `{}`: `memory: direct` bypasses the processor model's accesses, but `{}` times instructions itself (`on retire`)",
+                    prof.unwrap().name,
+                    cpu.name
+                )));
+            }
+            let msp = self.isa.istream.as_ref().map(|i| self.spaces[&i.space]);
+            let mut reads = String::new();
+            let mut writes = String::new();
+            let mut fetches = String::new();
+            if let Some(msp) = msp.filter(|s| s.cell_bits == 8 && s.little_endian) {
+                for b in sys.buses.iter().filter(|b| b.masters.iter().any(|(m, _)| *m as usize == proc_idx)) {
+                    let info = self.bus(b.bus)?;
+                    let tr = |name: &str| info.transactions.iter().find(|t| t.name == name);
+                    let (Some(rd), Some(wr)) = (tr("read"), tr("write")) else { continue };
+                    let (Some(rbase), Some(wbase)) = (rd.base_cycles, wr.base_cycles) else { continue };
+                    let mut unit_bytes = 1u64;
+                    if let Some(Ty::Tuple(items)) = &rd.ret {
+                        if let Some((_, Ty::UInt(w))) = items.iter().find(|(n, _)| n.as_deref() == Some("data")) {
+                            unit_bytes = (*w as u64 / 8).max(1);
+                        }
+                    }
+                    // The `space` value that is the isa's memory space, by name.
+                    let mem_value = rd.params.iter().find(|(n, _)| n == "space").and_then(|(_, t)| match t {
+                        Ty::Enum(e) => self.enums[e].variants.iter().find(|(v, _)| v.eq_ignore_ascii_case(&msp.name)).map(|(_, x)| *x),
+                        _ => None,
+                    });
+                    let period = format!("clock::C{}", b.clock);
+                    for ((si, sp), ranges) in &b.slaves {
+                        let dev = &insts[*si as usize];
+                        let Some(m) = dev.model.mems.iter().find(|m| m.direct.as_ref().is_some_and(|d| d.port == *sp)) else { continue };
+                        let d = m.direct.as_ref().unwrap();
+                        let cells = format!("self.{}.{}", ident(&dev.name), ident(&m.name));
+                        let index = |a: &str| if d.mask == u128::MAX { format!("({a}) as usize") } else { format!("(({a}) & {:#x}) as usize", d.mask) };
+                        for r in ranges {
+                            if let Some(v) = r.space {
+                                if Some(v) != mem_value { continue; }
+                            }
+                            if d.mask == u128::MAX && r.hi >= m.len as u128 { continue; }
+                            let cond = format!("addr >= {:#x} && last <= {:#x}", r.lo, r.hi);
+                            let units = format!("(last / {unit_bytes} - addr / {unit_bytes} + 1) as clock::Time");
+                            let _ = writeln!(reads, "        if {cond} {{ let mut v: u128 = 0; for i in 0..n {{ v |= ({cells}[{}] as u128) << (8 * i); }} self.sig.now += {units} * {} * {period}; return Some(v); }}", index("addr + i"), rbase as u128 + d.wait);
+                            if !d.read_only {
+                                let _ = writeln!(writes, "        if {cond} {{ for i in 0..n {{ {cells}[{}] = (value >> (8 * i)) as u8; }} self.sig.now += {units} * {} * {period}; return true; }}", index("addr + i"), wbase as u128 + d.wait);
+                            }
+                            let _ = writeln!(fetches, "        if addr >= {:#x} && addr <= {:#x} {{ let u = addr / {unit_bytes}; if u != self.direct_code {{ self.direct_code = u; let t = {} * {period}; self.sig.now += t; self.code_time += t; }} return Some({cells}[{}]); }}", r.lo, r.hi, rbase as u128 + d.wait, index("addr"));
+                        }
+                    }
+                }
+                let amask = mask_literal(match &msp.addr { Ty::UInt(b) => *b, _ => 64 }, "u64");
+                direct_hooks = (
+                    format!("        if let Some(v) = self.direct_read(addr & {amask}, (bits / 8) as u64) {{ return v; }}\n"),
+                    format!("        if self.direct_write(addr & {amask}, (bits / 8) as u64, value) {{ return; }}\n"),
+                    format!("        if bits == 8 {{ if let Some(b) = self.direct_fetch(addr & {amask}) {{ return b as u128; }} }}\n"),
+                );
+            }
+            let _ = write!(
+                direct,
+                "        /// `memory: direct`: `n` bytes at `addr` from a memory that\n        /// declares `direct`, else None.\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_read(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{reads}        None\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_write(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{writes}        false\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_fetch(&mut self, addr: u64) -> Option<u8> {{\n{fetches}        self.direct_code = u64::MAX;\n        None\n        }}\n"
             );
         }
         let mut bus_impl = String::new();
@@ -1099,16 +1168,22 @@ impl<'a> Gen<'a> {
                 } else {
                     format!("(n - 1 - i) * {cell}")
                 };
+                let is_code = self.isa.istream.as_ref().is_some_and(|i| i.space == sp.def);
+                let hook = match (is_code, write) {
+                    (false, _) => "",
+                    (true, false) => direct_hooks.0.as_str(),
+                    (true, true) => direct_hooks.1.as_str(),
+                };
                 if write {
                     let _ = write!(
                         bus_impl,
-                        "    fn {n}_write(&mut self, addr: u64, bits: u32, value: u128) {{\n        let mut ctx = {};\n        let addr = addr & {amask};\n        match bits {{\n{arms}            _ => {{\n                let n = bits / {cell};\n                for i in 0..n {{\n                    let a = (addr + i as u64) & {amask};\n                    let v = (value >> ({shift})) as {cty};\n                    self.{cpu_name}.{n}_write_u{cell}(&mut ctx, a as {aty}, v);\n                }}\n            }}\n        }}\n    }}\n",
+                        "    fn {n}_write(&mut self, addr: u64, bits: u32, value: u128) {{\n{hook}        let mut ctx = {};\n        let addr = addr & {amask};\n        match bits {{\n{arms}            _ => {{\n                let n = bits / {cell};\n                for i in 0..n {{\n                    let a = (addr + i as u64) & {amask};\n                    let v = (value >> ({shift})) as {cty};\n                    self.{cpu_name}.{n}_write_u{cell}(&mut ctx, a as {aty}, v);\n                }}\n            }}\n        }}\n    }}\n",
                         ctx_cpu("self")
                     );
                 } else {
                     let _ = write!(
                         bus_impl,
-                        "    fn {n}_read(&mut self, addr: u64, bits: u32) -> u128 {{\n        let mut ctx = {};\n        let addr = addr & {amask};\n        match bits {{\n{arms}            _ => {{\n                let n = bits / {cell};\n                let mut v: u128 = 0;\n                for i in 0..n {{\n                    let a = (addr + i as u64) & {amask};\n                    v |= (self.{cpu_name}.{n}_read_u{cell}(&mut ctx, a as {aty}) as u128) << ({shift});\n                }}\n                v\n            }}\n        }}\n    }}\n",
+                        "    fn {n}_read(&mut self, addr: u64, bits: u32) -> u128 {{\n{hook}        let mut ctx = {};\n        let addr = addr & {amask};\n        match bits {{\n{arms}            _ => {{\n                let n = bits / {cell};\n                let mut v: u128 = 0;\n                for i in 0..n {{\n                    let a = (addr + i as u64) & {amask};\n                    v |= (self.{cpu_name}.{n}_read_u{cell}(&mut ctx, a as {aty}) as u128) << ({shift});\n                }}\n                v\n            }}\n        }}\n    }}\n",
                         ctx_cpu("self")
                     );
                 }
@@ -1150,7 +1225,8 @@ impl<'a> Gen<'a> {
             };
             let _ = write!(
                 bus_impl,
-                "    fn {n}_fetch(&mut self, addr: u64, bits: u32) -> u128 {{\n        let t0 = self.sig.now;\n        let v = {{\n            let mut ctx = {};\n            let addr = addr & {amask};\n            match bits {{\n{arms}                _ => {{\n                    let n = bits / {cell};\n                    let mut v: u128 = 0;\n                    for i in 0..n {{\n                        let a = (addr + i as u64) & {amask};\n                        v |= ({cell_fetch} as u128) << ({shift});\n                    }}\n                    v\n                }}\n            }}\n        }};\n        self.code_time += self.sig.now - t0;\n        v\n    }}\n",
+                "    fn {n}_fetch(&mut self, addr: u64, bits: u32) -> u128 {{\n{}        let t0 = self.sig.now;\n        let v = {{\n            let mut ctx = {};\n            let addr = addr & {amask};\n            match bits {{\n{arms}                _ => {{\n                    let n = bits / {cell};\n                    let mut v: u128 = 0;\n                    for i in 0..n {{\n                        let a = (addr + i as u64) & {amask};\n                        v |= ({cell_fetch} as u128) << ({shift});\n                    }}\n                    v\n                }}\n            }}\n        }};\n        self.code_time += self.sig.now - t0;\n        v\n    }}\n",
+                direct_hooks.2,
                 ctx_cpu("self")
             );
             if cpu_retire {
@@ -1192,7 +1268,7 @@ impl<'a> Gen<'a> {
         }
         let _ = write!(
             o,
-            "    /// Every component model, the time and the signal levels: the processor's bus.\n    #[derive(Clone, Debug)]\n    pub struct Board {{\n{fields}    }}\n    impl Board {{\n        pub fn new() -> Board {{\n            Board {{\n{init}            }}\n        }}\n    }}\n    impl Bus for Board {{\n{bus_impl}    }}\n"
+            "    /// Every component model, the time and the signal levels: the processor's bus.\n    #[derive(Clone, Debug)]\n    pub struct Board {{\n{fields}    }}\n    impl Board {{\n        pub fn new() -> Board {{\n            Board {{\n{init}            }}\n        }}\n{direct}    }}\n    impl Bus for Board {{\n{bus_impl}    }}\n"
         );
 
         // Reset, sync and signal delivery.

@@ -412,6 +412,14 @@ The transaction level. Contents:
   with the component's state snapshot, and the generated struct exposes
   it for the embedding program to fill or read. For a handful of channels
   prefer `state`. Both are indexed and assigned the same way.
+- `mem cells: [u8; N] { direct: port(addr & MASK), wait: W };` states that
+  the slave bus port `port` reads and writes this memory plainly. The
+  byte at bus address `addr` is `cells[addr & MASK]` (or `cells[addr]`
+  for `port(addr)`), and each transfer takes `W` wait states. `read_only`
+  means writes still go through the handlers (a ROM). Like `istream {
+  window }`, it is a fact the author states, not something checked
+  against the handlers: an emulation profile (`memory: direct`) relies on
+  it to bypass them.
 - `fn name(params) -> T { ... }` helpers over the component's state
   (section 8.3a).
 - Handlers:
@@ -1448,6 +1456,15 @@ system PcAt386 {
   `default` applies to everything not named. The compiler reports, for a
   profile, which components run adapted and which run rtl inside a `model`
   build.
+- `memory: direct;` in a profile builds an emulator. The processor's
+  memory accesses in the ranges of slaves whose memory declares `direct`
+  read and write the cells without the processor model's handlers or the
+  bus's decode. Each access is charged the transfer's clocks plus the
+  declared waits once per bus-width unit it touches, and code once per
+  unit fetched, as a one-unit buffer would. Time is approximate: a
+  processor model's own buffering and its view of writes into it are
+  bypassed. Processor models that time instructions themselves (`on
+  retire`) can't be built this way. `memory: bus;` is the default.
 - `wire inst.in_port = other.out_port;` connects an output to an input of
   the same type; `wire inst.in_port = <constant>;` straps a pin (`wire
   pic1.sp = true;`). Each input is driven at most once; an output may

@@ -460,6 +460,10 @@ impl Parser {
                         &[Punct::Comma, Punct::Semi],
                         |p| {
                             let key = p.expect_ident()?;
+                            // A bare flag (`read_only`).
+                            if !p.at_punct(Punct::Colon) {
+                                return Ok(MemOption::Other(key, None));
+                            }
                             p.expect_punct(Punct::Colon)?;
                             Ok(match key.name.as_str() {
                                 "ports" => MemOption::Ports(p.parse_expr()?),

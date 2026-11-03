@@ -143,11 +143,13 @@ component Cpu386 {
 }
 
 /// 4 MB of zero-wait-state RAM: the first 640 KB and, from 1 MB, the
-/// extended memory (the cells between are the ISA bus's).
+/// extended memory (the cells between are the ISA bus's). Its port reads
+/// and writes the cells plainly (`direct`), so an emulation profile
+/// reaches them without the handlers.
 component Ram386 {
     ports { bus port: LocalBus386::Slave; }
     model {
-        mem cells: [u8; 0x400000];
+        mem cells: [u8; 0x400000] { direct: port(addr & 0x3FFFFF), wait: 0 };
         on port.read(space: Space, addr: u32, be: u4) -> (data: u32, wait: u8) {
             let a = addr & 0x3FFFFC;
             return (data: concat(cells[a + 3], cells[a + 2], cells[a + 1], cells[a]), wait: 0);
@@ -169,7 +171,7 @@ component Ram386 {
 component Rom386 {
     ports { bus port: LocalBus386::Slave; }
     model {
-        mem cells: [u8; 0x10000];
+        mem cells: [u8; 0x10000] { direct: port(addr & 0xFFFF), wait: 2, read_only };
         on port.read(space: Space, addr: u32, be: u4) -> (data: u32, wait: u8) {
             let a = addr & 0xFFFC;
             return (data: concat(cells[a + 3], cells[a + 2], cells[a + 1], cells[a]), wait: 2);
@@ -346,6 +348,9 @@ system Board386 {
     wire ega.switches = 0x9;
 
     profile fast { default: model; }
+    /// An emulator: the processor reaches RAM and ROM directly (time
+    /// approximate: a transfer's clocks per dword touched).
+    profile emulate { default: model; memory: direct; }
 }
 
 /// The same board with a VGA in place of the EGA.
@@ -412,4 +417,7 @@ system Board386Vga {
     wire cpu.intr_line = pic1.int;
 
     profile fast { default: model; }
+    /// An emulator: the processor reaches RAM and ROM directly (time
+    /// approximate: a transfer's clocks per dword touched).
+    profile emulate { default: model; memory: direct; }
 }

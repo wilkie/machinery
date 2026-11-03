@@ -293,7 +293,24 @@ impl Checker<'_> {
                 SystemItem::Profile(p) => {
                     let mut default = Level::Model;
                     let mut overrides = Vec::new();
+                    let mut direct_memory = false;
                     for e in &p.entries {
+                        if e.target.segments.len() == 1 && e.target.segments[0].name == "memory" {
+                            match e.level.name.as_str() {
+                                "direct" => direct_memory = true,
+                                "bus" => direct_memory = false,
+                                other => {
+                                    self.error(
+                                        module,
+                                        "E1049",
+                                        e.level.span,
+                                        format!("unknown memory access `{other}` (expected `direct` or `bus`)"),
+                                    );
+                                    ok = false;
+                                }
+                            }
+                            continue;
+                        }
                         let Some(lv) = level(&e.level.name) else {
                             self.error(
                                 module,
@@ -324,6 +341,7 @@ impl Checker<'_> {
                     }
                     profiles.push(hir::Profile {
                         name: p.name.name.clone(),
+                        direct_memory,
                         default,
                         overrides,
                     });

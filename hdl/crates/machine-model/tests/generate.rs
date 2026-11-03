@@ -570,30 +570,33 @@ fn i386_vga_board_system_boots() {
         read("i386", "board.machine"),
     ]);
     assert!(!checked.has_errors());
-    let src = generate_system(&checked, "Board386Vga", Some("fast")).unwrap_or_else(|e| panic!("{e}"));
-    let crate_ = package(
-        &crate_name("Board386Vga"),
-        src,
-        &root.join("crates").join("machine-runtime"),
-    );
-    let dir = root.join("target").join("gen-tests").join("board386vga");
-    write_crate(&dir, &crate_).unwrap();
-    std::fs::create_dir_all(dir.join("tests")).unwrap();
-    std::fs::copy(
-        root.join("targets").join("i386").join("vga_test.rs"),
-        dir.join("tests").join("vga.rs"),
-    )
-    .unwrap();
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let output = Command::new(&cargo)
-        .args(["test", "--quiet", "--test", "vga", "--manifest-path"])
-        .arg(dir.join("Cargo.toml"))
-        .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
-        .output()
-        .expect("run cargo");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "VGA board tests failed:\n{stdout}\n{stderr}");
+    // Both builds: the exact one, and the emulator (`memory: direct`).
+    for (profile, dir) in [("fast", "board386vga"), ("emulate", "board386vga-emulate")] {
+        let src = generate_system(&checked, "Board386Vga", Some(profile)).unwrap_or_else(|e| panic!("{e}"));
+        let crate_ = package(
+            &crate_name("Board386Vga"),
+            src,
+            &root.join("crates").join("machine-runtime"),
+        );
+        let dir = root.join("target").join("gen-tests").join(dir);
+        write_crate(&dir, &crate_).unwrap();
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::copy(
+            root.join("targets").join("i386").join("vga_test.rs"),
+            dir.join("tests").join("vga.rs"),
+        )
+        .unwrap();
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let output = Command::new(&cargo)
+            .args(["test", "--quiet", "--test", "vga", "--manifest-path"])
+            .arg(dir.join("Cargo.toml"))
+            .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+            .output()
+            .expect("run cargo");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "VGA board tests ({profile}) failed:\n{stdout}\n{stderr}");
+    }
 }
 
 /// The processor model's pipeline (SPEC 11.2c): the conformance rig

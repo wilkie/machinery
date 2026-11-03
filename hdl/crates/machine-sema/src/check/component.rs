@@ -130,7 +130,7 @@ impl Checker<'_> {
         // Model state and memories: collected before any body so handlers
         // may appear in any order.
         let mut states: Vec<(String, Ty)> = Vec::new();
-        let mut mems: Vec<(String, Ty, u64)> = Vec::new();
+        let mut mems: Vec<(String, Ty, u64, Option<hir::MemDirect>)> = Vec::new();
         let mut state_decls: Vec<(&ast::Stmt, Ty)> = Vec::new();
         let mut fns: Vec<ModelFnSig> = Vec::new();
         let mut fn_names: HashMap<String, u32> = HashMap::new();
@@ -178,16 +178,48 @@ impl Checker<'_> {
                                 (Ty::Error, 0)
                             }
                         };
+                        let mut direct: Option<hir::MemDirect> = None;
+                        let mut wait: Option<u128> = None;
+                        let mut read_only = false;
                         for o in options {
-                            if let ast::MemOption::Other(k, _) = o {
-                                self.error(
-                                    module,
-                                    "E1043",
-                                    k.span,
-                                    format!("unknown `mem` option `{}`", k.name),
-                                );
+                            let ast::MemOption::Other(k, v) = o else { continue };
+                            match (k.name.as_str(), v) {
+                                ("direct", Some(e)) => match self.mem_direct(&names, &ports, e) {
+                                    Ok(d) => direct = Some(d),
+                                    Err(msg) => {
+                                        self.error(module, "E1043", e.span, msg);
+                                        ok = false;
+                                    }
+                                },
+                                ("wait", Some(ast::Expr { kind: ast::ExprKind::Int { value, .. }, .. })) => {
+                                    wait = Some(*value)
+                                }
+                                ("read_only", None) => read_only = true,
+                                _ => {
+                                    self.error(
+                                        module,
+                                        "E1043",
+                                        k.span,
+                                        format!("unknown `mem` option `{}`", k.name),
+                                    );
+                                    ok = false;
+                                }
+                            }
+                        }
+                        if let Some(d) = direct.as_mut() {
+                            d.wait = wait.unwrap_or(0);
+                            d.read_only = read_only;
+                            if !matches!(elem, Ty::UInt(8)) {
+                                self.error(module, "E1043", ty.span, "a `direct` memory has `u8` cells");
                                 ok = false;
                             }
+                            if d.mask != u128::MAX && d.mask >= len as u128 {
+                                self.error(module, "E1043", ty.span, format!("`direct`: `addr & {:#x}` reaches past the memory's {len} cells", d.mask));
+                                ok = false;
+                            }
+                        } else if wait.is_some() || read_only {
+                            self.error(module, "E1043", n.span, "`wait` and `read_only` go with `direct`");
+                            ok = false;
                         }
                         if names
                             .insert(n.name.clone(), CompEntry::Mem(mems.len() as u32))
@@ -201,7 +233,7 @@ impl Checker<'_> {
                             );
                             ok = false;
                         }
-                        mems.push((n.name.clone(), elem, len));
+                        mems.push((n.name.clone(), elem, len, direct));
                     }
                     S::Fn(d) => {
                         let mut ps = Vec::new();
@@ -240,7 +272,7 @@ impl Checker<'_> {
             Rc::new(CompScope {
                 ports: ports.clone(),
                 states: states.clone(),
-                mems: mems.clone(),
+                mems: mems.iter().map(|(n, e, l, _)| (n.clone(), e.clone(), *l)).collect(),
                 names,
                 isa,
                 fns: fns.clone(),
@@ -269,10 +301,11 @@ impl Checker<'_> {
             }
             let hmems = mems
                 .iter()
-                .map(|(n, e, l)| hir::ModelMem {
+                .map(|(n, e, l, d)| hir::ModelMem {
                     name: n.clone(),
                     elem: e.clone(),
                     len: *l,
+                    direct: d.clone(),
                 })
                 .collect();
             let mut handlers = Vec::new();
@@ -934,6 +967,39 @@ impl Checker<'_> {
     }
 
     /// An `extern fn` of the component's isa, by name.
+    /// `direct: port(addr & mask)` or `direct: port(addr)`: a slave bus
+    /// port of the component, and the byte its address reaches.
+    fn mem_direct(
+        &self,
+        names: &HashMap<String, CompEntry>,
+        ports: &[hir::Port],
+        e: &ast::Expr,
+    ) -> Result<hir::MemDirect, String> {
+        use ast::ExprKind as K;
+        let shape = "`direct` is `port(addr)` or `port(addr & <mask>)`";
+        let K::Call { callee, args, .. } = &e.kind else { return Err(shape.into()) };
+        let (K::Path(port), [arg]) = (&callee.kind, args.as_slice()) else { return Err(shape.into()) };
+        let is_addr = |x: &ast::Expr| matches!(&x.kind, K::Path(p) if p.segments.len() == 1 && p.segments[0].name == "addr");
+        let mask = match &arg.value.kind {
+            _ if is_addr(&arg.value) => u128::MAX,
+            K::Binary(ast::BinaryOp::BitAnd, a, b) => match (&a.kind, &b.kind) {
+                (_, K::Int { value, .. }) if is_addr(a) => *value,
+                (K::Int { value, .. }, _) if is_addr(b) => *value,
+                _ => return Err(shape.into()),
+            },
+            _ => return Err(shape.into()),
+        };
+        let name = &port.segments[0].name;
+        let Some(CompEntry::Port(pi)) = names.get(name).copied() else {
+            return Err(format!("`{name}` is not a port of this component"));
+        };
+        match ports[pi as usize].kind {
+            PortKind::Bus { role, .. } if role != 0 => {}
+            _ => return Err(format!("`{name}` is not a responding bus port")),
+        }
+        Ok(hir::MemDirect { port: pi, mask, wait: 0, read_only: false })
+    }
+
     fn isa_extern(&self, isa: Option<DefId>, name: &str) -> Option<DefId> {
         let isa = isa?;
         self.prog

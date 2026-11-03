@@ -778,6 +778,21 @@ pub struct ModelMem {
     pub name: String,
     pub elem: Ty,
     pub len: u64,
+    /// `{ direct: port(addr & mask), wait: n }`: the slave port's reads and
+    /// writes are plain byte accesses of this memory, which an emulation
+    /// profile (`memory: direct`) reaches without the handlers.
+    pub direct: Option<MemDirect>,
+}
+
+/// A memory a slave port reads and writes plainly: the byte at `addr` is
+/// `mem[addr & mask]` (`mask` all ones for `port(addr)`), each transfer
+/// with `wait` wait states; `read_only` when writes take the handlers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemDirect {
+    pub port: u32,
+    pub mask: u128,
+    pub wait: u128,
+    pub read_only: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -950,6 +965,9 @@ pub enum Level {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
     pub name: String,
+    /// `memory: direct;`: the processor reaches memories that declare
+    /// `direct` without their handlers (time approximate).
+    pub direct_memory: bool,
     pub default: Level,
     /// Instance paths (`vga`, `vga.crtc`) and their level.
     pub overrides: Vec<(String, Level)>,

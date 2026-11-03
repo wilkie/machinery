@@ -367,6 +367,9 @@ system Board386 {
     /// An emulator: the processor reaches RAM and ROM directly (time
     /// approximate: a transfer's clocks per dword touched).
     profile emulate { default: model; memory: direct; }
+    /// The emulator with the trace core: runs of decoded instructions kept
+    /// and run again.
+    profile trace { default: model; memory: direct; core: trace; }
 }
 
 /// The same board with a VGA in place of the EGA.
@@ -438,6 +441,9 @@ system Board386Vga {
     /// An emulator: the processor reaches RAM and ROM directly (time
     /// approximate: a transfer's clocks per dword touched).
     profile emulate { default: model; memory: direct; }
+    /// The emulator with the trace core: runs of decoded instructions kept
+    /// and run again.
+    profile trace { default: model; memory: direct; core: trace; }
 }
 
 /// A 386 AT with a VGA: the 25 MHz 386 board with the PC/AT's system-board
@@ -528,4 +534,7 @@ system At386Vga {
     profile fast { default: model; }
     /// Direct memory bypasses the A20 gate: memory never wraps at 1 MB.
     profile emulate { default: model; memory: direct; }
+    /// The emulator with the trace core: runs of decoded instructions kept
+    /// and run again.
+    profile trace { default: model; memory: direct; core: trace; }
 }

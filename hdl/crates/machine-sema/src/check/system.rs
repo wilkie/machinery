@@ -294,7 +294,19 @@ impl Checker<'_> {
                     let mut default = Level::Model;
                     let mut overrides = Vec::new();
                     let mut direct_memory = false;
+                    let mut core = hir::Core::Decode;
                     for e in &p.entries {
+                        if e.target.segments.len() == 1 && e.target.segments[0].name == "core" {
+                            match e.level.name.as_str() {
+                                "decode" => core = hir::Core::Decode,
+                                "trace" => core = hir::Core::Trace,
+                                other => {
+                                    self.error(module, "E1049", e.level.span, format!("unknown core `{other}` (expected `decode` or `trace`)"));
+                                    ok = false;
+                                }
+                            }
+                            continue;
+                        }
                         if e.target.segments.len() == 1 && e.target.segments[0].name == "memory" {
                             match e.level.name.as_str() {
                                 "direct" => direct_memory = true,
@@ -342,6 +354,7 @@ impl Checker<'_> {
                     profiles.push(hir::Profile {
                         name: p.name.name.clone(),
                         direct_memory,
+                        core,
                         default,
                         overrides,
                     });

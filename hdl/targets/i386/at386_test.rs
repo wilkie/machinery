@@ -232,6 +232,11 @@ const A20: &[u8] = &[
 /// ROM images needed: the program is the boot ROM.
 #[test]
 fn a20_gate_wraps_memory_at_1_mb() {
+    // Direct memory bypasses the gate (SPEC 12): an emulator built so never
+    // wraps.
+    if machine_at386_vga::system::DIRECT_MEMORY {
+        return;
+    }
     let mut sys = System::new();
     let mut rom = vec![0xF4u8; 0x10000];
     rom[..A20.len()].copy_from_slice(A20);

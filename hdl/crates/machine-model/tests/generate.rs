@@ -558,23 +558,27 @@ fn i386_at_boots_dos() {
         target386("board.machine"),
     ]);
     assert!(!checked.has_errors());
-    let src = generate_system(&checked, "At386Vga", Some("fast")).unwrap_or_else(|e| panic!("{e}"));
-    let root = hdl_root();
-    let crate_ = package(&crate_name("At386Vga"), src, &root.join("crates").join("machine-runtime"));
-    let dir = root.join("target").join("gen-tests").join("at386vga");
-    write_crate(&dir, &crate_).unwrap();
-    std::fs::create_dir_all(dir.join("tests")).unwrap();
-    std::fs::copy(root.join("targets").join("i386").join("at386_test.rs"), dir.join("tests").join("at386.rs")).unwrap();
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let output = Command::new(&cargo)
-        .args(["test", "--release", "--quiet", "--test", "at386", "--manifest-path"])
-        .arg(dir.join("Cargo.toml"))
-        .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
-        .output()
-        .expect("run cargo");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "386 AT tests failed:\n{stdout}\n{stderr}");
+    // The exact build, and the emulator with the trace core: the same DOS
+    // boots and installs on both.
+    for (profile, dir) in [("fast", "at386vga"), ("trace", "at386vga-trace")] {
+        let src = generate_system(&checked, "At386Vga", Some(profile)).unwrap_or_else(|e| panic!("{e}"));
+        let root = hdl_root();
+        let crate_ = package(&crate_name("At386Vga"), src, &root.join("crates").join("machine-runtime"));
+        let dir = root.join("target").join("gen-tests").join(dir);
+        write_crate(&dir, &crate_).unwrap();
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::copy(root.join("targets").join("i386").join("at386_test.rs"), dir.join("tests").join("at386.rs")).unwrap();
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let output = Command::new(&cargo)
+            .args(["test", "--release", "--quiet", "--test", "at386", "--manifest-path"])
+            .arg(dir.join("Cargo.toml"))
+            .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+            .output()
+            .expect("run cargo");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "386 AT tests ({profile}) failed:\n{stdout}\n{stderr}");
+    }
 }
 
 /// The 386 board: the i386 on a 32-bit local bus with RAM and a ROM, and
@@ -651,7 +655,7 @@ fn i386_vga_board_system_boots() {
     ]);
     assert!(!checked.has_errors());
     // Both builds: the exact one, and the emulator (`memory: direct`).
-    for (profile, dir) in [("fast", "board386vga"), ("emulate", "board386vga-emulate")] {
+    for (profile, dir) in [("fast", "board386vga"), ("emulate", "board386vga-emulate"), ("trace", "board386vga-trace")] {
         let src = generate_system(&checked, "Board386Vga", Some(profile)).unwrap_or_else(|e| panic!("{e}"));
         let crate_ = package(
             &crate_name("Board386Vga"),

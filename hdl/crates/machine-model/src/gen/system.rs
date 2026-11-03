@@ -269,6 +269,9 @@ impl<'a> Gen<'a> {
                 ident(&m.name),
                 self.rty(&m.elem)?
             );
+            if self.trace.is_some() && m.direct.is_some() {
+                let _ = writeln!(st, "    /// The trace core's code pages of `{}`: per 4 KB page, which 128-byte\n    /// blocks hold recorded code, and writes to them; and those writes in\n    /// all.\n    pub {}_code: Vec<u32>,\n    pub {}_stamps: Vec<u32>,\n    pub {}_writes: u64,", m.name, ident(&m.name), ident(&m.name), ident(&m.name));
+            }
         }
         let mut memo_init = String::new();
         if let Some(mi) = memo {
@@ -307,6 +310,9 @@ impl<'a> Gen<'a> {
                 self.default_value(&m.elem)?,
                 m.len
             );
+            if self.trace.is_some() && m.direct.is_some() {
+                let _ = writeln!(st, "            {}_code: vec![0; {}],\n            {}_stamps: vec![0; {}],\n            {}_writes: 0,", ident(&m.name), m.len.div_ceil(4096), ident(&m.name), m.len.div_ceil(4096), ident(&m.name));
+            }
         }
         st.push_str(&memo_init);
         st.push_str("        };\n");
@@ -568,8 +574,13 @@ impl<'a> Gen<'a> {
         let mut o = String::new();
         let _ = write!(
             o,
-            "\n/// The system `{}`.\npub mod system {{\n    use super::*;\n\n    /// `e / p` for times: in 64 bits when both fit (an elapsed time is\n    /// short), else in 128.\n    #[inline(always)]\n    pub fn div_time(e: clock::Time, p: clock::Time) -> clock::Time {{\n        if (e | p) >> 64 == 0 {{ (e as u64 / p as u64) as clock::Time }} else {{ e / p }}\n    }}\n\n    /// The time unit is `BASE_NUM / BASE_DEN` seconds.\n    pub const BASE_NUM: u128 = {};\n    pub const BASE_DEN: u128 = {};\n    /// Clock periods in time units.\n    pub mod clock {{\n        /// A time: a count of the system's time unit. 128 bits, so that time\n        /// stays exact over any run however fine the unit the clocks need.\n        pub type Time = u128;\n",
-            sys.name, sys.base_num, sys.base_den
+            "\n/// The system `{}`.\npub mod system {{\n    use super::*;\n\n    /// `e / p` for times: in 64 bits when both fit (an elapsed time is\n    /// short), else in 128.\n    #[inline(always)]\n    pub fn div_time(e: clock::Time, p: clock::Time) -> clock::Time {{\n        if (e | p) >> 64 == 0 {{ (e as u64 / p as u64) as clock::Time }} else {{ e / p }}\n    }}\n\n    /// The time unit is `BASE_NUM / BASE_DEN` seconds.\n    pub const BASE_NUM: u128 = {};\n    pub const BASE_DEN: u128 = {};\n    /// The profile this crate was built with, its core, and whether the\n    /// processor reaches memory directly (`memory: direct`: no A20 gate,\n    /// approximate time).\n    pub const PROFILE: &str = {:?};\n    pub const CORE: &str = {:?};\n    pub const DIRECT_MEMORY: bool = {};\n    /// Clock periods in time units.\n    pub mod clock {{\n        /// A time: a count of the system's time unit. 128 bits, so that time\n        /// stays exact over any run however fine the unit the clocks need.\n        pub type Time = u128;\n",
+            sys.name,
+            sys.base_num,
+            sys.base_den,
+            profile.unwrap_or("default"),
+            if self.trace.is_some() { "trace" } else { "decode" },
+            prof.is_some_and(|p| p.direct_memory)
         );
         for (i, c) in sys.clocks.iter().enumerate() {
             let _ = writeln!(
@@ -1191,6 +1202,13 @@ impl<'a> Gen<'a> {
             let mut reads = String::new();
             let mut writes = String::new();
             let mut fetches = String::new();
+            // The trace core: code pages of direct memories, their write
+            // counts, and fetches charged without reading.
+            let mut pages = String::new();
+            let mut stamps = String::new();
+            let mut skips = String::new();
+            let mut marks = String::new();
+            let mut numbered: Vec<(usize, String)> = Vec::new();
             if let Some(msp) = msp.filter(|s| s.cell_bits == 8 && s.little_endian) {
                 for b in sys.buses.iter().filter(|b| b.masters.iter().any(|(m, _)| *m as usize == proc_idx)) {
                     let info = self.bus(b.bus)?;
@@ -1223,8 +1241,26 @@ impl<'a> Gen<'a> {
                             let cond = format!("addr >= {:#x} && last <= {:#x}", r.lo, r.hi);
                             let units = format!("(last / {unit_bytes} - addr / {unit_bytes} + 1) as clock::Time");
                             let _ = writeln!(reads, "        if {cond} {{ let mut v: u128 = 0; for i in 0..n {{ v |= ({cells}[{}] as u128) << (8 * i); }} self.sig.now += {units} * {} * {period}; return Some(v); }}", index("addr + i"), rbase as u128 + d.wait);
+                            let stamp = if self.trace.is_some() {
+                                format!(" let k = {}; if {cells}_code[k >> 12] & (1u32 << ((k >> 7) & 31)) != 0 {{ {cells}_stamps[k >> 12] = {cells}_stamps[k >> 12].wrapping_add(1); {cells}_code[k >> 12] = 0; {cells}_writes = {cells}_writes.wrapping_add(1); }}", index("addr + i"))
+                            } else {
+                                String::new()
+                            };
                             if !d.read_only {
-                                let _ = writeln!(writes, "        if {cond} {{ for i in 0..n {{ {cells}[{}] = (value >> (8 * i)) as u8; }} self.sig.now += {units} * {} * {period}; return true; }}", index("addr + i"), wbase as u128 + d.wait);
+                                let _ = writeln!(writes, "        if {cond} {{ for i in 0..n {{ {cells}[{}] = (value >> (8 * i)) as u8;{stamp} }} self.sig.now += {units} * {} * {period}; return true; }}", index("addr + i"), wbase as u128 + d.wait);
+                            }
+                            if self.trace.is_some() {
+                                let k = match numbered.iter().position(|(_, c)| *c == cells) {
+                                    Some(k) => k,
+                                    None => {
+                                        numbered.push((*si as usize, cells.clone()));
+                                        let _ = writeln!(stamps, "            {} => {cells}_stamps.get((page & 0xFF_FFFF) as usize).copied().unwrap_or(0),", numbered.len() - 1);
+                                        let _ = writeln!(marks, "            {} => {{ if let Some(c) = {cells}_code.get_mut((page & 0xFF_FFFF) as usize) {{ *c |= bits; }} }}", numbered.len() - 1);
+                                        numbered.len() - 1
+                                    }
+                                };
+                                let _ = writeln!(pages, "        if addr >= {:#x} && addr <= {:#x} {{ return Some((({k} as u32) << 24) | ({} >> 12) as u32); }}", r.lo, r.hi, index("addr"));
+                                let _ = writeln!(skips, "        if addr >= {:#x} && last <= {:#x} {{ let (u0, u1) = (addr / {unit_bytes}, last / {unit_bytes}); let c = u1 - u0 + 1 - (u0 == self.direct_code) as u64; self.direct_code = u1; let t = c as clock::Time * {} * {period}; self.sig.now += t; self.code_time += t; return true; }}", r.lo, r.hi, rbase as u128 + d.wait);
                             }
                             let _ = writeln!(fetches, "        if addr >= {:#x} && addr <= {:#x} {{ let u = addr / {unit_bytes}; if u != self.direct_code {{ self.direct_code = u; let t = {} * {period}; self.sig.now += t; self.code_time += t; }} return Some({cells}[{}]); }}", r.lo, r.hi, rbase as u128 + d.wait, index("addr"));
                         }
@@ -1237,9 +1273,15 @@ impl<'a> Gen<'a> {
                     format!("        if bits == 8 {{ if let Some(b) = self.direct_fetch(addr & {amask}) {{ return b as u128; }} }}\n"),
                 );
             }
+            let wsum: String = numbered.iter().map(|(_, c)| format!(" + {c}_writes")).collect();
+            let trace_direct = if self.trace.is_some() {
+                format!("        /// The trace core: the code page `addr` is in (memory, page), its\n        /// write count, and `n` code bytes' fetches charged as `direct_fetch`\n        /// charges them (false: not all in one direct memory).\n        #[inline]\n        fn direct_code_page(&self, addr: u64) -> Option<u32> {{\n{pages}        None\n        }}\n        #[inline]\n        fn direct_code_stamp(&self, page: u32) -> u32 {{\n            match page >> 24 {{\n{stamps}            _ => 0,\n            }}\n        }}\n        #[inline]\n        fn direct_code_writes(&self) -> u64 {{ 0{wsum} }}\n        fn direct_code_mark(&mut self, page: u32, addr: u64, n: u32) {{\n            let (b0, b1) = (((addr & 0xFFF) >> 7) as u32, (((addr & 0xFFF) + n as u64 - 1) >> 7).min(31) as u32);\n            let bits = (u32::MAX >> (31 - b1)) & (u32::MAX << b0);\n            match page >> 24 {{\n{marks}            _ => {{}}\n            }}\n        }}\n        #[inline]\n        fn direct_skip(&mut self, addr: u64, n: u32) -> bool {{\n        let last = addr.wrapping_add(n as u64 - 1);\n{skips}        false\n        }}\n")
+            } else {
+                String::new()
+            };
             let _ = write!(
                 direct,
-                "        /// `memory: direct`: `n` bytes at `addr` from a memory that\n        /// declares `direct`, else None.\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_read(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{reads}        None\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_write(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{writes}        false\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_fetch(&mut self, addr: u64) -> Option<u8> {{\n{fetches}        self.direct_code = u64::MAX;\n        None\n        }}\n"
+                "        /// `memory: direct`: `n` bytes at `addr` from a memory that\n        /// declares `direct`, else None.\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_read(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{reads}        None\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_write(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{writes}        false\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_fetch(&mut self, addr: u64) -> Option<u8> {{\n{fetches}        self.direct_code = u64::MAX;\n        None\n        }}\n{trace_direct}"
             );
         }
         let mut bus_impl = String::new();
@@ -1332,6 +1374,12 @@ impl<'a> Gen<'a> {
                 direct_hooks.2,
                 ctx_cpu("self")
             );
+            if self.trace.is_some() {
+                let _ = write!(
+                    bus_impl,
+                    "    #[inline]\n    fn {n}_code_page(&mut self, addr: u64) -> Option<u32> {{ self.direct_code_page(addr & {amask}) }}\n    #[inline]\n    fn {n}_code_stamp(&mut self, page: u32) -> u32 {{ self.direct_code_stamp(page) }}\n    #[inline]\n    fn {n}_code_writes(&mut self) -> u64 {{ self.direct_code_writes() }}\n    fn {n}_code_mark(&mut self, page: u32, addr: u64, n: u32) {{ self.direct_code_mark(page, addr, n) }}\n    #[inline]\n    fn {n}_fetch_skip(&mut self, addr: u64, n: u32) {{\n        if self.direct_skip(addr & {amask}, n) {{ return; }}\n        for i in 0..n {{ self.{n}_fetch(addr.wrapping_add(i as u64), 8); }}\n    }}\n"
+                );
+            }
             if cpu.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Reset)) {
                 let _ = write!(
                     bus_impl,
@@ -1555,6 +1603,16 @@ impl<'a> Gen<'a> {
                 );
             }
         }
+        // The trace core: runs forgotten at reset, and when the host has
+        // written code memory or the processor's state directly.
+        let (trace_reset, code_changed) = if self.trace.is_some() {
+            (
+                format!("            self.{cpu_name}.trace_clear();\n"),
+                format!("        /// The host wrote memory or the processor's state directly: the\n        /// trace core's runs are forgotten.\n        pub fn code_changed(&mut self) {{ self.{cpu_name}.trace_clear(); }}\n"),
+            )
+        } else {
+            (String::new(), "        /// The host wrote memory or the processor's state directly (nothing\n        /// is kept from them with this core).\n        pub fn code_changed(&mut self) {}\n".to_string())
+        };
         let _ = write!(
             o,
             r#"    /// The system around its processor `{cpu_name}`.
@@ -1583,8 +1641,9 @@ impl<'a> Gen<'a> {
         pub fn reset(&mut self) {{
             let b = &mut self.{cpu_name}.bus;
 {reset}            self.{cpu_name}.reset();
-            self.deliver();
+{trace_reset}            self.deliver();
         }}
+{code_changed}
         /// One instruction (or an interrupt taken at the boundary), then
         /// every device caught up to the present. A halted processor
         /// spends one cycle of its clock waiting.

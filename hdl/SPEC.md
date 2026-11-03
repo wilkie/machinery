@@ -1527,6 +1527,40 @@ system PcAt386 {
   gate: an emulator addresses memory above 1 MB with the gate closed).
   Processor models that time instructions themselves (`on
   retire`) can't be built this way. `memory: bus;` is the default.
+- `core: decode | trace;` in a profile chooses how the processor's
+  instructions are found and run (**cores**); the description is the same.
+  `decode` (the default) decodes each instruction where it runs. `trace`
+  (with `memory: direct`) keeps runs of decoded instructions and runs them
+  again without decoding. As the processor runs, each instruction decoded
+  is recorded with what decoding left (its `Instr`, its length, its
+  prefixes' latches, the pc after it, the decoder's clocks) while
+  instructions follow one another within a page of code memory; when a
+  run's start is reached again, its instructions are replayed: pc, latches
+  and decoder state set as decoding left them, the fetches charged as they
+  cost, then the instruction. The compiler derives what makes a replay
+  exactly the run the decoder would have made:
+  - What the decoder reads besides the bytes and the pc (on the 386: `CS`,
+    for the operand size) is a run's key, compared by value where a run is
+    entered.
+  - Every assignment the compiler emits to state the decoder or the
+    istream's address, window and limit fns read, other than the pc, bumps
+    an epoch, field by field (a far jump, a task switch, a `CR0` or `CR3`
+    write, a TLB fill; not a carry flag, not `DS`). A run stops when it
+    changes; a run that followed another is entered from it directly
+    (chained) while the epoch of what is not in the key is unchanged and
+    the key holds.
+  - A run continues only while the pc is where it goes next (a jump taken
+    leaves it).
+  - Each direct memory marks the 128-byte blocks of each 4 KB page that
+    hold recorded code; a write to a marked block counts against its page,
+    and a run is replayed only while its page's count is unchanged. Writes
+    to data beside code cost nothing; code that changes is decoded again.
+  Interrupts, device catch-up and timing run per instruction as with
+  `decode`, so the machine's behaviour and time are the same; the host
+  calls `code_changed()` after writing memory or the processor's state
+  directly. On the 386 board, 32-bit code with paging on runs 29% faster
+  (decoding, fetching and translating the code address are done once per
+  run), real-mode code 9%, and a DOS boot 2-7% (its loading 5% slower).
 - `wire inst.in_port = other.out_port;` connects an output to an input of
   the same type; `wire inst.in_port = <constant>;` straps a pin (`wire
   pic1.sp = true;`). Each input is driven at most once; an output may

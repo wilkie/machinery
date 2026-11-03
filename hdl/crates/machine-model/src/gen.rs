@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 mod system;
+mod trace;
 
 use machine_sema::builtins::Builtin;
 use machine_sema::hir::{
@@ -140,6 +141,8 @@ pub struct Gen<'a> {
     pub(crate) memo_cur: std::cell::RefCell<Option<MemoCur>>,
     /// Emitting a recording copy: reads of versioned state are recorded.
     pub(crate) memo_rec: std::cell::Cell<bool>,
+    /// The trace core (`core: trace;`), when the profile asks for it.
+    trace: Option<trace::TracePlan>,
 }
 
 pub fn generate(prog: &Program, hir: &hir::Hir, isa_def: DefId) -> R<String> {
@@ -164,6 +167,15 @@ pub fn generate_system(
     let proc_idx = system::processor(hir, sys)?;
     let comp = system::comp_info(hir, sys.components[proc_idx].component)?;
     let mut g = Gen::new(prog, hir, comp.isa.unwrap())?;
+    // The profile's core: the trace core is planned before the processor is
+    // emitted (assignments bump its epoch).
+    let prof = profile.and_then(|n| sys.profiles.iter().find(|p| p.name == n));
+    if prof.is_some_and(|p| p.core == hir::Core::Trace) {
+        if !prof.is_some_and(|p| p.direct_memory) {
+            return Err(GenError::new("`core: trace` needs `memory: direct` (code pages are counted in direct memory)"));
+        }
+        g.trace = Some(g.plan_trace()?);
+    }
     g.emit_all()?;
     g.emit_system(sys, proc_idx, profile)?;
     Ok(g.out)
@@ -197,6 +209,7 @@ impl<'a> Gen<'a> {
             in_istream_next: std::cell::Cell::new(false),
             memo_cur: std::cell::RefCell::new(None),
             memo_rec: std::cell::Cell::new(false),
+            trace: None,
         })
     }
 }
@@ -1183,6 +1196,12 @@ impl<'a> Gen<'a> {
     /// Statements that store `rhs` (an expression text) into `place`, and
     /// stamp versioned state with a new version (SPEC 8.3b).
     fn assign(&self, cx: &Cx, place: &Expr, rhs: &str) -> R<String> {
+        let bump = self.trace_bump(cx, place);
+        let s = self.assign_plain(cx, place, rhs)?;
+        Ok(if bump.is_empty() { s } else { format!("{s}{bump}") })
+    }
+
+    fn assign_plain(&self, cx: &Cx, place: &Expr, rhs: &str) -> R<String> {
         fn root(e: &Expr) -> Option<&Expr> {
             match &e.kind {
                 H::State(..) | H::ModelMem(..) => Some(e),
@@ -1212,6 +1231,21 @@ impl<'a> Gen<'a> {
                     self.lvalue(cx, b)?
                 ))
             }
+            // A cell of a direct memory, with the trace core: its page's
+            // write count (code pages are checked against it).
+            (H::Index(b, idx), Some(H::ModelMem(_, i))) if matches!(b.kind, H::ModelMem(..)) && self.stamped(cx, *i).is_some() => {
+                let m = self.stamped(cx, *i).unwrap();
+                Ok(format!(
+                    "{{ let v = {rhs}; let i = ({}) as usize; {}[i] = v; if {r}.{m}_code[i >> 12] & (1u32 << ((i >> 7) & 31)) != 0 {{ {r}.{m}_stamps[i >> 12] = {r}.{m}_stamps[i >> 12].wrapping_add(1); {r}.{m}_code[i >> 12] = 0; {r}.{m}_writes = {r}.{m}_writes.wrapping_add(1); }} }}\n",
+                    self.expr(cx, idx)?,
+                    self.lvalue(cx, b)?
+                ))
+            }
+            (_, Some(H::ModelMem(_, i))) if self.stamped(cx, *i).is_some() => {
+                let m = self.stamped(cx, *i).unwrap();
+                let inner = self.assign_inner(cx, place, rhs)?;
+                Ok(format!("{inner}for c in {r}.{m}_stamps.iter_mut() {{ *c = c.wrapping_add(1); }} for c in {r}.{m}_code.iter_mut() {{ *c = 0; }} {r}.{m}_writes = {r}.{m}_writes.wrapping_add(1);\n"))
+            }
             (_, Some(H::ModelMem(_, i))) if self.memo_mem(*i).is_some() => {
                 let m = self.memo_mem(*i).unwrap();
                 let inner = self.assign_inner(cx, place, rhs)?;
@@ -1219,6 +1253,14 @@ impl<'a> Gen<'a> {
             }
             _ => self.assign_inner(cx, place, rhs),
         }
+    }
+
+    /// With the trace core, a component's direct memory counts writes per
+    /// page: its name, when memory `i` of the component in `cx` is one.
+    fn stamped(&self, cx: &Cx, i: u32) -> Option<String> {
+        self.trace.as_ref()?;
+        let m = cx.comp?.model.as_ref()?.mems.get(i as usize)?;
+        m.direct.as_ref().map(|_| ident(&m.name))
     }
 
     fn assign_inner(&self, cx: &Cx, place: &Expr, rhs: &str) -> R<String> {
@@ -1465,6 +1507,7 @@ impl<'a> Gen<'a> {
         self.line("#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, unused_variables, unused_mut, unused_parens, unused_imports, unused_braces, unused_labels, dead_code, unreachable_code, unreachable_patterns, unused_comparisons, unused_assignments, clippy::all)]");
         self.line("use machine_runtime as rt;");
         self.line("");
+        self.emit_trace_types()?;
 
         // Enums.
         for e in &self.hir.enums {
@@ -1695,6 +1738,7 @@ impl<'a> Gen<'a> {
         if let Some(ist) = &self.isa.istream {
             let n = ident(&self.spaces[&ist.space].name);
             let _ = writeln!(s, "    /// An instruction-stream fetch (a code bus cycle); a read by default.\n    fn {n}_fetch(&mut self, addr: u64, bits: u32) -> u128 {{ self.{n}_read(addr, bits) }}");
+            let _ = writeln!(s, "    /// The trace core: the page of code memory `addr` is in, when its writes\n    /// are counted; its write count; and the fetches of `n` bytes from\n    /// `addr` as the istream makes them, their values not needed.\n    #[allow(unused_variables)]\n    fn {n}_code_page(&mut self, addr: u64) -> Option<u32> {{ None }}\n    /// Writes to code memory so far, all pages.\n    fn {n}_code_writes(&mut self) -> u64 {{ 0 }}\n    /// `n` bytes at `addr` (in `page`) hold code: writes to them count.\n    #[allow(unused_variables)]\n    fn {n}_code_mark(&mut self, page: u32, addr: u64, n: u32) {{}}\n    #[allow(unused_variables)]\n    fn {n}_code_stamp(&mut self, page: u32) -> u32 {{ 0 }}\n    fn {n}_fetch_skip(&mut self, addr: u64, n: u32) {{ for i in 0..n {{ self.{n}_fetch(addr.wrapping_add(i as u64), 8); }} }}");
         }
         let mut ext_flat = String::new();
         for f in self.isa.fns.iter().filter(|f| f.external) {
@@ -1750,11 +1794,15 @@ impl<'a> Gen<'a> {
         for l in &self.isa.latches {
             let _ = writeln!(latch_fields, "    pub latch_{}: {},", ident(&l.name), self.rty(&l.ty)?);
         }
+        let (tr_hot, tr_cold) = self.trace_fields();
+        latch_fields.push_str(tr_hot);
         let mut s = format!(
             "#[derive(Clone, Debug)]\n/// Laid out as declared (`repr(C)`): the latches and the per-step state\n/// first, then the registers, then the bus. Left to the compiler, the\n/// order shifted as fields were added, and with it the speed: five unused\n/// fields cost a fifth of the 386's.\n#[repr(C)]\npub struct {isa_name}<B: Bus = Flat> {{\n{latch_fields}    /// Bytes decoded this step, and the extra decoder clocks on each.\n    pub fetched: u8,\n    /// The istream's window this step (`istream {{ window ...; }}`): from\n    /// byte `win_from`, `win_len` bytes at consecutive addresses from\n    /// `win_base`.\n    pub win_from: u8,\n    pub win_len: u32,\n    pub win_base: u64,\n    /// Execution cycles of the last step beyond its bus transfers (the\n    /// timing table: the instruction, its prefixes, a delivered fault).\n    pub cycles: u32,\n    /// Prefix cycles accumulated while decoding.\n    pub prefix_cycles: u32,\n    /// Of `cycles`, the instruction's own timing-table entry.\n    pub entry_cycles: u32,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// This step decoded an instruction (`last` is it), and its schedule.\n    pub decoded: bool,\n    /// Data accesses made this step (a fault's delivery follows those the\n    /// instruction made).\n    pub accesses: u8,\n    /// Where the last step started, and whether this one started there too.\n    pub last_start: u64,\n    pub restarted: bool,\n    /// Held in reset (`istream {{ reset ...; }}`).\n    pub in_reset: bool,\n    /// Shut down: a fault while delivering a double fault.\n    pub shutdown: bool,\n    pub mode: {mode_ty},\n    pub decode_at: [u8; 16],\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n"
 
         );
-        s.push_str("    pub r: Regs,\n    pub run_sched: Schedule,\n    pub bus: B,\n");
+        s.push_str("    pub r: Regs,\n    pub run_sched: Schedule,\n");
+        s.push_str(tr_cold);
+        s.push_str("    pub bus: B,\n");
         s.push_str("}\n");
         self.out.push_str(&s);
 
@@ -1768,6 +1816,7 @@ impl<'a> Gen<'a> {
                 ident(&l.name)
             );
         }
+        s.push_str(&self.trace_init());
         s.push_str("        };\n        m.reset_latches();\n        m\n    }\n");
         // Reset: architectural state to zero, then the isa's `fn reset()`.
         let reset_fn = self
@@ -2471,6 +2520,7 @@ impl<'a> Gen<'a> {
             }
         }
         let _ = write!(self.out, "    /// Decodes and runs one instruction (prefixes included).\n    pub fn decode_run(&mut self) -> Result<(), Fault> {{\n'decode: loop {{\n{run}}}\n}}\n");
+        self.emit_trace_fns()?;
 
         let mut s = String::from(
             "    pub fn exec(&mut self, i: Instr) -> Result<(), Fault> {\n        match i {\n",
@@ -2575,13 +2625,27 @@ impl<'a> Gen<'a> {
         };
         // Without a `schedules` table an instruction's schedule is its
         // timing entry as work: computed once.
+        // Where the instruction is, and how it runs: decoded, or (the trace
+        // core) the next of a run being replayed, or the first of a run kept
+        // here, else decoded and recorded.
+        let (find, run) = if self.trace.is_some() {
+            (
+                format!("        self.tr_rec_now = false;\n        let mut next = if self.tr_on {{ self.trace_peek() }} else {{ None }};\n        if next.is_none() && self.tr_prev != u32::MAX {{ next = self.trace_follow(); }}\n        let start = match next {{\n            Some((p, _)) => p,\n            None => {{\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{seed}        if start != u64::MAX {{ next = self.trace_enter(start); if next.is_none() {{ self.trace_note(start); }} }}\n        start\n            }}\n        }};\n"),
+                "let r = match next { Some((p, s)) => self.trace_run(p, s), None => self.decode_run() };".to_string(),
+            )
+        } else {
+            (
+                format!("        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{seed}"),
+                "let r = self.decode_run();".to_string(),
+            )
+        };
         let entry = if self.isa.instructions.iter().any(|i| i.schedule.is_some()) {
             "sched = self.run_sched;"
         } else {
             "sched.work[0] = self.entry_cycles as u16;"
         };
         s.push_str(&format!(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.entry_cycles = 0;\n        self.fetched = 0;\n        self.win_len = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{reset_check}        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{seed}        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        self.decoded = false;\n        let r = self.decode_run();\n        let cur: Option<Instr> = if self.decoded {{ self.last }} else {{ None }};\n        if self.decoded {{ {entry} }}\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n        if B::SCHEDULE {{\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        }} else {{\n        let _ = (before, performed, cur);\n        }}\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.entry_cycles = 0;\n        self.fetched = 0;\n        self.win_len = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{reset_check}        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n{find}        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        self.decoded = false;\n        {run}\n        let cur: Option<Instr> = if self.decoded {{ self.last }} else {{ None }};\n        if self.decoded {{ {entry} }}\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n        if B::SCHEDULE {{\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        }} else {{\n        let _ = (before, performed, cur);\n        }}\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
         ));
         let _ = write!(
             s,
@@ -2907,9 +2971,10 @@ impl<'a> Gen<'a> {
                 } else {
                     ""
                 };
+                let rec = if self.trace.is_some() { "        if self.tr_rec_now { self.trace_record(i); }\n" } else { "" };
                 let _ = write!(
                     run_fns,
-                    "    #[inline]\n    #[allow(unused_variables, clippy::redundant_closure_call)]\n    fn run_{n}(&mut self, ops: {ops_ty}) -> Result<(), Fault> {{\n        let i = Instr::{n}(ops);\n        self.last = Some(i);\n        self.decoded = true;\n{sched_part}        self.entry_cycles = {{ let r: Result<u32, Fault> = (|| Ok({text}))(); r.unwrap_or(0) }};\n        self.cycles = self.entry_cycles + self.prefix_cycles;\n{lock_part}        self.exec_{n}(ops)\n    }}\n"
+                    "    #[inline]\n    #[allow(unused_variables, clippy::redundant_closure_call)]\n    fn run_{n}(&mut self, ops: {ops_ty}) -> Result<(), Fault> {{\n        let i = Instr::{n}(ops);\n        self.last = Some(i);\n        self.decoded = true;\n{rec}{sched_part}        self.entry_cycles = {{ let r: Result<u32, Fault> = (|| Ok({text}))(); r.unwrap_or(0) }};\n        self.cycles = self.entry_cycles + self.prefix_cycles;\n{lock_part}        self.exec_{n}(ops)\n    }}\n"
                 );
             }
             let _ = writeln!(

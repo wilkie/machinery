@@ -1,0 +1,621 @@
+//! The trace core (`core: trace;`, SPEC 12, "Cores"): runs of decoded
+//! instructions kept and run again without decoding.
+//!
+//! As the processor runs, each instruction it decodes is recorded with what
+//! decoding left behind (its `Instr`, its length, the latches its prefixes
+//! set, the pc after it, the decoder's clocks), appended to the run under
+//! way while instructions follow one another in a page of code memory. When
+//! a run's start is reached again, its instructions are replayed: the pc,
+//! latches and decoder state are set as decoding left them, the fetches are
+//! charged as they cost (`<space>_fetch_skip`), and the instruction runs.
+//!
+//! A replay is exactly the run the decoder would have made, and the
+//! generator derives what that takes:
+//! - The decoder reads some state (the operand size's default: `CS` on the
+//!   386). A run starts only where that state is as it was (`TKey`,
+//!   compared by value), at the same pc and physical address.
+//! - The istream's address, window and limit fns read more (the segment,
+//!   paging, the TLB). Every assignment the generator emits to state the
+//!   decoder or those fns read, besides the pc, bumps `tr_epoch`: a run
+//!   stops when it changes, and the next instruction is decoded. What is
+//!   not in the key also bumps `tr_aepoch`: while it is unchanged and the
+//!   key holds, the pc still leads where it did, and a run that followed
+//!   another is entered from it directly (a link), without finding where
+//!   the pc is.
+//! - The pc must be where the run goes next: a taken jump leaves it.
+//! - Code memory: each `direct` memory marks the 128-byte blocks of each
+//!   4 KB page that hold recorded code; a write to a marked block counts
+//!   against the page (the processor's, DMA's, any device's). A run is
+//!   replayed only while its page's count is unchanged: checked before an
+//!   instruction when code memory's write total has moved.
+//!
+//! Interrupts, device catch-up and timing run per instruction as with the
+//! decode core.
+
+use std::fmt::Write as _;
+
+use machine_sema::hir::{ArmBody, Block, Expr, ExprKind as H, Stmt, StmtKind as S, TailExpr};
+use machine_sema::program::DefId;
+use machine_sema::ty::Ty;
+
+use super::{ident, Cx, Gen, GenError, R};
+
+/// Runs kept, direct-mapped by physical address.
+const TRACES: usize = 4096;
+/// Instructions in a run at most.
+const STEPS: usize = 64;
+
+/// State read: a whole register, one of its fields, or the mode.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Cell {
+    Reg(DefId),
+    Field(DefId, u32),
+    Mode,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TracePlan {
+    /// Registers the decoder reads, besides the pc: the run's key.
+    pub key: Vec<DefId>,
+    pub key_mode: bool,
+    /// What a run depends on staying put: assignments to it bump the epoch.
+    pub watched: Vec<Cell>,
+    /// The registers the istream's `next` fn advances.
+    pub pc: Vec<DefId>,
+}
+
+struct Reads<'g, 'a> {
+    g: &'g Gen<'a>,
+    cells: Vec<Cell>,
+    seen: Vec<DefId>,
+    /// A fn not to walk into (the address fn, when walking the decoder).
+    skip: Option<DefId>,
+}
+
+impl Reads<'_, '_> {
+    fn add(&mut self, c: Cell) {
+        if !self.cells.contains(&c) {
+            self.cells.push(c);
+        }
+    }
+    fn fn_body(&mut self, d: DefId) {
+        if Some(d) == self.skip || self.seen.contains(&d) {
+            return;
+        }
+        self.seen.push(d);
+        if let Some(f) = self.g.fns.get(&d) {
+            if !f.external {
+                self.block(&f.body);
+            }
+        }
+    }
+    fn block(&mut self, b: &Block) {
+        for s in &b.stmts {
+            self.stmt(s);
+        }
+    }
+    fn arm(&mut self, a: &ArmBody) {
+        match a {
+            ArmBody::Expr(e) => self.expr(e),
+            ArmBody::Block(b) => self.block(b),
+        }
+    }
+    fn stmt(&mut self, s: &Stmt) {
+        match &s.kind {
+            S::Let(_, Some(e)) | S::Return(Some(e)) | S::Expr(e) | S::Assert(e, _) => self.expr(e),
+            S::If(c, b, e) => {
+                self.expr(c);
+                self.block(b);
+                if let Some(e) = e {
+                    self.stmt(e);
+                }
+            }
+            S::Match(e, arms) => {
+                self.expr(e);
+                for a in arms {
+                    self.arm(&a.body);
+                }
+            }
+            S::For(_, _, _, b) => self.block(b),
+            S::Assign(p, v) => {
+                self.place(p);
+                self.expr(v);
+            }
+            S::SpaceWrite(_, _, a, v) => {
+                self.expr(a);
+                self.expr(v);
+            }
+            S::OperandWrite(_, v) => self.expr(v),
+            S::Raise(_, args) => args.iter().for_each(|a| self.expr(a)),
+            _ => {}
+        }
+    }
+    /// A place assigned to: only its indexes are read.
+    fn place(&mut self, p: &Expr) {
+        match &p.kind {
+            H::Index(b, i) => {
+                self.place(b);
+                self.expr(i);
+            }
+            H::Field(b, _) | H::TupleField(b, _) | H::Slice(b, ..) => self.place(b),
+            H::Register(_) | H::RegField(..) | H::RegView(..) | H::Mode(_) | H::Latch(_) | H::Local(_) => {}
+            _ => self.expr(p),
+        }
+    }
+    fn expr(&mut self, e: &Expr) {
+        match &e.kind {
+            H::Register(d) => self.add(Cell::Reg(*d)),
+            H::RegField(d, i) => self.add(Cell::Field(*d, *i)),
+            H::RegView(d, i) => {
+                for f in self.g.regs[d].1.views[*i as usize].mapping.clone() {
+                    self.add(Cell::Field(*d, f));
+                }
+            }
+            H::Mode(_) => self.add(Cell::Mode),
+            H::Unary(_, a) | H::Cast(a) | H::Field(a, _) | H::TupleField(a, _) | H::Slice(a, ..) | H::ArrayRepeat(a, _) | H::OperandField(a, _) | H::OperandTail(a) | H::TailOperand(a, _) | H::SpaceRead(_, _, a) | H::SpaceCell(_, a) => self.expr(a),
+            H::Binary(_, a, b) | H::Index(a, b) | H::SpaceWrite(_, _, a, b) => {
+                self.expr(a);
+                self.expr(b);
+            }
+            H::Ternary(a, b, c) => {
+                self.expr(a);
+                self.expr(b);
+                self.expr(c);
+            }
+            H::Call(_, args) | H::Builtin(_, args) | H::BundleLit(_, args) | H::Tuple(args) | H::Array(args) | H::KindSelect(_, args) => args.iter().for_each(|a| self.expr(a)),
+            H::Match(s, arms) => {
+                self.expr(s);
+                for a in arms {
+                    self.arm(&a.body);
+                }
+            }
+            H::If(c, t, f) => {
+                self.expr(c);
+                self.block(t);
+                if let Some(f) = f {
+                    self.expr(f);
+                }
+            }
+            H::Block(b) => self.block(b),
+            H::FnCall(d, args) => {
+                args.iter().for_each(|a| self.expr(a));
+                self.fn_body(*d);
+            }
+            _ => {}
+        }
+    }
+    fn tail(&mut self, t: &TailExpr) {
+        if let TailExpr::If(c, a, b) = t {
+            self.expr(c);
+            self.tail(a);
+            if let Some(b) = b {
+                self.tail(b);
+            }
+        }
+    }
+}
+
+impl Gen<'_> {
+    /// What the trace core needs to know of the isa; None without an
+    /// istream window (instructions at consecutive addresses).
+    pub(crate) fn plan_trace(&self) -> R<TracePlan> {
+        let ist = self.isa.istream.as_ref().ok_or_else(|| GenError::new("`core: trace` needs an istream"))?;
+        if ist.window.is_none() {
+            return Err(GenError::new("`core: trace` needs `istream { window ... }`: instructions at consecutive addresses"));
+        }
+        if self.spaces[&ist.space].cell_bits != 8 {
+            return Err(GenError::new("`core: trace` needs a byte-addressed code space"));
+        }
+        // The decoder: its `next` fn (not the address it fetches from), the
+        // latches' reset values, decode conditions, prefixes, operand tails.
+        let mut dec = Reads { g: self, cells: Vec::new(), seen: Vec::new(), skip: Some(ist.address) };
+        dec.fn_body(ist.next);
+        for l in &self.isa.latches {
+            dec.expr(&l.init);
+        }
+        for i in &self.isa.instructions {
+            if let Some(c) = &i.when {
+                dec.expr(c);
+            }
+            if i.prefix {
+                if let Some(b) = &i.semantics {
+                    dec.block(b);
+                }
+                if let Some(t) = &i.timing {
+                    dec.expr(t);
+                }
+                for b in &i.operands {
+                    if let Some(k) = self.kinds.get(&b.kind) {
+                        for r in &k.rules {
+                            dec.arm(&r.body);
+                        }
+                    }
+                }
+            }
+        }
+        for o in &self.isa.operands {
+            if let Some(t) = &o.tail {
+                dec.tail(t);
+            }
+        }
+        // The pc: what `next` assigns.
+        let mut pc = Vec::new();
+        let next = self.fns[&ist.next];
+        fn assigned(b: &Block, out: &mut Vec<DefId>) {
+            for s in &b.stmts {
+                match &s.kind {
+                    S::Assign(p, _) => {
+                        let mut e = p;
+                        loop {
+                            match &e.kind {
+                                H::Register(d) | H::RegField(d, _) | H::RegView(d, _) => {
+                                    if !out.contains(d) {
+                                        out.push(*d);
+                                    }
+                                    break;
+                                }
+                                H::Field(b, _) | H::Index(b, _) | H::Slice(b, ..) => e = b,
+                                _ => break,
+                            }
+                        }
+                    }
+                    S::If(_, b, e) => {
+                        assigned(b, out);
+                        if let Some(e) = e {
+                            assigned(&Block { stmts: vec![(**e).clone()], span: b.span }, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assigned(&next.body, &mut pc);
+        // The address, window and limit fns.
+        let mut addr = Reads { g: self, cells: dec.cells.clone(), seen: Vec::new(), skip: None };
+        addr.fn_body(ist.address);
+        if let Some(w) = ist.window {
+            addr.fn_body(w);
+        }
+        if let Some(l) = ist.limit {
+            addr.fn_body(l);
+        }
+        let not_pc = |c: &Cell| match c {
+            Cell::Reg(d) | Cell::Field(d, _) => !pc.contains(d),
+            Cell::Mode => true,
+        };
+        let mut key = Vec::new();
+        let mut key_mode = false;
+        for c in dec.cells.iter().filter(|c| not_pc(c)) {
+            match c {
+                Cell::Reg(d) | Cell::Field(d, _) => {
+                    if !key.contains(d) {
+                        key.push(*d);
+                    }
+                }
+                Cell::Mode => key_mode = true,
+            }
+        }
+        let watched = addr.cells.into_iter().filter(not_pc).collect();
+        Ok(TracePlan { key, key_mode, watched, pc })
+    }
+
+    /// The epoch bump after an assignment to `place`, when it writes
+    /// watched state.
+    pub(super) fn trace_bump(&self, cx: &Cx, place: &Expr) -> String {
+        let Some(p) = self.trace.as_ref() else { return String::new() };
+        if cx.comp.is_some() {
+            return String::new();
+        }
+        let mut e = place;
+        let written: Vec<Cell> = loop {
+            match &e.kind {
+                H::Register(d) => break vec![Cell::Reg(*d)],
+                H::RegField(d, i) => break vec![Cell::Field(*d, *i)],
+                H::RegView(d, i) => break self.regs[d].1.views[*i as usize].mapping.iter().map(|f| Cell::Field(*d, *f)).collect(),
+                H::Mode(_) => break vec![Cell::Mode],
+                H::Index(b, _) | H::Field(b, _) | H::TupleField(b, _) | H::Slice(b, ..) => e = b,
+                _ => return String::new(),
+            }
+        };
+        let bits = |d: DefId, i: u32| -> (u32, u32) {
+            let f = &self.regs[&d].1.fields[i as usize];
+            let w = match &f.ty {
+                Ty::UInt(n) | Ty::SInt(n) => *n,
+                Ty::Bool => 1,
+                Ty::Enum(e) => self.enums[e].width,
+                _ => 8,
+            };
+            (f.offset, f.offset + w)
+        };
+        let hits = |c: &Cell| {
+            written.iter().any(|w| match (w, c) {
+                (Cell::Reg(a), Cell::Reg(b) | Cell::Field(b, _)) => a == b,
+                (Cell::Field(a, _), Cell::Reg(b)) => a == b,
+                (Cell::Field(a, i), Cell::Field(b, j)) => {
+                    let ((a0, a1), (b0, b1)) = (bits(*a, *i), bits(*b, *j));
+                    a == b && a0 < b1 && b0 < a1
+                }
+                (Cell::Mode, Cell::Mode) => true,
+                _ => false,
+            })
+        };
+        // The key (compared by value where runs are entered) only stops a
+        // run; the rest also stops links and entries checked by epoch.
+        let in_key = |c: &Cell| match c {
+            Cell::Reg(d) | Cell::Field(d, _) => p.key.contains(d),
+            Cell::Mode => p.key_mode,
+        };
+        let any = p.watched.iter().any(hits);
+        let outside = p.watched.iter().filter(|c| !in_key(c)).any(hits);
+        let mut s = String::new();
+        if any {
+            let _ = writeln!(s, "{0}.tr_epoch = {0}.tr_epoch.wrapping_add(1);", cx.recv);
+        }
+        if outside {
+            let _ = writeln!(s, "{0}.tr_aepoch = {0}.tr_aepoch.wrapping_add(1);", cx.recv);
+        }
+        s
+    }
+
+    /// `TKey`, `TStep` and `Trace` (module level).
+    pub(crate) fn emit_trace_types(&mut self) -> R<()> {
+        let Some(p) = self.trace.clone() else { return Ok(()) };
+        let mut key = String::new();
+        for d in &p.key {
+            let r = self.regs[d].1;
+            let _ = writeln!(key, "    pub r_{}: {},", ident(&r.name), self.rty(&r.ty)?);
+        }
+        if p.key_mode {
+            let mode_ty = match self.isa.mode {
+                Some(m) => super::native(self.enums[&m].width, false).1,
+                None => "u8",
+            };
+            let _ = writeln!(key, "    pub mode: {mode_ty},");
+        }
+        let mut step = String::new();
+        for l in &self.isa.latches {
+            let _ = writeln!(step, "    pub l_{}: {},", ident(&l.name), self.rty(&l.ty)?);
+        }
+        for d in &p.pc {
+            let r = self.regs[d].1;
+            let _ = writeln!(step, "    pub pc_{}: {},", ident(&r.name), self.rty(&r.ty)?);
+        }
+        let _ = write!(
+            self.out,
+            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start, and how many.\n    pub off: u16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at epoch `ep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub slot: u32,\n}}\n"
+        );
+        Ok(())
+    }
+
+    /// The machine's small trace fields (hot) and its tables.
+    pub(crate) fn trace_fields(&self) -> (&'static str, &'static str) {
+        if self.trace.is_none() {
+            return ("", "");
+        }
+        (
+            "    /// The trace core: replaying run `tr_cur` (when `tr_on`) at\n    /// instruction `tr_idx`, entered at epoch `tr_ep0`; the epoch, bumped\n    /// by writes to what runs depend on; recording this step; code memory's\n    /// write total when last checked; the run that just ended.\n    pub tr_on: bool,\n    pub tr_rec_now: bool,\n    pub tr_idx: u32,\n    pub tr_cur: u32,\n    pub tr_prev: u32,\n    pub tr_epoch: u64,\n    pub tr_ep0: u64,\n    pub tr_aepoch: u64,\n    pub tr_w: u64,\n    pub tr_phys: u64,\n",
+            "    /// The runs kept, and the one being recorded (from epoch\n    /// `tr_rec_ep`).\n    pub traces: Box<[Option<Box<Trace>>]>,\n    pub tr_rec: Option<Box<Trace>>,\n    pub tr_rec_ep: u64,\n",
+        )
+    }
+
+    pub(crate) fn trace_init(&self) -> String {
+        if self.trace.is_none() {
+            return String::new();
+        }
+        format!("            tr_on: false,\n            tr_rec_now: false,\n            tr_idx: 0,\n            tr_cur: 0,\n            tr_prev: u32::MAX,\n            tr_epoch: 0,\n            tr_ep0: 0,\n            tr_aepoch: 0,\n            tr_w: u64::MAX,\n            tr_phys: 0,\n            traces: vec![None; {TRACES}].into_boxed_slice(),\n            tr_rec: None,\n            tr_rec_ep: 0,\n")
+    }
+
+    /// The trace core's methods (inside the machine's impl).
+    pub(crate) fn emit_trace_fns(&mut self) -> R<()> {
+        let Some(p) = self.trace.clone() else { return Ok(()) };
+        let ist = self.isa.istream.as_ref().unwrap();
+        let sp = ident(&self.spaces[&ist.space].name);
+        let mut key = String::new();
+        for d in &p.key {
+            let n = ident(&self.regs[d].1.name);
+            let _ = write!(key, "r_{n}: self.r.{n}, ");
+        }
+        if p.key_mode {
+            key.push_str("mode: self.mode, ");
+        }
+        // The pc as a number (the run's `pc`), and its registers saved and
+        // restored.
+        let pc0 = ident(&self.regs[&p.pc[0]].1.name);
+        let mut save = String::new();
+        let mut restore = String::new();
+        for l in &self.isa.latches {
+            let n = ident(&l.name);
+            let _ = write!(save, "l_{n}: self.latch_{n}, ");
+            let _ = writeln!(restore, "        self.latch_{n} = s.l_{n};");
+        }
+        for d in &p.pc {
+            let n = ident(&self.regs[d].1.name);
+            let _ = write!(save, "pc_{n}: self.r.{n}, ");
+            let _ = writeln!(restore, "        self.r.{n} = s.pc_{n};");
+        }
+        let mut runs = String::new();
+        for i in self.isa.instructions.iter().filter(|i| !i.prefix) {
+            let _ = writeln!(runs, "            Instr::{n}(ops) => self.run_{n}(ops),", n = ident(&i.name));
+        }
+        let mask = TRACES - 1;
+        let _ = write!(
+            self.out,
+            r#"    #[inline]
+    fn tr_slot(phys: u64) -> usize {{ ((phys ^ (phys >> 12)) as usize) & {mask} }}
+    /// What the decoder reads: a run's key.
+    #[inline]
+    fn tkey(&self) -> TKey {{ TKey {{ {key}}} }}
+    /// The next instruction of the run being replayed and where it is;
+    /// None when the run ends here (it stops replaying). Code memory's write
+    /// total is checked each time, the run's page when it has moved.
+    #[inline]
+    fn trace_peek(&mut self) -> Option<(u64, TStep)> {{
+        let cur = self.tr_cur as usize;
+        let idx = self.tr_idx as usize;
+        let (phys, s, page, stamp, n) = {{
+            let t = self.traces[cur].as_deref()?;
+            let s = *t.steps.get(idx)?;
+            (t.phys, s, t.page, t.stamp, t.steps.len())
+        }};
+        let pc = self.traces[cur].as_deref().map_or(0, |t| t.pc);
+        if self.tr_epoch != self.tr_ep0 || self.r.{pc0} as u64 != pc.wrapping_add(s.off as u64) {{
+            self.tr_on = false;
+            self.tr_prev = cur as u32;
+            return None;
+        }}
+        let w = self.bus.{sp}_code_writes();
+        if w != self.tr_w {{
+            if self.bus.{sp}_code_stamp(page) != stamp {{
+                self.tr_on = false;
+                self.tr_prev = u32::MAX;
+                return None;
+            }}
+            self.tr_w = w;
+        }}
+        self.tr_idx += 1;
+        if self.tr_idx as usize == n {{
+            self.tr_on = false;
+            self.tr_prev = cur as u32;
+        }}
+        Some((phys + s.off as u64, s))
+    }}
+    /// Runs a recorded instruction as decoding it would have left things.
+    #[inline]
+    fn trace_run(&mut self, phys: u64, s: TStep) -> Result<(), Fault> {{
+        self.tr_phys = phys;
+        self.bus.{sp}_fetch_skip(phys, s.len as u32);
+        self.fetched = s.len;
+        self.known_opcode = s.known;
+        self.prefix_cycles = s.prefix_cycles;
+        if B::SCHEDULE {{ self.decode_at = s.decode_at; }}
+{restore}        self.run_instr(s.instr)
+    }}
+    /// The run the last one led to before, at this pc and epoch: entered
+    /// without finding where the pc is (it is where it was).
+    #[inline]
+    fn trace_follow(&mut self) -> Option<(u64, TStep)> {{
+        let prev = self.tr_prev as usize;
+        let pc = self.r.{pc0} as u64;
+        let l = *self.traces.get(prev)?.as_deref()?.links.iter().find(|l| l.pc == pc && l.ep == self.tr_aepoch)?;
+        let key = self.tkey();
+        let t = self.traces[l.slot as usize].as_deref()?;
+        if t.phys != l.phys || t.pc != pc || t.key != key {{
+            return None;
+        }}
+        self.tr_on = true;
+        self.tr_cur = l.slot;
+        self.tr_idx = 0;
+        self.tr_ep0 = self.tr_epoch;
+        self.tr_w = u64::MAX;
+        self.trace_peek()
+    }}
+    /// The run at `start`, if there is one and it holds: entered (and
+    /// linked from the run before), and its first instruction.
+    #[inline]
+    fn trace_enter(&mut self, start: u64) -> Option<(u64, TStep)> {{
+        let slot = Self::tr_slot(start);
+        let pc = self.r.{pc0} as u64;
+        let ep = self.tr_epoch;
+        let aep = self.tr_aepoch;
+        let key_ok = match self.traces[slot].as_deref() {{
+            Some(t) if t.phys == start && t.pc == pc => t.ok_ep == ep || t.key == self.tkey(),
+            _ => false,
+        }};
+        if !key_ok {{
+            self.tr_prev = u32::MAX;
+            return None;
+        }}
+        self.trace_close();
+        if let Some(t) = self.traces[slot].as_deref_mut() {{
+            t.ok_ep = ep;
+        }}
+        let prev = self.tr_prev as usize;
+        if let Some(p) = self.traces.get_mut(prev).and_then(|t| t.as_deref_mut()) {{
+            let l = TLink {{ pc, phys: start, ep: aep, slot: slot as u32 }};
+            if p.links[0].pc == pc || p.links[0].ep != aep {{ p.links[0] = l; }} else {{ p.links[1] = l; }}
+        }}
+        self.tr_on = true;
+        self.tr_cur = slot as u32;
+        self.tr_idx = 0;
+        self.tr_ep0 = ep;
+        self.tr_w = u64::MAX;
+        self.trace_peek()
+    }}
+    /// The instruction at `start` is about to be decoded: record it, in the
+    /// run being recorded if it follows on, else in a new one.
+    #[inline(never)]
+    fn trace_note(&mut self, start: u64) {{
+        self.tr_prev = u32::MAX;
+        let follows = match self.tr_rec.as_deref() {{
+            Some(t) => {{
+                let off = t.steps.last().map(|s| s.off as u64 + s.len as u64).unwrap_or(0);
+                t.steps.len() < {STEPS} && start == t.phys + off && self.r.{pc0} as u64 == t.pc.wrapping_add(off) && self.tr_epoch == self.tr_rec_ep && start >> 12 == t.phys >> 12 && self.bus.{sp}_code_stamp(t.page) == t.stamp
+            }}
+            None => false,
+        }};
+        if !follows {{
+            self.trace_close();
+            if let Some(page) = self.bus.{sp}_code_page(start) {{
+                let stamp = self.bus.{sp}_code_stamp(page);
+                self.tr_rec = Some(Box::new(Trace {{ phys: start, pc: self.r.{pc0} as u64, key: self.tkey(), page, stamp, ok_ep: self.tr_epoch, links: [TLink::default(); 2], steps: Vec::new() }}));
+                self.tr_rec_ep = self.tr_epoch;
+            }}
+        }}
+        self.tr_phys = start;
+        self.tr_rec_now = self.tr_rec.is_some();
+    }}
+    /// The run being recorded, kept.
+    fn trace_close(&mut self) {{
+        if let Some(mut t) = self.tr_rec.take() {{
+            if !t.steps.is_empty() {{
+                let slot = Self::tr_slot(t.phys);
+                if (self.tr_on && self.tr_cur as usize == slot) || self.tr_prev as usize == slot {{
+                    self.tr_on = false;
+                    self.tr_prev = u32::MAX;
+                }}
+                t.ok_ep = u64::MAX;
+                self.traces[slot] = Some(t);
+            }}
+        }}
+    }}
+    /// A decoded instruction into the run being recorded: when its bytes lay
+    /// in the window it was decoded through, in the run's page.
+    #[inline(never)]
+    fn trace_record(&mut self, i: Instr) {{
+        self.tr_rec_now = false;
+        let n = self.fetched;
+        let ok = self.win_from == 1 && n > 0 && (n as u32) <= self.win_len && (self.tr_phys + n as u64 - 1) >> 12 == self.tr_phys >> 12;
+        let s = TStep {{ instr: i, off: 0, len: n, known: self.known_opcode, prefix_cycles: self.prefix_cycles, decode_at: self.decode_at, {save}}};
+        let page = match self.tr_rec.as_deref_mut() {{
+            Some(t) if ok => {{
+                t.steps.push(TStep {{ off: (self.tr_phys - t.phys) as u16, ..s }});
+                t.page
+            }}
+            _ => {{
+                self.trace_close();
+                return;
+            }}
+        }};
+        // Its bytes hold code now: writes to them count.
+        self.bus.{sp}_code_mark(page, self.tr_phys, n as u32);
+    }}
+    /// Forget the runs (after code memory or state was changed other than by
+    /// the description).
+    pub fn trace_clear(&mut self) {{
+        for t in self.traces.iter_mut() {{ *t = None; }}
+        self.tr_rec = None;
+        self.tr_on = false;
+        self.tr_prev = u32::MAX;
+        self.tr_epoch = self.tr_epoch.wrapping_add(1);
+        self.tr_aepoch = self.tr_aepoch.wrapping_add(1);
+    }}
+    /// Runs a decoded instruction.
+    fn run_instr(&mut self, i: Instr) -> Result<(), Fault> {{
+        match i {{
+{runs}        }}
+    }}
+"#
+        );
+        Ok(())
+    }
+}

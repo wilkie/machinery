@@ -1000,12 +1000,23 @@ pub enum Level {
     Rtl,
 }
 
+/// How the processor's instructions are found and run (`core: ...;`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Core {
+    /// Each instruction decoded where it runs.
+    #[default]
+    Decode,
+    /// Runs of decoded instructions kept and run again (SPEC 12, "Cores").
+    Trace,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
     pub name: String,
     /// `memory: direct;`: the processor reaches memories that declare
     /// `direct` without their handlers (time approximate).
     pub direct_memory: bool,
+    pub core: Core,
     pub default: Level,
     /// Instance paths (`vga`, `vga.crtc`) and their level.
     pub overrides: Vec<(String, Level)>,

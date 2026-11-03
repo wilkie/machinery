@@ -1530,7 +1530,8 @@ drives), and `system::System`:
   (the AT's bus controller: a slave on the processor's local bus, master
   of the ISA bus) runs its own transactions inside the one it answers,
   each charged on its own bus's clock. Before a transaction enters a
-  bridge, the masters behind it are caught up; inside, a master whose
+  bridge, the masters behind it that are due are caught up (a scheduled
+  `on tick` has said it does nothing before its deadline); inside, a master whose
   transfers would have to cross the bridge again (the DMA controller,
   reached through the bridge whose transaction is in progress) is left to
   catch up after the instruction, and a device the context cannot lend

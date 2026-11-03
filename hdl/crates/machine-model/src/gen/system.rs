@@ -490,7 +490,7 @@ impl<'a> Gen<'a> {
         let mut o = String::new();
         let _ = write!(
             o,
-            "\n/// The system `{}`.\npub mod system {{\n    use super::*;\n\n    /// The time unit is `BASE_NUM / BASE_DEN` seconds.\n    pub const BASE_NUM: u128 = {};\n    pub const BASE_DEN: u128 = {};\n    /// Clock periods in time units.\n    pub mod clock {{\n        /// A time: a count of the system's time unit. 128 bits, so that time\n        /// stays exact over any run however fine the unit the clocks need.\n        pub type Time = u128;\n",
+            "\n/// The system `{}`.\npub mod system {{\n    use super::*;\n\n    /// `e / p` for times: in 64 bits when both fit (an elapsed time is\n    /// short), else in 128.\n    #[inline(always)]\n    pub fn div_time(e: clock::Time, p: clock::Time) -> clock::Time {{\n        if (e | p) >> 64 == 0 {{ (e as u64 / p as u64) as clock::Time }} else {{ e / p }}\n    }}\n\n    /// The time unit is `BASE_NUM / BASE_DEN` seconds.\n    pub const BASE_NUM: u128 = {};\n    pub const BASE_DEN: u128 = {};\n    /// Clock periods in time units.\n    pub mod clock {{\n        /// A time: a count of the system's time unit. 128 bits, so that time\n        /// stays exact over any run however fine the unit the clocks need.\n        pub type Time = u128;\n",
             sys.name, sys.base_num, sys.base_den
         );
         for (i, c) in sys.clocks.iter().enumerate() {
@@ -901,7 +901,16 @@ impl<'a> Gen<'a> {
                                         let c = catch_in(m, ii);
                                         if !c.is_empty() {
                                             let mn = ident(&insts[m].name);
-                                            let _ = write!(behind, "if let Some(dev) = self.{mn}.as_deref_mut() {{ {c}}} ");
+                                            // Only when it is due: by its own
+                                            // deadline it does nothing before.
+                                            let mine: Vec<&(usize, Option<u32>, u32)> = ticks.iter().filter(|t| t.0 == m).collect();
+                                            let gate = if mine.iter().all(|t| scheduled.contains(&(m, t.1))) {
+                                                let dues: Vec<String> = mine.iter().map(|t| format!("self.sig.now >= self.marks.due_{mn}_{}", method_tick(insts[m].comp, t.1))).collect();
+                                                dues.join(" || ")
+                                            } else {
+                                                "true".to_string()
+                                            };
+                                            let _ = write!(behind, "if {gate} {{ if let Some(dev) = self.{mn}.as_deref_mut() {{ {c}}} }} ");
                                         }
                                     }
                                 }
@@ -1032,13 +1041,13 @@ impl<'a> Gen<'a> {
                     let after = after.replace("{m}", "c.marks");
                     let _ = write!(
                         body,
-                        "        {{\n            let p = clock::C{sc};\n            let mut k = (c.sig.now - c.marks.{n}_{mt}) / p;\n            c.marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as clock::Time);\n                k -= s;\n                {call_pre}dev.{mt}(&mut *c, s as u32);{after}\n            }}\n        }}\n"
+                        "        {{\n            let p = clock::C{sc};\n            let mut k = div_time(c.sig.now - c.marks.{n}_{mt}, p);\n            c.marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as clock::Time);\n                k -= s;\n                {call_pre}dev.{mt}(&mut *c, s as u32);{after}\n            }}\n        }}\n"
                     );
                 } else {
                     let after = after.replace("{m}", "marks");
                     let _ = write!(
                         body,
-                        "        {{\n            let p = clock::C{sc};\n            let mut k = (sig.now - marks.{n}_{mt}) / p;\n            marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as clock::Time);\n                k -= s;\n                let mut c = Ctx_{n} {{ sig: &mut *sig }};\n                {call_pre}dev.{mt}(&mut c, s as u32);{after}\n            }}\n        }}\n"
+                        "        {{\n            let p = clock::C{sc};\n            let mut k = div_time(sig.now - marks.{n}_{mt}, p);\n            marks.{n}_{mt} += k * p;\n            while k > 0 {{\n                let s = k.min(u32::MAX as clock::Time);\n                k -= s;\n                let mut c = Ctx_{n} {{ sig: &mut *sig }};\n                {call_pre}dev.{mt}(&mut c, s as u32);{after}\n            }}\n        }}\n"
                     );
                 }
             }

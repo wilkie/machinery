@@ -322,3 +322,69 @@ fn bench_vga_modes() {
         eprintln!("VGA {name}: {:.0} frames/s ({:.1} us a frame)", n as f64 / s, s * 1e6 / n as f64);
     }
 }
+
+// --- the whole system ---
+
+/// RAM only (`compute.asm`): a checksum over 32 KB, 40 passes, with 32-bit
+/// arithmetic, a call a word and a string move a pass.
+const COMPUTE: &[u8] = &[
+    0x31, 0xc0, 0x8e, 0xd8, 0x8e, 0xc0, 0xbd, 0x28, 0x00, 0xbe, 0x00, 0x80, 0xb9, 0x00, 0x40, 0x66,
+    0x31, 0xd2, 0xad, 0x66, 0x0f, 0xb7, 0xc0, 0x66, 0x01, 0xc2, 0x66, 0xc1, 0xc2, 0x03, 0xe8, 0x16,
+    0x00, 0xe2, 0xef, 0x66, 0x89, 0x16, 0x00, 0x06, 0xbe, 0x00, 0x80, 0xbf, 0x00, 0x90, 0xb9, 0x00,
+    0x08, 0xf3, 0xa5, 0x4d, 0x75, 0xd3, 0xf4, 0x81, 0xf2, 0x5a, 0x5a, 0xc3,
+];
+
+/// Mode 13h frames (`draw.asm`), 20 of them: the screen filled a pixel at a
+/// time over the ISA bus, a little 32-bit arithmetic in RAM, then a wait on
+/// Input Status 1 for the start of vertical retrace, as a game loop does.
+const DRAW: &[u8] = &[
+    0xb8, 0x00, 0xa0, 0x8e, 0xc0, 0xbd, 0x14, 0x00, 0x31, 0xdb, 0x31, 0xff, 0xba, 0xc8, 0x00, 0xb9,
+    0x40, 0x01, 0x88, 0xd0, 0x00, 0xd8, 0xaa, 0xfe, 0xc0, 0xe2, 0xfb, 0x4a, 0x75, 0xf1, 0xb9, 0xd0,
+    0x07, 0xbe, 0x00, 0x10, 0x66, 0x8b, 0x04, 0x66, 0x69, 0xc0, 0xfd, 0x43, 0x03, 0x00, 0x66, 0x05,
+    0xc3, 0x9e, 0x26, 0x00, 0x66, 0x89, 0x04, 0xe2, 0xeb, 0xba, 0xda, 0x03, 0xec, 0xa8, 0x08, 0x75,
+    0xfb, 0xec, 0xa8, 0x08, 0x74, 0xfb, 0xfe, 0xc3, 0x4d, 0x75, 0xbf, 0xf4,
+];
+
+/// Runs to the HLT and reports the rate: instructions, emulated time
+/// against wall time.
+fn measure(name: &str, sys: &mut System) {
+    let (t0, f0) = (sys.seconds(), sys.board().vga.frames);
+    let wall = std::time::Instant::now();
+    let n = sys.run(2_000_000_000).unwrap();
+    let w = wall.elapsed().as_secs_f64();
+    assert!(sys.cpu.halted);
+    sys.catch_up_all();
+    let (t, f) = (sys.seconds() - t0, sys.board().vga.frames - f0);
+    eprintln!(
+        "{name}: {n} instructions, {:.1} M/s; {:.3} s emulated in {:.3} s ({:.1}x real time); {f} frames shown",
+        n as f64 / w / 1e6,
+        t,
+        w,
+        t / w
+    );
+}
+
+/// The whole system's speed: the 386 interpreter with every device caught
+/// up as it is today (per instruction and before each transaction).
+#[test]
+#[ignore]
+fn bench_system() {
+    let only = std::env::var("BENCH_ONLY").unwrap_or_default();
+    if only != "draw" {
+        let mut sys = boot(rom(COMPUTE));
+        measure("compute (RAM only)", &mut sys);
+    }
+    if only == "compute" {
+        return;
+    }
+    let Some(bios) = vga_bios() else { return skip() };
+    let mut code = HOST_PROLOGUE.to_vec();
+    code.extend(int10(0x0013, 0, 0, 0));
+    let start = code.len() as u32;
+    code.extend_from_slice(DRAW);
+    let mut sys = boot(rom(&code));
+    sys.board().vga.bios[..bios.len()].copy_from_slice(&bios);
+    sys.run_until(50_000_000, |s| s.cpu.r.EIP == start).unwrap();
+    assert_eq!(sys.cpu.r.EIP, start, "the BIOS set mode 13h");
+    measure("mode 13h frames (ISA writes, retrace polling)", &mut sys);
+}

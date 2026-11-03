@@ -506,6 +506,24 @@ impl Checker<'_> {
                 }
             },
         };
+        let reset = match &d.reset {
+            None => None,
+            Some(p) => match fn_item(self, p) {
+                Some(f) => {
+                    if let Some(sig) = self.fn_sig(f) {
+                        if !sig.params.is_empty() || sig.ret != Ty::Bool {
+                            self.error(module, "E1046", p.span, "`reset` is a `fn () -> bool`: whether the processor is held in reset");
+                            ok = false;
+                        }
+                    }
+                    Some(f)
+                }
+                None => {
+                    ok = false;
+                    None
+                }
+            },
+        };
         let (Some(space), Some(address), Some(next)) = (space, address, next) else {
             return None;
         };
@@ -517,6 +535,7 @@ impl Checker<'_> {
             fault,
             boundary,
             limit,
+            reset,
             window,
             double,
             lock: lock_latch,

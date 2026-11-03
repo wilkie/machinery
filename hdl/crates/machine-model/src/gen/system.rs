@@ -1332,6 +1332,13 @@ impl<'a> Gen<'a> {
                 direct_hooks.2,
                 ctx_cpu("self")
             );
+            if cpu.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Reset)) {
+                let _ = write!(
+                    bus_impl,
+                    "    /// The processor alone is reset: its model too.\n    fn processor_reset(&mut self) {{\n        let mut ctx = {};\n        self.{cpu_name}.on_reset(&mut ctx);\n        self.code_time = 0;\n    }}\n",
+                    ctx_cpu("self")
+                );
+            }
             if cpu_retire {
                 let _ = write!(
                     bus_impl,

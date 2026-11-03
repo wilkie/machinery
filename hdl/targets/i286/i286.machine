@@ -729,12 +729,16 @@ isa I286 {
         return b;
     }
 
-    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; double DoubleFault; }
+    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; reset reset_line; double DoubleFault; }
 
     /// The INTR pin, and the two interrupt-acknowledge bus cycles that
     /// fetch the vector from the interrupt controller: the processor model
     /// supplies both.
     extern fn intr() -> bool;
+    /// The RESET pin: while it is high the processor is held in reset, and
+    /// it starts at FFFF0h when it falls (on the AT, the keyboard
+    /// controller pulses it to bring the processor back to real mode).
+    extern fn reset_line() -> bool;
     extern fn acknowledge() -> u8;
 
     /// At each instruction boundary: a maskable interrupt is taken when

@@ -119,10 +119,15 @@ component Pic8259 {
             update_int();
             return (wait: 1);
         }
+        /// A rising edge requests; a request whose line falls before it is
+        /// acknowledged is withdrawn (the 8259 needs IR held until INTA).
         on ir.request(line: u3, value: bool) {
             let bit = (1 as u8) << line;
             if value && (lines & bit) == 0 {
                 irr = irr | bit;
+            }
+            if !value {
+                irr = irr & ~bit;
             }
             lines = if value { lines | bit } else { lines & ~bit };
             update_int();
@@ -193,9 +198,33 @@ component Pit8254 {
         bus port: IsaBus::Slave;
         /// OUT0 drives IRQ 0.
         bus irq: IrqLines::Device;
+        /// The AT's system control port B (61h), the board's glue around
+        /// the timer: bit 0 gates channel 2, 1 drives the speaker with its
+        /// output, 2 and 3 enable parity and I/O channel checks; reading,
+        /// bit 4 is the refresh request flip-flop, which channel 1's output
+        /// toggles each period (15 us as the BIOS programs it), and bit 5
+        /// is channel 2's output. It is kept with the timer whose outputs
+        /// drive it, so that reading it sees them current (until components
+        /// can be composed). Unbound on boards without it.
+        bus portb: IsaBus::Slave;
     }
     model {
         state ch: [PitChannel; 3];
+        /// Port B's low four bits, and the refresh flip-flop.
+        state portb_bits: u8 = 0;
+        state refresh: bool = false;
+        /// Channel 2's GATE: open until port B says otherwise.
+        state gate2: bool = true;
+
+        on portb.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            let v = (portb_bits & 15) | (if refresh { 0x10 } else { 0 }) | (if ch[2].out { 0x20 } else { 0 });
+            return (data: v as u16, wait: 1);
+        }
+        on portb.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            portb_bits = (data as u8) & 15;
+            gate2 = portb_bits[0] == 1;
+            return (wait: 1);
+        }
 
         /// Set a channel's OUT pin; channel 0's drives interrupt line 0.
         fn set_out(c: u2, level: bool) {
@@ -274,7 +303,7 @@ component Pit8254 {
         /// timer up first.
         on tick(n: u32) -> u32 {
             for c in 0..3 {
-                if ch[c].counting {
+                if ch[c].counting && (c != 2 || gate2) {
                     let period: u32 = if ch[c].reload == 0 { 0x10000 } else { ch[c].reload as u32 };
                     let left: u32 = if ch[c].count == 0 { 0x10000 } else { ch[c].count as u32 };
                     if n < left {
@@ -289,6 +318,11 @@ component Pit8254 {
                         // OUT pulses low as the count reloads: one edge.
                         set_out(c, false);
                         set_out(c, true);
+                        // Each of channel 1's pulses toggles the refresh
+                        // flip-flop.
+                        if c == 1 && ((n - left) / period) % 2 == 0 {
+                            refresh = !refresh;
+                        }
                     }
                 }
             }
@@ -330,11 +364,18 @@ component Dma8237 {
         bus regs: IsaBus::Slave;
         bus pages: IsaBus::Slave;
         bus dma: IsaBus::Master;
+        /// Strapped on the AT's second controller (channels 4-7, at C0h-DFh):
+        /// its registers are at even addresses (A0 isn't connected). Its
+        /// 16-bit transfers aren't modelled yet (the ISA bus here has the
+        /// four 8-bit request lines): it is programmed but moves nothing.
+        in word: bool;
     }
     model {
         state ch: [DmaChannel; 4];
         state command: u8 = 0;
         state flip: bool = false;
+        /// The page registers no channel uses.
+        state spare: [u8; 8];
 
         on reset { master_clear(); }
 
@@ -377,6 +418,7 @@ component Dma8237 {
         /// else never: a rising DREQ wakes the controller, through the
         /// handler below, and programming it is a bus access.
         on tick(n: u32) -> u32 {
+            if word { return 0xFFFFFFFF; }
             if command[2] == 1 {
                 return 0xFFFFFFFF;
             }
@@ -399,9 +441,9 @@ component Dma8237 {
         on dma.dreq(channel: u2, value: bool) { }
 
         on regs.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
-            let r = addr[3:0];
+            let r = if word { addr[4:1] } else { addr[3:0] };
             if r < 8 {
-                let c = addr[2:1];
+                let c = r[2:1];
                 let v = if r[0] == 0 { ch[c].addr } else { ch[c].count };
                 let b: u8 = if flip { (v >> 8) as u8 } else { v as u8 };
                 flip = !flip;
@@ -425,9 +467,9 @@ component Dma8237 {
 
         on regs.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
             let d = data as u8;
-            let r = addr[3:0];
+            let r = if word { addr[4:1] } else { addr[3:0] };
             if r < 8 {
-                let c = addr[2:1];
+                let c = r[2:1];
                 if r[0] == 0 {
                     let v = if flip { concat(d, ch[c].base_addr as u8) } else { (ch[c].base_addr & 0xFF00) | d as u16 };
                     ch[c].base_addr = v;
@@ -461,9 +503,12 @@ component Dma8237 {
         }
 
         /// The AT page registers: 87 channel 0, 83 channel 1, 81 channel 2,
-        /// 82 channel 3.
+        /// 82 channel 3 (89-8F the same for the second controller's 4-7).
+        /// They are a 74LS612's sixteen registers, and those no channel uses
+        /// read back too (the BIOS tests them all).
         on pages.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
             let r = addr[2:0];
+            spare[r] = data as u8;
             if r == 7 {
                 ch[0].page = data as u8;
             } else if r == 3 {
@@ -477,7 +522,7 @@ component Dma8237 {
         }
         on pages.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
             let r = addr[2:0];
-            let v: u8 = if r == 7 { ch[0].page } else if r == 3 { ch[1].page } else if r == 1 { ch[2].page } else if r == 2 { ch[3].page } else { 0xFF };
+            let v: u8 = if r == 7 { ch[0].page } else if r == 3 { ch[1].page } else if r == 1 { ch[2].page } else if r == 2 { ch[3].page } else { spare[r] };
             return (data: v as u16, wait: 1);
         }
     }
@@ -1408,6 +1453,403 @@ component Hercules {
                 mode = d & (if config[1] == 1 { allowed | 0x80 } else { allowed });
             } else if r == 0x3BF {
                 config = d & 3;
+            }
+            return (wait: 1);
+        }
+    }
+}
+
+/// A diagnostic POST card at I/O port 80h: the BIOS writes a checkpoint
+/// there before each test of its power-on self test. It keeps them in
+/// order (the first 4096), and reads back the last.
+component PostCard {
+    ports { bus port: IsaBus::Slave; }
+    model {
+        mem codes: [u8; 4096];
+        state count: u32 = 0;
+        state last: u8 = 0;
+
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            last = data as u8;
+            if count < 4096 { codes[count] = last; }
+            count = count + 1;
+            return (wait: 0);
+        }
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            return (data: last as u16, wait: 0);
+        }
+    }
+}
+
+/// Days in `month` (1-12) of the two-digit `year` (every fourth a leap
+/// year, as the MC146818 counts).
+unit DaysIn(month: u32, year: u32) -> u32 {
+    if month == 2 { return if year % 4 == 0 { 29 } else { 28 }; }
+    if month == 4 || month == 6 || month == 9 || month == 11 { return 30; }
+    return 31;
+}
+
+/// The Motorola MC146818 real-time clock and its battery-backed memory, as
+/// on the PC/AT: port 70h selects one of its 64 bytes (bit 7 masks NMI on
+/// the AT, which isn't modelled), 71h reads or writes it. Bytes 0-9 are the
+/// time of day (seconds, alarm seconds, minutes, alarm minutes, hours,
+/// alarm hours, day of week, date, month, year), 10-13 the registers A-D,
+/// and 14-63 the CMOS memory the BIOS keeps its configuration in (the
+/// embedding program fills `cmos` as a battery would have kept it).
+///
+/// Register A: bit 7 update in progress (read-only), 6-4 the divider (010
+/// for the 32.768 kHz crystal: running), 3-0 the periodic rate. B: 7 SET
+/// (stops updates), 6 periodic, 5 alarm and 4 update interrupt enables, 2
+/// binary (else BCD), 1 24-hour. C (read-only, cleared by reading): 7 IRQF,
+/// 6 periodic, 5 alarm, 4 update flags. D: 7 the battery is good.
+component Mc146818 {
+    ports {
+        bus port: IsaBus::Slave;
+        /// IRQF drives IRQ 8.
+        bus irq: IrqLines::Device;
+    }
+    model {
+        mem cmos: [u8; 64];
+        state index: u8 = 0;
+        /// 32.768 kHz ticks into the current second.
+        state div: u32 = 0;
+
+        fn bcd() -> bool { return cmos[11][2] == 0; }
+        fn from(v: u8) -> u32 {
+            return if bcd() { ((v >> 4) as u32) * 10 + (v & 15) as u32 } else { v as u32 };
+        }
+        fn to(v: u32) -> u8 {
+            return if bcd() { (((v / 10) << 4) | (v % 10)) as u8 } else { v as u8 };
+        }
+        fn running() -> bool { return (cmos[10] >> 4) & 7 == 2; }
+        /// Ticks of the periodic interrupt, by register A's rate (0: none).
+        fn period() -> u32 {
+            let r = cmos[10] & 15;
+            if r == 0 { return 0; }
+            if r <= 2 { return 1 << ((r + 6) as u32); }
+            return 1 << ((r - 1) as u32);
+        }
+
+        /// IRQ 8 follows IRQF: a flag whose interrupt is enabled.
+        fn update_irq() {
+            let f = cmos[12] & cmos[11] & 0x70;
+            let irqf = f != 0;
+            cmos[12] = if irqf { cmos[12] | 0x80 } else { cmos[12] & 0x7F };
+            emit irq.request(0) = irqf;
+        }
+
+        /// The once-a-second update: the time advances by a second, and
+        /// the alarm is checked.
+        fn second() {
+            let mut s = from(cmos[0]) + 1;
+            let mut m = from(cmos[2]);
+            let pm = cmos[11][1] == 0 && cmos[4][7] == 1;
+            let mut h = from(cmos[4] & 0x7F);
+            if cmos[11][1] == 0 {
+                // 12-hour: 12 AM is 0.
+                h = (if h == 12 { 0 } else { h }) + (if pm { 12 } else { 0 });
+            }
+            let mut wd = from(cmos[6]);
+            let mut d = from(cmos[7]);
+            let mut mo = from(cmos[8]);
+            let mut y = from(cmos[9]);
+            if s >= 60 { s = 0; m = m + 1; }
+            if m >= 60 { m = 0; h = h + 1; }
+            if h >= 24 {
+                h = 0;
+                wd = if wd >= 7 { 1 } else { wd + 1 };
+                d = d + 1;
+                if d > DaysIn(mo, y) {
+                    d = 1;
+                    mo = mo + 1;
+                    if mo > 12 { mo = 1; y = (y + 1) % 100; }
+                }
+            }
+            cmos[0] = to(s);
+            cmos[2] = to(m);
+            if cmos[11][1] == 1 {
+                cmos[4] = to(h);
+            } else {
+                let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+                cmos[4] = to(h12) | (if h >= 12 { 0x80 } else { 0 });
+            }
+            cmos[6] = to(wd);
+            cmos[7] = to(d);
+            cmos[8] = to(mo);
+            cmos[9] = to(y);
+            cmos[12] = cmos[12] | 0x10;
+            let alarm = (cmos[1] >= 0xC0 || cmos[1] == cmos[0])
+                && (cmos[3] >= 0xC0 || cmos[3] == cmos[2])
+                && (cmos[5] >= 0xC0 || cmos[5] == cmos[4]);
+            if alarm { cmos[12] = cmos[12] | 0x20; }
+        }
+
+        on tick(n: u32) -> u32 {
+            if !running() { return 0xFFFFFFFF; }
+            let mut left = n;
+            while left > 0 {
+                let step = if left < 32768 - div { left } else { 32768 - div };
+                let p = period();
+                if p != 0 && (div + step) / p != div / p {
+                    cmos[12] = cmos[12] | 0x40;
+                }
+                div = div + step;
+                left = left - step;
+                if div >= 32768 {
+                    div = 0;
+                    if cmos[11][7] == 0 { second(); }
+                }
+            }
+            update_irq();
+            // Woken for the next interrupt it would raise.
+            let p = period();
+            let mut due: u32 = 0xFFFFFFFF;
+            if cmos[11][6] == 1 && p != 0 { due = p - div % p; }
+            if cmos[11][5] == 1 || cmos[11][4] == 1 {
+                let s = 32768 - div;
+                if s < due { due = s; }
+            }
+            return due;
+        }
+
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            if addr[0] == 0 { return (data: 0xFF, wait: 1); }
+            let i = index;
+            if i == 10 {
+                // Update in progress: 244 us before the update, and the
+                // update's own 1984 us after it.
+                let uip = running() && cmos[11][7] == 0 && (div >= 32768 - 8 || div < 65);
+                return (data: ((cmos[10] & 0x7F) | (if uip { 0x80 } else { 0 })) as u16, wait: 1);
+            }
+            if i == 12 {
+                let v = cmos[12];
+                cmos[12] = 0;
+                update_irq();
+                return (data: v as u16, wait: 1);
+            }
+            if i == 13 { return (data: 0x80, wait: 1); }
+            return (data: cmos[i] as u16, wait: 1);
+        }
+
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            let d = data as u8;
+            if addr[0] == 0 {
+                index = d & 0x3F;
+                return (wait: 1);
+            }
+            let i = index;
+            if i == 10 {
+                cmos[10] = d & 0x7F;
+                if !running() { div = 0; }
+            } else if i == 11 {
+                // SET stops the update and its interrupt.
+                cmos[11] = if d[7] == 1 { d & 0xEF } else { d };
+                update_irq();
+            } else if i != 12 && i != 13 {
+                cmos[i] = d;
+            }
+            return (wait: 1);
+        }
+    }
+}
+
+/// The PC/AT's keyboard controller, an Intel 8042 running IBM's firmware,
+/// as its command set presents it, with the keyboard attached to it. Port
+/// 60h is data (to the keyboard, or a command's operand), 64h status
+/// (read) and commands (write).
+///
+/// Status: bit 0 the output buffer is full, 1 the input buffer (always
+/// empty here: commands take effect at once), 2 the system flag (the
+/// self-test passed, or the command byte's bit 2), 3 the last write was a
+/// command, 4 the keylock is off. The command byte: bit 0 IRQ 1 on a full
+/// output buffer, 2 the system flag, 4 the keyboard disabled, 6 scan code
+/// translation. The output port: bit 0 the processor runs (0 holds it in
+/// reset), 1 the A20 gate. The input port is the board's switches
+/// (`switches`: bit 7 keylock off, 6 the display switch, 0 colour, 5 the
+/// manufacturing jumper off, 4 512 KB on the board).
+///
+/// The keyboard answers the commands the BIOS sends it (reset: ACK and
+/// the passed self-test, AAh; LEDs, typematic rate and the rest: ACK; ID:
+/// ACK, ABh, 83h, which translation makes 41h). Its bytes come over the
+/// serial line about a millisecond apart, so a byte read lets IRQ 1 fall
+/// before the next arrives. Keys pressed by the host (`key`) arrive as
+/// set-1 scan codes, as the 8042 delivers them translated. The
+/// controller's own answers (its self-test's 55h) are at once.
+component Kbc8042 {
+    ports {
+        bus port: IsaBus::Slave;
+        /// A full output buffer, while enabled, drives IRQ 1.
+        bus irq: IrqLines::Device;
+        in switches: u8;
+        /// The output port's A20 gate, and the processor's RESET (the
+        /// output port's bit 0 inverted).
+        out a20: bool;
+        out cpu_reset: bool;
+    }
+    model {
+        state status: u8 = 0x10;
+        state command: u8 = 0;
+        state outp: u8 = 0xCD;
+        state obuf: u8 = 0;
+        /// Bytes from the keyboard on their way, and clocks until the
+        /// first is in.
+        mem queue: [u8; 32];
+        state qhead: u8 = 0;
+        state qlen: u8 = 0;
+        state kdelay: u32 = 0;
+        /// A command waiting for its operand at 60h (0: none), and one the
+        /// keyboard is waiting for.
+        state pending: u8 = 0;
+        state kbd_pending: u8 = 0;
+        /// Clocks left of a reset pulse (FEh).
+        state pulse: u32 = 0;
+
+        on reset {
+            status = 0x10;
+            command = 0;
+            outp = 0xCD;
+            qlen = 0;
+            pending = 0;
+            kbd_pending = 0;
+            a20 = false;
+            cpu_reset = false;
+            pulse = 0;
+        }
+
+        /// A pulse on the reset line lasts about 6 us; a keyboard byte
+        /// takes about a millisecond (1000 clocks) to come in.
+        on tick(n: u32) -> u32 {
+            if pulse > 0 {
+                pulse = if n >= pulse { 0 } else { pulse - n };
+                if pulse == 0 { cpu_reset = outp[0] == 0; }
+            }
+            if qlen > 0 && status[0] == 0 {
+                kdelay = if n >= kdelay { 0 } else { kdelay - n };
+                if kdelay == 0 {
+                    obuf = queue[qhead];
+                    qhead = (qhead + 1) & 31;
+                    qlen = qlen - 1;
+                    status = status | 1;
+                    irq_level();
+                    kdelay = 1000;
+                }
+            }
+            let mut due: u32 = 0xFFFFFFFF;
+            if pulse > 0 { due = pulse; }
+            if qlen > 0 && status[0] == 0 && kdelay < due { due = kdelay; }
+            return due;
+        }
+
+        fn irq_level() {
+            emit irq.request(1) = status[0] == 1 && command[0] == 1;
+        }
+
+        /// The controller's own answer, into the output buffer.
+        fn put(b: u8) {
+            obuf = b;
+            status = status | 1;
+            irq_level();
+        }
+
+        /// A byte from the keyboard, on its way.
+        fn send(b: u8) {
+            if qlen < 32 {
+                if qlen == 0 { kdelay = 1000; }
+                queue[(qhead + qlen) & 31] = b;
+                qlen = qlen + 1;
+            }
+        }
+
+        /// The host presses a key: a set-1 scan code.
+        fn key(code: u8) {
+            if command[4] == 0 { send(code); }
+        }
+
+        fn set_output(v: u8) {
+            outp = v;
+            a20 = v[1] == 1;
+            cpu_reset = v[0] == 0;
+        }
+
+        /// A byte for the keyboard.
+        fn keyboard(b: u8) {
+            if kbd_pending != 0 {
+                kbd_pending = 0;
+                send(0xFA);
+                return;
+            }
+            if b == 0xFF {
+                send(0xFA);
+                send(0xAA);
+            } else if b == 0xEE {
+                send(0xEE);
+            } else if b == 0xF2 {
+                send(0xFA);
+                send(0xAB);
+                send(if command[6] == 1 { 0x41 } else { 0x83 });
+            } else if b == 0xED || b == 0xF3 {
+                kbd_pending = b;
+                send(0xFA);
+            } else {
+                send(0xFA);
+            }
+        }
+
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            if addr[2] == 1 {
+                return (data: status as u16, wait: 1);
+            }
+            let v = obuf;
+            status = status & 0xFE;
+            if qlen > 0 && kdelay == 0 { kdelay = 1000; }
+            irq_level();
+            return (data: v as u16, wait: 1);
+        }
+
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            let d = data as u8;
+            if addr[2] == 0 {
+                status = status & 0xF7;
+                let p = pending;
+                pending = 0;
+                if p == 0x60 {
+                    command = d;
+                    status = (status & 0xFB) | (d & 4);
+                    irq_level();
+                } else if p == 0xD1 {
+                    set_output(d);
+                } else {
+                    keyboard(d);
+                }
+                return (wait: 1);
+            }
+            status = status | 8;
+            if d == 0x20 {
+                put(command);
+            } else if d == 0x60 || d == 0xD1 {
+                pending = d;
+            } else if d == 0xAA {
+                status = status | 4;
+                put(0x55);
+            } else if d == 0xAB {
+                put(0x00);
+            } else if d == 0xAD {
+                command = command | 0x10;
+            } else if d == 0xAE {
+                command = command & 0xEF;
+            } else if d == 0xC0 {
+                put(switches);
+            } else if d == 0xD0 {
+                put(outp);
+            } else if d == 0xE0 {
+                put(0x00);
+            } else if d >= 0xF0 {
+                // Pulse the output port's low bits that are 0 in the
+                // command: FE pulses the processor's reset.
+                if d[0] == 0 {
+                    cpu_reset = true;
+                    pulse = 7;
+                }
             }
             return (wait: 1);
         }

@@ -655,6 +655,9 @@ pub struct Istream {
     /// `fn () -> u32`: bytes the stream holds from the current address
     /// before its segment ends (a processor model stops prefetching there).
     pub limit: Option<DefId>,
+    /// `fn () -> bool`: while true the processor is held in reset; when it
+    /// falls, it starts as after reset.
+    pub reset: Option<DefId>,
     /// `fn () -> u32`: how many bytes from the current address follow at
     /// consecutive addresses, so that the interpreter may translate the
     /// stream's address once and count on while decoding (0: every byte).

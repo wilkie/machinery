@@ -1074,6 +1074,9 @@ pub struct IstreamDecl {
     /// `limit code_room;`: a `fn () -> u32`, how many bytes the stream
     /// holds from the current address before its segment ends.
     pub limit: Option<Path>,
+    /// `reset reset_line;`: a `fn () -> bool`; while it is true the
+    /// processor is held in reset (SPEC 11.1a).
+    pub reset: Option<Path>,
     /// `window code_window;`: a `fn () -> u32`, how many bytes from the
     /// current address follow at consecutive addresses (SPEC 11.1a).
     pub window: Option<Path>,

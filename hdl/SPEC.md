@@ -962,6 +962,14 @@ fn code_window() -> u32 {
 }
 ```
 
+`reset` names a `fn () -> bool`, usually an `extern fn` the processor
+model answers from its RESET pin. The interpreter asks at every
+instruction boundary. While it is true, the processor is held in reset
+(halted, its registers at their reset values, and `Bus::processor_reset`
+lets the processor model empty its own state). When it falls, the
+processor starts as after a reset. On the AT the keyboard controller
+pulses it, which is how the BIOS brings the 286 back from protected mode.
+
 The window must be exact: inside it, `address` would return the
 window's start plus the offset, and would raise nothing. Getting it
 wrong changes behaviour, not just speed.

@@ -497,6 +497,43 @@ fn i286_board_system_boots() {
     assert!(stdout.contains("22 passed"), "expected 22 tests:\n{stdout}");
 }
 
+/// The IBM PC/AT (`At286` in `targets/i286/board.machine`): the 286 board
+/// with the AT's system-board devices (the MC146818 clock, the 8042
+/// keyboard controller, the second DMA controller, port B), booting IBM's
+/// own BIOS through its power-on self test when the ROM images are present
+/// (`targets/i286/at_test.rs`).
+#[test]
+fn i286_at_boots_its_bios() {
+    let checked = check_files(vec![
+        target("alu.machine"),
+        target("i286.machine"),
+        target("timing.machine"),
+        target("schedules.machine"),
+        pc("isabus.machine"),
+        pc("crtc.machine"),
+        pc("pc.machine"),
+        target("board.machine"),
+    ]);
+    assert!(!checked.has_errors());
+    let src = generate_system(&checked, "At286", Some("fast")).unwrap_or_else(|e| panic!("{e}"));
+    let root = hdl_root();
+    let crate_ = package(&crate_name("At286"), src, &root.join("crates").join("machine-runtime"));
+    let dir = root.join("target").join("gen-tests").join("at286");
+    write_crate(&dir, &crate_).unwrap();
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::copy(root.join("targets").join("i286").join("at_test.rs"), dir.join("tests").join("at.rs")).unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let output = Command::new(&cargo)
+        .args(["test", "--quiet", "--test", "at", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+        .output()
+        .expect("run cargo");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "AT tests failed:\n{stdout}\n{stderr}");
+}
+
 /// The 386 board: the i386 on a 32-bit local bus with RAM and a ROM, and
 /// the PC's devices on the ISA bus behind the AT bus controller (a bridge:
 /// its handlers run ISA cycles). Generates, compiles, boots ROM programs

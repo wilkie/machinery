@@ -13,7 +13,7 @@
 
 use i286::{I286};
 use isabus::{Space, BusSize, IsaBus, IrqLines};
-use pc::{Pic8259, Pit8254, Dma8237, HostLink, Cga, Hercules, Console};
+use pc::{Pic8259, Pit8254, Dma8237, HostLink, Cga, Hercules, Console, PostCard, Mc146818, Kbc8042};
 
 /// The 286 local bus at the transaction level. A word transfer is aligned;
 /// the processor splits an odd-address word into two byte transfers, as
@@ -113,6 +113,8 @@ component Cpu286 {
         bus local: LocalBus::Master;
         /// INTR, from the master interrupt controller.
         in intr_line: bool;
+        /// RESET (on the AT, from the keyboard controller; unwired, low).
+        in reset_pin: bool;
     }
     model {
         /// The code word last fetched, and whether it is still good.
@@ -189,6 +191,12 @@ component Cpu286 {
         state trace_n: u16 = 0;
 
         on intr() -> bool { return intr_line; }
+        on reset_line() -> bool { return reset_pin; }
+        /// A reset empties the pipeline and the code buffer.
+        on reset {
+            flush();
+            code_valid = false;
+        }
 
         on mem.fetch_u8(addr: u24) -> u8 {
             let w = addr & 0xFFFFFE;
@@ -860,6 +868,82 @@ system Board286 {
     /// The CGA's font jumper left off: the thick font.
     wire cga.thin_font = false;
     wire cpu.intr_line = pic1.int;
+
+    profile fast { default: model; }
+}
+
+/// The IBM PC/AT (5170, the 8 MHz type 3 board) as it boots its own BIOS:
+/// the 286 board's devices with a POST card at 80h. The system board's
+/// remaining devices are added as its power-on self test reaches them.
+system At286 {
+    clock osc: 14.31818 MHz;
+    clock cpu_clk: 8 MHz;
+    clock pit_clk = osc / 12;
+    clock dma_clk = osc / 3;
+    clock rtc_clk: 32.768 kHz;
+
+    component cpu: Cpu286 @ cpu_clk;
+    component ram: Ram;
+    component rom: Rom;
+    component atbus: AtBus286;
+    component pic1: Pic8259;
+    component pic2: Pic8259;
+    component pit: Pit8254 @ pit_clk;
+    component dma: Dma8237 @ dma_clk;
+    component dma2: Dma8237 @ dma_clk;
+    component cga: Cga @ osc;
+    component post: PostCard;
+    component rtc: Mc146818 @ rtc_clk;
+    component kbc: Kbc8042 @ pit_clk;
+
+    bus local: LocalBus @ cpu_clk {
+        master cpu.local;
+        master atbus.mem;
+        slave ram.port @ mem 0x00000..=0x9FFFF;
+        slave rom.port @ mem 0xF0000..=0xFFFFF, mem 0xFF0000..=0xFFFFFF;
+        slave atbus.local;
+    }
+
+    bus isa: IsaBus @ cpu_clk {
+        master atbus.isa;
+        master dma.dma;
+        master dma2.dma;
+        slave atbus.sysmem @ mem 0x00000..=0x9FFFF, mem 0xF0000..=0xFFFFF, mem 0xFF0000..=0xFFFFFF;
+        slave pic1.port @ io 0x20..=0x21;
+        slave pic2.port @ io 0xA0..=0xA1;
+        slave pit.port @ io 0x40..=0x43;
+        slave pit.portb @ io 0x61..=0x61;
+        slave dma.regs @ io 0x00..=0x0F;
+        slave dma.pages @ io 0x81..=0x87;
+        slave dma2.regs @ io 0xC0..=0xDF;
+        slave dma2.pages @ io 0x88..=0x8F;
+        slave post.port @ io 0x80..=0x80;
+        slave rtc.port @ io 0x70..=0x71;
+        slave kbc.port @ io 0x60..=0x60, io 0x64..=0x64;
+        slave cga.port @ mem 0xB8000..=0xBFFFF, io 0x3D0..=0x3DF;
+    }
+
+    bus irq_master: IrqLines @ cpu_clk {
+        master pic1.ir;
+        slave pit.irq;
+        slave kbc.irq;
+        slave pic2.cascade;
+    }
+    bus irq_slave: IrqLines @ cpu_clk {
+        master pic2.ir;
+        slave rtc.irq;
+    }
+
+    wire pic1.sp = true;
+    wire pic2.sp = false;
+    wire pic2.cas_in = pic1.cas_out;
+    wire cga.thin_font = false;
+    wire dma2.word = true;
+    /// The keylock off, a colour display, no manufacturing jumper, 512 KB
+    /// on the board.
+    wire kbc.switches = 0xAF;
+    wire cpu.intr_line = pic1.int;
+    wire cpu.reset_pin = kbc.cpu_reset;
 
     profile fast { default: model; }
 }

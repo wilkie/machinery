@@ -1015,10 +1015,17 @@ impl<'a> Gen<'a> {
             S::For(id, lo, hi, body) => {
                 let name = self.local_name(cx, *id);
                 let ty = self.rty(&cx.locals[*id as usize].ty)?;
-                format!(
-                    "for {name} in ({lo} as {ty})..({hi} as {ty}) {{\n{}}}\n",
-                    self.block_stmts(cx, body)?
-                )
+                // Inclusive: the loop variable's type holds `hi - 1`, which
+                // may be its largest value (`for i in 0..256` over a `u8`).
+                if hi <= lo {
+                    String::new()
+                } else {
+                    format!(
+                        "for {name} in ({lo} as {ty})..=({} as {ty}) {{\n{}}}\n",
+                        hi - 1,
+                        self.block_stmts(cx, body)?
+                    )
+                }
             }
             S::Return(Some(e)) if cx.opt => format!("return Some({});\n", self.expr(cx, e)?),
             S::Decline => "return None;\n".into(),

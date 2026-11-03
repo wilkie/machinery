@@ -2255,3 +2255,287 @@ component Fdc765 {
         }
     }
 }
+
+/// The AT's fixed disk controller, the Western Digital WD1003 on IBM's
+/// fixed disk and diskette adapter, with one drive and the disk image in
+/// it; IRQ 14.
+///
+/// 1F0h is the data register, 16 bits wide (the only one: it answers
+/// `cs16`); a sector is 256 words. 1F1h reads the error register (01h
+/// after a reset or diagnostics: no error; 10h: no such sector; 04h:
+/// aborted) and takes the write precompensation; 1F2h the sector count (0
+/// means 256), 1F3h the sector, 1F4h-1F5h the cylinder, 1F6h drive and
+/// head (bit 4 the drive, 3-0 the head). 1F7h reads the status (80h busy,
+/// 40h ready, 10h seek complete, 08h data request, 01h error) and takes a
+/// command: 1xh restore, 7xh seek, 2xh read and 3xh write sectors (a
+/// request and an interrupt a sector), 4xh verify, 50h format a track,
+/// 90h diagnostics, 91h set the drive's parameters. 3F6h: bit 2 resets
+/// the controller, bit 1 masks its interrupt.
+///
+/// The disk is `image`, `cylinders` by `heads` by `sectors` (17 a track)
+/// of 512 bytes, when `present`: by default the AT's type 2 drive, 615
+/// cylinders and 4 heads (20 MB). A command is busy (80h) for a while
+/// before it completes and interrupts (about 250 us, on a 1.19 MHz
+/// clock): each sector read, and each sector written once the host has
+/// filled the buffer; a write's first data request comes at once. Reading
+/// the status or writing a command clears the interrupt.
+component Wd1003 {
+    ports {
+        bus port: IsaBus::Slave;
+        bus irq: IrqLines::Device;
+    }
+    model {
+        mem image: [u8; 33554432];
+        state present: bool = false;
+        state cylinders: u32 = 615;
+        state heads: u32 = 4;
+        state sectors: u32 = 17;
+
+        state error: u8 = 1;
+        state count: u8 = 1;
+        state sector: u8 = 1;
+        state cyl: u16 = 0;
+        state sdh: u8 = 0xA0;
+        state status: u8 = 0x50;
+        state control: u8 = 0;
+        state intrq: bool = false;
+        /// The sector in transfer, where in it, and whether the host is
+        /// writing it (or formatting).
+        mem buf: [u8; 512];
+        state pos: u32 = 0;
+        state writing: bool = false;
+        state formatting: bool = false;
+        state left: u32 = 0;
+        /// What completes when the busy time is up (0 nothing, 1 a sector
+        /// to read, 2 the buffer to write, 3 done: ready and interrupt, 4
+        /// verify, 5 the format), and the clocks left.
+        state pending: u8 = 0;
+        state busy: u32 = 0;
+
+        fn after(what: u8) {
+            pending = what;
+            busy = 300;
+            status = 0x80;
+        }
+
+        on tick(n: u32) -> u32 {
+            if pending == 0 { return 0xFFFFFFFF; }
+            busy = if n >= busy { 0 } else { busy - n };
+            if busy > 0 { return busy; }
+            let what = pending;
+            pending = 0;
+            if what == 1 { load(); }
+            else if what == 2 { written(); }
+            else if what == 3 { status = 0x50; interrupt(); }
+            else if what == 4 { verify(); }
+            else if what == 5 { written(); }
+            return 0xFFFFFFFF;
+        }
+
+        fn line() {
+            emit irq.request(6) = intrq && control[1] == 0;
+        }
+        fn interrupt() {
+            intrq = true;
+            line();
+        }
+        fn here() -> bool { return present && sdh[4] == 0; }
+
+        /// The offset of the sector addressed by the registers, or all
+        /// ones when there is no such sector.
+        fn offset() -> u32 {
+            let h = (sdh & 15) as u32;
+            if !here() || (cyl as u32) >= cylinders || h >= heads || sector == 0 || (sector as u32) > sectors {
+                return 0xFFFFFFFF;
+            }
+            return (((cyl as u32) * heads + h) * sectors + (sector as u32 - 1)) * 512;
+        }
+
+        /// On to the next sector: the next number, head, cylinder.
+        fn advance() {
+            if (sector as u32) < sectors {
+                sector = sector + 1;
+            } else {
+                sector = 1;
+                let h = (sdh & 15) + 1;
+                if (h as u32) < heads {
+                    sdh = (sdh & 0xF0) | h;
+                } else {
+                    sdh = sdh & 0xF0;
+                    cyl = cyl + 1;
+                }
+            }
+            count = count - 1;
+        }
+
+        fn fail(code: u8) {
+            error = code;
+            status = 0x51;
+            interrupt();
+        }
+
+        /// The next sector into the buffer for the host to read.
+        fn load() {
+            let o = offset();
+            if o == 0xFFFFFFFF { fail(0x10); return; }
+            for i in 0..512 { buf[i] = image[o + i as u32]; }
+            pos = 0;
+            status = 0x58;
+            interrupt();
+        }
+
+        fn command(c: u8) {
+            intrq = false;
+            line();
+            error = 0;
+            writing = false;
+            formatting = false;
+            let op = c >> 4;
+            if c == 0x90 {
+                error = 1;
+                after(3);
+            } else if !here() {
+                fail(0x04);
+            } else if c == 0x91 {
+                after(3);
+            } else if op == 1 {
+                cyl = 0;
+                after(3);
+            } else if op == 7 {
+                if (cyl as u32) < cylinders { after(3); } else { fail(0x10); }
+            } else if op == 2 {
+                left = if count == 0 { 256 } else { count as u32 };
+                after(1);
+            } else if op == 3 {
+                left = if count == 0 { 256 } else { count as u32 };
+                if offset() == 0xFFFFFFFF { fail(0x10); return; }
+                writing = true;
+                pos = 0;
+                status = 0x58;
+            } else if op == 4 {
+                after(4);
+            } else if c == 0x50 {
+                // The interleave table comes as a sector of data first.
+                formatting = true;
+                pos = 0;
+                status = 0x58;
+            } else {
+                fail(0x04);
+            }
+        }
+
+        /// Verify: every sector asked for is there.
+        fn verify() {
+            let n = if count == 0 { 256 } else { count as u32 };
+            let mut bad = false;
+            for i in 0..256 {
+                if (i as u32) < n && !bad {
+                    if offset() == 0xFFFFFFFF { bad = true; } else { advance(); }
+                }
+            }
+            if bad { fail(0x10); } else { status = 0x50; interrupt(); }
+        }
+
+        /// The host has filled the buffer: it is written (or the track
+        /// formatted).
+        fn written() {
+            if formatting {
+                formatting = false;
+                let h = (sdh & 15) as u32;
+                if !here() || (cyl as u32) >= cylinders || h >= heads { fail(0x10); return; }
+                let t = ((cyl as u32) * heads + h) * sectors * 512;
+                for i in 0..8704 {
+                    if (i as u32) < sectors * 512 { image[t + i as u32] = 0; }
+                }
+                status = 0x50;
+                interrupt();
+                return;
+            }
+            let o = offset();
+            if o == 0xFFFFFFFF { writing = false; fail(0x10); return; }
+            for i in 0..512 { image[o + i as u32] = buf[i]; }
+            advance();
+            left = left - 1;
+            pos = 0;
+            if left == 0 { writing = false; status = 0x50; } else { status = 0x58; }
+            interrupt();
+        }
+
+        fn data_in() -> u8 {
+            if status[3] == 0 || writing || formatting { return 0xFF; }
+            let b = buf[pos];
+            pos = pos + 1;
+            if pos == 512 {
+                advance();
+                left = left - 1;
+                if left == 0 { status = 0x50; } else { after(1); }
+            }
+            return b;
+        }
+
+        fn data_out(b: u8) {
+            if status[3] == 0 || !(writing || formatting) { return; }
+            buf[pos] = b;
+            pos = pos + 1;
+            if pos == 512 { after(if formatting { 5 } else { 2 }); }
+        }
+
+        on port.cs16(space: Space, addr: u24) -> (cs16_n: bool, wait: u8) {
+            if space != Space::Io || addr != 0x1F0 { decline; }
+            return (cs16_n: false, wait: 0);
+        }
+
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            let r = addr[2:0];
+            if addr[9] == 1 { return (data: 0xFF, wait: 1); }
+            if r == 0 {
+                let lo = data_in();
+                if size == BusSize::Word {
+                    let hi = data_in();
+                    return (data: concat(hi, lo), wait: 0);
+                }
+                return (data: lo as u16, wait: 0);
+            }
+            if r == 7 {
+                intrq = false;
+                line();
+                // An absent drive selected: not ready (the BIOS checks
+                // that there is no second drive this way).
+                return (data: (if here() { status } else { status & 0x81 }) as u16, wait: 1);
+            }
+            let v = if r == 1 { error } else if r == 2 { count } else if r == 3 { sector }
+                else if r == 4 { cyl as u8 } else if r == 5 { (cyl >> 8) as u8 } else { sdh };
+            return (data: v as u16, wait: 1);
+        }
+
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            let d = data as u8;
+            let r = addr[2:0];
+            if addr[9] == 1 {
+                // 3F6h: reset on the falling edge of bit 2.
+                let was = control;
+                control = d;
+                if was[2] == 1 && d[2] == 0 {
+                    error = 1;
+                    status = if present { 0x50 } else { 0 };
+                    writing = false;
+                    formatting = false;
+                    intrq = false;
+                    pending = 0;
+                }
+                line();
+                return (wait: 1);
+            }
+            if r == 0 {
+                data_out(d);
+                if size == BusSize::Word { data_out((data >> 8) as u8); }
+            } else if r == 2 { count = d; }
+            else if r == 3 { sector = d; }
+            else if r == 4 { cyl = (cyl & 0xFF00) | d as u16; }
+            else if r == 5 { cyl = (cyl & 0x00FF) | ((d as u16) << 8); }
+            else if r == 6 { sdh = d; }
+            else if r == 7 { command(d); }
+            return (wait: 1);
+        }
+    }
+}

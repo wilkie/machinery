@@ -13,7 +13,7 @@
 
 use i286::{I286};
 use isabus::{Space, BusSize, IsaBus, IrqLines};
-use pc::{Pic8259, Pit8254, Dma8237, HostLink, Cga, Hercules, Console, PostCard, Mc146818, Kbc8042, Fdc765};
+use pc::{Pic8259, Pit8254, Dma8237, HostLink, Cga, Hercules, Console, PostCard, Mc146818, Kbc8042, Fdc765, Wd1003};
 
 /// The 286 local bus at the transaction level. A word transfer is aligned;
 /// the processor splits an odd-address word into two byte transfers, as
@@ -266,14 +266,25 @@ component Cpu286 {
         }
         /// A word port is one access for the pipeline (two bus cycles at an
         /// odd port); the devices see it a byte at a time.
+        /// A word at an even port is one bus cycle (a 16-bit device takes it
+        /// whole); at an odd one, two.
         on io.read_u16(addr: u16) -> u16 {
-            note(3, if addr[0] == 0 { 1 } else { 2 });
+            if addr[0] == 0 {
+                note(3, 1);
+                return local.read(space: Space::Io, addr: addr as u24, size: BusSize::Word).data;
+            }
+            note(3, 2);
             let lo = local.read(space: Space::Io, addr: addr as u24, size: BusSize::Byte).data as u8;
             let hi = local.read(space: Space::Io, addr: (addr + 1) as u24, size: BusSize::Byte).data as u8;
             return concat(hi, lo);
         }
         on io.write_u16(addr: u16, data: u16) {
-            note(4, if addr[0] == 0 { 1 } else { 2 });
+            if addr[0] == 0 {
+                note(4, 1);
+                local.write(space: Space::Io, addr: addr as u24, size: BusSize::Word, data: data);
+                return;
+            }
+            note(4, 2);
             local.write(space: Space::Io, addr: addr as u24, size: BusSize::Byte, data: data & 0xFF);
             local.write(space: Space::Io, addr: (addr + 1) as u24, size: BusSize::Byte, data: data >> 8);
         }
@@ -896,6 +907,7 @@ system At286 {
     component rtc: Mc146818 @ rtc_clk;
     component kbc: Kbc8042 @ pit_clk;
     component fdc: Fdc765 @ pit_clk;
+    component hdc: Wd1003 @ pit_clk;
 
     bus local: LocalBus @ cpu_clk {
         master cpu.local;
@@ -921,7 +933,10 @@ system At286 {
         slave post.port @ io 0x80..=0x80;
         slave rtc.port @ io 0x70..=0x71;
         slave kbc.port @ io 0x60..=0x60, io 0x64..=0x64;
-        slave fdc.port @ io 0x3F1..=0x3F2, io 0x3F4..=0x3F5, io 0x3F7..=0x3F7;
+        // The fixed disk and diskette adapter: the WD1003 at 1F0h-1F7h and
+        // 3F6h, the 765 at 3F2h-3F5h and 3F7h.
+        slave fdc.port @ io 0x3F2..=0x3F2, io 0x3F4..=0x3F5, io 0x3F7..=0x3F7;
+        slave hdc.port @ io 0x1F0..=0x1F7, io 0x3F6..=0x3F6;
         slave cga.port @ mem 0xB8000..=0xBFFFF, io 0x3D0..=0x3DF;
     }
 
@@ -935,6 +950,7 @@ system At286 {
     bus irq_slave: IrqLines @ cpu_clk {
         master pic2.ir;
         slave rtc.irq;
+        slave hdc.irq;
     }
 
     wire pic1.sp = true;

@@ -426,3 +426,119 @@ fn freedos_boots() {
     insert(&mut sys, &d);
     until_screen(&mut sys, "Welcome to the FreeDOS 1.4 installation program", 150_000_000);
 }
+
+// --- the fixed disk ---
+
+/// A 20 MB fixed disk in the AT: type 2 in the CMOS (615 cylinders, 4
+/// heads, 17 sectors), blank.
+fn fixed_disk(sys: &mut System) {
+    let c = &mut sys.board().rtc.cmos;
+    c[0x12] = 0x20;
+    let sum: u16 = c[0x10..=0x2D].iter().map(|&b| b as u16).sum();
+    c[0x2E] = (sum >> 8) as u8;
+    c[0x2F] = sum as u8;
+    let h = &mut sys.board().hdc;
+    h.present = true;
+    h.cylinders = 615;
+    h.heads = 4;
+    h.sectors = 17;
+}
+
+/// The boot sector of `BOOT` for drive C (80h).
+const BOOT_C: &[u8] = &[
+    0x31, 0xc0, 0x8e, 0xd8, 0x8e, 0xc0, 0x8e, 0xd0, 0xbc, 0x00, 0x7c, 0xbe, 0x54, 0x7c, 0xe8, 0x34,
+    0x00, 0xb8, 0x02, 0x02, 0xb9, 0x02, 0x00, 0xba, 0x80, 0x00, 0xbb, 0x00, 0x80, 0xcd, 0x13, 0x72,
+    0x1d, 0xbe, 0xf4, 0x81, 0xe8, 0x1e, 0x00, 0xb8, 0x01, 0x03, 0xb9, 0x05, 0x00, 0xba, 0x80, 0x00,
+    0xbb, 0x00, 0x7c, 0xcd, 0x13, 0x72, 0x07, 0xbe, 0x65, 0x7c, 0xe8, 0x08, 0x00, 0xf4, 0xbe, 0x76,
+    0x7c, 0xe8, 0x01, 0x00, 0xf4, 0xac, 0x08, 0xc0, 0x74, 0x09, 0xb4, 0x0e, 0xbb, 0x07, 0x00, 0xcd,
+    0x10, 0xeb, 0xf2, 0xc3, 0x42, 0x6f, 0x6f, 0x74, 0x65, 0x64, 0x20, 0x66, 0x72, 0x6f, 0x6d, 0x20,
+    0x43, 0x3a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x57, 0x72, 0x6f, 0x74, 0x65, 0x20, 0x73, 0x65, 0x63,
+    0x74, 0x6f, 0x72, 0x20, 0x35, 0x00, 0x44, 0x69, 0x73, 0x6b, 0x20, 0x65, 0x72, 0x72, 0x6f, 0x72,
+];
+
+/// The AT boots from its fixed disk when drive A is empty: the BIOS reads
+/// the boot sector through the WD1003, 16 bits a word, and the boot
+/// sector's own reads (across two sectors) and write go through it too.
+#[test]
+fn ibm_at_boots_from_the_fixed_disk() {
+    let Some(mut sys) = at() else { return skip() };
+    fixed_disk(&mut sys);
+    {
+        let h = &mut sys.board().hdc;
+        h.image[..BOOT_C.len()].copy_from_slice(BOOT_C);
+        h.image[510] = 0x55;
+        h.image[511] = 0xAA;
+        h.image[512..1024].fill(b'-');
+        let msg = b"read across two sectors";
+        h.image[512 + 500..512 + 500 + msg.len()].copy_from_slice(msg);
+        h.image[512 + 500 + msg.len()] = 0;
+    }
+    until_screen(&mut sys, "Wrote sector 5", 200_000_000);
+    let text = screen(&mut sys);
+    assert!(text.iter().any(|l| l == "Booted from C:"), "{text:#?}");
+    assert!(text.iter().any(|l| l == "read across two sectors"), "{text:#?}");
+    assert_eq!(sys.board().ram.cells[0x416], 0, "POST's error flags");
+    assert_eq!(sys.board().ram.cells[0x475], 1, "one fixed disk");
+    let img = &sys.board().hdc.image;
+    assert_eq!(&img[4 * 512..5 * 512], &img[..512], "the boot sector, written to sector 5");
+}
+
+/// Waits for `prompt`, then a moment, then types `keys`.
+fn answer(sys: &mut System, prompt: &str, keys: &[u8], steps: u64) {
+    until_screen(sys, prompt, steps);
+    let t = sys.seconds() + 0.5;
+    sys.run_until(100_000_000, |s| s.seconds() >= t).unwrap();
+    type_keys(sys, keys);
+}
+
+/// MS-DOS 3.30 installs itself on the fixed disk and boots from it: FDISK
+/// makes the DOS partition and restarts the AT, FORMAT C:/S formats it
+/// (20 MB) and copies the system, and with drive A empty Ctrl-Alt-Del
+/// brings up MS-DOS from C:.
+#[test]
+fn ms_dos_330_installs_on_the_fixed_disk() {
+    let (Some(mut sys), Some(d)) = (at(), disk("msdos330/DISK01.IMG")) else { return skip() };
+    fixed_disk(&mut sys);
+    insert(&mut sys, &d);
+    answer(&mut sys, "Enter new date", &[ENTER], 150_000_000);
+    answer(&mut sys, "Enter new time", &[ENTER], 20_000_000);
+    // FDISK: create the DOS partition, the primary one, at the largest
+    // size and active.
+    answer(&mut sys, "A>", &[0x21, 0x20, 0x17, 0x1F, 0x25, ENTER], 20_000_000);
+    answer(&mut sys, "Enter choice:", &[ENTER], 50_000_000);
+    answer(&mut sys, "Create Primary DOS partition", &[ENTER], 50_000_000);
+    answer(&mut sys, "(Y/N)", &[ENTER], 50_000_000);
+    answer(&mut sys, "Press any key when ready", &[ENTER], 100_000_000);
+    // Restarted: from the diskette again.
+    answer(&mut sys, "Enter new date", &[ENTER], 200_000_000);
+    answer(&mut sys, "Enter new time", &[ENTER], 20_000_000);
+    // FORMAT C:/S
+    sys.with_kbc(|k, ctx| k.fn_key(ctx, 0x2A));
+    answer(&mut sys, "A>", &[0x21, 0x18, 0x13, 0x32, 0x1E, 0x14, 0x39, 0x2E, 0x27], 20_000_000);
+    sys.with_kbc(|k, ctx| k.fn_key(ctx, 0xAA));
+    type_keys(&mut sys, &[0x35, 0x1F, ENTER]);
+    answer(&mut sys, "Proceed with Format (Y/N)?", &[0x15, ENTER], 50_000_000);
+    until_screen(&mut sys, "bytes available on disk", 1_500_000_000);
+    let text = screen(&mut sys);
+    assert!(text.iter().any(|l| l == "System transferred"), "{text:#?}");
+    assert!(text.iter().any(|l| l.trim() == "21309440 bytes total disk space"), "{text:#?}");
+    // Drive A empty, Ctrl-Alt-Del.
+    sys.board().fdc.present = false;
+    sys.board().fdc.changed = true;
+    for k in [0x1D, 0x38, 0x53, 0xD3, 0xB8, 0x9D] {
+        sys.with_kbc(|kb, ctx| kb.fn_key(ctx, k));
+        let t = sys.seconds() + 0.01;
+        sys.run_until(1_000_000, |s| s.seconds() >= t).unwrap();
+    }
+    // Until the restart has cleared the screen of FORMAT's report.
+    let mut n = 0u32;
+    sys.run_until(200_000_000, |s| {
+        n += 1;
+        n.is_multiple_of(10_000) && !screen(s).iter().any(|l| l.contains("bytes available"))
+    })
+    .unwrap();
+    answer(&mut sys, "Enter new date", &[ENTER], 200_000_000);
+    answer(&mut sys, "Enter new time", &[ENTER], 20_000_000);
+    answer(&mut sys, "C>", &[0x2F, 0x12, 0x13, ENTER], 20_000_000);
+    until_screen(&mut sys, "MS-DOS Version 3.30", 20_000_000);
+}

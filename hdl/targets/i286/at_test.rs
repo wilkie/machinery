@@ -1,6 +1,7 @@
 //! Drives the crate generated from `board.machine`'s `At286`: the IBM PC/AT
 //! (5170, the 8 MHz type 3 board) booting IBM's own BIOS (15NOV85, from
-//! `~/roms` or `PC_ROMS`; not in the repository), and its system-board
+//! `~/roms` or `PC_ROMS`; not in the repository) and DOS from disk images
+//! there (MS-DOS 3.30 and 4.00, FreeDOS 1.4), and its system-board
 //! devices driven directly.
 
 use machine_at286::system::System;
@@ -49,7 +50,7 @@ fn cmos() -> [u8; 64] {
     let sum: u16 = c[0x10..=0x2D].iter().map(|&b| b as u16).sum();
     c[0x2E] = (sum >> 8) as u8;
     c[0x2F] = sum as u8;
-    c[0x32] = 0x19;
+    c[0x32] = 0x20;
     c
 }
 
@@ -342,4 +343,86 @@ fn fdc_seeks_and_senses() {
     f.on_port_write(&mut Quiet, 1, 0x3F7, 0, 0);
     fdc_cmd(&mut f, &[0x4A, 0x00]);
     assert_eq!(fdc_result(&mut f), [0x00, 0, 0, 0, 0, 1, 2], "cylinder 0, head 0, sector 1, 512 bytes");
+}
+
+// --- DOS, from disk images in ~/roms (not in the repository) ---
+
+/// A disk image from the ROM directory, if it is there.
+fn disk(name: &str) -> Option<Vec<u8>> {
+    std::fs::read(roms()?.join(name)).ok()
+}
+
+/// Puts `d` in drive A, its geometry from its boot sector's parameter
+/// block (15 sectors a track is high density, 500 kbit/s; fewer, 300
+/// kbit/s in the AT's drive), and raises the disk-change line, as opening
+/// and closing the door would.
+fn insert(sys: &mut System, d: &[u8]) {
+    let spt = u16::from_le_bytes([d[24], d[25]]) as u32;
+    let heads = u16::from_le_bytes([d[26], d[27]]) as u32;
+    let total = u16::from_le_bytes([d[19], d[20]]) as u32;
+    let f = &mut sys.board().fdc;
+    f.image[..d.len()].copy_from_slice(d);
+    f.present = true;
+    f.sectors = spt;
+    f.heads = heads;
+    f.cylinders = total / (spt * heads);
+    f.rate = if spt >= 15 { 0 } else { 1 };
+    f.changed = true;
+}
+
+/// Types keys (set-1 make codes), each pressed and released.
+fn type_keys(sys: &mut System, keys: &[u8]) {
+    for &k in keys {
+        press(sys, k);
+    }
+}
+
+const ENTER: u8 = 0x1C;
+
+/// MS-DOS 3.30 boots from its 360 KB disk (read double-stepped at 300
+/// kbit/s in the AT's 1.2 MB drive): it takes the date and time from the
+/// clock, answers VER, and lists the disk.
+#[test]
+fn ms_dos_330_boots() {
+    let (Some(mut sys), Some(d)) = (at(), disk("msdos330/DISK01.IMG")) else { return skip() };
+    insert(&mut sys, &d);
+    until_screen(&mut sys, "Current date is Mon 11-02-2026", 150_000_000);
+    press(&mut sys, ENTER);
+    until_screen(&mut sys, "Enter new time", 20_000_000);
+    press(&mut sys, ENTER);
+    until_screen(&mut sys, "A>", 20_000_000);
+    type_keys(&mut sys, &[0x2F, 0x12, 0x13, ENTER]); // VER
+    until_screen(&mut sys, "MS-DOS Version 3.30", 20_000_000);
+    type_keys(&mut sys, &[0x20, 0x17, 0x13, ENTER]); // DIR
+    until_screen(&mut sys, "bytes free", 50_000_000);
+    let text = screen(&mut sys);
+    assert!(text.iter().any(|l| l.starts_with("FORMAT   COM")), "{text:#?}");
+}
+
+/// MS-DOS 4.00's INSTALL disk asks for SELECT; with the disks swapped
+/// (the change line raised) SELECT runs its full-screen installer, which
+/// asks for INSTALL back.
+#[test]
+fn ms_dos_400_installs_from_two_disks() {
+    let (Some(mut sys), Some(install), Some(select)) = (at(), disk("msdos400/INSTALL.IMG"), disk("msdos400/SELECT.IMG")) else {
+        return skip();
+    };
+    insert(&mut sys, &install);
+    until_screen(&mut sys, "Insert SELECT diskette in drive A:", 150_000_000);
+    // As a person would: a moment later (INSTALL empties the keyboard
+    // buffer before it waits for Enter).
+    let t = sys.seconds() + 1.0;
+    sys.run_until(100_000_000, |s| s.seconds() >= t).unwrap();
+    insert(&mut sys, &select);
+    press(&mut sys, ENTER);
+    until_screen(&mut sys, "Continuing Installation", 300_000_000);
+    until_screen(&mut sys, "Insert INSTALL diskette in drive A", 100_000_000);
+}
+
+/// FreeDOS 1.4 boots from its 1.2 MB disk into its installer.
+#[test]
+fn freedos_boots() {
+    let (Some(mut sys), Some(d)) = (at(), disk("freedos/120m/x86BOOT.img")) else { return skip() };
+    insert(&mut sys, &d);
+    until_screen(&mut sys, "Welcome to the FreeDOS 1.4 installation program", 150_000_000);
 }

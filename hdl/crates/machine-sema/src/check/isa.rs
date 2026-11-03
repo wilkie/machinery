@@ -488,6 +488,24 @@ impl Checker<'_> {
                 }
             },
         };
+        let window = match &d.window {
+            None => None,
+            Some(p) => match fn_item(self, p) {
+                Some(f) => {
+                    if let Some(sig) = self.fn_sig(f) {
+                        if !sig.params.is_empty() || sig.ret != Ty::UInt(32) {
+                            self.error(module, "E1046", p.span, "`window` is a `fn () -> u32`: how many bytes from the current address follow at consecutive addresses");
+                            ok = false;
+                        }
+                    }
+                    Some(f)
+                }
+                None => {
+                    ok = false;
+                    None
+                }
+            },
+        };
         let (Some(space), Some(address), Some(next)) = (space, address, next) else {
             return None;
         };
@@ -499,6 +517,7 @@ impl Checker<'_> {
             fault,
             boundary,
             limit,
+            window,
             double,
             lock: lock_latch,
         })

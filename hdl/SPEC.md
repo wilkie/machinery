@@ -888,6 +888,24 @@ current address before its segment ends. It is timing information only:
 a processor model's bus unit does not prefetch past it (section 11.2c).
 On the 286, `fn code_room() -> u32 { return 0x10000 - (IP as u32); }`.
 
+`window` names a `fn () -> u32`: how many bytes from the current address
+follow at consecutive addresses, because translating them would check
+and compute the same things. It is a fact about the architecture that
+the interpreter uses for speed. While `next` decodes an instruction, the
+interpreter calls `address` once and counts on through the window,
+translating again only past it. 0 means every byte is translated. On
+the 386 the window is the rest of the segment while paging is off, and
+none with paging on, where every fetch walks the page tables as `page`
+describes:
+
+```
+fn code_window() -> u32 { return if CR0.PG == 1 { 0 } else { code_room() }; }
+```
+
+The window must be exact: inside it, `address` would return the
+window's start plus the offset, and would raise nothing. Getting it
+wrong changes behaviour, not just speed.
+
 ### 11.2 Instructions
 
 ```
@@ -1185,7 +1203,10 @@ unit, the decoder and the execution unit are model code in the processor
 description; the language provides the schedule and the hook, not a
 pipeline. A model may time an instruction late: the 286's runs one
 instruction behind the interpreter, because its decoder needs to know
-where the following instruction ends, and HLT completes it.
+where the following instruction ends, and HLT completes it. A board
+whose processor model has no `on retire` times instructions from their
+cycles alone (`Bus::SCHEDULE` is false), and the interpreter doesn't
+build schedules for it.
 
 The i286 description's processor model (`Cpu286` in
 `targets/i286/board.machine`) implements the rules found in the

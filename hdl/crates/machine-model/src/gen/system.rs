@@ -1162,7 +1162,7 @@ impl<'a> Gen<'a> {
             } else {
                 let _ = write!(
                 bus_impl,
-                "    /// The instruction's execution overlaps its code fetches: charge what\n    /// exceeds them.\n    fn retire(&mut self, cycles: u32, _schedule: Schedule) {{\n        let x = cycles as clock::Time * clock::C{cpu_clock};\n        if x > self.code_time {{\n            self.sig.now += x - self.code_time;\n        }}\n        self.code_time = 0;\n    }}\n"
+                "    /// The board times instructions from their cycles: no schedule.\n    const SCHEDULE: bool = false;\n    /// The instruction's execution overlaps its code fetches: charge what\n    /// exceeds them.\n    fn retire(&mut self, cycles: u32, _schedule: Schedule) {{\n        let x = cycles as clock::Time * clock::C{cpu_clock};\n        if x > self.code_time {{\n            self.sig.now += x - self.code_time;\n        }}\n        self.code_time = 0;\n    }}\n"
             );
             }
         }

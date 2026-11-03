@@ -565,6 +565,14 @@ impl<'a> Gen<'a> {
                     .fns
                     .get(d)
                     .ok_or_else(|| GenError::new("call of a fn from another isa"))?;
+                // In the istream's `next`, its address goes through the
+                // window (`istream { window ...; }`).
+                if args.is_empty()
+                    && self.in_istream_next.get()
+                    && self.isa.istream.as_ref().is_some_and(|i| i.address == *d && i.window.is_some())
+                {
+                    return Ok(format!("{}.istream_address()?", cx.recv));
+                }
                 let a: R<Vec<String>> = args.iter().map(|x| self.expr(cx, x)).collect();
                 if f.external {
                     // Supplied by the bus side: a processor model handler,
@@ -1549,7 +1557,7 @@ impl<'a> Gen<'a> {
             None => "u8",
         };
         // The bus: how the machine reaches its address spaces.
-        let mut s = String::from("/// The isa's address spaces as the machine reaches them: plain memory\n/// ([`Flat`]) or a system's buses.\npub trait Bus {\n");
+        let mut s = String::from("/// The isa's address spaces as the machine reaches them: plain memory\n/// ([`Flat`]) or a system's buses.\npub trait Bus {\n    /// Whether `retire` looks at its schedule: without, the interpreter\n    /// doesn't build one.\n    const SCHEDULE: bool = true;\n");
         for sp in &self.isa.spaces {
             let n = ident(&sp.name);
             let _ = writeln!(s, "    fn {n}_read(&mut self, addr: u64, bits: u32) -> u128;\n    fn {n}_write(&mut self, addr: u64, bits: u32, value: u128);");
@@ -1610,7 +1618,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut s = format!(
-            "#[derive(Clone, Debug)]\npub struct {isa_name}<B: Bus = Flat> {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n    /// Execution cycles of the last step beyond its bus transfers (the\n    /// timing table: the instruction, its prefixes, a delivered fault).\n    pub cycles: u32,\n    /// Prefix cycles accumulated while decoding.\n    pub prefix_cycles: u32,\n    /// Of `cycles`, the instruction's own timing-table entry.\n    pub entry_cycles: u32,\n    /// Where the last step started, and whether this one started there too.\n    pub last_start: u64,\n    pub restarted: bool,\n    /// Bytes decoded this step, and the extra decoder clocks on each.\n    pub fetched: u8,\n    pub decode_at: [u8; 16],\n    /// Data accesses made this step (a fault's delivery follows those the\n    /// instruction made).\n    pub accesses: u8,\n    /// Shut down: a fault while delivering a double fault.\n    pub shutdown: bool,\n"
+            "#[derive(Clone, Debug)]\npub struct {isa_name}<B: Bus = Flat> {{\n    pub r: Regs,\n    pub mode: {mode_ty},\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n    /// Execution cycles of the last step beyond its bus transfers (the\n    /// timing table: the instruction, its prefixes, a delivered fault).\n    pub cycles: u32,\n    /// Prefix cycles accumulated while decoding.\n    pub prefix_cycles: u32,\n    /// Of `cycles`, the instruction's own timing-table entry.\n    pub entry_cycles: u32,\n    /// Where the last step started, and whether this one started there too.\n    pub last_start: u64,\n    pub restarted: bool,\n    /// Bytes decoded this step, and the extra decoder clocks on each.\n    pub fetched: u8,\n    pub decode_at: [u8; 16],\n    /// The istream's window this step (`istream {{ window ...; }}`): from\n    /// byte `win_from`, `win_len` bytes at consecutive addresses from\n    /// `win_base`.\n    pub win_from: u8,\n    pub win_len: u32,\n    pub win_base: u64,\n    /// Data accesses made this step (a fault's delivery follows those the\n    /// instruction made).\n    pub accesses: u8,\n    /// Shut down: a fault while delivering a double fault.\n    pub shutdown: bool,\n"
         );
         s.push_str("    pub bus: B,\n");
         for l in &self.isa.latches {
@@ -1620,7 +1628,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut s = format!(
-            "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            cycles: 0,\n            prefix_cycles: 0,\n            entry_cycles: 0,\n            last_start: u64::MAX,\n            restarted: false,\n            fetched: 0,\n            decode_at: [0; 16],\n            accesses: 0,\n            shutdown: false,\n            bus,\n"
+            "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            cycles: 0,\n            prefix_cycles: 0,\n            entry_cycles: 0,\n            last_start: u64::MAX,\n            restarted: false,\n            fetched: 0,\n            decode_at: [0; 16],\n            win_from: 0,\n            win_len: 0,\n            win_base: 0,\n            accesses: 0,\n            shutdown: false,\n            bus,\n"
         );
         for l in &self.isa.latches {
             let _ = writeln!(
@@ -1862,16 +1870,94 @@ impl<'a> Gen<'a> {
                 self.rty(&f.locals[*p as usize].ty)?
             ));
         }
-        let body = self.block_stmts(&cx, &f.body)?;
         let tail = if f.ret == Ty::Unit { "Ok(())\n" } else { "" };
-        let s = format!(
-            "    pub fn fn_{}({}) -> Result<{}, Fault> {{\n{body}{tail}}}\n",
-            ident(&f.name),
-            params.join(", "),
-            self.rty(&f.ret)?
-        );
+        let name = ident(&f.name);
+        let params = params.join(", ");
+        let ret = self.rty(&f.ret)?;
+        // Guards first: the leading `if`s that only leave the function
+        // (`if CR0.PG == 0 { return lin; }`). When the rest is more than a
+        // few statements, the guards go in an inlined wrapper and the rest
+        // in a function of its own, so that the common early way out costs
+        // no call.
+        // Plain `let`s may come before and between them; the locals they
+        // bind are passed on to the rest.
+        let lead = f
+            .body
+            .stmts
+            .iter()
+            .take_while(|st| Self::is_guard(st) || matches!(st.kind, S::Let(LetTarget::Local(_), Some(_))))
+            .count();
+        // The head ends after the first run of guards: the cheap way out.
+        let guards = match f.body.stmts[..lead].iter().position(Self::is_guard) {
+            Some(i) => i + f.body.stmts[i..lead].iter().take_while(|st| Self::is_guard(st)).count(),
+            None => 0,
+        };
+        let rest = &f.body.stmts[guards..];
+        if guards > 0 && Self::weight(rest) > 4 {
+            let mut params = params.clone();
+            let mut bound: Vec<hir::LocalId> = f.params.clone();
+            for st in &f.body.stmts[..guards] {
+                if let S::Let(LetTarget::Local(id), _) = st.kind {
+                    params.push_str(&format!(
+                        ", {}: {}",
+                        self.local_name(&cx, id),
+                        self.rty(&cx.locals[id as usize].ty)?
+                    ));
+                    bound.push(id);
+                }
+            }
+            let mut head = String::new();
+            for st in &f.body.stmts[..guards] {
+                head.push_str(&self.stmt(&cx, st)?);
+            }
+            let mut body = String::new();
+            for st in rest {
+                body.push_str(&self.stmt(&cx, st)?);
+            }
+            let args: Vec<String> = bound.iter().map(|p| self.local_name(&cx, *p)).collect();
+            let outer = f.params.iter().map(|p| -> R<String> {
+                Ok(format!("{}: {}", self.local_name(&cx, *p), self.rty(&cx.locals[*p as usize].ty)?))
+            });
+            let outer: Vec<String> = std::iter::once(Ok("&mut self".to_string())).chain(outer).collect::<R<_>>()?;
+            let s = format!(
+                "    #[inline]\n    pub fn fn_{name}({}) -> Result<{ret}, Fault> {{\n{head}self.fn_{name}_rest({})\n}}\n    #[inline(never)]\n    #[allow(clippy::too_many_arguments)]\n    fn fn_{name}_rest({params}) -> Result<{ret}, Fault> {{\n{body}{tail}}}\n",
+                outer.join(", "),
+                args.join(", ")
+            );
+            self.out.push_str(&s);
+            return Ok(());
+        }
+        let body = self.block_stmts(&cx, &f.body)?;
+        let inline = if Self::weight(&f.body.stmts) <= 3 { "    #[inline]\n" } else { "" };
+        let s = format!("{inline}    pub fn fn_{name}({params}) -> Result<{ret}, Fault> {{\n{body}{tail}}}\n");
         self.out.push_str(&s);
         Ok(())
+    }
+
+    /// `if c { ...; return/raise }` with no else: a way out of the function.
+    fn is_guard(st: &Stmt) -> bool {
+        match &st.kind {
+            S::If(_, b, None) => matches!(
+                b.stmts.last().map(|s| &s.kind),
+                Some(S::Return(_) | S::Raise(..))
+            ),
+            _ => false,
+        }
+    }
+
+    /// Roughly how many statements run: nested blocks count their own.
+    fn weight(stmts: &[Stmt]) -> usize {
+        stmts
+            .iter()
+            .map(|st| match &st.kind {
+                S::If(_, b, e) => {
+                    1 + Self::weight(&b.stmts) + e.as_ref().map_or(0, |e| Self::weight(std::slice::from_ref(&**e)))
+                }
+                S::Match(_, arms) => 1 + 2 * arms.len(),
+                S::For(_, _, _, b) => 8 + Self::weight(&b.stmts),
+                _ => 1,
+            })
+            .sum()
     }
 
     fn rule_expr(k: &hir::OperandKind, rule: &hir::KindRule) -> Expr {
@@ -2135,6 +2221,17 @@ impl<'a> Gen<'a> {
             self.out,
             "    pub fn istream_next(&mut self) -> Result<u8, Fault> {{ self.fetched = self.fetched.wrapping_add(1); Ok(self.fn_{next}()? as u8) }}"
         );
+        if let Some(w) = istream.window {
+            // Byte `fetched` of the step: within the window it is the
+            // window's base plus how far the stream has come; past it the
+            // address fn runs and opens a new window.
+            let window = ident(&self.fns[&w].name);
+            let addr_ty = self.rty(&self.fns[&istream.address].ret)?;
+            let _ = writeln!(
+                self.out,
+                "    /// The istream's address through its window: translated once a window.\n    #[inline]\n    pub fn istream_address(&mut self) -> Result<{addr_ty}, Fault> {{\n        let k = self.fetched.wrapping_sub(self.win_from) as u32;\n        if self.fetched >= self.win_from && k < self.win_len {{\n            return Ok(self.win_base.wrapping_add(k as u64) as {addr_ty});\n        }}\n        let a = self.fn_{address}()?;\n        self.win_len = self.fn_{window}()?;\n        self.win_from = self.fetched;\n        self.win_base = a as u64;\n        Ok(a)\n    }}"
+            );
+        }
 
         // Operand fetchers.
         for o in &self.isa.operands {
@@ -2275,7 +2372,7 @@ impl<'a> Gen<'a> {
         );
         let boundary = match istream.boundary {
             Some(b) => format!(
-                "        // The isa's boundary fn may take an interrupt in place of the\n        // next instruction (and wakes a halted processor when it does).\n        match self.fn_{}() {{\n            Ok(true) => {{ self.halted = false; self.cycles = self.interrupt_cycles(); let mut s = self.interrupt_schedule(); s.start = self.fn_{1}().map(|a| a as u64).unwrap_or(u64::MAX); s.next = s.start; s.room = {2}; self.bus.retire(self.cycles, s); return Ok(()); }}\n            Ok(false) => {{}}\n            Err(f) => return self.finish(Err(f)),\n        }}\n",
+                "        // The isa's boundary fn may take an interrupt in place of the\n        // next instruction (and wakes a halted processor when it does).\n        match self.fn_{}() {{\n            Ok(true) => {{ self.halted = false; self.cycles = self.interrupt_cycles(); let mut s = Schedule::default(); if B::SCHEDULE {{ s = self.interrupt_schedule(); s.start = self.fn_{1}().map(|a| a as u64).unwrap_or(u64::MAX); s.next = s.start; s.room = {2}; }} self.bus.retire(self.cycles, s); return Ok(()); }}\n            Ok(false) => {{}}\n            Err(f) => return self.finish(Err(f)),\n        }}\n",
                 ident(&self.fns[&b].name),
                 ident(&self.fns[&istream.address].name),
                 match istream.limit {
@@ -2315,8 +2412,23 @@ impl<'a> Gen<'a> {
         } else {
             "        let _ = (performed, cur);\n        let k = (sched.steps as usize).min(8);\n        sched.work[k] = sched.work[k].saturating_add(self.cycles.saturating_sub(before) as u16);\n".to_string()
         };
+        // The stream's first byte is at `start`: the window opens there.
+        let seed = match istream.window {
+            Some(w) => format!(
+                "        if start != u64::MAX {{ self.win_from = 1; self.win_base = start; self.win_len = self.fn_{}().unwrap_or(0); }}\n",
+                ident(&self.fns[&w].name)
+            ),
+            None => String::new(),
+        };
+        // Without a `schedules` table an instruction's schedule is its
+        // timing entry as work: computed once.
+        let entry = if self.isa.instructions.iter().any(|i| i.schedule.is_some()) {
+            "sched = self.schedule_of(&i); self.entry_cycles = self.timing_of(&i);"
+        } else {
+            "self.entry_cycles = self.timing_of(&i); sched.work[0] = self.entry_cycles as u16;"
+        };
         s.push_str(&format!(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.entry_cycles = 0;\n        self.fetched = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let mut cur: Option<Instr> = None;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); cur = Some(i); sched = self.schedule_of(&i); self.entry_cycles = self.timing_of(&i); self.cycles = self.entry_cycles + self.prefix_cycles; {lock_check} }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.entry_cycles = 0;\n        self.fetched = 0;\n        self.win_len = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{seed}        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        let mut cur: Option<Instr> = None;\n        let r = match self.decode() {{\n            Ok(i) => {{ self.last = Some(i); cur = Some(i); {entry} self.cycles = self.entry_cycles + self.prefix_cycles; {lock_check} }}\n            Err(f) => Err(f),\n        }};\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n        if B::SCHEDULE {{\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        }} else {{\n        let _ = (before, performed, cur);\n        }}\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
         ));
         let _ = write!(
             s,

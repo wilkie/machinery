@@ -811,6 +811,7 @@ impl Parser {
                 let mut fault = None;
                 let mut boundary = None;
                 let mut limit = None;
+                let mut window = None;
                 let mut double = None;
                 let mut lock = None;
                 while !self.at_punct(Punct::RBrace) {
@@ -826,13 +827,14 @@ impl Parser {
                         "fault" => fault = Some(self.parse_path_colons()?),
                         "boundary" => boundary = Some(self.parse_path_colons()?),
                         "limit" => limit = Some(self.parse_path_colons()?),
+                        "window" => window = Some(self.parse_path_colons()?),
                         "double" => double = Some(self.parse_path_colons()?),
                         "lock" => lock = Some(self.parse_path_colons()?),
                         other => {
                             return Err(self.error(
                                 "E0106",
                                 key.span,
-                                format!("unknown `istream` item `{other}`; expected `space`, `address`, `next`, `undefined`, `fault`, `boundary`, `limit` or `double`"),
+                                format!("unknown `istream` item `{other}`; expected `space`, `address`, `next`, `undefined`, `fault`, `boundary`, `limit`, `window`, `double` or `lock`"),
                             ))
                         }
                     }
@@ -850,6 +852,7 @@ impl Parser {
                     fault,
                     boundary,
                     limit,
+                    window,
                     double,
                     lock,
                     span: start.to(self.prev_span()),

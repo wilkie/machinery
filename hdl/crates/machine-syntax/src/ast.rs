@@ -1072,6 +1072,9 @@ pub struct IstreamDecl {
     /// `limit code_room;`: a `fn () -> u32`, how many bytes the stream
     /// holds from the current address before its segment ends.
     pub limit: Option<Path>,
+    /// `window code_window;`: a `fn () -> u32`, how many bytes from the
+    /// current address follow at consecutive addresses (SPEC 11.1a).
+    pub window: Option<Path>,
     /// `double DF;`: the double-fault fault.
     pub double: Option<Path>,
     /// `lock locked;`: the latch a lock prefix sets.

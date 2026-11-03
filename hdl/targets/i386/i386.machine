@@ -1051,6 +1051,10 @@ isa I386 {
 
     fn code_address() -> u32 { return page(translate(CS, EIP, 1, Access::Execute), false, cpl() == 3); }
     fn code_room() -> u32 { return if EIP > CS.limit { 0 } else { CS.limit - EIP + 1 }; }
+    /// Bytes from EIP at consecutive addresses: the rest of the segment
+    /// while paging is off (the segment checks do not depend on the
+    /// offset), none with paging on, where every fetch walks the tables.
+    fn code_window() -> u32 { return if CR0.PG == 1 { 0 } else { code_room() }; }
 
     /// A 386 instruction is at most 15 bytes, prefixes included; a longer
     /// one is #UD on the 386EX (the vectors show vector 6).
@@ -1062,7 +1066,7 @@ isa I386 {
         return b;
     }
 
-    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; double DoubleFault; lock locked; }
+    istream { space mem; address code_address; next next_byte; undefined UD; fault deliver; boundary take_interrupt; limit code_room; window code_window; double DoubleFault; lock locked; }
 
     extern fn intr() -> bool;
     extern fn acknowledge() -> u8;

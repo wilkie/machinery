@@ -660,7 +660,7 @@ impl<'a> Gen<'a> {
         }
         let _ = write!(
             o,
-            "    #[derive(Clone, Debug, Default)]\n    pub struct Marks {{\n{marks}    }}\n"
+            "    #[derive(Clone, Debug, Default)]\n    pub struct Marks {{\n{marks}        /// No device is due before this (at most the least `due_`):\n        /// `sync` has nothing to do until then.\n        pub next_due: clock::Time,\n    }}\n"
         );
 
         // Who masters a bus: the processor, and at most one device.
@@ -767,7 +767,7 @@ impl<'a> Gen<'a> {
                 .iter()
                 .filter(|(i, _)| *i == ii)
                 .map(|(_, clock)| {
-                    format!(" {m}.due_{n}_{} = 0;", method_tick(insts[ii].comp, *clock))
+                    format!(" {m}.due_{n}_{} = 0; {m}.next_due = 0;", method_tick(insts[ii].comp, *clock))
                 })
                 .collect()
         };
@@ -1126,7 +1126,7 @@ impl<'a> Gen<'a> {
                 let (call_pre, after) = if sched {
                     (
                         "let r = ",
-                        format!("\n                {{m}}.due_{n}_{mt} = {{m}}.{n}_{mt}.saturating_add((r as clock::Time).saturating_mul(p));"),
+                        format!("\n                {{m}}.due_{n}_{mt} = {{m}}.{n}_{mt}.saturating_add((r as clock::Time).saturating_mul(p));\n                if {{m}}.due_{n}_{mt} < {{m}}.next_due {{{{ {{m}}.next_due = {{m}}.due_{n}_{mt}; }}}}"),
                     )
                 } else {
                     ("", String::new())
@@ -1400,6 +1400,9 @@ impl<'a> Gen<'a> {
             );
         }
         let mut sync = String::new();
+        // Every device's deadlines, when every device that ticks is
+        // scheduled: `sync` then waits for the least of them.
+        let mut all_dues: Option<Vec<String>> = Some(Vec::new());
         for (ii, inst) in insts.iter().enumerate() {
             let c = catch_from(ii, "b", false);
             if c.is_empty() {
@@ -1420,10 +1423,30 @@ impl<'a> Gen<'a> {
                     })
                     .collect();
                 let _ = writeln!(sync, "            if {} {{ {c}}}", dues.join(" || "));
+                if let Some(a) = all_dues.as_mut() {
+                    a.extend(mine.iter().map(|t| format!("b.marks.due_{n}_{}", method_tick(inst.comp, t.1))));
+                }
             } else {
                 let _ = writeln!(sync, "            {c}");
+                all_dues = None;
             }
         }
+        // With every deadline known, nothing is due before the least of
+        // them: `sync` returns at once until then (unless an edge waits).
+        let (sync_gate, sync_next) = match all_dues.filter(|a| !a.is_empty()) {
+            Some(a) => {
+                let mut next = format!("            let b = &mut self.{cpu_name}.bus;\n            let mut d = {};\n", a[0]);
+                for x in &a[1..] {
+                    let _ = writeln!(next, "            if {x} < d {{ d = {x}; }}");
+                }
+                next.push_str("            b.marks.next_due = d;\n");
+                (
+                    "            if b.sig.now < b.marks.next_due && b.sig.events.is_empty() { return; }\n".to_string(),
+                    next,
+                )
+            }
+            None => (String::new(), String::new()),
+        };
         let mut all = String::new();
         for ii in 0..insts.len() {
             let c = catch_from(ii, "b", false);
@@ -1441,7 +1464,7 @@ impl<'a> Gen<'a> {
                 .filter(|(i, _)| *i == ii)
                 .map(|(_, clock)| {
                     format!(
-                        " b.marks.due_{n}_{} = 0;",
+                        " b.marks.due_{n}_{} = 0; b.marks.next_due = 0;",
                         method_tick(insts[ii].comp, *clock)
                     )
                 })
@@ -1600,8 +1623,8 @@ impl<'a> Gen<'a> {
         /// only when its deadline has passed) and deliver signal edges.
         pub fn sync(&mut self) {{
             let b = &mut self.{cpu_name}.bus;
-{sync}            self.deliver();
-        }}
+{sync_gate}{sync}            self.deliver();
+{sync_next}        }}
         fn deliver(&mut self) {{
             let b = &mut self.{cpu_name}.bus;
             let mut rounds = 0;

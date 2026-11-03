@@ -1569,7 +1569,12 @@ drives), and `system::System`:
   device up regardless, for a host about to read a device's state, such
   as a framebuffer mid-frame. A tick that returns nothing runs at every
   catch-up, as before. On the i286 board this took a halted processor
-  from 34 to 120 million steps a second, with identical results.
+  from 34 to 120 million steps a second, with identical results. When
+  every device that ticks is scheduled, the system keeps the least of
+  their deadlines (lowered whenever one is set): until it passes and
+  while no edge waits, the after-instruction catch-up is one comparison.
+  On the 386 AT this made a DOS boot 15-20% faster, with identical
+  results.
 - `step()` runs one instruction, or an interrupt the isa's `boundary` fn
   took, and catches the devices up; a halted processor waits one cycle
   of its clock per step. `run(n)` runs until the processor halts and

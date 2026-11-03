@@ -902,12 +902,17 @@ and compute the same things. It is a fact about the architecture that
 the interpreter uses for speed. While `next` decodes an instruction, the
 interpreter calls `address` once and counts on through the window,
 translating again only past it. 0 means every byte is translated. On
-the 386 the window is the rest of the segment while paging is off, and
-none with paging on, where every fetch walks the page tables as `page`
-describes:
+the 386 the window is the rest of the segment, and with paging on no
+further than the end of the page. The first byte's translation leaves
+that page in the TLB, and a read that hits changes nothing:
 
 ```
-fn code_window() -> u32 { return if CR0.PG == 1 { 0 } else { code_room() }; }
+fn code_window() -> u32 {
+    let room = code_room();
+    if CR0.PG == 0 { return room; }
+    let page_room = 0x1000 - ((CS.base + EIP) & 0xFFF);
+    return if page_room < room { page_room } else { room };
+}
 ```
 
 The window must be exact: inside it, `address` would return the

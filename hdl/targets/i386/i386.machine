@@ -39,6 +39,11 @@ bundle Segment { selector: u16, base: u32, limit: u32, rights: u8, big: bool, st
 /// A descriptor-table register (GDTR, IDTR).
 bundle TableReg { base: u32, limit: u16 }
 
+/// A TLB entry: the page (linear bits 31:15 as the tag; bits 14:12 chose
+/// the set), its frame, the directory's and table's user and writable
+/// bits combined, and the table entry's dirty bit.
+bundle TlbEntry { valid: bool, tag: u32, frame: u32, user: u1, write: u1, dirty: u1 }
+
 /// A descriptor as read from a table: base, limit (the granularity
 /// applied), the access byte and the D/B bit; `w0` and `w3` are its first
 /// and last words, from which a gate's offset is made (its selector is
@@ -109,6 +114,10 @@ isa I386 {
     /// the cached descriptor, as for the segment registers.
     register LDTR: Segment;
     register TR: Segment;
+    /// The translation lookaside buffer: 32 entries, four ways of eight
+    /// sets (`TLB[set * 4 + way]`), and each set's next way to fill.
+    register TLB: [TlbEntry; 32];
+    register TLB_NEXT: [u8; 8];
 
     /// Why memory is touched.
     enum Access : u2 { Read, Write, Execute }
@@ -241,11 +250,36 @@ isa I386 {
     // R/W in both to write; the 386 lets the supervisor write any present
     // page. A missing entry or a refused access is #PF, with CR2 the
     // linear address. The walk sets the accessed bits, and a write the
-    // table entry's dirty bit. There is no TLB: every access walks the
-    // tables, so software that relies on a stale translation differs.
+    // table entry's dirty bit.
+    //
+    // Translations are cached in the TLB (32 entries, four-way
+    // set-associative; the set is linear bits 14:12). A hit checks the
+    // cached bits and reads no tables; a write to a page cached clean
+    // walks again to set its dirty bit. A fault caches nothing. Loading
+    // CR3 (a MOV or a task switch) flushes it all, and nothing else does,
+    // so a changed table entry takes effect only then, as on the 386.
+    // Which way a fill replaces is not documented: here each set fills its
+    // ways in turn.
 
     fn page(lin: u32, write: bool, user: bool) -> u32 {
         if CR0.PG == 0 { return lin; }
+        let set = (lin >> 12) & 7;
+        let tag = lin >> 15;
+        for w in 0..4 {
+            let e = TLB[set * 4 + (w as u32)];
+            if e.valid && e.tag == tag {
+                if user && (e.user == 0 || (write && e.write == 0)) {
+                    CR2 = lin;
+                    raise PageFault((if write { 2_u16 } else { 0_u16 }) | 4 | 1);
+                }
+                if !write || e.dirty == 1 { return (e.frame << 12) | (lin & 0xFFF); }
+            }
+        }
+        return walk(lin, write, user);
+    }
+
+    /// The tables' translation of `lin`, cached.
+    fn walk(lin: u32, write: bool, user: bool) -> u32 {
         let code: u16 = (if write { 2_u16 } else { 0_u16 }) | (if user { 4_u16 } else { 0_u16 });
         let da = (CR3 & 0xFFFFF000) + ((lin >> 22) << 2);
         let pde = mem.read_u32(da);
@@ -258,7 +292,24 @@ isa I386 {
         if pde[5] == 0 { mem.write_u32(da, pde | 0x20); }
         let want = pte | 0x20 | (if write { 0x40_u32 } else { 0_u32 });
         if want != pte { mem.write_u32(ta, want); }
+        // Into the way that holds the page already, else the set's next.
+        let set = (lin >> 12) & 7;
+        let tag = lin >> 15;
+        let mut way = TLB_NEXT[set] as u32;
+        let mut found = false;
+        for w in 0..4 {
+            let e = TLB[set * 4 + (w as u32)];
+            if !found && e.valid && e.tag == tag { way = w as u32; found = true; }
+        }
+        if !found { TLB_NEXT[set] = ((way + 1) & 3) as u8; }
+        TLB[set * 4 + way] = TlbEntry { valid: true, tag: tag, frame: pte >> 12, user: both[2], write: both[1], dirty: want[6] };
         return (pte & 0xFFFFF000) | (lin & 0xFFF);
+    }
+
+    /// Loading CR3 empties the TLB.
+    fn load_cr3(v: u32) {
+        CR3 = v;
+        for i in 0..32 { TLB[i as u32].valid = false; }
     }
 
     /// Whether an access of `n` bytes at `lin` stays within one page.
@@ -939,7 +990,7 @@ isa I386 {
             gs = sys_read<16>(nb + 0x5C);
             ldt = sys_read<16>(nb + 0x60);
             EFLAGS = (EFLAGS & 0xFFFC8000) | (nfl & 0x00037FD5) | 0x0002;
-            if CR0.PG == 1 { CR3 = cr3; }
+            if CR0.PG == 1 { load_cr3(cr3); }
         } else {
             EIP = sys_read<16>(nb + 14) as u32;
             let nfl = sys_read<16>(nb + 16);
@@ -1052,9 +1103,15 @@ isa I386 {
     fn code_address() -> u32 { return page(translate(CS, EIP, 1, Access::Execute), false, cpl() == 3); }
     fn code_room() -> u32 { return if EIP > CS.limit { 0 } else { CS.limit - EIP + 1 }; }
     /// Bytes from EIP at consecutive addresses: the rest of the segment
-    /// while paging is off (the segment checks do not depend on the
-    /// offset), none with paging on, where every fetch walks the tables.
-    fn code_window() -> u32 { return if CR0.PG == 1 { 0 } else { code_room() }; }
+    /// (the segment checks do not depend on the offset), and with paging
+    /// on only the rest of the page, which the first byte's fetch left in
+    /// the TLB (a read that hits changes nothing).
+    fn code_window() -> u32 {
+        let room = code_room();
+        if CR0.PG == 0 { return room; }
+        let page_room = 0x1000 - ((CS.base + EIP) & 0xFFF);
+        return if page_room < room { page_room } else { room };
+    }
 
     /// A 386 instruction is at most 15 bytes, prefixes included; a longer
     /// one is #UD on the 386EX (the vectors show vector 6).
@@ -2994,7 +3051,7 @@ isa I386 {
                     CR0 = v & 0x8000001F;
                 }
                 2 => { CR2 = v; }
-                _ => { CR3 = v & 0xFFFFF000; }
+                _ => { load_cr3(v & 0xFFFFF000); }
             }
         }
     }

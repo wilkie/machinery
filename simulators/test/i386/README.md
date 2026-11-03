@@ -24,6 +24,9 @@ Assemble with `./assemble-tests.sh` (nasm); the binaries are not checked in.
   and a switch to a 286 TSS.
 - `paging.asm` - page tables, accessed and dirty bits, #PF error codes and
   CR2, accesses across pages, user and supervisor protection.
+- `tlb.asm` - the TLB: a stale translation until CR3 is reloaded, the
+  dirty bit set on a write to a page cached by a read, and nothing
+  cached for a page that faulted.
 - `faults.asm` - the page-fault and contributory double-fault classes.
 - `v86.asm` - virtual-8086 mode: entry, INT to protected mode, the I/O
   permission bitmap, IOPL-sensitive instructions.

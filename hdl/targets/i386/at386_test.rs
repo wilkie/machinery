@@ -244,3 +244,39 @@ fn a20_gate_wraps_memory_at_1_mb() {
     assert_eq!(&r[0x500..0x503], &[0x22, 0x11, 0x22], "open, closed (wraps to 0:0000), open");
     assert_eq!((r[0x100000], r[0x010], r[0x100010]), (0x22, 0x33, 0), "the closed write wrapped to 0:0010");
 }
+
+/// Runs until `stop` (or `steps` instructions) and reports the stretch:
+/// emulated time against wall time, and instructions.
+fn timed(sys: &mut System, what: &str, steps: u64, stop: impl FnMut(&mut System) -> bool) {
+    let t0 = sys.seconds();
+    let wall = std::time::Instant::now();
+    let n = sys.run_until(steps, stop).unwrap();
+    let w = wall.elapsed().as_secs_f64();
+    sys.catch_up_all();
+    let t = sys.seconds() - t0;
+    eprintln!("{what:>12}: {t:6.2} s emulated in {w:6.2} s ({:5.1}x real time); {n:>11} instructions, {:5.1} M/s", t / w, n as f64 / w / 1e6);
+}
+
+/// Has the screen got `text`? Looks every 10,000 instructions.
+fn shows(text: &'static str) -> impl FnMut(&mut System) -> bool {
+    let mut n = 0u32;
+    move |s| {
+        n += 1;
+        n.is_multiple_of(10_000) && screen(s).iter().any(|l| l.contains(text))
+    }
+}
+
+/// How fast a DOS boot runs (AMI's BIOS on the 25 MHz 386 AT with the VGA): POST up to the
+/// boot sector, MS-DOS 3.30 loading from drive A up to its date prompt,
+/// and two seconds idle at the prompt (DOS polling the keyboard). Run with
+/// `cargo test --release -- --ignored --nocapture bench_dos_boot`.
+#[test]
+#[ignore]
+fn bench_dos_boot() {
+    let (Some(mut sys), Some(d)) = (at(0), read("msdos330/DISK01.IMG")) else { return skip() };
+    insert(&mut sys, &d);
+    timed(&mut sys, "POST", 400_000_000, |s| s.cpu.r.CS.base + s.cpu.r.EIP == 0x7C00);
+    timed(&mut sys, "DOS loading", 400_000_000, shows("Enter new date"));
+    let t = sys.seconds() + 2.0;
+    timed(&mut sys, "idle", 400_000_000, |s| s.seconds() >= t);
+}

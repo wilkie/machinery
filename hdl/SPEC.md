@@ -908,8 +908,8 @@ that page in the TLB, and a read that hits changes nothing:
 
 ```
 fn code_window() -> u32 {
+    if CR0.PG == 0 { return code_room(); }
     let room = code_room();
-    if CR0.PG == 0 { return room; }
     let page_room = 0x1000 - ((CS.base + EIP) & 0xFFF);
     return if page_room < room { page_room } else { room };
 }

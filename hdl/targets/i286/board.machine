@@ -115,6 +115,10 @@ component Cpu286 {
         in intr_line: bool;
         /// RESET (on the AT, from the keyboard controller; unwired, low).
         in reset_pin: bool;
+        /// The A20 gate: low, address line 20 is held low and memory wraps
+        /// at 1 MB as on an 8086 (on the AT, the keyboard controller's
+        /// output port drives it; boards without a gate tie it high).
+        in a20_gate: bool;
     }
     model {
         /// The code word last fetched, and whether it is still good.
@@ -198,8 +202,17 @@ component Cpu286 {
             code_valid = false;
         }
 
+        /// A memory address through the A20 gate.
+        fn gate(a: u24) -> u24 { return if a20_gate { a } else { a & 0xEFFFFF }; }
+        fn mem_rd(a: u24, size: BusSize) -> u16 {
+            return local.read(space: Space::Mem, addr: gate(a), size: size).data;
+        }
+        fn mem_wr(a: u24, size: BusSize, data: u16) {
+            local.write(space: Space::Mem, addr: gate(a), size: size, data: data);
+        }
+
         on mem.fetch_u8(addr: u24) -> u8 {
-            let w = addr & 0xFFFFFE;
+            let w = gate(addr) & 0xFFFFFE;
             if !code_valid || w != code_addr {
                 code = local.read(space: Space::Mem, addr: w, size: BusSize::Word).data;
                 code_addr = w;
@@ -210,7 +223,7 @@ component Cpu286 {
 
         /// A store into the buffered word makes it stale.
         fn wrote(addr: u24) {
-            if (addr & 0xFFFFFE) == code_addr || ((addr + 1) & 0xFFFFFE) == code_addr {
+            if (gate(addr) & 0xFFFFFE) == code_addr || (gate(addr + 1) & 0xFFFFFE) == code_addr {
                 code_valid = false;
             }
         }
@@ -227,33 +240,33 @@ component Cpu286 {
 
         on mem.read_u8(addr: u24) -> u8 {
             note(1, 1);
-            return local.read(space: Space::Mem, addr: addr, size: BusSize::Byte).data as u8;
+            return mem_rd(addr, BusSize::Byte) as u8;
         }
         /// An aligned word is one transfer; an odd address takes two.
         on mem.read_u16(addr: u24) -> u16 {
             if addr[0] == 0 {
                 note(1, 1);
-                return local.read(space: Space::Mem, addr: addr, size: BusSize::Word).data;
+                return mem_rd(addr, BusSize::Word);
             }
             note(1, 2);
-            let lo = local.read(space: Space::Mem, addr: addr, size: BusSize::Byte).data as u8;
-            let hi = local.read(space: Space::Mem, addr: addr + 1, size: BusSize::Byte).data as u8;
+            let lo = mem_rd(addr, BusSize::Byte) as u8;
+            let hi = mem_rd(addr + 1, BusSize::Byte) as u8;
             return concat(hi, lo);
         }
         on mem.write_u8(addr: u24, data: u8) {
             wrote(addr);
             note(2, 1);
-            local.write(space: Space::Mem, addr: addr, size: BusSize::Byte, data: data as u16);
+            mem_wr(addr, BusSize::Byte, data as u16);
         }
         on mem.write_u16(addr: u24, data: u16) {
             wrote(addr);
             if addr[0] == 0 {
                 note(2, 1);
-                local.write(space: Space::Mem, addr: addr, size: BusSize::Word, data: data);
+                mem_wr(addr, BusSize::Word, data);
             } else {
                 note(2, 2);
-                local.write(space: Space::Mem, addr: addr, size: BusSize::Byte, data: data & 0xFF);
-                local.write(space: Space::Mem, addr: addr + 1, size: BusSize::Byte, data: data >> 8);
+                mem_wr(addr, BusSize::Byte, data & 0xFF);
+                mem_wr(addr + 1, BusSize::Byte, data >> 8);
             }
         }
         on io.read_u8(addr: u16) -> u8 {
@@ -879,6 +892,8 @@ system Board286 {
     /// The CGA's font jumper left off: the thick font.
     wire cga.thin_font = false;
     wire cpu.intr_line = pic1.int;
+    /// No A20 gate on this board: address line 20 always passes.
+    wire cpu.a20_gate = true;
 
     profile fast { default: model; }
 }
@@ -962,6 +977,8 @@ system At286 {
     /// on the board.
     wire kbc.switches = 0xAF;
     wire cpu.intr_line = pic1.int;
+    /// The A20 gate, from the keyboard controller.
+    wire cpu.a20_gate = kbc.a20;
     wire cpu.reset_pin = kbc.cpu_reset;
 
     profile fast { default: model; }

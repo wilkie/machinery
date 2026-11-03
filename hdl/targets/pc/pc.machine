@@ -1666,7 +1666,9 @@ component Mc146818 {
 /// command, 4 the keylock is off. The command byte: bit 0 IRQ 1 on a full
 /// output buffer, 2 the system flag, 4 the keyboard disabled, 6 scan code
 /// translation. The output port: bit 0 the processor runs (0 holds it in
-/// reset), 1 the A20 gate. The input port is the board's switches
+/// reset), 1 the A20 gate. Its pins come up high (FFh): A20 enabled, as
+/// the processors' reset addresses (FFFFF0h, FFFFFFF0h) need; the BIOS
+/// closes it before booting. The input port is the board's switches
 /// (`switches`: bit 7 keylock off, 6 the display switch, 0 colour, 5 the
 /// manufacturing jumper off, 4 512 KB on the board).
 ///
@@ -1676,7 +1678,9 @@ component Mc146818 {
 /// serial line about a millisecond apart, so a byte read lets IRQ 1 fall
 /// before the next arrives. Keys pressed by the host (`key`) arrive as
 /// set-1 scan codes, as the 8042 delivers them translated. The
-/// controller's own answers (its self-test's 55h) are at once.
+/// controller's own answers take its firmware a moment (about 25 us, its
+/// self-test about a millisecond): a BIOS empties the output buffer after
+/// sending a command and then waits for the answer.
 component Kbc8042 {
     ports {
         bus port: IsaBus::Slave;
@@ -1691,7 +1695,7 @@ component Kbc8042 {
     model {
         state status: u8 = 0x10;
         state command: u8 = 0;
-        state outp: u8 = 0xCD;
+        state outp: u8 = 0xFF;
         state obuf: u8 = 0;
         /// Bytes from the keyboard on their way, and clocks until the
         /// first is in.
@@ -1705,15 +1709,20 @@ component Kbc8042 {
         state kbd_pending: u8 = 0;
         /// Clocks left of a reset pulse (FEh).
         state pulse: u32 = 0;
+        /// The controller's answer on its way, and clocks until it is in.
+        state answer: u8 = 0;
+        state answering: bool = false;
+        state adelay: u32 = 0;
 
         on reset {
             status = 0x10;
             command = 0;
-            outp = 0xCD;
+            outp = 0xFF;
             qlen = 0;
             pending = 0;
+            answering = false;
             kbd_pending = 0;
-            a20 = false;
+            a20 = true;
             cpu_reset = false;
             pulse = 0;
         }
@@ -1721,6 +1730,15 @@ component Kbc8042 {
         /// A pulse on the reset line lasts about 6 us; a keyboard byte
         /// takes about a millisecond (1000 clocks) to come in.
         on tick(n: u32) -> u32 {
+            if answering {
+                adelay = if n >= adelay { 0 } else { adelay - n };
+                if adelay == 0 {
+                    answering = false;
+                    obuf = answer;
+                    status = status | 1;
+                    irq_level();
+                }
+            }
             if pulse > 0 {
                 pulse = if n >= pulse { 0 } else { pulse - n };
                 if pulse == 0 { cpu_reset = outp[0] == 0; }
@@ -1737,7 +1755,8 @@ component Kbc8042 {
                 }
             }
             let mut due: u32 = 0xFFFFFFFF;
-            if pulse > 0 { due = pulse; }
+            if answering { due = adelay; }
+            if pulse > 0 && pulse < due { due = pulse; }
             if qlen > 0 && status[0] == 0 && kdelay < due { due = kdelay; }
             return due;
         }
@@ -1746,12 +1765,14 @@ component Kbc8042 {
             emit irq.request(1) = status[0] == 1 && command[0] == 1;
         }
 
-        /// The controller's own answer, into the output buffer.
-        fn put(b: u8) {
-            obuf = b;
-            status = status | 1;
-            irq_level();
+        /// The controller's own answer, into the output buffer after
+        /// `clocks`.
+        fn reply(b: u8, clocks: u32) {
+            answer = b;
+            answering = true;
+            adelay = clocks;
         }
+        fn put(b: u8) { reply(b, 30); }
 
         /// A byte from the keyboard, on its way.
         fn send(b: u8) {
@@ -1831,8 +1852,13 @@ component Kbc8042 {
             } else if d == 0x60 || d == 0xD1 {
                 pending = d;
             } else if d == 0xAA {
+                // The self-test reinitialises the controller, its output
+                // port with it (A20 open). The 5170's POST relies on it: a
+                // warm restart sends only AAh before testing the memory
+                // above 1 MB, with A20 left closed by the last POST.
                 status = status | 4;
-                put(0x55);
+                set_output(0xFF);
+                reply(0x55, 1193);
             } else if d == 0xAB {
                 put(0x00);
             } else if d == 0xAD {

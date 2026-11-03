@@ -44,6 +44,8 @@ system Rig286 {
         master cpu.local;
         slave space.port;
     }
+    /// No A20 gate: the vectors address all 16 MB.
+    wire cpu.a20_gate = true;
 
     profile fast { default: model; }
 }

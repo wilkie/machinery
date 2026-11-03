@@ -1523,7 +1523,9 @@ system PcAt386 {
   declared waits once per bus-width unit it touches, and code once per
   unit fetched, as a one-unit buffer would. Time is approximate: a
   processor model's own buffering and its view of writes into it are
-  bypassed. Processor models that time instructions themselves (`on
+  bypassed, and so is anything they do to the address (the AT's A20
+  gate: an emulator addresses memory above 1 MB with the gate closed).
+  Processor models that time instructions themselves (`on
   retire`) can't be built this way. `memory: bus;` is the default.
 - `wire inst.in_port = other.out_port;` connects an output to an input of
   the same type; `wire inst.in_port = <constant>;` straps a pin (`wire

@@ -661,13 +661,23 @@ impl<'a> Gen<'a> {
                 let c = cx
                     .comp
                     .ok_or_else(|| GenError::new("bus call outside a component"))?;
+                // Arguments first, in temporaries: one may call into the
+                // component, which borrows the context too.
                 let a: R<Vec<String>> = args.iter().map(|x| self.expr(cx, x)).collect();
-                format!(
-                    "ctx.{}_{}({})",
+                let mut s = String::from("{ ");
+                let mut names = Vec::new();
+                for (k, arg) in a?.iter().enumerate() {
+                    let _ = write!(s, "let b{k} = {arg}; ");
+                    names.push(format!("b{k}"));
+                }
+                let _ = write!(
+                    s,
+                    "ctx.{}_{}({}) }}",
                     ident(&c.ports[*port as usize].name),
                     ident(&self.prog.item_name(*t)),
-                    a?.join(", ")
-                )
+                    names.join(", ")
+                );
+                s
             }
             H::PortClocks(port, n) => {
                 let c = cx

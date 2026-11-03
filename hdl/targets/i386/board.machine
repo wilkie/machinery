@@ -77,6 +77,10 @@ component Cpu386 {
         in intr_line: bool;
         /// RESET (on an AT, from the keyboard controller; unwired, low).
         in reset_pin: bool;
+        /// The A20 gate: low, address line 20 is held low and memory wraps
+        /// at 1 MB (on an AT, the keyboard controller's output port drives
+        /// it; boards without a gate tie it high).
+        in a20_gate: bool;
     }
     model {
         /// The code dword last fetched, and whether it is still good.
@@ -90,8 +94,11 @@ component Cpu386 {
         on reset { code_valid = false; }
         on acknowledge() -> u8 { return local.inta().vector; }
 
+        /// A memory address through the A20 gate.
+        fn gate(a: u32) -> u32 { return if a20_gate { a } else { a & 0xFFEFFFFF }; }
+
         on mem.fetch_u8(addr: u32) -> u8 {
-            let d = addr & 0xFFFFFFFC;
+            let d = gate(addr) & 0xFFFFFFFC;
             if !code_valid || d != code_addr {
                 code = local.read(space: Space::Mem, addr: d, be: 0xF).data;
                 code_addr = d;
@@ -102,18 +109,20 @@ component Cpu386 {
 
         /// A store into the buffered dword makes it stale.
         fn wrote(addr: u32, n: u3) {
-            if (addr & 0xFFFFFFFC) == code_addr || ((addr + (n as u32) - 1) & 0xFFFFFFFC) == code_addr {
+            if (gate(addr) & 0xFFFFFFFC) == code_addr || (gate(addr + (n as u32) - 1) & 0xFFFFFFFC) == code_addr {
                 code_valid = false;
             }
         }
 
         /// `n` bytes at `addr` that lie within one dword.
         fn read_in(space: Space, addr: u32, n: u3) -> u32 {
-            let v = local.read(space: space, addr: addr & 0xFFFFFFFC, be: Lanes(addr, n)).data;
+            let a = if space == Space::Mem { gate(addr) } else { addr };
+            let v = local.read(space: space, addr: a & 0xFFFFFFFC, be: Lanes(addr, n)).data;
             return v >> ((addr & 3) * 8);
         }
         fn write_in(space: Space, addr: u32, n: u3, data: u32) {
-            local.write(space: space, addr: addr & 0xFFFFFFFC, be: Lanes(addr, n), data: data << ((addr & 3) * 8));
+            let a = if space == Space::Mem { gate(addr) } else { addr };
+            local.write(space: space, addr: a & 0xFFFFFFFC, be: Lanes(addr, n), data: data << ((addr & 3) * 8));
         }
 
         /// `n` bytes at `addr`, as one transfer or, across a dword
@@ -346,6 +355,8 @@ system Board386 {
     wire pic2.sp = false;
     wire pic2.cas_in = pic1.cas_out;
     wire cpu.intr_line = pic1.int;
+    /// No A20 gate on this board: address line 20 always passes.
+    wire cpu.a20_gate = true;
     /// The EGA's configuration switches (1001 as the BIOS reads them): an
     /// Enhanced Color Display, primary, with a monochrome display beside it
     /// (whose mode sets the EGA BIOS hands to the system BIOS's video
@@ -420,6 +431,8 @@ system Board386Vga {
     wire pic2.sp = false;
     wire pic2.cas_in = pic1.cas_out;
     wire cpu.intr_line = pic1.int;
+    /// No A20 gate on this board: address line 20 always passes.
+    wire cpu.a20_gate = true;
 
     profile fast { default: model; }
     /// An emulator: the processor reaches RAM and ROM directly (time
@@ -508,8 +521,11 @@ system At386Vga {
     /// on the board.
     wire kbc.switches = 0xAF;
     wire cpu.intr_line = pic1.int;
+    /// The A20 gate, from the keyboard controller.
+    wire cpu.a20_gate = kbc.a20;
     wire cpu.reset_pin = kbc.cpu_reset;
 
     profile fast { default: model; }
+    /// Direct memory bypasses the A20 gate: memory never wraps at 1 MB.
     profile emulate { default: model; memory: direct; }
 }

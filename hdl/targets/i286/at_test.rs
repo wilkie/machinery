@@ -238,17 +238,23 @@ fn rtc_keeps_time() {
 #[derive(Default)]
 struct Probe {
     reset: bool,
+    a20: Option<bool>,
 }
 impl machine_at286::Kbc8042Ports for Probe {
     fn write_cpu_reset(&mut self, value: bool) {
         self.reset = value;
     }
+    fn write_a20(&mut self, value: bool) {
+        self.a20 = Some(value);
+    }
 }
 
-/// The 8042: its self-test answers 55h at once and sets the system flag;
+/// The 8042: its self-test answers 55h after about a millisecond and sets
+/// the system flag;
 /// the keyboard acknowledges a reset and passes its own self-test (AAh), a
 /// byte about a millisecond apart, the output buffer emptying between
-/// them; the command byte reads back; FEh pulses the processor's reset.
+/// them; the command byte reads back; FEh pulses the processor's reset;
+/// D1h writes the output port (A20), and a self-test opens A20 again.
 #[test]
 fn kbc_and_keyboard() {
     let mut k = Kbc8042::new();
@@ -257,11 +263,14 @@ fn kbc_and_keyboard() {
     let data = |k: &mut Kbc8042| k.on_port_read(&mut Quiet, 1, 0x60, 0).unwrap().0 as u8;
     assert_eq!(status(&mut k) & 0x05, 0, "cold: no system flag");
     k.on_port_write(&mut Quiet, 1, 0x64, 0, 0xAA);
+    assert_eq!(status(&mut k) & 0x05, 0x04, "the self-test takes a while");
+    k.on_tick(&mut Quiet, 1193);
     assert_eq!(status(&mut k) & 0x05, 0x05);
     assert_eq!(data(&mut k), 0x55);
     k.on_port_write(&mut Quiet, 1, 0x64, 0, 0x60);
     k.on_port_write(&mut Quiet, 1, 0x60, 0, 0x45);
     k.on_port_write(&mut Quiet, 1, 0x64, 0, 0x20);
+    k.on_tick(&mut Quiet, 30);
     assert_eq!(data(&mut k), 0x45);
     k.on_port_write(&mut Quiet, 1, 0x60, 0, 0xFF);
     assert_eq!(status(&mut k) & 1, 0, "not yet");
@@ -276,6 +285,12 @@ fn kbc_and_keyboard() {
     assert!(probe.reset);
     k.on_tick(&mut probe, 7);
     assert!(!probe.reset, "a pulse");
+    k.on_port_write(&mut probe, 1, 0x64, 0, 0xD1);
+    k.on_port_write(&mut probe, 1, 0x60, 0, 0xDD);
+    assert_eq!(probe.a20, Some(false), "A20 closed");
+    assert!(!probe.reset);
+    k.on_port_write(&mut probe, 1, 0x64, 0, 0xAA);
+    assert_eq!(probe.a20, Some(true), "the self-test opens it");
 }
 
 /// An 8259 request needs its line held until it is acknowledged: one

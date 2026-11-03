@@ -214,3 +214,33 @@ fn ms_dos_installs_on_the_386s_fixed_disk() {
     answer(&mut sys, "C>", &[0x2F, 0x12, 0x13, ENTER], 20_000_000);
     until_screen(&mut sys, "MS-DOS Version 3.30", 20_000_000);
 }
+
+/// `A20.asm` from reset: memory at FFFF:0010 with the A20 gate open (it
+/// comes up open, as the 8042's output port pins come up high), closed
+/// through the 8042 (D1h, DDh), and open again (D1h, DFh); the readings at
+/// 0:0500-0502.
+const A20: &[u8] = &[
+    0x31, 0xc0, 0x8e, 0xc0, 0x26, 0xc6, 0x06, 0x00, 0x00, 0x11, 0xb8, 0xff, 0xff, 0x8e, 0xd8, 0xc6,
+    0x06, 0x10, 0x00, 0x22, 0xa0, 0x10, 0x00, 0x26, 0xa2, 0x00, 0x05, 0xb0, 0xd1, 0xe6, 0x64, 0xb0,
+    0xdd, 0xe6, 0x60, 0xa0, 0x10, 0x00, 0x26, 0xa2, 0x01, 0x05, 0xc6, 0x06, 0x20, 0x00, 0x33, 0xb0,
+    0xd1, 0xe6, 0x64, 0xb0, 0xdf, 0xe6, 0x60, 0xa0, 0x10, 0x00, 0x26, 0xa2, 0x02, 0x05, 0xf4,
+];
+
+/// The A20 gate: with it open FFFF:0010 is the first byte above 1 MB; the
+/// 8042 closes it and the address wraps to 0, as on an 8086 (a write there
+/// lands in low memory); opened again, the memory above 1 MB is back. No
+/// ROM images needed: the program is the boot ROM.
+#[test]
+fn a20_gate_wraps_memory_at_1_mb() {
+    let mut sys = System::new();
+    let mut rom = vec![0xF4u8; 0x10000];
+    rom[..A20.len()].copy_from_slice(A20);
+    rom[0xFFF0..0xFFF5].copy_from_slice(&[0xEA, 0x00, 0x00, 0x00, 0xF0]); // jmp far F000:0000
+    sys.board().rom.cells = rom;
+    sys.reset();
+    sys.run(10_000).unwrap();
+    assert!(sys.cpu.halted);
+    let r = &sys.board().ram.cells;
+    assert_eq!(&r[0x500..0x503], &[0x22, 0x11, 0x22], "open, closed (wraps to 0:0000), open");
+    assert_eq!((r[0x100000], r[0x010], r[0x100010]), (0x22, 0x33, 0), "the closed write wrapped to 0:0010");
+}

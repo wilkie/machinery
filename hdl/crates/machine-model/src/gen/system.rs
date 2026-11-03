@@ -170,6 +170,14 @@ impl<'a> Gen<'a> {
             "/// What a `{name}` model reaches through its ports. Every method has a\n/// default (nothing attached: open bus, low levels, emits go nowhere), so a\n/// hand-written context overrides only what it observes.\npub trait {name}Ports {{\n"
         );
         for p in &comp.ports {
+            if let PortKind::Bus { .. } = p.kind {
+                let _ = writeln!(
+                    t,
+                    "    /// `{0}.clocks(n)`: `n` of this component's clock periods in\n    /// clocks of the bus on `{0}`, rounded up (unattached: `n`).\n    fn clocks_{1}(&mut self, n: u32) -> u32 {{ n }}",
+                    p.name,
+                    ident(&p.name)
+                );
+            }
             let wire = match &p.kind {
                 PortKind::In(ty) | PortKind::AsyncIn(ty) => Some((ty, false)),
                 PortKind::Out(ty) => Some((ty, true)),
@@ -1045,6 +1053,22 @@ impl<'a> Gen<'a> {
                 }
             }
             m.push_str(&signal_methods(self, ii)?);
+            // `port.clocks(n)`: this instance's clock periods in the bus's.
+            if let Some((_, ic)) = i.sys.clocks.first() {
+                for (pi, p) in i.comp.ports.iter().enumerate() {
+                    if !matches!(p.kind, PortKind::Bus { .. }) {
+                        continue;
+                    }
+                    if let Some(b) = attached(ii, pi) {
+                        let _ = writeln!(
+                            m,
+                            "        fn clocks_{}(&mut self, n: u32) -> u32 {{ (n as clock::Time * clock::C{ic}).div_ceil(clock::C{}) as u32 }}",
+                            ident(&p.name),
+                            sys.buses[b].clock
+                        );
+                    }
+                }
+            }
             for (pi, p) in i.comp.ports.iter().enumerate() {
                 let pn = ident(&p.name);
                 match &p.kind {

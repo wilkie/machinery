@@ -668,6 +668,12 @@ impl<'a> Gen<'a> {
                     a?.join(", ")
                 )
             }
+            H::PortClocks(port, n) => {
+                let c = cx
+                    .comp
+                    .ok_or_else(|| GenError::new("port outside a component"))?;
+                format!("ctx.clocks_{}(({}) as u32)", ident(&c.ports[*port as usize].name), self.expr(cx, n)?)
+            }
             H::ModelFnCall(i, args) => {
                 let c = cx
                     .comp

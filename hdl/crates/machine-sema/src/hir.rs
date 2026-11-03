@@ -116,6 +116,9 @@ pub enum ExprKind {
     /// Call of a model fn of the enclosing component, by index into
     /// [`ModelBody::fns`].
     ModelFnCall(u32, Vec<Expr>),
+    /// `port.clocks(n)`: `n` periods of the component's clock, in clocks of
+    /// the bus on `port`, rounded up (a `u32`).
+    PortClocks(u32, Box<Expr>),
     Error,
 }
 
@@ -1138,6 +1141,7 @@ pub fn visit_expr(x: &Expr, on_stmt: &mut dyn FnMut(&Stmt), on_expr: &mut dyn Fn
         | ExprKind::OperandTail(a)
         | ExprKind::TailOperand(a, _)
         | ExprKind::SpaceRead(_, _, a)
+        | ExprKind::PortClocks(_, a)
         | ExprKind::SpaceCell(_, a) => visit_expr(a, on_stmt, on_expr),
         ExprKind::Binary(_, a, b) | ExprKind::Index(a, b) | ExprKind::SpaceWrite(_, _, a, b) => {
             visit_expr(a, on_stmt, on_expr);

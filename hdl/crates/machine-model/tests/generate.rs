@@ -494,7 +494,7 @@ fn i286_board_system_boots() {
         output.status.success(),
         "board tests failed:\n{stdout}\n{stderr}"
     );
-    assert!(stdout.contains("19 passed"), "expected 19 tests:\n{stdout}");
+    assert!(stdout.contains("22 passed"), "expected 22 tests:\n{stdout}");
 }
 
 /// The 386 board: the i386 on a 32-bit local bus with RAM and a ROM, and

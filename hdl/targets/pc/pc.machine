@@ -587,8 +587,49 @@ component Cga {
         state color: u8 = 0;
         /// The beam, in dots from the top left of the frame.
         state pos: u32 = 0;
+        /// Snow, per character cell of the frame (line * 80 + column): the
+        /// frame it fell in (plus one; 0 none) and the character and
+        /// attribute the cell showed.
+        mem snow_tag: [u16; 20480];
+        mem snow_ch: [u8; 20480];
+        mem snow_at: [u8; 20480];
 
         on reset { t = Mc6845Timing(crtc); }
+
+        /// A memory cycle of the CPU's, at the beam's `pos`; its wait
+        /// states, in clocks of the bus.
+        ///
+        /// The CGA's RAM is single-ported, and the card gives the CPU a
+        /// slot in its own timing: one character clock (8 dots), then the
+        /// next 16-dot boundary after it. The CPU then goes on at its next
+        /// clock. On a 4.77 MHz PC that is 3 to 8 CPU cycles, 5.8 on
+        /// average, in every mode and at any point in the frame
+        /// (reenigne.org, "The CGA wait states"). On the AT the bus
+        /// controller's own default wait states follow here rather than
+        /// overlapping, as IOCHRDY's would.
+        ///
+        /// In 80-column text, where the display uses every memory cycle,
+        /// the CPU's slot takes the fetch of the character in the next
+        /// character clock: that cell shows the byte that was in memory
+        /// as its character, and the byte on the bus (written or read) as
+        /// its attribute. That is CGA snow, after MartyPC's model; outside
+        /// the display area nothing shows.
+        fn mem_cycle(a: u32, write: bool, data: u8) -> u8 {
+            let slot = ((pos + 8) / 16 + 1) * 16;
+            let ld = line_dots();
+            if mode[0] == 1 && mode[1] == 0 && mode[3] == 1 && ld != 0 {
+                let at = slot + 8;
+                let line = at / ld;
+                let col = (at % ld) / 8;
+                if line < t.shown_lines && line < 256 && col < t.shown_chars && col < 80 {
+                    let i = line * 80 + col;
+                    snow_tag[i] = ((frames & 0x7FFF) + 1) as u16;
+                    snow_ch[i] = vram[a];
+                    snow_at[i] = if write { data } else { vram[a] };
+                }
+            }
+            return port.clocks(slot - pos) as u8;
+        }
 
         /// Dots per character: 8 in 80-column text, else 16.
         fn char_dots() -> u32 {
@@ -630,8 +671,13 @@ component Cga {
                     } else {
                         // Text: a character and its attribute.
                         let a = (ma * 2) & 0x3FFF;
-                        let ch = vram[a];
-                        let attr = vram[a + 1];
+                        let mut ch = vram[a];
+                        let mut attr = vram[a + 1];
+                        let si = line * 80 + col as u32;
+                        if line < 256 && snow_tag[si] == ((frames & 0x7FFF) + 1) as u16 {
+                            ch = snow_ch[si];
+                            attr = snow_at[si];
+                        }
                         let bank: u32 = if thin_font { 0x1000 } else { 0x1800 };
                         let mut glyph = charrom[bank + ch as u32 * 8 + (ra & 7)];
                         let mut fg = attr & 15;
@@ -691,10 +737,11 @@ component Cga {
         on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
             if space == Space::Mem {
                 let a = addr[13:0];
+                let w = mem_cycle(a as u32, false, 0);
                 if size == BusSize::Word {
-                    return (data: concat(vram[a + 1], vram[a]), wait: 1);
+                    return (data: concat(vram[(a + 1) & 0x3FFF], vram[a]), wait: w);
                 }
-                return (data: vram[a] as u16, wait: 1);
+                return (data: vram[a] as u16, wait: w);
             }
             let r = addr[3:0];
             if r == 10 {
@@ -719,11 +766,12 @@ component Cga {
         on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
             if space == Space::Mem {
                 let a = addr[13:0];
+                let w = mem_cycle(a as u32, true, data as u8);
                 vram[a] = data as u8;
                 if size == BusSize::Word {
                     vram[(a + 1) & 0x3FFF] = (data >> 8) as u8;
                 }
-                return (wait: 1);
+                return (wait: w);
             }
             let r = addr[3:0];
             let d = data as u8;

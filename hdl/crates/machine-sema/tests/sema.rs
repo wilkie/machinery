@@ -965,6 +965,13 @@ fn dev(model: &str) -> String {
     format!("{BUS_PRELUDE}\ncomponent D {{ ports {{ clock clk; bus io: B::S; in en: bool; out led: bool; }} model {{ {model} }} }}")
 }
 
+/// `port.clocks(n)`: a duration in the component's clock, in the bus's.
+#[test]
+fn port_clocks_check() {
+    assert_codes(&dev("on io.read(addr: u8) -> (data: u8, wait: u8) { return (data: 0, wait: io.clocks(9) as u8); }"), &[]);
+    assert_codes(&dev("state x: u8 = 0; fn f() { x = io.clocks(1, 2) as u8; }"), &["E1041"]);
+}
+
 /// `memo fn`: no value, integer arguments, no ports, and outputs that it
 /// doesn't read and nothing else writes.
 #[test]

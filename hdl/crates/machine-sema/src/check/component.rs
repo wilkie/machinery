@@ -1328,6 +1328,14 @@ impl Checker<'_> {
                     ty: Ty::Bool,
                     span,
                 };
+            } else if method.name == "clocks" && args.len() == 1 && args[0].name.is_none() {
+                // A duration in this component's clock, in the bus's.
+                let n = self.check_expr(cx, &args[0].value, Some(&Ty::UInt(32)));
+                return hir::Expr {
+                    kind: H::PortClocks(port, Box::new(n)),
+                    ty: Ty::UInt(32),
+                    span,
+                };
             } else {
                 self.error(
                     cx.module,

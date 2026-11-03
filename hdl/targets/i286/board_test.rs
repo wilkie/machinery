@@ -523,6 +523,121 @@ fn bench_cga_modes() {
     bench_cga("320x200 graphics", &GRAPHICS_320X200, 0x0A);
 }
 
+/// The CGA driven directly in 80x25 text (`mode`), with video memory
+/// holding 'A' in light grey on black, and the test glyphs of `boot_cga`.
+fn direct_cga(mode: u8) -> machine_board286::Cga {
+    use machine_board286::Cga;
+    let mut cga = Cga::new();
+    let mut c = Quiet;
+    for (i, &v) in TEXT_80X25.iter().enumerate() {
+        cga.on_port_write(&mut c, 1, 0x3D4, 0, i as u16);
+        cga.on_port_write(&mut c, 1, 0x3D5, 0, v as u16);
+    }
+    cga.on_port_write(&mut c, 1, 0x3D8, 0, mode as u16);
+    for i in 0..0x2000 {
+        cga.vram[i * 2] = 0x41;
+        cga.vram[i * 2 + 1] = 0x07;
+    }
+    cga.charrom[0x1800 + 0x41 * 8..0x1800 + 0x41 * 8 + 8].copy_from_slice(&[0xFF, 0x81, 0, 0, 0, 0, 0, 0x18]);
+    cga.charrom[0x1800 + 0x42 * 8..0x1800 + 0x42 * 8 + 8].copy_from_slice(&[0xF0; 8]);
+    // To the start of a frame.
+    let left = cga.on_tick(&mut c, 1);
+    cga.on_tick(&mut c, left);
+    assert_eq!(cga.pos, 0);
+    cga
+}
+
+/// A CPU access to CGA memory waits one character clock, then for the next
+/// 16-dot boundary, then for the CPU's next clock (reenigne.org, "The CGA
+/// wait states"): on a 4.77 MHz PC, 3 dots a cycle, that is 3 cycles at one
+/// of the 16 phases and 4, 5, 6, 7 and 8 at three each, 5.8125 on average.
+/// Driven directly the card's waits are in dots.
+#[test]
+fn cga_wait_states_follow_its_character_clock() {
+    let mut counts = [0u32; 9];
+    let mut total = 0;
+    for k in 0..16u32 {
+        for mode in [0x09u8, 0x08, 0x0A] {
+            let mut cga = direct_cga(mode);
+            cga.on_tick(&mut Quiet, 48 * 100 + 3 * k);
+            let (_, dots) = cga.on_port_read(&mut Quiet, 0, 0xB8000, 0).unwrap();
+            assert!((9..=24).contains(&dots), "{dots} dots");
+            let cycles = (dots as u32).div_ceil(3);
+            if mode == 0x09 {
+                counts[cycles as usize] += 1;
+                total += cycles;
+            }
+            let (w,) = cga.on_port_write(&mut Quiet, 0, 0xB8000, 0, 0).unwrap();
+            assert_eq!(w, dots, "writes wait as reads do, in every mode");
+        }
+    }
+    assert_eq!(&counts[3..], &[1, 3, 3, 3, 3, 3]);
+    assert_eq!(total as f64 / 16.0, 5.8125);
+}
+
+/// On the AT's 8 MHz bus the card's 9 to 24 dots are 6 to 14 bus clocks: a
+/// loop of writes to CGA memory is that much slower than one to the
+/// Hercules card's (one wait state, on the same 8-bit ISA bus).
+#[test]
+fn cga_waits_are_bus_clocks_on_the_at() {
+    let run = |seg: u16| {
+        let mut code = SETUP.to_vec();
+        crtc(&mut code, &TEXT_80X25);
+        out8(&mut code, 0x3D8, 0x09);
+        code.extend_from_slice(&[0xB8, seg as u8, (seg >> 8) as u8, 0x8E, 0xD8]); // mov ax, seg; mov ds, ax
+        code.extend_from_slice(&[0xB9, 0xE8, 0x03]); // mov cx, 1000
+        code.extend_from_slice(&[0x88, 0x05, 0xE2, 0xFC]); // .l: mov [di], al; loop .l
+        code.push(0xF4);
+        let mut sys = boot_cga(&code);
+        let start = code.len() - 8;
+        sys.run_until(1_000_000, |s| s.cpu.r.IP as usize == start).unwrap();
+        let t0 = sys.seconds();
+        sys.run(1_000_000).unwrap();
+        assert!(sys.cpu.halted);
+        sys.seconds() - t0
+    };
+    let extra = (run(0xB800) - run(0xB000)) / 1000.0 * 8e6 + 1.0;
+    assert!((6.0..=14.0).contains(&extra), "{extra} bus clocks a write");
+}
+
+/// CGA snow: in 80-column text a CPU access during the display takes the
+/// memory cycle of the character fetched in the character clock after its
+/// slot, and that cell shows the byte that was in memory as its character
+/// and the byte on the bus as its attribute, for that frame only. In
+/// 40-column text, or during retrace, nothing shows.
+#[test]
+fn cga_snow() {
+    let probe = |mode: u8, line: u32| {
+        let mut cga = direct_cga(mode);
+        cga.vram[4000] = 0x42; // 'B': the old byte at the address written
+        cga.on_tick(&mut Quiet, line * 912 + 100);
+        cga.on_port_write(&mut Quiet, 0, 0xB8000 + 4000, 0, 0x4E).unwrap(); // yellow on red
+        assert_eq!(cga.vram[4000], 0x4E, "the write itself lands");
+        let left = cga.on_tick(&mut Quiet, 1);
+        cga.on_tick(&mut Quiet, left);
+        cga
+    };
+    // At line 10, dot 100: the slot is at dot 9232, so the cell fetched at
+    // dot 9240 (line 10, column 15) snows. Line 10 is raster 2 of 'A'
+    // (blank) and of 'B' (four dots on).
+    let cga = probe(0x09, 10);
+    let at = 10 * 640 + 15 * 8;
+    assert_eq!(&cga.frame[at..at + 8], &[14, 14, 14, 14, 4, 4, 4, 4], "snow");
+    assert_eq!(&cga.frame[at - 8..at], &[0; 8], "its neighbour");
+    assert_eq!(&cga.frame[at + 640..at + 648], &[0; 8], "the next line");
+    // The next frame is clean.
+    let mut cga = cga;
+    let left = cga.on_tick(&mut Quiet, 1);
+    cga.on_tick(&mut Quiet, left);
+    assert_eq!(&cga.frame[at..at + 8], &[0; 8], "gone a frame later");
+    // 40 columns: the display leaves the CPU slots; no snow.
+    let cga = probe(0x08, 10);
+    assert!(cga.frame[10 * 640..11 * 640].iter().all(|&d| d == 0));
+    // Vertical retrace (line 230): no display fetch to take.
+    let cga = probe(0x09, 230);
+    assert!(cga.frame.iter().all(|&d| d == 0 || d == 7));
+}
+
 // --- Hercules ---
 
 /// Program the 6845 at 3B4/3B5 from R0.

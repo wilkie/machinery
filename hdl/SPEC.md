@@ -422,6 +422,11 @@ The transaction level. Contents:
   it to bypass them.
 - `fn name(params) -> T { ... }` helpers over the component's state
   (section 8.3a).
+- `port.clocks(n)` (a `u32`): `n` periods of the component's own clock,
+  in clocks of the bus on `port`, rounded up. A slave whose readiness
+  follows its own clock rather than the bus's turns a delay in its dots
+  into the bus `wait` it returns with this. The CGA uses it for the slot
+  it gives the CPU. A context with no bus attached returns `n`.
 - Handlers:
   - `on bus_port.read(addr: u<A>, size: Size) -> (data: u<D>, wait: u8) { ... }`
   - `on bus_port.write(addr, size, data) -> (wait: u8) { ... }`

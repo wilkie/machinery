@@ -445,55 +445,52 @@ impl Gen<'_> {
     /// What the decoder reads: a run's key.
     #[inline]
     fn tkey(&self) -> TKey {{ TKey {{ {key}}} }}
-    /// The next instruction of the run being replayed and where it is;
-    /// None when the run ends here (it stops replaying). Code memory's write
-    /// total is checked each time, the run's page when it has moved.
+    /// The next instruction of the run being replayed, run, and where it
+    /// was; None when the run ends here (it stops replaying). Code memory's
+    /// write total is checked each time, the run's page when it has moved.
     #[inline]
-    fn trace_peek(&mut self) -> Option<(u64, TStep)> {{
+    fn trace_go(&mut self) -> Option<(u64, Result<(), Fault>)> {{
         let cur = self.tr_cur as usize;
         let idx = self.tr_idx as usize;
-        let (phys, s, page, stamp, n) = {{
-            let t = self.traces[cur].as_deref()?;
-            let s = *t.steps.get(idx)?;
-            (t.phys, s, t.page, t.stamp, t.steps.len())
-        }};
-        let pc = self.traces[cur].as_deref().map_or(0, |t| t.pc);
-        if self.tr_epoch != self.tr_ep0 || self.r.{pc0} as u64 != pc.wrapping_add(s.off as u64) {{
+        let t = self.traces[cur].as_deref()?;
+        let s = t.steps.get(idx)?;
+        if self.tr_epoch != self.tr_ep0 || self.r.{pc0} as u64 != t.pc.wrapping_add(s.off as u64) {{
             self.tr_on = false;
             self.tr_prev = cur as u32;
             return None;
         }}
         let w = self.bus.{sp}_code_writes();
         if w != self.tr_w {{
-            if self.bus.{sp}_code_stamp(page) != stamp {{
+            if self.bus.{sp}_code_stamp(t.page) != t.stamp {{
                 self.tr_on = false;
                 self.tr_prev = u32::MAX;
                 return None;
             }}
             self.tr_w = w;
         }}
-        self.tr_idx += 1;
-        if self.tr_idx as usize == n {{
-            self.tr_on = false;
-            self.tr_prev = cur as u32;
-        }}
-        Some((phys + s.off as u64, s))
-    }}
-    /// Runs a recorded instruction as decoding it would have left things.
-    #[inline]
-    fn trace_run(&mut self, phys: u64, s: TStep) -> Result<(), Fault> {{
-        self.tr_phys = phys;
-        self.bus.{sp}_fetch_skip(phys, s.len as u32);
-        self.fetched = s.len;
+        let phys = t.phys + s.off as u64;
+        let last = idx + 1 == t.steps.len();
+        let instr = s.instr;
+        let len = s.len;
+        self.fetched = len;
         self.known_opcode = s.known;
         self.prefix_cycles = s.prefix_cycles;
         if B::SCHEDULE {{ self.decode_at = s.decode_at; }}
-{restore}        self.run_instr(s.instr)
+{restore}        self.tr_idx += 1;
+        if last {{
+            self.tr_on = false;
+            self.tr_prev = cur as u32;
+        }}
+        self.tr_phys = phys;
+        self.restarted = phys == self.last_start;
+        self.last_start = phys;
+        self.bus.{sp}_fetch_skip(phys, len as u32);
+        Some((phys, self.run_instr(instr)))
     }}
     /// The run the last one led to before, at this pc and epoch: entered
     /// without finding where the pc is (it is where it was).
     #[inline]
-    fn trace_follow(&mut self) -> Option<(u64, TStep)> {{
+    fn trace_follow(&mut self) -> Option<(u64, Result<(), Fault>)> {{
         let prev = self.tr_prev as usize;
         let pc = self.r.{pc0} as u64;
         let l = *self.traces.get(prev)?.as_deref()?.links.iter().find(|l| l.pc == pc && l.ep == self.tr_aepoch)?;
@@ -507,12 +504,12 @@ impl Gen<'_> {
         self.tr_idx = 0;
         self.tr_ep0 = self.tr_epoch;
         self.tr_w = u64::MAX;
-        self.trace_peek()
+        self.trace_go()
     }}
     /// The run at `start`, if there is one and it holds: entered (and
     /// linked from the run before), and its first instruction.
     #[inline]
-    fn trace_enter(&mut self, start: u64) -> Option<(u64, TStep)> {{
+    fn trace_enter(&mut self, start: u64) -> Option<(u64, Result<(), Fault>)> {{
         let slot = Self::tr_slot(start);
         let pc = self.r.{pc0} as u64;
         let ep = self.tr_epoch;
@@ -539,7 +536,7 @@ impl Gen<'_> {
         self.tr_idx = 0;
         self.tr_ep0 = ep;
         self.tr_w = u64::MAX;
-        self.trace_peek()
+        self.trace_go()
     }}
     /// The instruction at `start` is about to be decoded: record it, in the
     /// run being recorded if it follows on, else in a new one.

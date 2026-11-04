@@ -2628,15 +2628,15 @@ impl<'a> Gen<'a> {
         // Where the instruction is, and how it runs: decoded, or (the trace
         // core) the next of a run being replayed, or the first of a run kept
         // here, else decoded and recorded.
-        let (find, run) = if self.trace.is_some() {
+        let (find, _run) = if self.trace.is_some() {
             (
-                format!("        self.tr_rec_now = false;\n        let mut next = if self.tr_on {{ self.trace_peek() }} else {{ None }};\n        if next.is_none() && self.tr_prev != u32::MAX {{ next = self.trace_follow(); }}\n        let start = match next {{\n            Some((p, _)) => p,\n            None => {{\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{seed}        if start != u64::MAX {{ next = self.trace_enter(start); if next.is_none() {{ self.trace_note(start); }} }}\n        start\n            }}\n        }};\n"),
-                "let r = match next { Some((p, s)) => self.trace_run(p, s), None => self.decode_run() };".to_string(),
+                format!("        self.tr_rec_now = false;\n        self.decoded = false;\n        let mut done = if self.tr_on {{ self.trace_go() }} else {{ None }};\n        if done.is_none() && self.tr_prev != u32::MAX {{ done = self.trace_follow(); }}\n        let (start, r) = match done {{\n            Some(x) => x,\n            None => {{\n        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{seed}        let entered = if start != u64::MAX {{ self.trace_enter(start) }} else {{ None }};\n        match entered {{\n            Some(x) => x,\n            None => {{\n        if start != u64::MAX {{ self.trace_note(start); }}\n        self.restarted = start == self.last_start;\n        self.last_start = start;\n        (start, self.decode_run())\n            }}\n        }}\n            }}\n        }};\n        let mut sched = Schedule::default();\n"),
+                String::new(),
             )
         } else {
             (
-                format!("        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{seed}"),
-                "let r = self.decode_run();".to_string(),
+                format!("        let start = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{seed}        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        self.decoded = false;\n        let r = self.decode_run();\n"),
+                String::new(),
             )
         };
         let entry = if self.isa.instructions.iter().any(|i| i.schedule.is_some()) {
@@ -2645,7 +2645,7 @@ impl<'a> Gen<'a> {
             "sched.work[0] = self.entry_cycles as u16;"
         };
         s.push_str(&format!(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.entry_cycles = 0;\n        self.fetched = 0;\n        self.win_len = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{reset_check}        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n{find}        self.restarted = start == self.last_start;\n        self.last_start = start;\n        let mut sched = Schedule::default();\n        self.decoded = false;\n        {run}\n        let cur: Option<Instr> = if self.decoded {{ self.last }} else {{ None }};\n        if self.decoded {{ {entry} }}\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n        if B::SCHEDULE {{\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        }} else {{\n        let _ = (before, performed, cur);\n        }}\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.entry_cycles = 0;\n        self.fetched = 0;\n        self.win_len = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{reset_check}        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n{find}        let cur: Option<Instr> = if self.decoded {{ self.last }} else {{ None }};\n        if self.decoded {{ {entry} }}\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n        if B::SCHEDULE {{\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        }} else {{\n        let _ = (before, performed, cur);\n        }}\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
         ));
         let _ = write!(
             s,

@@ -1558,9 +1558,10 @@ system PcAt386 {
   Interrupts, device catch-up and timing run per instruction as with
   `decode`, so the machine's behaviour and time are the same; the host
   calls `code_changed()` after writing memory or the processor's state
-  directly. On the 386 board, 32-bit code with paging on runs 29% faster
-  (decoding, fetching and translating the code address are done once per
-  run), real-mode code 9%, and a DOS boot 2-7% (its loading 5% slower).
+  directly. On the 386 board, 32-bit code with paging on runs about 50%
+  faster (decoding, fetching and translating the code address are done
+  once per run), real-mode code about 27%; a DOS boot, mostly short loops
+  polling devices, about the same (-3% to +7%).
 - `wire inst.in_port = other.out_port;` connects an output to an input of
   the same type; `wire inst.in_port = <constant>;` straps a pin (`wire
   pic1.sp = true;`). Each input is driven at most once; an output may

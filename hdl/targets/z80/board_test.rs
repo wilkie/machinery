@@ -72,8 +72,10 @@ fn checksum_program_runs() {
     assert_eq!(&ram[0x2000..0x3000], &pattern[..], "copied by LDIR");
     assert_eq!(u16::from_le_bytes([ram[0xE002], ram[0xE003]]), sum, "the sum");
     assert_eq!((ram[0xE000], ram[0xE001]), (0, 0), "every pass made");
-    // The board's clock is 4 MHz.
-    assert_eq!((sys.seconds() * 4e6).round() as u64, T_STATES, "T-states");
+    // The board's clock is 4 MHz (exact, without a profile's concessions).
+    if machine_board_z80::system::EXACT {
+        assert_eq!((sys.seconds() * 4e6).round() as u64, T_STATES, "T-states");
+    }
     eprintln!("{} ({}): {n} instructions, {:.4} s emulated", machine_board_z80::system::PROFILE, machine_board_z80::system::CORE, sys.seconds());
 }
 
@@ -177,7 +179,9 @@ fn random_programs_agree_with_stepping() {
         compiled += usize::from(b.cpu.compiled_runs() > 0);
         assert_eq!(na, nb, "program {seed}: steps made");
         assert_eq!(a.cpu.r, b.cpu.r, "program {seed}: registers ({program:02x?})");
-        assert_eq!(a.now(), b.now(), "program {seed}: time");
+        if machine_board_z80::system::EXACT {
+            assert_eq!(a.now(), b.now(), "program {seed}: time");
+        }
         let (ra, rb) = (&a.board().ram.cells, &b.board().ram.cells);
         if let Some(k) = (0..ra.len()).find(|&k| ra[k] != rb[k]) {
             panic!("program {seed}: RAM differs at {k:04x}: {:02x} stepped, {:02x} run ({program:02x?})", ra[k], rb[k]);
@@ -217,7 +221,9 @@ fn self_modifying_code_agrees_with_stepping() {
     assert!(b.cpu.halted);
     assert_eq!(na, nb, "steps made");
     assert_eq!(a.cpu.r, b.cpu.r, "registers");
-    assert_eq!(a.now(), b.now(), "time");
+    if machine_board_z80::system::EXACT {
+        assert_eq!(a.now(), b.now(), "time");
+    }
     assert_eq!(a.board().ram.cells[7], b.board().ram.cells[7], "the operand");
     // 10240 increments of the operand from 0: it wraps back to 0, and A
     // sums 40 times 0 + 1 + ... + 255 (mod 256).

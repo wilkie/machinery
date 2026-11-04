@@ -79,6 +79,7 @@ impl Gen<'_> {
             );
             let _ = writeln!(fns, "            Instr::{n}(_) => Self::jit_step_{n} as *const () as usize,");
         }
+        let sync_run = self.sync_run;
         let _ = write!(
             self.out,
             r#"{shims}    /// The compiled step for `i`.
@@ -182,6 +183,10 @@ impl Gen<'_> {
         let f: extern "C" fn(*mut Self, u32) -> u32 = unsafe {{ std::mem::transmute(c) }};
         let n = f(self as *mut Self, from);
         self.jit_pending = false;
+        if {sync_run} {{
+            // `sync: run`: the devices, once for the run.
+            self.bus.after_step();
+        }}
         if self.jit_last != 0 {{
             // SAFETY: a step of this machine's run, which is live.
             self.last = Some(unsafe {{ *(self.jit_last as usize as *const Instr) }});
@@ -692,7 +697,11 @@ impl Gen<'_> {
         // The fetch, charged before the semantics as the bus would charge
         // it: serial (every unit), or overlapped (the unit last fetched is
         // in the buffer; the code time is what execution overlaps).
+        // `timing: approximate`: the fetch as if serial, whatever the bus
+        // does, charged with the cycles in one add.
+        let approx_fetch: Option<u128> = if {timing_approx} {{ units.map(|(u0, u1, cost)| (u1 - u0 + 1) as u128 * cost).or(fetch) }} else {{ None }};
         let quiet = match (board, fetch, units) {{
+            (Some(_), _, _) if approx_fetch.is_some() => true,
             // Serial, and nothing sees the time before the step retires: the
             // fetch is charged with it, in one add.
             (Some(b), Some(_), _) if b.serial && Self::jit_quiet(&instr) => true,
@@ -776,7 +785,11 @@ impl Gen<'_> {
         let x = e.op(machine_jit::Op::Mul, cyc, machine_jit::V::K(b.clock), machine_jit::N::U128);
         let now_p = machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }};
         let now = e.read(&now_p);
-        let now = if b.serial {{
+        let now = if let Some(f) = approx_fetch {{
+            let t = e.op(machine_jit::Op::Add, x, machine_jit::V::K(f), machine_jit::N::U128);
+            e.store(bus + b.direct_code, machine_jit::N::U64, machine_jit::V::K(u64::MAX as u128));
+            e.op(machine_jit::Op::Add, now, t, machine_jit::N::U128)
+        }} else if b.serial {{
             let t = if quiet {{ e.op(machine_jit::Op::Add, x, machine_jit::V::K(fetch.unwrap_or(0)), machine_jit::N::U128) }} else {{ x }};
             e.store(bus + b.direct_code, machine_jit::N::U64, machine_jit::V::K(u64::MAX as u128));
             e.op(machine_jit::Op::Add, now, t, machine_jit::N::U128)
@@ -805,7 +818,10 @@ impl Gen<'_> {
             (None, false) => machine_jit::V::K(1),
         }};
         // The devices change no processor field: a rare path.
-        e.cold(need, |e| {{ let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, true); }});
+        // `sync: run`: the devices are caught up when the run returns.
+        if !{sync_run} {{
+            e.cold(need, |e| {{ let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, true); }});
+        }}
         if !b.writes.is_empty() {{
             let mut w = machine_jit::V::K(0);
             for off in b.writes {{
@@ -850,6 +866,8 @@ impl Gen<'_> {
     }}
 "#,
             pc0n = ident(&pc0.name),
+            sync_run = self.sync_run,
+            timing_approx = self.timing_approx,
             boundary_wakes = ist.boundary.is_some_and(|b| {
                 let mut halts = false;
                 machine_sema::hir::visit_block(&self.fns[&b].body, &mut |st| halts |= matches!(st.kind, machine_sema::hir::StmtKind::Halt), &mut |_| {});

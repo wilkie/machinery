@@ -106,4 +106,7 @@ system BoardZ80 {
     profile emulate { default: model; memory: direct; }
     profile trace { default: model; memory: direct; core: trace; }
     profile jit { default: model; memory: direct; core: jit; }
+    /// The JIT with its concessions: devices caught up once a run, and a
+    /// compiled step's time in one add (SPEC 12, "Concessions").
+    profile approx { default: model; memory: direct; core: jit; sync: run; timing: approximate; }
 }

@@ -295,7 +295,24 @@ impl Checker<'_> {
                     let mut overrides = Vec::new();
                     let mut direct_memory = false;
                     let mut core = hir::Core::Decode;
+                    let mut sync_run = false;
+                    let mut timing_approx = false;
                     for e in &p.entries {
+                        let one = |n: &str| e.target.segments.len() == 1 && e.target.segments[0].name == n;
+                        if one("sync") || one("timing") {
+                            match (e.target.segments[0].name.as_str(), e.level.name.as_str()) {
+                                ("sync", "step") => sync_run = false,
+                                ("sync", "run") => sync_run = true,
+                                ("timing", "exact") => timing_approx = false,
+                                ("timing", "approximate") => timing_approx = true,
+                                (what, other) => {
+                                    let expected = if what == "sync" { "`step` or `run`" } else { "`exact` or `approximate`" };
+                                    self.error(module, "E1049", e.level.span, format!("unknown {what} `{other}` (expected {expected})"));
+                                    ok = false;
+                                }
+                            }
+                            continue;
+                        }
                         if e.target.segments.len() == 1 && e.target.segments[0].name == "core" {
                             match e.level.name.as_str() {
                                 "decode" => core = hir::Core::Decode,
@@ -352,10 +369,16 @@ impl Checker<'_> {
                             ok = false;
                         }
                     }
+                    if (sync_run || timing_approx) && core != hir::Core::Jit {
+                        self.error(module, "E1049", p.name.span, "`sync: run` and `timing: approximate` are concessions of the JIT core (`core: jit`)");
+                        ok = false;
+                    }
                     profiles.push(hir::Profile {
                         name: p.name.name.clone(),
                         direct_memory,
                         core,
+                        sync_run,
+                        timing_approx,
                         default,
                         overrides,
                     });

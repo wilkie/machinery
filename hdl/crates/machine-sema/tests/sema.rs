@@ -1550,6 +1550,13 @@ fn systems_check() {
     );
     // An unknown level.
     assert_codes(&system("profile p { default: fast; }"), &["E1049"]);
+    // Concessions: the JIT core's, with known values.
+    let c = check_src(&system("profile p { default: model; memory: direct; core: jit; sync: run; timing: approximate; }"));
+    assert_clean(&c);
+    let p = &c.hir.systems[0].profiles[0];
+    assert!(p.sync_run && p.timing_approx);
+    assert_codes(&system("profile p { default: model; memory: direct; core: trace; sync: run; }"), &["E1049"]);
+    assert_codes(&system("profile p { default: model; memory: direct; core: jit; timing: loose; }"), &["E1049"]);
 }
 
 #[test]

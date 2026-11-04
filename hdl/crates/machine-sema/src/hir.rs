@@ -1030,6 +1030,12 @@ pub struct Profile {
     /// `direct` without their handlers (time approximate).
     pub direct_memory: bool,
     pub core: Core,
+    /// Concessions (SPEC 12, "Concessions"): `sync: run` catches the
+    /// devices up once a compiled run rather than once an instruction;
+    /// `timing: approximate` charges a compiled step its fetch as if
+    /// serial and its cycles in one add.
+    pub sync_run: bool,
+    pub timing_approx: bool,
     pub default: Level,
     /// Instance paths (`vga`, `vga.crtc`) and their level.
     pub overrides: Vec<(String, Level)>,

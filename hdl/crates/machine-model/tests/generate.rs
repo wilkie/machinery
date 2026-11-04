@@ -560,7 +560,7 @@ fn i386_at_boots_dos() {
     assert!(!checked.has_errors());
     // The exact build, and the emulator with the trace core: the same DOS
     // boots and installs on both.
-    for (profile, dir) in [("fast", "at386vga"), ("trace", "at386vga-trace"), ("jit", "at386vga-jit")] {
+    for (profile, dir) in [("fast", "at386vga"), ("trace", "at386vga-trace"), ("jit", "at386vga-jit"), ("approx", "at386vga-approx")] {
         let src = generate_system(&checked, "At386Vga", Some(profile)).unwrap_or_else(|e| panic!("{e}"));
         let root = hdl_root();
         let crate_ = package(&crate_name("At386Vga"), src, &root.join("crates").join("machine-runtime"));
@@ -822,7 +822,7 @@ fn z80_board_runs_on_every_core() {
     let root = hdl_root();
     let checked = check_files(vec![target_z80("z80.machine"), target_z80("timing.machine"), target_z80("board.machine")]);
     assert!(!checked.has_errors());
-    for profile in ["fast", "emulate", "trace", "jit"] {
+    for profile in ["fast", "emulate", "trace", "jit", "approx"] {
         let src = generate_system(&checked, "BoardZ80", Some(profile)).unwrap_or_else(|e| panic!("{e}"));
         let crate_ = package(&crate_name("BoardZ80"), src, &root.join("crates").join("machine-runtime"));
         let dir = root.join("target").join("gen-tests").join(format!("boardz80-{profile}"));

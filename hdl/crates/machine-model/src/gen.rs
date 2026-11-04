@@ -148,6 +148,9 @@ pub struct Gen<'a> {
     /// the JIT core (`core: jit;`), which builds on it.
     trace: Option<trace::TracePlan>,
     jit: bool,
+    /// The JIT core's concessions (`sync: run`, `timing: approximate`).
+    sync_run: bool,
+    timing_approx: bool,
     /// The isa fns the JIT lowering inlines (`gen/lower.rs`).
     jit_fns: std::cell::RefCell<std::collections::HashSet<DefId>>,
     /// The kind rules it lowers: (kind, rule index).
@@ -194,6 +197,8 @@ pub fn generate_system(
         }
         g.trace = Some(g.plan_trace()?);
         g.jit = prof.is_some_and(|p| p.core == hir::Core::Jit);
+        g.sync_run = prof.is_some_and(|p| p.sync_run);
+        g.timing_approx = prof.is_some_and(|p| p.timing_approx);
     }
     g.emit_all()?;
     g.emit_system(sys, proc_idx, profile)?;
@@ -230,6 +235,8 @@ impl<'a> Gen<'a> {
             memo_rec: std::cell::Cell::new(false),
             trace: None,
             jit: false,
+            sync_run: false,
+            timing_approx: false,
             jit_fns: Default::default(),
             jit_rules: Default::default(),
             jit_units: Default::default(),

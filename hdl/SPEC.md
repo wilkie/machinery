@@ -1691,6 +1691,24 @@ system PcAt386 {
   must a loop that rewrites its own operand; so must random 386 code
   (`targets/i386/vga_test.rs`: each instruction tried on a copy of the
   machine first, so the loop runs, its faults returning through an IRET).
+- **Concessions** (with `core: jit`): profile options that give up some
+  of what the exact profiles keep, for speed, each one named. The crate
+  says whether it has any (`system::EXACT`), and tests that compare time
+  across cores look at it.
+  - `sync: run` catches the devices up once a compiled run returns,
+    rather than after each instruction: a device (and an interrupt it
+    raises) can be seen up to a run late. Ordinary steps still sync each.
+  - `timing: approximate` charges a compiled step its code fetch as if
+    the bus were serial and its cycles in one add, with no prefetch
+    overlap: emulated time runs differently (on the 386 board, POST
+    passes 24 s of emulated time where the exact profiles pass 17).
+    Accesses still charge their own time.
+
+  Measured (the Z80 checksum, a 386 DOS boot), they give little: the Z80
+  runs about 7% faster, the 386's POST no faster and its idle loop about
+  10% faster. What exact time keeping and per-instruction device order
+  cost is no longer much of what is left; the rest is structural (entering
+  runs, compiling, memory accesses through the paging and segment fns).
 - `wire inst.in_port = other.out_port;` connects an output to an input of
   the same type; `wire inst.in_port = <constant>;` straps a pin (`wire
   pic1.sp = true;`). Each input is driven at most once; an output may

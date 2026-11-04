@@ -28,14 +28,14 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n"
+        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n"
     }
 
     pub(crate) fn jit_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n"
+        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n"
     }
 
     /// The trace's fields for compiled code (inside `Trace`).
@@ -94,6 +94,7 @@ impl Gen<'_> {
         if !self.jit_check(j) {{
             return 2;
         }}
+        self.jit_last = 0;
         self.jit_go = false;
         let r = self.jit_prologue();
         if !self.jit_go {{
@@ -148,9 +149,12 @@ impl Gen<'_> {
                 let steps = &t.jit_steps;
                 let mut lowered = vec![false; steps.len()];
                 let _ = &calls;
+                let fetch: Vec<Option<u128>> = steps.iter().map(|j| self.bus.jit_fetch_time(j.page, j.phys, j.step.len as u32)).collect();
                 self.jit.compile_with(steps.len(), 2, |e, k| {{
                     let checked = k == 0 || lowered[k - 1];
-                    lowered[k] = Self::jit_emit_step(e, &steps[k], k, checked);
+                    // Only reached from a lowered step before it.
+                    let follows = k >= 2 && lowered[k - 1];
+                    lowered[k] = Self::jit_emit_step(e, &steps[k], k, checked, follows, fetch[k]);
                 }})
             }}
             None => None,
@@ -174,7 +178,14 @@ impl Gen<'_> {
         // which is live: runs are only replaced while stepping, not while
         // compiled code runs.
         let f: extern "C" fn(*mut Self, u32) -> u32 = unsafe {{ std::mem::transmute(c) }};
-        f(self as *mut Self, from)
+        let n = f(self as *mut Self, from);
+        if self.jit_last != 0 {{
+            // SAFETY: a step of this machine's run, which is live.
+            self.last = Some(unsafe {{ *(self.jit_last as usize as *const Instr) }});
+            self.last_fault = None;
+            self.jit_last = 0;
+        }}
+        n
     }}
     /// A run, as far as it goes (at most `budget` steps): when the last one
     /// ended where a compiled run follows, that run from its start; else one
@@ -359,6 +370,7 @@ impl Gen<'_> {
         // SAFETY: called by compiled code with its machine and a step of
         // one of its runs, live for the call.
         let (m, i) = unsafe {{ (&mut *m, *(i as usize as *const Instr)) }};
+        m.jit_last = 0;
         if len != 0 {{
             m.bus.{sp}_fetch_page(page as u32, phys, len as u32);
         }}
@@ -422,7 +434,10 @@ impl Gen<'_> {
     /// `checked` when the step before it checked the run's code after it.
     /// Whether it was lowered.
     #[allow(unused_variables, clippy::all)]
-    fn jit_emit_step(e: &mut machine_jit::Em, j: &JitStep, k: usize, checked: bool) -> bool {{
+    /// `follows`: the step is reached only from a lowered step before it,
+    /// which retired with the processor running, not shut down, and the
+    /// epoch as it was unless its writes bumped it.
+    fn jit_emit_step(e: &mut machine_jit::Em, j: &JitStep, k: usize, checked: bool, follows: bool, fetch: Option<u128>) -> bool {{
         let s = &j.step;
         if B::SCHEDULE || !{lowers} {{
             let r = e.call(Self::jit_step_fn(&s.instr), &[(machine_jit::V::K(j as *const JitStep as usize as u128), machine_jit::N::U64)], machine_jit::N::U32, false);
@@ -439,10 +454,15 @@ impl Gen<'_> {
         }}
         e.set_epochs([std::mem::offset_of!(Self, tr_epoch), std::mem::offset_of!(Self, tr_aepoch), std::mem::offset_of!(Self, tr_kepoch)]);
         // The run's check: epoch and pc (the code, after the step before).
-        let ep = e.load(std::mem::offset_of!(Self, tr_epoch), machine_jit::N::U64);
-        let ep0 = e.load(std::mem::offset_of!(Self, tr_ep0), machine_jit::N::U64);
+        let bumped = e.take_bumped();
+        let c1 = if follows && !bumped {{
+            machine_jit::V::K(0)
+        }} else {{
+            let ep = e.load(std::mem::offset_of!(Self, tr_epoch), machine_jit::N::U64);
+            let ep0 = e.load(std::mem::offset_of!(Self, tr_ep0), machine_jit::N::U64);
+            e.op(machine_jit::Op::Ne, ep, ep0, machine_jit::N::U64)
+        }};
         let pc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, r.{pc0n}), n: {pc_n}, bump: 0 }});
-        let c1 = e.op(machine_jit::Op::Ne, ep, ep0, machine_jit::N::U64);
         let c2 = e.op(machine_jit::Op::Ne, pc, machine_jit::V::K((j.pc & {pc_mask:#x}) as u128), {pc_n});
         let bad = e.op(machine_jit::Op::Or, c1, c2, machine_jit::N::Bool);
         e.exit_if(bad, false, |e| {{
@@ -457,12 +477,19 @@ impl Gen<'_> {
         e.store(std::mem::offset_of!(Self, cycles), machine_jit::N::U32, machine_jit::V::K(0));
         e.store(std::mem::offset_of!(Self, accesses), machine_jit::N::U8, machine_jit::V::K(0));
         e.store(std::mem::offset_of!(Self, win_len), machine_jit::N::U32, machine_jit::V::K(0));
-{latch_resets}        let sd = e.load(std::mem::offset_of!(Self, shutdown), machine_jit::N::Bool);
-        e.exit_if(sd, true, |e| {{ let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, false); }});
-{boundary}        let h = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, halted), n: machine_jit::N::Bool, bump: 0 }});
+{latch_resets}        if !follows {{
+            let sd = e.load(std::mem::offset_of!(Self, shutdown), machine_jit::N::Bool);
+            e.exit_if(sd, true, |e| {{ let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, false); }});
+        }}
+{boundary}        // A boundary fn that takes no interrupt leaves `halted` as it was
+        // (false, after a lowered step).
+        let h = if follows && !{boundary_wakes} {{
+            machine_jit::V::K(0)
+        }} else {{
+            e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, halted), n: machine_jit::N::Bool, bump: 0 }})
+        }};
         e.exit_if(h, true, |e| {{ let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, false); }});
         e.store(std::mem::offset_of!(Self, tr_rec_now), machine_jit::N::Bool, machine_jit::V::K(0));
-        e.store(std::mem::offset_of!(Self, decoded), machine_jit::N::Bool, machine_jit::V::K(0));
         // The state as decoding left it.
         e.store(std::mem::offset_of!(Self, fetched), machine_jit::N::U8, machine_jit::V::K(s.len as u128));
         e.store(std::mem::offset_of!(Self, known_opcode), machine_jit::N::Bool, machine_jit::V::K(s.known as u128));
@@ -477,8 +504,35 @@ impl Gen<'_> {
         let rs = e.op(machine_jit::Op::Eq, ls, machine_jit::V::K(j.phys as u128), machine_jit::N::U64);
         e.store(std::mem::offset_of!(Self, restarted), machine_jit::N::Bool, rs);
         e.store(std::mem::offset_of!(Self, last_start), machine_jit::N::U64, machine_jit::V::K(j.phys as u128));
-        let quiet = Self::jit_quiet(&instr);
-        if !quiet {{
+        // The board's time keeping in host code: a serial board that says
+        // how it keeps time, and a fetch whose time is known.
+        let board = B::jit_board().filter(|b| b.serial);
+        // The bus calls (fetches, accesses) move time and the code unit.
+        if let Some(b) = B::jit_board() {{
+            let bus = std::mem::offset_of!(Self, bus);
+            e.set_volatile(bus + b.now, 16);
+            e.set_volatile(bus + b.code_time, 16);
+            e.set_volatile(bus + b.direct_code, 8);
+        }}
+        // With the board's time in host code and the fetch's time known, the
+        // fetch is charged before the semantics, as the bus would charge it
+        // (the code time starts over: the fetch is serial).
+        let quiet = match (board, fetch) {{
+            // Nothing sees the time before the step retires: the fetch is
+            // charged with it, in one add.
+            (Some(_), Some(_)) if Self::jit_quiet(&instr) => true,
+            (Some(b), Some(f)) => {{
+                let bus = std::mem::offset_of!(Self, bus);
+                let now = e.load(bus + b.now, machine_jit::N::U128);
+                let now = e.op(machine_jit::Op::Add, now, machine_jit::V::K(f), machine_jit::N::U128);
+                e.store(bus + b.now, machine_jit::N::U128, now);
+                e.store(bus + b.code_time, machine_jit::N::U128, machine_jit::V::K(f));
+                false
+            }}
+            (Some(_), None) => false,
+            (None, _) => Self::jit_quiet(&instr),
+        }};
+        if !quiet && (board.is_none() || fetch.is_none()) {{
             let _ = e.call(Self::jit_fetch_c as *const () as usize, &[(machine_jit::V::K(j.page as u128), machine_jit::N::U64), (machine_jit::V::K(j.phys as u128), machine_jit::N::U64), (machine_jit::V::K(s.len as u128), machine_jit::N::U64)], machine_jit::N::U64, true);
         }}
         // The instruction: its timing entry on the state before it, then
@@ -488,14 +542,62 @@ impl Gen<'_> {
         let c = e.op(machine_jit::Op::Add, t, machine_jit::V::K(s.prefix_cycles as u128), machine_jit::N::U32);
         e.store(std::mem::offset_of!(Self, cycles), machine_jit::N::U32, c);
         body(e);
-        let r = e.call(Self::jit_retire_c as *const () as usize, &[
-            (machine_jit::V::K(&s.instr as *const Instr as usize as u128), machine_jit::N::U64),
-            (machine_jit::V::K(j.phys as u128), machine_jit::N::U64),
-            (machine_jit::V::K(j.page as u128), machine_jit::N::U64),
-            (machine_jit::V::K(j.stamp as u128), machine_jit::N::U64),
-            (machine_jit::V::K(if quiet {{ s.len as u128 }} else {{ 0 }}), machine_jit::N::U64),
-        ], machine_jit::N::U32, false);
-        e.exit_on(r);
+        let Some(b) = board else {{
+            let r = e.call(Self::jit_retire_c as *const () as usize, &[
+                (machine_jit::V::K(&s.instr as *const Instr as usize as u128), machine_jit::N::U64),
+                (machine_jit::V::K(j.phys as u128), machine_jit::N::U64),
+                (machine_jit::V::K(j.page as u128), machine_jit::N::U64),
+                (machine_jit::V::K(j.stamp as u128), machine_jit::N::U64),
+                (machine_jit::V::K(if quiet {{ s.len as u128 }} else {{ 0 }}), machine_jit::N::U64),
+            ], machine_jit::N::U32, false);
+            e.exit_on(r);
+            return true;
+        }};
+        // Retired in host code: the time (the fetch, for a step that reached
+        // no bus space, then the cycles; serial, so the code unit and code
+        // time start over), `last` (when the code returns), the devices due,
+        // the run's code, and whether the run goes on.
+        let bus = std::mem::offset_of!(Self, bus);
+        let cyc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, cycles), n: machine_jit::N::U32, bump: 0 }});
+        let cyc = e.cast(cyc, machine_jit::N::U32, machine_jit::N::U128);
+        let mut t = e.op(machine_jit::Op::Mul, cyc, machine_jit::V::K(b.clock), machine_jit::N::U128);
+        if quiet {{
+            t = e.op(machine_jit::Op::Add, t, machine_jit::V::K(fetch.unwrap_or(0)), machine_jit::N::U128);
+        }}
+        let now_p = machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }};
+        let now = e.read(&now_p);
+        let now = e.op(machine_jit::Op::Add, now, t, machine_jit::N::U128);
+        e.store(bus + b.now, machine_jit::N::U128, now);
+        e.store(bus + b.code_time, machine_jit::N::U128, machine_jit::V::K(0));
+        e.store(bus + b.direct_code, machine_jit::N::U64, machine_jit::V::K(u64::MAX as u128));
+        e.store(std::mem::offset_of!(Self, decoded), machine_jit::N::Bool, machine_jit::V::K(1));
+        e.store(std::mem::offset_of!(Self, jit_last), machine_jit::N::U64, machine_jit::V::K(&s.instr as *const Instr as usize as u128));
+        if (b.events && !quiet) || (!b.idle && b.due.is_none()) {{
+            let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, false);
+        }} else if let (false, Some(due)) = (b.idle, b.due) {{
+            let d = e.load(bus + due, machine_jit::N::U128);
+            let late = e.op(machine_jit::Op::Ge, now, d, machine_jit::N::U128);
+            e.if_(late, |e| {{ let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, false); }}, |_| {{}});
+        }}
+        if !b.writes.is_empty() {{
+            let mut w = machine_jit::V::K(0);
+            for off in b.writes {{
+                let x = e.load(bus + off, machine_jit::N::U64);
+                w = e.op(machine_jit::Op::Add, w, x, machine_jit::N::U64);
+            }}
+            let tw = e.load(std::mem::offset_of!(Self, tr_w), machine_jit::N::U64);
+            let changed = e.op(machine_jit::Op::Ne, w, tw, machine_jit::N::U64);
+            e.if_(changed, |e| {{
+                let r = e.call(Self::jit_code_c as *const () as usize, &[(machine_jit::V::K(j.page as u128), machine_jit::N::U64), (machine_jit::V::K(j.stamp as u128), machine_jit::N::U64)], machine_jit::N::U32, true);
+                let bad = e.op(machine_jit::Op::Ne, r, machine_jit::V::K(0), machine_jit::N::U32);
+                e.exit_if(bad, true, |_| {{}});
+            }}, |_| {{}});
+        }}
+        let h = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, halted), n: machine_jit::N::Bool, bump: 0 }});
+        let on = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, tr_on), n: machine_jit::N::Bool, bump: 0 }});
+        let off = e.not(on, machine_jit::N::Bool);
+        let stop = e.op(machine_jit::Op::Or, h, off, machine_jit::N::Bool);
+        e.exit_if(stop, true, |_| {{}});
         true
     }}
     /// A lowered instruction: its timing entry (emitted now) and its
@@ -521,6 +623,11 @@ impl Gen<'_> {
     }}
 "#,
             pc0n = ident(&pc0.name),
+            boundary_wakes = ist.boundary.is_some_and(|b| {
+                let mut halts = false;
+                machine_sema::hir::visit_block(&self.fns[&b].body, &mut |st| halts |= matches!(st.kind, machine_sema::hir::StmtKind::Halt), &mut |_| {});
+                halts
+            }),
             quiet_arms = quiet.iter().map(|n| format!("            Instr::{n}(_) => true,\n")).collect::<String>(),
             lowers_arms = lowered.iter().map(|n| format!("            Instr::{n}(_) => true,\n")).collect::<String>(),
         );

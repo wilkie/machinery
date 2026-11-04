@@ -86,7 +86,7 @@ pub const LIMIT: usize = 16384;
 
 fn new_module() -> Option<JITModule> {
     let mut flags = settings::builder();
-    flags.set("opt_level", "speed").ok()?;
+    flags.set("opt_level", "none").ok()?;
     // The verifier checks what the emitter builds; on with
     // `MACHINE_JIT_VERIFY` (and in this crate's tests).
     let verify = cfg!(test) || std::env::var_os("MACHINE_JIT_VERIFY").is_some();

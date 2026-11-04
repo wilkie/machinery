@@ -233,11 +233,14 @@ pub struct Em<'a, 'f> {
     sigs: HashMap<(usize, bool), SigRef>,
     regions: Vec<Option<Region>>,
     epochs: Option<[usize; 3]>,
+    /// Fields that calls change behind the code's back: never remembered.
+    volatile: Vec<(usize, usize)>,
+    bumped: bool,
 }
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, from: Value, out: Block) -> Self {
-        Em { b, ptr, cc, m, from, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None }
+        Em { b, ptr, cc, m, from, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -301,10 +304,19 @@ impl<'a, 'f> Em<'a, 'f> {
         if !self.live {
             return;
         }
+        // The field holds it already.
+        if let V::K(c) = v {
+            if !self.is_volatile(off, n) && self.regs.get(&(off, n)) == Some(&Known::K(c & n.mask())) {
+                return;
+            }
+        }
         let x = self.val(v, n);
         self.b.ins().store(MemFlags::trusted(), x, self.m, off as i32);
         // A register written outside `write` is no longer known.
         self.regs.retain(|(o, m), _| *o + m.width() as usize / 8 <= off || off + n.width() as usize / 8 <= *o);
+        if self.is_volatile(off, n) {
+            return;
+        }
         if let V::K(c) = v {
             self.regs.insert((off, n), Known::K(c & n.mask()));
         } else {
@@ -318,6 +330,7 @@ impl<'a, 'f> Em<'a, 'f> {
             return V::K(0);
         }
         match p {
+            Place::Mem { off, n, .. } if self.is_volatile(*off, *n) => V::D(self.b.ins().load(n.ir(), MemFlags::trusted(), self.m, *off as i32)),
             Place::Mem { off, n, .. } => match self.regs.get(&(*off, *n)) {
                 Some(Known::K(c)) => V::K(*c),
                 Some(Known::D(v)) => V::D(*v),
@@ -404,14 +417,35 @@ impl<'a, 'f> Em<'a, 'f> {
         self.if_(c, |e| e.write(&p, v), |e| e.write_switch(scrut, n, &rest, v))
     }
 
+    /// `n` bytes at `off` change behind the code's back (by calls it
+    /// declares pure): read from the machine each time.
+    pub fn set_volatile(&mut self, off: usize, n: usize) {
+        if !self.volatile.contains(&(off, n)) {
+            self.volatile.push((off, n));
+        }
+    }
+
+    fn is_volatile(&self, off: usize, n: N) -> bool {
+        let w = n.width() as usize / 8;
+        self.volatile.iter().any(|(o, l)| off < o + l && *o < off + w)
+    }
+
     /// The machine's epochs (u64 fields), which a write to a place bumps
     /// by its flags (1, 2, 4: the first, second, third).
     pub fn set_epochs(&mut self, offs: [usize; 3]) {
         self.epochs = Some(offs);
     }
 
+    /// Whether a write bumped an epoch since the last call.
+    pub fn take_bumped(&mut self) -> bool {
+        std::mem::take(&mut self.bumped)
+    }
+
     fn bump(&mut self, flags: u8) {
         let Some(offs) = self.epochs else { return };
+        if flags & 1 != 0 && self.live {
+            self.bumped = true;
+        }
         for (i, off) in offs.iter().enumerate() {
             if flags & (1 << i) != 0 {
                 let p = Place::Mem { off: *off, n: N::U64, bump: 0 };

@@ -1190,6 +1190,8 @@ impl<'a> Gen<'a> {
         // they touch; code is charged once a unit, as a one-unit buffer.
         let mut direct = String::new();
         let mut direct_hooks = (String::new(), String::new(), String::new());
+        // The JIT core: the code-write counters' offsets in the board.
+        let mut jit_writes = String::new();
         if prof.is_some_and(|p| p.direct_memory) {
             if cpu_retire {
                 return Err(GenError::new(format!(
@@ -1209,6 +1211,7 @@ impl<'a> Gen<'a> {
             let mut skips = String::new();
             let mut marks = String::new();
             let mut charges = String::new();
+            let mut jit_times = String::new();
             let mut numbered: Vec<(usize, String)> = Vec::new();
             if let Some(msp) = msp.filter(|s| s.cell_bits == 8 && s.little_endian) {
                 for b in sys.buses.iter().filter(|b| b.masters.iter().any(|(m, _)| *m as usize == proc_idx)) {
@@ -1257,6 +1260,7 @@ impl<'a> Gen<'a> {
                                         numbered.push((*si as usize, cells.clone()));
                                         let _ = writeln!(stamps, "            {} => {cells}_stamps.get((page & 0xFF_FFFF) as usize).copied().unwrap_or(0),", numbered.len() - 1);
                                         let _ = writeln!(marks, "            {} => {{ if let Some(c) = {cells}_code.get_mut((page & 0xFF_FFFF) as usize) {{ *c |= bits; }} }}", numbered.len() - 1);
+                                        let _ = writeln!(jit_times, "            {} => {{ let last = addr.wrapping_add(n as u64 - 1); Some((last / {unit_bytes} - addr / {unit_bytes} + 1) as clock::Time * {} * {period}) }}", numbered.len() - 1, rbase as u128 + d.wait);
                                         let _ = writeln!(charges, "            {} => {{ let last = addr.wrapping_add(n as u64 - 1); let (u0, u1) = (addr / {unit_bytes}, last / {unit_bytes}); let c = u1 - u0 + 1 - (u0 == self.direct_code) as u64; self.direct_code = u1; let t = c as clock::Time * {} * {period}; self.sig.now += t; self.code_time += t; true }}", numbered.len() - 1, rbase as u128 + d.wait);
                                         numbered.len() - 1
                                     }
@@ -1276,8 +1280,17 @@ impl<'a> Gen<'a> {
                 );
             }
             let wsum: String = numbered.iter().map(|(_, c)| format!(" + {c}_writes")).collect();
+            jit_writes = numbered.iter().map(|(_, c)| format!("std::mem::offset_of!(Board, {}_writes), ", c.trim_start_matches("self."))).collect();
             let trace_direct = if self.trace.is_some() {
-                format!("        /// The trace core: the code page `addr` is in (memory, page), its\n        /// write count, and `n` code bytes' fetches charged as `direct_fetch`\n        /// charges them (false: not all in one direct memory).\n        #[inline]\n        fn direct_code_page(&self, addr: u64) -> Option<u32> {{\n{pages}        None\n        }}\n        #[inline]\n        fn direct_code_stamp(&self, page: u32) -> u32 {{\n            match page >> 24 {{\n{stamps}            _ => 0,\n            }}\n        }}\n        #[inline]\n        fn direct_code_writes(&self) -> u64 {{ 0{wsum} }}\n        /// Code bytes' fetches charged, in the memory their page is in.\n        #[inline]\n        fn direct_charge(&mut self, page: u32, addr: u64, n: u32) -> bool {{\n            match page >> 24 {{\n{charges}            _ => false,\n            }}\n        }}\n        fn direct_code_mark(&mut self, page: u32, addr: u64, n: u32) {{\n            let (b0, b1) = (((addr & 0xFFF) >> 7) as u32, (((addr & 0xFFF) + n as u64 - 1) >> 7).min(31) as u32);\n            let bits = (u32::MAX >> (31 - b1)) & (u32::MAX << b0);\n            match page >> 24 {{\n{marks}            _ => {{}}\n            }}\n        }}\n        #[inline]\n        fn direct_skip(&mut self, addr: u64, n: u32) -> bool {{\n        let last = addr.wrapping_add(n as u64 - 1);\n{skips}        false\n        }}\n")
+                format!("        /// The trace core: the code page `addr` is in (memory, page), its\n        /// write count, and `n` code bytes' fetches charged as `direct_fetch`\n        /// charges them (false: not all in one direct memory).\n        #[inline]\n        fn direct_code_page(&self, addr: u64) -> Option<u32> {{\n{pages}        None\n        }}\n        #[inline]\n        fn direct_code_stamp(&self, page: u32) -> u32 {{\n            match page >> 24 {{\n{stamps}            _ => 0,\n            }}\n        }}\n        #[inline]\n        fn direct_code_writes(&self) -> u64 {{ 0{wsum} }}\n        /// Code bytes' fetches charged, in the memory their page is in.\n        #[inline]\n        fn direct_charge(&mut self, page: u32, addr: u64, n: u32) -> bool {{\n            match page >> 24 {{\n{charges}            _ => false,\n            }}\n        }}\n        /// The JIT core: what charging `n` code bytes from `addr` costs when
+        /// the code unit last fetched is not among them (a serial fetch).
+        #[allow(dead_code)]
+        fn direct_jit_time(&self, page: u32, addr: u64, n: u32) -> Option<clock::Time> {{
+            match page >> 24 {{
+{jit_times}            _ => None,
+            }}
+        }}
+        fn direct_code_mark(&mut self, page: u32, addr: u64, n: u32) {{\n            let (b0, b1) = (((addr & 0xFFF) >> 7) as u32, (((addr & 0xFFF) + n as u64 - 1) >> 7).min(31) as u32);\n            let bits = (u32::MAX >> (31 - b1)) & (u32::MAX << b0);\n            match page >> 24 {{\n{marks}            _ => {{}}\n            }}\n        }}\n        #[inline]\n        fn direct_skip(&mut self, addr: u64, n: u32) -> bool {{\n        let last = addr.wrapping_add(n as u64 - 1);\n{skips}        false\n        }}\n")
             } else {
                 String::new()
             };
@@ -1386,6 +1399,9 @@ impl<'a> Gen<'a> {
                 bus_impl,
                 "    #[inline]\n    fn after_step(&mut self) {{ self.board_sync(); }}\n    #[inline]\n    fn halted_cycle(&mut self) {{ self.sig.now += clock::C{cpu_clock}; }}\n"
             );
+            if self.jit {
+                bus_impl.push_str("    fn jit_board() -> Option<JitBoard> {\n        Board::JIT_BOARD\n    }\n    fn jit_fetch_time(&self, page: u32, addr: u64, n: u32) -> Option<u128> {\n        if Board::JIT_BOARD.is_some_and(|b| b.serial) { self.direct_jit_time(page, addr, n) } else { None }\n    }\n");
+            }
             if cpu.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Reset)) {
                 let _ = write!(
                     bus_impl,
@@ -1541,6 +1557,23 @@ impl<'a> Gen<'a> {
             let _ = write!(
                 with,
                 "        /// Call into `{n}` with a live context: how the embedding program\n        /// reaches its model fns (host input). The device is caught up first,\n        /// made due after, and the signal edges it raises are delivered.\n        pub fn with_{n}<R>(&mut self, f: impl FnOnce(&mut {cname}, &mut Ctx_{n}<'_>) -> R) -> R {{\n            let r = {{\n                let b = &mut self.{cpu_name}.bus;\n                {catch}\n                let r = {{ let mut c = {ctx}; f(&mut b.{n}, &mut c) }};\n               {due}\n                r\n            }};\n            self.deliver();\n            r\n        }}\n"
+            );
+        }
+        if self.jit {
+            let board = if cpu_retire || !prof.is_some_and(|p| p.direct_memory) {
+                "None".to_string()
+            } else {
+                format!(
+                    "Some(JitBoard {{ now: std::mem::offset_of!(Board, sig.now), code_time: std::mem::offset_of!(Board, code_time), direct_code: std::mem::offset_of!(Board, direct_code), writes: &[{jit_writes}], clock: clock::C{cpu_clock}, serial: {}, due: {}, events: {}, idle: {} }})",
+                    self.isa.serial_fetch,
+                    if sync_gate.is_empty() { "None" } else { "Some(std::mem::offset_of!(Board, marks.next_due))" },
+                    !events.is_empty(),
+                    sync.trim().is_empty()
+                )
+            };
+            let _ = write!(
+                o,
+                "    impl Board {{\n        /// How this board keeps time, for the JIT core.\n        pub const JIT_BOARD: Option<JitBoard> = {board};\n    }}\n"
             );
         }
         let mut deliver = String::new();

@@ -1,0 +1,935 @@
+// The Zilog Z80 instruction set architecture.
+//
+// This file is the architectural level of the Z80: what instructions mean,
+// with the undocumented behaviour real parts show (the X and Y flags, which
+// copy bits 3 and 5 of a result; MEMPTR, the internal register some
+// instructions leave an address in and BIT n,(HL) shows through X and Y;
+// Q, which says whether the last instruction wrote the flags, and which SCF
+// and CCF read). It is checked against the SingleStepTests Z80 vectors (see
+// `vectors` at the end): `machine vectors --isa Z80 targets/z80/z80.machine`.
+//
+// Encoding. The main page's opcodes are patterns over the classic
+// x/y/z fields (`01dddsss` for LD r,r'); where a register field is 6 it
+// names memory instead, and those are their own instructions with a more
+// specific pattern (SPEC 11.2d: the most specific pattern wins). DD and FD
+// are prefixes: they replace HL with IX or IY, H and L with their halves,
+// and (HL) with (IX+d), for the one instruction after them. CB and ED begin
+// two pages. After DD or FD, CB is followed by the displacement and then
+// the operation byte, which is not an opcode fetch: CB-page instructions
+// read their operation byte as an operand, plain or after a displacement,
+// chosen by whether a prefix came first.
+//
+// The refresh register R counts opcode fetches (M1 cycles): the istream's
+// `opcode` hook. A plain CB instruction's operation byte is an M1 too; its
+// semantics count it.
+
+isa Z80 {
+    space mem: addr u16 -> u8, little_endian;
+    space io:  addr u16 -> u8, little_endian;
+
+    /// The accumulator and the flags: carry, add/subtract, parity or
+    /// overflow, the undocumented X (bit 3), half carry, Y (bit 5), zero and
+    /// sign.
+    register AF: u16 {
+        F: u8 @ 0; A: u8 @ 8;
+        CF: u1 @ 0; NF: u1 @ 1; PF: u1 @ 2; XF: u1 @ 3; HF: u1 @ 4; YF: u1 @ 5; ZF: u1 @ 6; SF: u1 @ 7;
+    }
+    register BC: u16 { C: u8 @ 0; B: u8 @ 8; }
+    register DE: u16 { E: u8 @ 0; D: u8 @ 8; }
+    register HL: u16 { L: u8 @ 0; H: u8 @ 8; }
+    register IX: u16 { IXL: u8 @ 0; IXH: u8 @ 8; }
+    register IY: u16 { IYL: u8 @ 0; IYH: u8 @ 8; }
+    register SP: u16;
+    register PC: u16;
+    /// The interrupt vector base and the memory refresh counter (bit 7 is
+    /// kept; the low seven count M1 cycles).
+    register I: u8;
+    register R: u8;
+    /// The alternate registers (EX AF,AF'; EXX).
+    register AF_: u16;
+    register BC_: u16;
+    register DE_: u16;
+    register HL_: u16;
+    /// MEMPTR: an internal address register.
+    register WZ: u16;
+    register IFF1: u1;
+    register IFF2: u1;
+    register IM: u2;
+    /// Internal, per instruction: the last instruction was EI (no interrupt
+    /// is taken after it); LD A,I or LD A,R (an interrupt taken now would
+    /// reset P/V); it wrote the flags (`SQ`), and Q as the instruction before
+    /// it left it (`QP`, read by SCF and CCF).
+    register EI: u1;
+    register P: u1;
+    register SQ: u1;
+    register QP: u8;
+
+    /// The register pair DD and FD put in HL's place.
+    enum Idx : u2 { HL = 0, IX = 1, IY = 2 }
+    latch index: Idx = Idx::HL;
+
+    fault UD { vector: 0, class: Fault }
+
+    // -- the instruction stream ------------------------------------------------------
+
+    fn code_address() -> u16 { return PC; }
+    /// Code is at consecutive addresses up to the top of memory.
+    fn code_window() -> u32 { return 0x10000 - (PC as u32); }
+    fn next_byte() -> u8 {
+        let b = mem.read_u8(code_address());
+        PC = PC + 1;
+        return b;
+    }
+    /// An M1 cycle refreshes memory: R counts in its low seven bits.
+    fn m1() { R = (R & 0x80) | ((R + 1) & 0x7F); }
+    /// Before each instruction: Q as the last one left it, and the
+    /// per-instruction state cleared. (Interrupts are not taken yet.)
+    fn boundary() -> bool {
+        QP = if SQ == 1 { F } else { 0 };
+        SQ = 0;
+        EI = 0;
+        P = 0;
+        return false;
+    }
+
+    istream { space mem; address code_address; next next_byte; opcode m1; boundary boundary; window code_window; undefined UD; }
+
+    // -- flags --------------------------------------------------------------------------
+
+    /// S, Z, X and Y from a result.
+    fn szxy(v: u8) {
+        SF = v[7];
+        ZF = (v == 0) as u1;
+        YF = v[5];
+        XF = v[3];
+        SQ = 1;
+    }
+    fn parity_of(v: u8) -> u1 { return ~parity(v); }
+
+    /// The 8-bit arithmetic and logic: ADD ADC SUB SBC AND XOR OR CP (CP's
+    /// X and Y come from the operand).
+    fn alu(op: u3, a: u8, b: u8) -> u8 {
+        let c = CF as u16;
+        let aw = a as u16;
+        let bw = b as u16;
+        let r: u8 = match op {
+            0 | 1 => {
+                let z = aw + bw + (if op == 1 { c } else { 0 });
+                CF = z[8];
+                NF = 0;
+                let r8 = z as u8;
+                PF = ((~(a ^ b)) & (a ^ r8))[7];
+                HF = (a ^ b ^ r8)[4];
+                r8
+            }
+            2 | 3 | 7 => {
+                let z = aw - bw - (if op == 3 { c } else { 0 });
+                CF = z[8];
+                NF = 1;
+                let r8 = z as u8;
+                PF = ((a ^ b) & (a ^ r8))[7];
+                HF = (a ^ b ^ r8)[4];
+                r8
+            }
+            4 => { CF = 0; NF = 0; HF = 1; let r8 = a & b; PF = parity_of(r8); r8 }
+            5 => { CF = 0; NF = 0; HF = 0; let r8 = a ^ b; PF = parity_of(r8); r8 }
+            _ => { CF = 0; NF = 0; HF = 0; let r8 = a | b; PF = parity_of(r8); r8 }
+        };
+        szxy(r);
+        if op == 7 {
+            YF = b[5];
+            XF = b[3];
+            return a;
+        }
+        return r;
+    }
+    fn alu_name(op: u3) -> str {
+        return match op { 0 => "add", 1 => "adc", 2 => "sub", 3 => "sbc", 4 => "and", 5 => "xor", 6 => "or", _ => "cp" };
+    }
+
+    fn inc8(v: u8) -> u8 {
+        let z = v + 1;
+        NF = 0;
+        PF = (z == 0x80) as u1;
+        HF = ((z & 0x0F) == 0) as u1;
+        szxy(z);
+        return z;
+    }
+    fn dec8(v: u8) -> u8 {
+        let z = v - 1;
+        NF = 1;
+        PF = (z == 0x7F) as u1;
+        HF = ((z & 0x0F) == 0x0F) as u1;
+        szxy(z);
+        return z;
+    }
+
+    /// The CB page's rotates and shifts: RLC RRC RL RR SLA SRA SLL SRL.
+    fn rot(op: u3, x: u8) -> u8 {
+        let r: u8 = match op {
+            0 => { CF = x[7]; (x << 1) | (x >> 7) }
+            1 => { CF = x[0]; (x >> 1) | (x << 7) }
+            2 => { let c = CF as u8; CF = x[7]; (x << 1) | c }
+            3 => { let c = CF as u8; CF = x[0]; (x >> 1) | (c << 7) }
+            4 => { CF = x[7]; x << 1 }
+            5 => { CF = x[0]; (x & 0x80) | (x >> 1) }
+            6 => { CF = x[7]; (x << 1) | 1 }
+            _ => { CF = x[0]; x >> 1 }
+        };
+        NF = 0;
+        HF = 0;
+        PF = parity_of(r);
+        szxy(r);
+        return r;
+    }
+    fn rot_name(op: u3) -> str {
+        return match op { 0 => "rlc", 1 => "rrc", 2 => "rl", 3 => "rr", 4 => "sla", 5 => "sra", 6 => "sll", _ => "srl" };
+    }
+
+    /// BIT b,x: X and Y from `xy` (the operand for a register, MEMPTR's
+    /// high byte for memory).
+    fn bit(b: u3, x: u8, xy: u8) {
+        let z = x & ((1 as u8) << b);
+        NF = 0;
+        HF = 1;
+        PF = parity_of(z);
+        szxy(z);
+        YF = xy[5];
+        XF = xy[3];
+    }
+
+    /// The condition codes: NZ Z NC C PO PE P M.
+    fn cond(c: u3) -> bool {
+        return match c {
+            0 => ZF == 0, 1 => ZF == 1, 2 => CF == 0, 3 => CF == 1,
+            4 => PF == 0, 5 => PF == 1, 6 => SF == 0, _ => SF == 1,
+        };
+    }
+
+    // -- the index registers ------------------------------------------------------------
+
+    /// HL, or IX or IY after DD or FD.
+    fn hl() -> u16 {
+        return match index { Idx::IX => IX, Idx::IY => IY, _ => HL };
+    }
+    fn set_hl(v: u16) {
+        match index { Idx::IX => { IX = v; } Idx::IY => { IY = v; } _ => { HL = v; } }
+    }
+    fn is_indexed() -> u1 { return if index == Idx::HL { 0 } else { 1 }; }
+    /// (IX+d) or (IY+d): MEMPTR holds it.
+    fn indexed(d: i8) -> u16 {
+        let a = hl() + ((d as i16) as u16);
+        WZ = a;
+        return a;
+    }
+
+    // -- the stack ----------------------------------------------------------------------
+
+    fn push(v: u16) {
+        SP = SP - 1;
+        mem.write_u8(SP, (v >> 8) as u8);
+        SP = SP - 1;
+        mem.write_u8(SP, v as u8);
+    }
+    fn pop() -> u16 {
+        let lo = mem.read_u8(SP);
+        SP = SP + 1;
+        let hi = mem.read_u8(SP);
+        SP = SP + 1;
+        return ((hi as u16) << 8) | (lo as u16);
+    }
+    fn read16(a: u16) -> u16 { return (mem.read_u8(a) as u16) | ((mem.read_u8(a + 1) as u16) << 8); }
+    fn write16(a: u16, v: u16) { mem.write_u8(a, v as u8); mem.write_u8(a + 1, (v >> 8) as u8); }
+
+    // -- operands -----------------------------------------------------------------------
+
+    operand Imm8  { size 1; fields { value: u8 @ 0; } }
+    operand Imm16 { size 2; fields { value: u16 @ 0; } }
+    operand Disp8 { size 1; fields { value: i8 @ 0; } }
+    /// The CB page's operation byte: the operation (x), the bit or rotate
+    /// (y) and the register (z).
+    operand CbOp { size 1; fields { x: u2 @ 6; y: u3 @ 3; z: u3 @ 0; } }
+    /// After DD CB or FD CB: the displacement, then the operation byte.
+    operand IdxCbOp { size 2; fields { d: u8 @ 0; x: u2 @ 14; y: u3 @ 11; z: u3 @ 8; } }
+
+    /// B C D E H L - A (6, memory, is never selected).
+    operand_kind r : u8 {
+        select(n: u3) => match n { 0 => B, 1 => C, 2 => D, 3 => E, 4 => H, 5 => L, 6 => A, _ => A };
+    }
+    /// The same, with H and L the halves of IX or IY after DD or FD (`rxd`
+    /// and `rxs` too, for LD's two).
+    operand_kind rx : u8 {
+        select(n: u3) => match n {
+            0 => B, 1 => C, 2 => D, 3 => E,
+            4 => match index { Idx::IX => IXH, Idx::IY => IYH, _ => H },
+            5 => match index { Idx::IX => IXL, Idx::IY => IYL, _ => L },
+            6 => A, _ => A,
+        };
+    }
+    operand_kind rxd : u8 {
+        select(n: u3) => match n {
+            0 => B, 1 => C, 2 => D, 3 => E,
+            4 => match index { Idx::IX => IXH, Idx::IY => IYH, _ => H },
+            5 => match index { Idx::IX => IXL, Idx::IY => IYL, _ => L },
+            6 => A, _ => A,
+        };
+    }
+    operand_kind rxs : u8 {
+        select(n: u3) => match n {
+            0 => B, 1 => C, 2 => D, 3 => E,
+            4 => match index { Idx::IX => IXH, Idx::IY => IYH, _ => H },
+            5 => match index { Idx::IX => IXL, Idx::IY => IYL, _ => L },
+            6 => A, _ => A,
+        };
+    }
+    /// BC DE HL SP (HL: IX or IY after a prefix).
+    operand_kind rp : u16 {
+        select(n: u2) => match n { 0 => BC, 1 => DE, 2 => match index { Idx::IX => IX, Idx::IY => IY, _ => HL }, _ => SP };
+    }
+    /// BC DE HL AF, as PUSH and POP name them.
+    operand_kind rp2 : u16 {
+        select(n: u2) => match n { 0 => BC, 1 => DE, 2 => match index { Idx::IX => IX, Idx::IY => IY, _ => HL }, _ => AF };
+    }
+    /// The same without the prefix (the ED page's ADC, SBC and loads).
+    operand_kind rpe : u16 {
+        select(n: u2) => match n { 0 => BC, 1 => DE, 2 => HL, _ => SP };
+    }
+    operand_kind bits3 : u3 { value(n: u3) => n; }
+    operand_kind bits2 : u2 { value(n: u2) => n; }
+    operand_kind imm8  : u8  from i: Imm8  { read => i.value; }
+    operand_kind imm16 : u16 from i: Imm16 { read => i.value; }
+    operand_kind disp  : i8  from d: Disp8 { read => d.value; }
+    /// The CB page's fields: the bit or rotate, the register, and (after a
+    /// prefix) the displacement.
+    operand_kind bity : u3 { value(n: u3) => n; }
+    operand_kind regz : u3 { value(n: u3) => n; }
+    operand_kind dval : i8 { value(n: u8) => n as i8; }
+
+    // -- prefixes ----------------------------------------------------------------------
+
+    prefix IndexIx { encoding { opcode 0xDD; } semantics { index = Idx::IX; } }
+    prefix IndexIy { encoding { opcode 0xFD; } semantics { index = Idx::IY; } }
+
+    // -- 8-bit loads ---------------------------------------------------------------------
+
+    instruction Ld_r_r {
+        mnemonic "ld";
+        encoding { opcode "01dddsss" { d: rxd, s: rxs } }
+        operands (dst: rxd, src: rxs);
+        semantics { dst = src; }
+    }
+    instruction Ld_r_hl {
+        mnemonic "ld";
+        encoding { when is_indexed() == 0; opcode "01ddd110" { d: r } }
+        operands (dst: r);
+        semantics { dst = mem.read_u8(HL); }
+    }
+    instruction Ld_r_ix {
+        mnemonic "ld";
+        encoding { when is_indexed() == 1; opcode "01ddd110" { d: r }; Disp8 }
+        operands (dst: r, d: disp);
+        semantics { dst = mem.read_u8(indexed(d)); }
+    }
+    instruction Ld_hl_r {
+        mnemonic "ld";
+        encoding { when is_indexed() == 0; opcode "01110sss" { s: r } }
+        operands (src: r);
+        semantics { mem.write_u8(HL, src); }
+    }
+    instruction Ld_ix_r {
+        mnemonic "ld";
+        encoding { when is_indexed() == 1; opcode "01110sss" { s: r }; Disp8 }
+        operands (src: r, d: disp);
+        semantics { mem.write_u8(indexed(d), src); }
+    }
+    /// HALT: the Z80 then runs NOPs (refreshing) until an interrupt.
+    instruction Halt { mnemonic "halt"; encoding { opcode 0x76; } semantics { halt; } }
+
+    instruction Ld_r_n {
+        mnemonic "ld";
+        encoding { opcode "00ddd110" { d: rx }; Imm8 }
+        operands (dst: rx, n: imm8);
+        semantics { dst = n; }
+    }
+    instruction Ld_hl_n {
+        mnemonic "ld";
+        encoding { when is_indexed() == 0; opcode 0x36; Imm8 }
+        operands (n: imm8);
+        semantics { mem.write_u8(HL, n); }
+    }
+    instruction Ld_ix_n {
+        mnemonic "ld";
+        encoding { when is_indexed() == 1; opcode 0x36; Disp8; Imm8 }
+        operands (d: disp, n: imm8);
+        semantics { mem.write_u8(indexed(d), n); }
+    }
+    instruction Ld_a_bc { mnemonic "ld"; encoding { opcode 0x0A; } semantics { A = mem.read_u8(BC); WZ = BC + 1; } }
+    instruction Ld_a_de { mnemonic "ld"; encoding { opcode 0x1A; } semantics { A = mem.read_u8(DE); WZ = DE + 1; } }
+    instruction Ld_bc_a { mnemonic "ld"; encoding { opcode 0x02; } semantics { mem.write_u8(BC, A); WZ = ((BC + 1) & 0xFF) | ((A as u16) << 8); } }
+    instruction Ld_de_a { mnemonic "ld"; encoding { opcode 0x12; } semantics { mem.write_u8(DE, A); WZ = ((DE + 1) & 0xFF) | ((A as u16) << 8); } }
+    instruction Ld_a_nn {
+        mnemonic "ld";
+        encoding { opcode 0x3A; Imm16 }
+        operands (nn: imm16);
+        semantics { A = mem.read_u8(nn); WZ = nn + 1; }
+    }
+    instruction Ld_nn_a {
+        mnemonic "ld";
+        encoding { opcode 0x32; Imm16 }
+        operands (nn: imm16);
+        semantics { mem.write_u8(nn, A); WZ = ((nn + 1) & 0xFF) | ((A as u16) << 8); }
+    }
+
+    // -- 16-bit loads --------------------------------------------------------------------
+
+    instruction Ld_rp_nn {
+        mnemonic "ld";
+        encoding { opcode "00pp0001" { p: rp }; Imm16 }
+        operands (dst: rp, nn: imm16);
+        semantics { dst = nn; }
+    }
+    instruction Ld_hl_inn {
+        mnemonic "ld";
+        encoding { opcode 0x2A; Imm16 }
+        operands (nn: imm16);
+        semantics { set_hl(read16(nn)); WZ = nn + 1; }
+    }
+    instruction Ld_inn_hl {
+        mnemonic "ld";
+        encoding { opcode 0x22; Imm16 }
+        operands (nn: imm16);
+        semantics { write16(nn, hl()); WZ = nn + 1; }
+    }
+    instruction Ld_sp_hl { mnemonic "ld"; encoding { opcode 0xF9; } semantics { SP = hl(); } }
+    instruction Push { mnemonic "push"; encoding { opcode "11pp0101" { p: rp2 } } operands (src: rp2); semantics { push(src); } }
+    instruction Pop  { mnemonic "pop";  encoding { opcode "11pp0001" { p: rp2 } } operands (dst: rp2); semantics { dst = pop(); } }
+
+    // -- exchanges -----------------------------------------------------------------------
+
+    instruction Ex_de_hl { mnemonic "ex"; encoding { opcode 0xEB; } semantics { let t = DE; DE = HL; HL = t; } }
+    instruction Ex_af_af { mnemonic "ex"; encoding { opcode 0x08; } semantics { let t = AF; AF = AF_; AF_ = t; } }
+    instruction Exx {
+        mnemonic "exx";
+        encoding { opcode 0xD9; }
+        semantics { let b = BC; BC = BC_; BC_ = b; let d = DE; DE = DE_; DE_ = d; let h = HL; HL = HL_; HL_ = h; }
+    }
+    instruction Ex_sp_hl {
+        mnemonic "ex";
+        encoding { opcode 0xE3; }
+        semantics { let v = read16(SP); write16(SP, hl()); set_hl(v); WZ = v; }
+    }
+
+    // -- 8-bit arithmetic and logic --------------------------------------------------------
+
+    instruction Alu_r {
+        mnemonic alu_name(op);
+        encoding { opcode "10ooosss" { o: bits3, s: rx } }
+        operands (op: bits3, src: rx);
+        semantics { let r = alu(op, A, src); A = r; }
+    }
+    instruction Alu_hl {
+        mnemonic alu_name(op);
+        encoding { when is_indexed() == 0; opcode "10ooo110" { o: bits3 } }
+        operands (op: bits3);
+        semantics { let r = alu(op, A, mem.read_u8(HL)); A = r; }
+    }
+    instruction Alu_ix {
+        mnemonic alu_name(op);
+        encoding { when is_indexed() == 1; opcode "10ooo110" { o: bits3 }; Disp8 }
+        operands (op: bits3, d: disp);
+        semantics { let r = alu(op, A, mem.read_u8(indexed(d))); A = r; }
+    }
+    instruction Alu_n {
+        mnemonic alu_name(op);
+        encoding { opcode "11ooo110" { o: bits3 }; Imm8 }
+        operands (op: bits3, n: imm8);
+        semantics { let r = alu(op, A, n); A = r; }
+    }
+    instruction Inc_r { mnemonic "inc"; encoding { opcode "00ddd100" { d: rx } } operands (dst: rx); semantics { dst = inc8(dst); } }
+    instruction Dec_r { mnemonic "dec"; encoding { opcode "00ddd101" { d: rx } } operands (dst: rx); semantics { dst = dec8(dst); } }
+    instruction Inc_hl { mnemonic "inc"; encoding { when is_indexed() == 0; opcode 0x34; } semantics { mem.write_u8(HL, inc8(mem.read_u8(HL))); } }
+    instruction Dec_hl { mnemonic "dec"; encoding { when is_indexed() == 0; opcode 0x35; } semantics { mem.write_u8(HL, dec8(mem.read_u8(HL))); } }
+    instruction Inc_ix {
+        mnemonic "inc";
+        encoding { when is_indexed() == 1; opcode 0x34; Disp8 }
+        operands (d: disp);
+        semantics { let a = indexed(d); mem.write_u8(a, inc8(mem.read_u8(a))); }
+    }
+    instruction Dec_ix {
+        mnemonic "dec";
+        encoding { when is_indexed() == 1; opcode 0x35; Disp8 }
+        operands (d: disp);
+        semantics { let a = indexed(d); mem.write_u8(a, dec8(mem.read_u8(a))); }
+    }
+
+    // -- accumulator and flags -------------------------------------------------------------
+
+    instruction Rlca { mnemonic "rlca"; encoding { opcode 0x07; } semantics { let a = A; A = (a << 1) | (a >> 7); CF = a[7]; NF = 0; HF = 0; YF = A[5]; XF = A[3]; SQ = 1; } }
+    instruction Rrca { mnemonic "rrca"; encoding { opcode 0x0F; } semantics { let a = A; A = (a >> 1) | (a << 7); CF = a[0]; NF = 0; HF = 0; YF = A[5]; XF = A[3]; SQ = 1; } }
+    instruction Rla  { mnemonic "rla";  encoding { opcode 0x17; } semantics { let a = A; A = (a << 1) | (CF as u8); CF = a[7]; NF = 0; HF = 0; YF = A[5]; XF = A[3]; SQ = 1; } }
+    instruction Rra  { mnemonic "rra";  encoding { opcode 0x1F; } semantics { let a = A; A = (a >> 1) | ((CF as u8) << 7); CF = a[0]; NF = 0; HF = 0; YF = A[5]; XF = A[3]; SQ = 1; } }
+    instruction Daa {
+        mnemonic "daa";
+        encoding { opcode 0x27; }
+        semantics {
+            let a = A;
+            let mut v = A;
+            if CF == 1 || v > 0x99 { v = if NF == 1 { v - 0x60 } else { v + 0x60 }; CF = 1; }
+            if HF == 1 || (v & 0x0F) > 9 { v = if NF == 1 { v - 0x06 } else { v + 0x06 }; }
+            A = v;
+            PF = parity_of(v);
+            szxy(v);
+            HF = (v ^ a)[4];
+        }
+    }
+    instruction Cpl { mnemonic "cpl"; encoding { opcode 0x2F; } semantics { A = ~A; NF = 1; HF = 1; YF = A[5]; XF = A[3]; SQ = 1; } }
+    /// SCF and CCF: X and Y are A's bits ORed with the flags', unless the
+    /// instruction before wrote the flags (Q), when they are A's alone. A
+    /// prefix before them hides Q.
+    instruction Scf {
+        mnemonic "scf";
+        encoding { opcode 0x37; }
+        semantics {
+            let f = if QP != 0 && index == Idx::HL { F & 0xD7 } else { F };
+            CF = 1; NF = 0; HF = 0;
+            YF = (f | A)[5]; XF = (f | A)[3];
+            SQ = 1;
+        }
+    }
+    instruction Ccf {
+        mnemonic "ccf";
+        encoding { opcode 0x3F; }
+        semantics {
+            let f = if QP != 0 && index == Idx::HL { F & 0xD7 } else { F };
+            HF = CF; CF = ~CF; NF = 0;
+            YF = (f | A)[5]; XF = (f | A)[3];
+            SQ = 1;
+        }
+    }
+
+    // -- 16-bit arithmetic -----------------------------------------------------------------
+
+    /// ADD HL,rp: H from bit 11's carry, C from bit 15's, X and Y from the
+    /// high byte; S, Z and P/V kept. MEMPTR is HL before, plus one.
+    instruction Add_hl_rp {
+        mnemonic "add";
+        encoding { opcode "00pp1001" { p: rp } }
+        operands (src: rp);
+        semantics {
+            let a = hl();
+            let b = src;
+            let z = (a as u32) + (b as u32);
+            let r = z as u16;
+            WZ = a + 1;
+            set_hl(r);
+            CF = z[16];
+            NF = 0;
+            HF = (a ^ b ^ r)[12];
+            YF = r[13];
+            XF = r[11];
+            SQ = 1;
+        }
+    }
+    instruction Inc_rp { mnemonic "inc"; encoding { opcode "00pp0011" { p: rp } } operands (dst: rp); semantics { dst = dst + 1; } }
+    instruction Dec_rp { mnemonic "dec"; encoding { opcode "00pp1011" { p: rp } } operands (dst: rp); semantics { dst = dst - 1; } }
+
+    // -- jumps, calls, returns -------------------------------------------------------------
+
+    instruction Jp {
+        mnemonic "jp";
+        encoding { opcode 0xC3; Imm16 }
+        operands (nn: imm16);
+        semantics { WZ = nn; PC = nn; }
+    }
+    instruction Jp_cc {
+        mnemonic "jp";
+        encoding { opcode "11ccc010" { c: bits3 }; Imm16 }
+        operands (c: bits3, nn: imm16);
+        semantics { WZ = nn; if cond(c) { PC = nn; } }
+    }
+    instruction Jp_hl { mnemonic "jp"; encoding { opcode 0xE9; } semantics { PC = hl(); } }
+    instruction Jr {
+        mnemonic "jr";
+        encoding { opcode 0x18; Disp8 }
+        operands (e: disp);
+        semantics { let t = PC + ((e as i16) as u16); WZ = t; PC = t; }
+    }
+    instruction Jr_cc {
+        mnemonic "jr";
+        encoding { opcode "001cc000" { c: bits2 }; Disp8 }
+        operands (c: bits2, e: disp);
+        semantics { if cond(c as u3) { let t = PC + ((e as i16) as u16); WZ = t; PC = t; } }
+    }
+    instruction Djnz {
+        mnemonic "djnz";
+        encoding { opcode 0x10; Disp8 }
+        operands (e: disp);
+        semantics { B = B - 1; if B != 0 { let t = PC + ((e as i16) as u16); WZ = t; PC = t; } }
+    }
+    instruction Call {
+        mnemonic "call";
+        encoding { opcode 0xCD; Imm16 }
+        operands (nn: imm16);
+        semantics { WZ = nn; push(PC); PC = nn; }
+    }
+    instruction Call_cc {
+        mnemonic "call";
+        encoding { opcode "11ccc100" { c: bits3 }; Imm16 }
+        operands (c: bits3, nn: imm16);
+        semantics { WZ = nn; if cond(c) { push(PC); PC = nn; } }
+    }
+    instruction Ret { mnemonic "ret"; encoding { opcode 0xC9; } semantics { let a = pop(); WZ = a; PC = a; } }
+    instruction Ret_cc {
+        mnemonic "ret";
+        encoding { opcode "11ccc000" { c: bits3 } }
+        operands (c: bits3);
+        semantics { if cond(c) { let a = pop(); WZ = a; PC = a; } }
+    }
+    instruction Rst {
+        mnemonic "rst";
+        encoding { opcode "11ttt111" { t: bits3 } }
+        operands (t: bits3);
+        semantics { push(PC); let a = (t as u16) << 3; WZ = a; PC = a; }
+    }
+
+    // -- control ---------------------------------------------------------------------------
+
+    instruction Nop { mnemonic "nop"; encoding { opcode 0x00; } semantics { } }
+    instruction Di  { mnemonic "di";  encoding { opcode 0xF3; } semantics { IFF1 = 0; IFF2 = 0; } }
+    instruction Ei  { mnemonic "ei";  encoding { opcode 0xFB; } semantics { IFF1 = 1; IFF2 = 1; EI = 1; } }
+
+    // -- I/O -------------------------------------------------------------------------------
+
+    /// IN A,(n): the port's high byte is A. MEMPTR is that port plus one.
+    instruction In_a_n {
+        mnemonic "in";
+        encoding { opcode 0xDB; Imm8 }
+        operands (n: imm8);
+        semantics { let port = ((A as u16) << 8) | (n as u16); A = io.read_u8(port); WZ = port + 1; }
+    }
+    instruction Out_n_a {
+        mnemonic "out";
+        encoding { opcode 0xD3; Imm8 }
+        operands (n: imm8);
+        semantics { let port = ((A as u16) << 8) | (n as u16); io.write_u8(port, A); WZ = (((n as u16) + 1) & 0xFF) | ((A as u16) << 8); }
+    }
+
+    // -- the CB page -----------------------------------------------------------------------
+
+    /// The operation byte is an M1 cycle: R counts it.
+    instruction Cb_rot {
+        mnemonic rot_name(y);
+        encoding { when is_indexed() == 0; opcode 0xCB; CbOp { x: 0, y: bity, z: regz } }
+        operands (y: bity, z: regz);
+        semantics { m1(); if z == 6 { let v = rot(y, mem.read_u8(HL)); mem.write_u8(HL, v); } else { r.select(z) = rot(y, r.select(z)); } }
+    }
+    instruction Cb_bit {
+        mnemonic "bit";
+        encoding { when is_indexed() == 0; opcode 0xCB; CbOp { x: 1, y: bity, z: regz } }
+        operands (y: bity, z: regz);
+        semantics { m1(); if z == 6 { bit(y, mem.read_u8(HL), (WZ >> 8) as u8); } else { let v = r.select(z); bit(y, v, v); } }
+    }
+    instruction Cb_res {
+        mnemonic "res";
+        encoding { when is_indexed() == 0; opcode 0xCB; CbOp { x: 2, y: bity, z: regz } }
+        operands (y: bity, z: regz);
+        semantics { m1(); let m = ~((1 as u8) << y); if z == 6 { mem.write_u8(HL, mem.read_u8(HL) & m); } else { r.select(z) = r.select(z) & m; } }
+    }
+    instruction Cb_set {
+        mnemonic "set";
+        encoding { when is_indexed() == 0; opcode 0xCB; CbOp { x: 3, y: bity, z: regz } }
+        operands (y: bity, z: regz);
+        semantics { m1(); let m = (1 as u8) << y; if z == 6 { mem.write_u8(HL, mem.read_u8(HL) | m); } else { r.select(z) = r.select(z) | m; } }
+    }
+    /// DD CB d op: on (IX+d); a rotate, RES or SET also leaves its result in
+    /// register z when z is not 6 (undocumented).
+    instruction Ix_rot {
+        mnemonic rot_name(y);
+        encoding { when is_indexed() == 1; opcode 0xCB; IdxCbOp { x: 0, d: dval, y: bity, z: regz } }
+        operands (d: dval, y: bity, z: regz);
+        semantics { let a = indexed(d); let v = rot(y, mem.read_u8(a)); mem.write_u8(a, v); if z != 6 { r.select(z) = v; } }
+    }
+    instruction Ix_bit {
+        mnemonic "bit";
+        encoding { when is_indexed() == 1; opcode 0xCB; IdxCbOp { x: 1, d: dval, y: bity, z: regz } }
+        operands (d: dval, y: bity, z: regz);
+        semantics { let a = indexed(d); bit(y, mem.read_u8(a), (a >> 8) as u8); }
+    }
+    instruction Ix_res {
+        mnemonic "res";
+        encoding { when is_indexed() == 1; opcode 0xCB; IdxCbOp { x: 2, d: dval, y: bity, z: regz } }
+        operands (d: dval, y: bity, z: regz);
+        semantics { let a = indexed(d); let v = mem.read_u8(a) & ~((1 as u8) << y); mem.write_u8(a, v); if z != 6 { r.select(z) = v; } }
+    }
+    instruction Ix_set {
+        mnemonic "set";
+        encoding { when is_indexed() == 1; opcode 0xCB; IdxCbOp { x: 3, d: dval, y: bity, z: regz } }
+        operands (d: dval, y: bity, z: regz);
+        semantics { let a = indexed(d); let v = mem.read_u8(a) | ((1 as u8) << y); mem.write_u8(a, v); if z != 6 { r.select(z) = v; } }
+    }
+
+    // -- the ED page -----------------------------------------------------------------------
+
+    /// ED with no instruction: a two-byte NOP.
+    instruction Ed_nop { mnemonic "nop"; encoding { opcode [0xED, "--------"]; } semantics { } }
+
+    /// IN r,(C): flags from the byte; (C) with r = 6 sets only the flags.
+    instruction In_r_c {
+        mnemonic "in";
+        encoding { opcode [0xED, "01rrr000"] { r: bits3 } }
+        operands (n: bits3);
+        semantics {
+            let v = io.read_u8(BC);
+            WZ = BC + 1;
+            NF = 0; HF = 0; PF = parity_of(v); szxy(v);
+            if n != 6 { r.select(n) = v; }
+        }
+    }
+    instruction Out_c_r {
+        mnemonic "out";
+        encoding { opcode [0xED, "01rrr001"] { r: bits3 } }
+        operands (n: bits3);
+        semantics { io.write_u8(BC, if n == 6 { 0 } else { r.select(n) }); WZ = BC + 1; }
+    }
+    /// SBC HL,rp and ADC HL,rp: every flag, X and Y from the high byte.
+    instruction Sbc_hl_rp {
+        mnemonic "sbc";
+        encoding { opcode [0xED, "01pp0010"] { p: rpe } }
+        operands (src: rpe);
+        semantics {
+            let a = HL;
+            let b = src;
+            let z = (a as u32) - (b as u32) - (CF as u32);
+            let r = z as u16;
+            WZ = a + 1;
+            HL = r;
+            CF = z[16];
+            NF = 1;
+            PF = ((a ^ b) & (a ^ r))[15];
+            HF = (a ^ b ^ r)[12];
+            SF = r[15];
+            ZF = (r == 0) as u1;
+            YF = r[13];
+            XF = r[11];
+            SQ = 1;
+        }
+    }
+    instruction Adc_hl_rp {
+        mnemonic "adc";
+        encoding { opcode [0xED, "01pp1010"] { p: rpe } }
+        operands (src: rpe);
+        semantics {
+            let a = HL;
+            let b = src;
+            let z = (a as u32) + (b as u32) + (CF as u32);
+            let r = z as u16;
+            WZ = a + 1;
+            HL = r;
+            CF = z[16];
+            NF = 0;
+            PF = ((~(a ^ b)) & (a ^ r))[15];
+            HF = (a ^ b ^ r)[12];
+            SF = r[15];
+            ZF = (r == 0) as u1;
+            YF = r[13];
+            XF = r[11];
+            SQ = 1;
+        }
+    }
+    instruction Ld_inn_rp {
+        mnemonic "ld";
+        encoding { opcode [0xED, "01pp0011"] { p: rpe }; Imm16 }
+        operands (src: rpe, nn: imm16);
+        semantics { write16(nn, src); WZ = nn + 1; }
+    }
+    instruction Ld_rp_inn {
+        mnemonic "ld";
+        encoding { opcode [0xED, "01pp1011"] { p: rpe }; Imm16 }
+        operands (dst: rpe, nn: imm16);
+        semantics { dst = read16(nn); WZ = nn + 1; }
+    }
+    instruction Neg {
+        mnemonic "neg";
+        encoding { opcode [0xED, "01---100"]; }
+        semantics { let r = alu(2, 0, A); A = r; }
+    }
+    /// RETN and RETI: IFF1 from IFF2.
+    instruction Retn {
+        mnemonic "retn";
+        encoding { opcode [0xED, "01---101"]; }
+        semantics { let a = pop(); WZ = a; PC = a; IFF1 = IFF2; }
+    }
+    instruction Im {
+        mnemonic "im";
+        encoding { opcode [0xED, "01mmm110"] { m: bits3 } }
+        operands (m: bits3);
+        semantics { IM = match m & 3 { 0 => 0, 1 => 0, 2 => 1, _ => 2 }; }
+    }
+    instruction Ld_i_a { mnemonic "ld"; encoding { opcode [0xED, 0x47]; } semantics { I = A; } }
+    instruction Ld_r_a { mnemonic "ld"; encoding { opcode [0xED, 0x4F]; } semantics { R = A; } }
+    /// LD A,I and LD A,R: P/V is IFF2.
+    instruction Ld_a_i {
+        mnemonic "ld";
+        encoding { opcode [0xED, 0x57]; }
+        semantics { A = I; NF = 0; HF = 0; PF = IFF2; szxy(A); P = 1; }
+    }
+    instruction Ld_a_r {
+        mnemonic "ld";
+        encoding { opcode [0xED, 0x5F]; }
+        semantics { A = R; NF = 0; HF = 0; PF = IFF2; szxy(A); P = 1; }
+    }
+    instruction Rrd {
+        mnemonic "rrd";
+        encoding { opcode [0xED, 0x67]; }
+        semantics {
+            let v = mem.read_u8(HL);
+            WZ = HL + 1;
+            mem.write_u8(HL, (A << 4) | (v >> 4));
+            A = (A & 0xF0) | (v & 0x0F);
+            NF = 0; HF = 0; PF = parity_of(A); szxy(A);
+        }
+    }
+    instruction Rld {
+        mnemonic "rld";
+        encoding { opcode [0xED, 0x6F]; }
+        semantics {
+            let v = mem.read_u8(HL);
+            WZ = HL + 1;
+            mem.write_u8(HL, (v << 4) | (A & 0x0F));
+            A = (A & 0xF0) | (v >> 4);
+            NF = 0; HF = 0; PF = parity_of(A); szxy(A);
+        }
+    }
+
+    // -- block transfers, compares and I/O ----------------------------------------------------
+
+    /// A repeating block instruction that goes round again: the PC back at
+    /// it, MEMPTR one past that, and X and Y from the PC's bits 11 and 13.
+    fn repeat() {
+        PC = PC - 2;
+        WZ = PC + 1;
+        XF = PC[11];
+        YF = PC[13];
+    }
+    /// LDI, LDD, LDIR, LDDR: `dir` 0 up, 1 down; `rep` repeats.
+    fn ld_block(dir: u1, rep: u1) {
+        let v = mem.read_u8(HL);
+        mem.write_u8(DE, v);
+        if dir == 0 { HL = HL + 1; DE = DE + 1; } else { HL = HL - 1; DE = DE - 1; }
+        BC = BC - 1;
+        let n = A + v;
+        NF = 0; HF = 0; PF = (BC != 0) as u1;
+        XF = n[3]; YF = n[1];
+        SQ = 1;
+        if rep == 1 && BC != 0 { repeat(); }
+    }
+    fn cp_block(dir: u1, rep: u1) {
+        let v = mem.read_u8(HL);
+        if dir == 0 { HL = HL + 1; WZ = WZ + 1; } else { HL = HL - 1; WZ = WZ - 1; }
+        BC = BC - 1;
+        let n = A - v;
+        NF = 1;
+        PF = (BC != 0) as u1;
+        HF = (A ^ v ^ n)[4];
+        let m = n - (HF as u8);
+        szxy(n);
+        XF = m[3]; YF = m[1];
+        if rep == 1 && BC != 0 && ZF == 0 { repeat(); }
+    }
+    /// An I/O block instruction going round again also changes P/V and H,
+    /// by the byte it moved and B (as the latest research on the Z80 has it).
+    fn repeat_io(v: u8) {
+        repeat();
+        if CF == 1 {
+            if v[7] == 1 {
+                PF = PF ^ (parity_of((B - 1) & 7) ^ 1);
+                HF = ((B & 0x0F) == 0) as u1;
+            } else {
+                PF = PF ^ (parity_of((B + 1) & 7) ^ 1);
+                HF = ((B & 0x0F) == 0x0F) as u1;
+            }
+        } else {
+            PF = PF ^ (parity_of(B & 7) ^ 1);
+        }
+    }
+    /// INI and friends: the flags from B, and from the byte and C (+1 or -1).
+    fn in_block(dir: u1, rep: u1) {
+        WZ = if dir == 0 { BC + 1 } else { BC - 1 };
+        let v = io.read_u8(BC);
+        B = B - 1;
+        mem.write_u8(HL, v);
+        if dir == 0 { HL = HL + 1; } else { HL = HL - 1; }
+        let c = if dir == 0 { C + 1 } else { C - 1 };
+        let k = (c as u16) + (v as u16);
+        CF = k[8];
+        HF = k[8];
+        NF = v[7];
+        PF = parity_of(((k as u8) & 7) ^ B);
+        szxy(B);
+        if rep == 1 && B != 0 { repeat_io(v); }
+    }
+    fn out_block(dir: u1, rep: u1) {
+        let v = mem.read_u8(HL);
+        B = B - 1;
+        io.write_u8(BC, v);
+        if dir == 0 { HL = HL + 1; WZ = BC + 1; } else { HL = HL - 1; WZ = BC - 1; }
+        let k = (L as u16) + (v as u16);
+        CF = k[8];
+        HF = k[8];
+        NF = v[7];
+        PF = parity_of(((k as u8) & 7) ^ B);
+        szxy(B);
+        if rep == 1 && B != 0 { repeat_io(v); }
+    }
+    instruction Ldi  { mnemonic "ldi";  encoding { opcode [0xED, 0xA0]; } semantics { ld_block(0, 0); } }
+    instruction Ldd  { mnemonic "ldd";  encoding { opcode [0xED, 0xA8]; } semantics { ld_block(1, 0); } }
+    instruction Ldir { mnemonic "ldir"; encoding { opcode [0xED, 0xB0]; } semantics { ld_block(0, 1); } }
+    instruction Lddr { mnemonic "lddr"; encoding { opcode [0xED, 0xB8]; } semantics { ld_block(1, 1); } }
+    instruction Cpi  { mnemonic "cpi";  encoding { opcode [0xED, 0xA1]; } semantics { cp_block(0, 0); } }
+    instruction Cpd  { mnemonic "cpd";  encoding { opcode [0xED, 0xA9]; } semantics { cp_block(1, 0); } }
+    instruction Cpir { mnemonic "cpir"; encoding { opcode [0xED, 0xB1]; } semantics { cp_block(0, 1); } }
+    instruction Cpdr { mnemonic "cpdr"; encoding { opcode [0xED, 0xB9]; } semantics { cp_block(1, 1); } }
+    instruction Ini  { mnemonic "ini";  encoding { opcode [0xED, 0xA2]; } semantics { in_block(0, 0); } }
+    instruction Ind  { mnemonic "ind";  encoding { opcode [0xED, 0xAA]; } semantics { in_block(1, 0); } }
+    instruction Inir { mnemonic "inir"; encoding { opcode [0xED, 0xB2]; } semantics { in_block(0, 1); } }
+    instruction Indr { mnemonic "indr"; encoding { opcode [0xED, 0xBA]; } semantics { in_block(1, 1); } }
+    instruction Outi { mnemonic "outi"; encoding { opcode [0xED, 0xA3]; } semantics { out_block(0, 0); } }
+    instruction Outd { mnemonic "outd"; encoding { opcode [0xED, 0xAB]; } semantics { out_block(1, 0); } }
+    instruction Otir { mnemonic "otir"; encoding { opcode [0xED, 0xB3]; } semantics { out_block(0, 1); } }
+    instruction Otdr { mnemonic "otdr"; encoding { opcode [0xED, 0xBB]; } semantics { out_block(1, 1); } }
+}
+
+// -- hardware vectors -------------------------------------------------------------------------
+
+vectors "../../../simulators/test/z80/SingleStepTests/v1/*.json" on Z80 {
+    format json;
+    memory mem;
+    ports io;
+    reg pc = PC;
+    reg sp = SP;
+    reg a = A;
+    reg f = F;
+    reg b = B;
+    reg c = C;
+    reg d = D;
+    reg e = E;
+    reg h = H;
+    reg l = L;
+    reg i = I;
+    reg r = R;
+    reg ix = IX;
+    reg iy = IY;
+    reg wz = WZ;
+    reg af_ = AF_;
+    reg bc_ = BC_;
+    reg de_ = DE_;
+    reg hl_ = HL_;
+    reg im = IM;
+    reg iff1 = IFF1;
+    reg iff2 = IFF2;
+    reg ei = EI;
+    reg p = P;
+    /// Q: F if the instruction wrote the flags, else 0. A test's initial Q
+    /// is the instruction before it's.
+    reg q { load => SQ = (value != 0) as u1; read => if SQ == 1 { F } else { 0 }; }
+}

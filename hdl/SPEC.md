@@ -970,6 +970,12 @@ lets the processor model empty its own state). When it falls, the
 processor starts as after a reset. On the AT the keyboard controller
 pulses it, which is how the BIOS brings the 286 back from protected mode.
 
+`opcode` names a `fn ()` the decoder runs after each opcode byte it
+fetches (the bytes of an encoding's `opcode`, and a prefix's), not after
+an operand's: the Z80 refreshes memory in its M1 cycles, and R counts them
+(`fn m1() { R = (R & 0x80) | ((R + 1) & 0x7F); }`). The trace core records
+how many a step made and makes them again when it replays it.
+
 The window must be exact: inside it, `address` would return the
 window's start plus the offset, and would raise nothing. Getting it
 wrong changes behaviour, not just speed.
@@ -1010,7 +1016,12 @@ instruction Add_rm8_r8 {
   `operands` must be bound exactly once. No byte sequence may decode to two
   instructions: instructions whose leading opcode patterns overlap must
   fetch the same operand first and constrain one of its fields to different
-  values (E1045). The assembler, disassembler and decoder are generated
+  values, or differ in a decode condition (section 11.2d), or one must be
+  **more specific**: a pattern that fixes strictly more bits and refines
+  the other wins on the bytes it matches (the Z80's `HALT`, 76h, inside
+  `LD r,r'`, `01dddsss`). Two patterns that meet without either refining
+  the other may stand when an instruction more specific than both covers
+  where they meet (E1045). The assembler, disassembler and decoder are generated
   from this. When an `implements` routine exists, the compiler also
   **derives** the encoding from the routine's `fetch` sequence and reports
   any mismatch.
@@ -1735,6 +1746,15 @@ Built into the language and the compiler:
    raises an exception run like any other: the ISA's delivery fn must
    produce the state the hardware did. `machine vectors --isa I286
    files...` runs it.
+
+   `format json;` reads the SingleStepTests format for 8-bit processors
+   (the Z80's): a file is a list of tests, each an initial and final state
+   of named registers and RAM, the ports it reads and writes, and a cycle
+   trace. The register names are the file's own, and each is as wide as the
+   place it maps to. `ports io;` names the space the ports are on: a port
+   the test reads answers its value, and one it writes is compared after.
+   A JSON test is one instruction (one iteration of a repeating one), so
+   the runner makes one step rather than running to a `halt`.
 5. **Conformance (differential)**: for every component with two levels, the
    compiler generates a harness that runs both from the same initial state
    and stimulus and compares the architectural projection (processors) at

@@ -1084,6 +1084,9 @@ pub struct IstreamDecl {
     pub double: Option<Path>,
     /// `lock locked;`: the latch a lock prefix sets.
     pub lock: Option<Path>,
+    /// `opcode m1;`: a `fn ()` run after each opcode byte the decoder
+    /// fetches (not operand bytes): the Z80's M1 cycles refresh R.
+    pub opcode: Option<Path>,
     pub span: Span,
 }
 
@@ -1230,6 +1233,9 @@ pub enum VectorsItem {
     Format(Ident),
     /// `memory mem;`: the address space vector RAM addresses refer to.
     Memory(Ident),
+    /// `ports io;`: the space the vectors' port reads and writes are on
+    /// (JSON vectors).
+    Ports(Ident),
     /// `open io = 0xFF;`: in the test environment nothing answers on this
     /// space; reads return the value and writes are discarded.
     Open {

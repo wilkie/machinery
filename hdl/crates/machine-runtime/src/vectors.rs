@@ -52,6 +52,11 @@ pub struct MooTest {
     pub hash: Option<String>,
     /// The hardware's cycle trace, summarised, when the file has one.
     pub timing: Option<CycleSummary>,
+    /// I/O the instruction made (JSON vectors): `(port, value, written)`;
+    /// a read's value is what the port answers.
+    pub ports: Vec<(u32, u8, bool)>,
+    /// Clock cycles the instruction took (JSON vectors: one entry a cycle).
+    pub cycles: Option<u32>,
 }
 
 /// What timing needs from a captured cycle trace: every cycle from the jump
@@ -433,4 +438,222 @@ mod tests {
         assert_eq!(tests[0].initial.reg("ax"), Some(0x1234));
         assert_eq!(tests[0].exception, Some(6));
     }
+}
+
+// -- JSON vectors (the SingleStepTests format for 8-bit processors) ------------------
+
+/// A JSON value: only what the vector files use.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Json {
+    Null,
+    Bool(bool),
+    Num(f64),
+    Str(String),
+    Arr(Vec<Json>),
+    Obj(Vec<(String, Json)>),
+}
+
+impl Json {
+    pub fn get(&self, key: &str) -> Option<&Json> {
+        match self {
+            Json::Obj(kv) => kv.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+    pub fn num(&self) -> Option<f64> {
+        match self {
+            Json::Num(n) => Some(*n),
+            _ => None,
+        }
+    }
+    pub fn arr(&self) -> &[Json] {
+        match self {
+            Json::Arr(a) => a,
+            _ => &[],
+        }
+    }
+}
+
+struct Parser<'a> {
+    s: &'a [u8],
+    i: usize,
+}
+
+impl Parser<'_> {
+    fn ws(&mut self) {
+        while self.i < self.s.len() && self.s[self.i].is_ascii_whitespace() {
+            self.i += 1;
+        }
+    }
+    fn err(&self, what: &str) -> MooError {
+        MooError(format!("JSON: {what} at byte {}", self.i))
+    }
+    fn value(&mut self) -> Result<Json, MooError> {
+        self.ws();
+        let Some(&c) = self.s.get(self.i) else { return Err(self.err("unexpected end")) };
+        match c {
+            b'{' => {
+                self.i += 1;
+                let mut kv = Vec::new();
+                self.ws();
+                if self.s.get(self.i) == Some(&b'}') {
+                    self.i += 1;
+                    return Ok(Json::Obj(kv));
+                }
+                loop {
+                    self.ws();
+                    let Json::Str(k) = self.value()? else { return Err(self.err("expected a key")) };
+                    self.ws();
+                    if self.s.get(self.i) != Some(&b':') {
+                        return Err(self.err("expected `:`"));
+                    }
+                    self.i += 1;
+                    let v = self.value()?;
+                    kv.push((k, v));
+                    self.ws();
+                    match self.s.get(self.i) {
+                        Some(b',') => self.i += 1,
+                        Some(b'}') => {
+                            self.i += 1;
+                            return Ok(Json::Obj(kv));
+                        }
+                        _ => return Err(self.err("expected `,` or `}`")),
+                    }
+                }
+            }
+            b'[' => {
+                self.i += 1;
+                let mut a = Vec::new();
+                self.ws();
+                if self.s.get(self.i) == Some(&b']') {
+                    self.i += 1;
+                    return Ok(Json::Arr(a));
+                }
+                loop {
+                    a.push(self.value()?);
+                    self.ws();
+                    match self.s.get(self.i) {
+                        Some(b',') => self.i += 1,
+                        Some(b']') => {
+                            self.i += 1;
+                            return Ok(Json::Arr(a));
+                        }
+                        _ => return Err(self.err("expected `,` or `]`")),
+                    }
+                }
+            }
+            b'"' => {
+                self.i += 1;
+                let mut out = String::new();
+                while let Some(&c) = self.s.get(self.i) {
+                    self.i += 1;
+                    match c {
+                        b'"' => return Ok(Json::Str(out)),
+                        b'\\' => {
+                            let e = *self.s.get(self.i).ok_or_else(|| self.err("bad escape"))?;
+                            self.i += 1;
+                            out.push(match e {
+                                b'n' => '\n',
+                                b't' => '\t',
+                                b'u' => {
+                                    let h = std::str::from_utf8(self.s.get(self.i..self.i + 4).ok_or_else(|| self.err("bad escape"))?).map_err(|_| self.err("bad escape"))?;
+                                    self.i += 4;
+                                    char::from_u32(u32::from_str_radix(h, 16).map_err(|_| self.err("bad escape"))?).unwrap_or('?')
+                                }
+                                c => c as char,
+                            });
+                        }
+                        c => out.push(c as char),
+                    }
+                }
+                Err(self.err("unterminated string"))
+            }
+            b't' if self.s[self.i..].starts_with(b"true") => {
+                self.i += 4;
+                Ok(Json::Bool(true))
+            }
+            b'f' if self.s[self.i..].starts_with(b"false") => {
+                self.i += 5;
+                Ok(Json::Bool(false))
+            }
+            b'n' if self.s[self.i..].starts_with(b"null") => {
+                self.i += 4;
+                Ok(Json::Null)
+            }
+            _ => {
+                let start = self.i;
+                while self.i < self.s.len() && matches!(self.s[self.i], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9') {
+                    self.i += 1;
+                }
+                let t = std::str::from_utf8(&self.s[start..self.i]).map_err(|_| self.err("bad number"))?;
+                t.parse::<f64>().map(Json::Num).map_err(|_| self.err("bad number"))
+            }
+        }
+    }
+}
+
+/// Parses a JSON document.
+pub fn parse_json(data: &[u8]) -> Result<Json, MooError> {
+    let mut p = Parser { s: data, i: 0 };
+    let v = p.value()?;
+    Ok(v)
+}
+
+fn json_state(v: &Json, names: &[&'static str]) -> CpuState {
+    let mut st = CpuState::default();
+    for n in names {
+        if let Some(x) = v.get(n).and_then(Json::num) {
+            st.regs.push((n, x as u32));
+        }
+    }
+    for e in v.get("ram").map(Json::arr).unwrap_or(&[]) {
+        let a = e.arr();
+        if let (Some(addr), Some(val)) = (a.first().and_then(Json::num), a.get(1).and_then(Json::num)) {
+            st.ram.push((addr as u32, val as u8));
+        }
+    }
+    st
+}
+
+/// The tests of a JSON vector file (SingleStepTests' 8-bit format, plain or
+/// gzipped): the registers named in `names`, RAM, the ports the instruction
+/// read or wrote, and its cycle count.
+pub fn read_json(path: &Path, names: &[&'static str]) -> Result<Vec<MooTest>, MooError> {
+    let raw = std::fs::read(path).map_err(|e| MooError(format!("{}: {e}", path.display())))?;
+    let data = if raw.starts_with(&[0x1f, 0x8b]) {
+        let mut out = Vec::new();
+        flate2::read::GzDecoder::new(&raw[..])
+            .read_to_end(&mut out)
+            .map_err(|e| MooError(format!("{}: {e}", path.display())))?;
+        out
+    } else {
+        raw
+    };
+    let doc = parse_json(&data).map_err(|e| MooError(format!("{}: {}", path.display(), e.0)))?;
+    let mut out = Vec::new();
+    for (k, t) in doc.arr().iter().enumerate() {
+        let name = match t.get("name") {
+            Some(Json::Str(s)) => s.clone(),
+            _ => String::new(),
+        };
+        let initial = t.get("initial").map(|v| json_state(v, names)).unwrap_or_default();
+        let final_ = t.get("final").map(|v| json_state(v, names)).unwrap_or_default();
+        let ports = t
+            .get("ports")
+            .map(Json::arr)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|p| {
+                let a = p.arr();
+                let addr = a.first()?.num()? as u32;
+                let val = a.get(1)?.num()? as u8;
+                let w = matches!(a.get(2), Some(Json::Str(s)) if s.contains('w'));
+                Some((addr, val, w))
+            })
+            .collect();
+        let cycles = t.get("cycles").map(|c| c.arr().len() as u32);
+        let bytes = initial.ram.iter().map(|(_, b)| *b).collect();
+        out.push(MooTest { index: k as u32, name, bytes, initial, final_, ports, cycles, ..Default::default() });
+    }
+    Ok(out)
 }

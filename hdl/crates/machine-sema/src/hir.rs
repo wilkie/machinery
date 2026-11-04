@@ -628,6 +628,8 @@ pub struct VectorsInfo {
     pub glob: String,
     pub format: String,
     pub memory: DefId,
+    /// The space port reads and writes are on (`ports`, JSON vectors).
+    pub ports: Option<DefId>,
     /// Spaces with nothing attached in the test environment: `(space,
     /// value every read returns)`.
     pub open: Vec<(DefId, i128)>,
@@ -667,6 +669,8 @@ pub struct Istream {
     pub double: Option<DefId>,
     /// The latch a lock prefix sets (`istream { lock locked; }`).
     pub lock: Option<DefId>,
+    /// `fn ()` run after each opcode byte decoded (`istream { opcode m1; }`).
+    pub opcode: Option<DefId>,
 }
 
 /// A resolved `enum`/`mode`, exported for backends.

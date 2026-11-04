@@ -1,0 +1,107 @@
+// A Z80 board for the model backend: the z80 isa as a processor on its
+// 8-bit bus, with 64 KB of RAM and I/O ports that read as all ones.
+//
+// `machine build --system BoardZ80 --out <dir> targets/z80/z80.machine
+// targets/z80/board.machine` generates the emulator crate. Time is the bus
+// cycles' (an opcode fetch four T-states, a memory or I/O transfer three);
+// the processor's own internal cycles are not modelled yet.
+
+use z80::{Z80};
+
+/// Memory or I/O, as MREQ and IORQ tell them apart.
+enum Space : u1 { Mem, Io }
+
+bus Z80Bus {
+    clock clk;
+    wires {
+        addr: u16  driven_by Master;
+        data: u8   shared;
+        mreq: bool driven_by Master;
+        iorq: bool driven_by Master;
+        rd:   bool driven_by Master;
+        wr:   bool driven_by Master;
+        ready: bool wired_and;
+    }
+    roles { Master; Slave; }
+
+    /// An opcode fetch (M1): T1, T2 with the read, then T3 and T4 refresh.
+    transaction fetch(space: Space, addr: u16) -> (data: u8) {
+        Master {
+            cycle { addr = addr; mreq = true; rd = true; }
+            wait until ready;
+            cycle { let v = data; return v; }
+            cycle { } cycle { }
+        }
+    }
+    /// A memory or I/O read: three T-states.
+    transaction read(space: Space, addr: u16) -> (data: u8) {
+        Master {
+            cycle { addr = addr; mreq = space == Space::Mem; iorq = space == Space::Io; rd = true; }
+            wait until ready;
+            cycle { let v = data; return v; }
+            cycle { }
+        }
+    }
+    /// A memory or I/O write: three T-states.
+    transaction write(space: Space, addr: u16, data: u8) {
+        Master {
+            cycle { addr = addr; mreq = space == Space::Mem; iorq = space == Space::Io; wr = true; data = data; }
+            wait until ready;
+            cycle { }
+            cycle { }
+        }
+    }
+}
+
+/// The processor: the z80 isa, its spaces on the bus.
+component CpuZ80 {
+    isa Z80;
+    ports { bus bus: Z80Bus::Master; }
+    model {
+        on mem.fetch_u8(addr: u16) -> u8 { return bus.fetch(space: Space::Mem, addr: addr).data; }
+        on mem.read_u8(addr: u16) -> u8 { return bus.read(space: Space::Mem, addr: addr).data; }
+        on mem.write_u8(addr: u16, data: u8) { bus.write(space: Space::Mem, addr: addr, data: data); }
+        on io.read_u8(addr: u16) -> u8 { return bus.read(space: Space::Io, addr: addr).data; }
+        on io.write_u8(addr: u16, data: u8) { bus.write(space: Space::Io, addr: addr, data: data); }
+    }
+}
+
+/// 64 KB of RAM with no wait states.
+component RamZ80 {
+    ports { bus port: Z80Bus::Slave; }
+    model {
+        mem cells: [u8; 0x10000] { direct: port(addr & 0xFFFF), wait: 0 };
+        on port.fetch(space: Space, addr: u16) -> (data: u8, wait: u8) { return (data: cells[addr], wait: 0); }
+        on port.read(space: Space, addr: u16) -> (data: u8, wait: u8) { return (data: cells[addr], wait: 0); }
+        on port.write(space: Space, addr: u16, data: u8) -> (wait: u8) { cells[addr] = data; return (wait: 0); }
+    }
+}
+
+/// I/O ports: reads float high; the last byte written to each port is kept.
+component PortsZ80 {
+    ports { bus port: Z80Bus::Slave; }
+    model {
+        mem written: [u8; 0x10000];
+        on port.read(space: Space, addr: u16) -> (data: u8, wait: u8) { return (data: 0xFF, wait: 0); }
+        on port.write(space: Space, addr: u16, data: u8) -> (wait: u8) { written[addr] = data; return (wait: 0); }
+    }
+}
+
+system BoardZ80 {
+    clock cpu_clk: 4 MHz;
+
+    component cpu: CpuZ80 @ cpu_clk;
+    component ram: RamZ80;
+    component ports: PortsZ80;
+
+    bus bus: Z80Bus @ cpu_clk {
+        master cpu.bus;
+        slave ram.port @ mem 0x0000..=0xFFFF;
+        slave ports.port @ io 0x0000..=0xFFFF;
+    }
+
+    profile fast { default: model; }
+    profile emulate { default: model; memory: direct; }
+    profile trace { default: model; memory: direct; core: trace; }
+    profile jit { default: model; memory: direct; core: jit; }
+}

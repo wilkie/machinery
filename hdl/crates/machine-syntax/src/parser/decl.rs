@@ -817,6 +817,7 @@ impl Parser {
                 let mut reset = None;
                 let mut double = None;
                 let mut lock = None;
+                let mut opcode = None;
                 while !self.at_punct(Punct::RBrace) {
                     if self.at_eof() {
                         return Err(self.error_expected("`}`"));
@@ -834,11 +835,12 @@ impl Parser {
                         "reset" => reset = Some(self.parse_path_colons()?),
                         "double" => double = Some(self.parse_path_colons()?),
                         "lock" => lock = Some(self.parse_path_colons()?),
+                        "opcode" => opcode = Some(self.parse_path_colons()?),
                         other => {
                             return Err(self.error(
                                 "E0106",
                                 key.span,
-                                format!("unknown `istream` item `{other}`; expected `space`, `address`, `next`, `undefined`, `fault`, `boundary`, `limit`, `window`, `reset`, `double` or `lock`"),
+                                format!("unknown `istream` item `{other}`; expected `space`, `address`, `next`, `undefined`, `fault`, `boundary`, `limit`, `window`, `reset`, `double`, `lock` or `opcode`"),
                             ))
                         }
                     }
@@ -860,6 +862,7 @@ impl Parser {
                     window,
                     double,
                     lock,
+                    opcode,
                     span: start.to(self.prev_span()),
                 }))
             }
@@ -1362,6 +1365,11 @@ impl Parser {
                 self.expect_semi()?;
                 Ok(VectorsItem::Memory(m))
             }
+            "ports" => {
+                let m = self.expect_ident()?;
+                self.expect_semi()?;
+                Ok(VectorsItem::Ports(m))
+            }
             "open" => {
                 let space = self.expect_ident()?;
                 self.expect_punct(Punct::Eq)?;
@@ -1411,7 +1419,7 @@ impl Parser {
             other => Err(self.error(
                 "E0107",
                 key.span,
-                format!("unknown `vectors` item `{other}`; expected `format`, `memory`, `open`, `harness_cycles` or `reg`"),
+                format!("unknown `vectors` item `{other}`; expected `format`, `memory`, `ports`, `open`, `harness_cycles` or `reg`"),
             )),
         }
     }

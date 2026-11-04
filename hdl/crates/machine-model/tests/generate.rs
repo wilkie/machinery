@@ -750,3 +750,75 @@ fn system_without_processor_is_reported() {
     let err = generate_system(&checked, "TimerBoard", None).unwrap_err();
     assert!(err.to_string().contains("no processor"), "{err}");
 }
+
+fn target_z80(name: &str) -> SourceFile {
+    let path = hdl_root().join("targets").join("z80").join(name);
+    SourceFile::new(name, std::fs::read_to_string(&path).unwrap())
+}
+
+/// The Z80 isa through generated code against the SingleStepTests Z80
+/// vectors: a file from each page and prefix (the whole corpus, 1.6
+/// million vectors, is `machine vectors --isa Z80 targets/z80/z80.machine`).
+/// Skipped without the corpus.
+#[test]
+fn z80_target_passes_hardware_vectors() {
+    let root = hdl_root();
+    let vectors = root.join("..").join("simulators").join("test").join("z80").join("SingleStepTests").join("v1");
+    if !vectors.join("00.json").exists() {
+        eprintln!("SingleStepTests Z80 corpus not found at {}; skipping hardware vectors", vectors.display());
+        return;
+    }
+    let checked = check_files(vec![target_z80("z80.machine")]);
+    assert!(!checked.has_errors());
+    let src = generate_isa(&checked, "Z80").unwrap_or_else(|e| panic!("{e}"));
+    let crate_ = package(&crate_name("Z80"), src, &root.join("crates").join("machine-runtime"));
+    let dir = root.join("target").join("gen-tests").join("z80");
+    write_crate(&dir, &crate_).unwrap();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let output = Command::new(&cargo)
+        .args(["run", "--quiet", "--release", "--features", "vectors", "--bin", "vectors", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+        .arg("--")
+        .arg("--dir")
+        .arg(&vectors)
+        .args([
+            "--filter",
+            "00,0a,10,27,37,3f,76,86,c3,cd,db,e3,cb 06,cb 46,cb 7e,dd 21,dd 34,dd 7e,dd e3,dd cb __ 06,fd cb __ 46,ed 42,ed 4a,ed 57,ed 67,ed a1,ed b0,ed b1,ed b2,ed bb",
+            "--max-failures",
+            "5",
+        ])
+        .output()
+        .expect("run vectors");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "Z80 vectors failed:\n{stdout}\n{stderr}");
+    assert!(stdout.contains(" 0 failed"), "{stdout}");
+}
+
+/// The Z80 board on every core (decode, emulate, trace, JIT): the checksum
+/// program, checked against Rust (`targets/z80/board_test.rs`).
+#[test]
+fn z80_board_runs_on_every_core() {
+    let root = hdl_root();
+    let checked = check_files(vec![target_z80("z80.machine"), target_z80("board.machine")]);
+    assert!(!checked.has_errors());
+    for profile in ["fast", "emulate", "trace", "jit"] {
+        let src = generate_system(&checked, "BoardZ80", Some(profile)).unwrap_or_else(|e| panic!("{e}"));
+        let crate_ = package(&crate_name("BoardZ80"), src, &root.join("crates").join("machine-runtime"));
+        let dir = root.join("target").join("gen-tests").join(format!("boardz80-{profile}"));
+        write_crate(&dir, &crate_).unwrap();
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::copy(root.join("targets").join("z80").join("board_test.rs"), dir.join("tests").join("board.rs")).unwrap();
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let output = Command::new(&cargo)
+            .args(["test", "--release", "--quiet", "--test", "board", "--manifest-path"])
+            .arg(dir.join("Cargo.toml"))
+            .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+            .output()
+            .expect("run cargo");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "Z80 board ({profile}) failed:\n{stdout}\n{stderr}");
+    }
+}

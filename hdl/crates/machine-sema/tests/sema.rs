@@ -1316,10 +1316,23 @@ fn field_constraints_and_overlap() {
         instruction A { mnemonic "a"; encoding { opcode 0xC6; ModRM { reg: 0 } } }
         instruction B { mnemonic "b"; encoding { opcode 0xC6; ModRM } }"#;
     assert_codes(&dec(unconstrained), &["E1045"]);
-    let pattern_overlap = r#"
+    // A pattern that fixes more bits wins on the bytes it matches (SPEC
+    // 11.2d): 48h refines 0100oo00.
+    let refinement = r#"
         instruction A { mnemonic "a"; encoding { opcode "0100oo00" { o: op } } operands (o: op); }
         instruction B { mnemonic "b"; encoding { opcode 0x48; } }"#;
-    assert_codes(&dec(pattern_overlap), &["E1045"]);
+    assert_codes(&dec(refinement), &[]);
+    // Neither refines the other where they meet (48h)...
+    let partial = r#"
+        instruction A { mnemonic "a"; encoding { opcode "0100oo00" { o: op } } operands (o: op); }
+        instruction B { mnemonic "b"; encoding { opcode "010010--"; } }"#;
+    assert_codes(&dec(partial), &["E1045"]);
+    // ...unless an instruction more specific than both covers it.
+    let covered = r#"
+        instruction A { mnemonic "a"; encoding { opcode "0100oo00" { o: op } } operands (o: op); }
+        instruction B { mnemonic "b"; encoding { opcode "010010--"; } }
+        instruction C { mnemonic "c"; encoding { opcode 0x48; } }"#;
+    assert_codes(&dec(covered), &[]);
     assert_codes(
         &dec(r#"instruction A { mnemonic "a"; encoding { opcode 0xC6; ModRM { reg: 9 } } }"#),
         &["E1006"],
@@ -1363,7 +1376,9 @@ fn vectors_declarations() {
         &v("format moo; memory mem; reg ax { load => AX = value + 1; read => AX - 1; }"),
         &[],
     );
-    assert_codes(&v("format json; memory mem;"), &["E1049"]);
+    assert_codes(&v("format xml; memory mem;"), &["E1049"]);
+    // JSON vectors name their registers freely.
+    assert_codes(&v("format json; memory mem; reg zz = AX;"), &[]);
     assert_codes(&v("format moo;"), &["E1049"]);
     assert_codes(&v("memory mem;"), &["E1049"]);
     assert_codes(&v("format moo; memory nope;"), &["E1049", "E1049"]);

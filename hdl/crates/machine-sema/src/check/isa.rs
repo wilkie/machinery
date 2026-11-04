@@ -230,12 +230,38 @@ impl Checker<'_> {
                 .zip(b)
                 .all(|(x, y)| (x.value ^ y.value) & x.mask & y.mask == 0)
         };
+        // Specificity (SPEC 11.2d): a pattern that fixes more bits wins on
+        // the bytes it matches.
+        let fixed = |a: &[hir::OpcodeByte]| a.iter().map(|b| b.mask.count_ones()).sum::<u32>();
+        let refines = |a: &[hir::OpcodeByte], b: &[hir::OpcodeByte]| {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.mask & y.mask == y.mask && (x.value ^ y.value) & y.mask == 0)
+        };
+        let leads: Vec<Vec<hir::OpcodeByte>> = instructions.iter().map(lead).collect();
         for (ai, ia) in instructions.iter().enumerate() {
             let la = lead(ia);
-            for ib in &instructions[..ai] {
+            for (bi, ib) in instructions[..ai].iter().enumerate() {
                 let lb = lead(ib);
                 if !overlap(&la, &lb) {
                     continue;
+                }
+                if la.len() == lb.len() && !ia.prefix && !ib.prefix {
+                    let (fa, fb) = (fixed(&la), fixed(&lb));
+                    if (fa > fb && refines(&la, &lb)) || (fb > fa && refines(&lb, &la)) {
+                        continue;
+                    }
+                    // Both lose where they meet to an instruction more
+                    // specific than either that covers the meeting.
+                    let meet: Vec<hir::OpcodeByte> = la
+                        .iter()
+                        .zip(&lb)
+                        .map(|(x, y)| hir::OpcodeByte { value: (x.value & x.mask) | (y.value & y.mask), mask: x.mask | y.mask })
+                        .collect();
+                    let covered = leads.iter().enumerate().any(|(ci, lc)| {
+                        ci != ai && ci != bi && !instructions[ci].prefix && fixed(lc) > fa.max(fb) && refines(&meet, lc)
+                    });
+                    if covered {
+                        continue;
+                    }
                 }
                 // `when E == a` and `when E == b` with a != b (SPEC 11.2d).
                 if let (Some(ka), Some(kb)) = (when_key(ia), when_key(ib)) {
@@ -524,6 +550,24 @@ impl Checker<'_> {
                 }
             },
         };
+        let opcode = match &d.opcode {
+            None => None,
+            Some(p) => match fn_item(self, p) {
+                Some(f) => {
+                    if let Some(sig) = self.fn_sig(f) {
+                        if !sig.params.is_empty() || sig.ret != Ty::Unit {
+                            self.error(module, "E1046", p.span, "`opcode` is a `fn ()`: what each opcode byte's fetch does besides fetching it");
+                            ok = false;
+                        }
+                    }
+                    Some(f)
+                }
+                None => {
+                    ok = false;
+                    None
+                }
+            },
+        };
         let (Some(space), Some(address), Some(next)) = (space, address, next) else {
             return None;
         };
@@ -539,6 +583,7 @@ impl Checker<'_> {
             window,
             double,
             lock: lock_latch,
+            opcode,
         })
     }
 
@@ -2474,6 +2519,10 @@ impl Checker<'_> {
         let mut regs: Vec<hir::VectorReg> = Vec::new();
         let mut open: Vec<(DefId, i128)> = Vec::new();
         let mut harness_cycles: u32 = 0;
+        let mut ports = None;
+        // JSON vectors name their registers freely; each is as wide as the
+        // place it maps to.
+        let json = d.items.iter().any(|i| matches!(i, ast::VectorsItem::Format(f) if f.name == "json"));
         // The 8086/286 file (`REGS`, 16-bit) and the 386 file (`RG32`, 32-bit;
         // its segment registers hold 16-bit selectors).
         const MOO_REGS: &[&str] = &[
@@ -2488,12 +2537,12 @@ impl Checker<'_> {
         for item in &d.items {
             match item {
                 ast::VectorsItem::Format(f) => {
-                    if f.name != "moo" {
+                    if f.name != "moo" && f.name != "json" {
                         self.error(
                             module,
                             "E1049",
                             f.span,
-                            format!("unknown vector format `{}`; supported: `moo`", f.name),
+                            format!("unknown vector format `{}`; supported: `moo`, `json`", f.name),
                         );
                         ok = false;
                     }
@@ -2544,6 +2593,13 @@ impl Checker<'_> {
                         None => ok = false,
                     }
                 }
+                ast::VectorsItem::Ports(m) => match self.lookup_item(scope, &m.name) {
+                    Some(sp) if self.prog.item(sp).kind == ItemKind::Space => ports = Some(sp),
+                    _ => {
+                        self.error(module, "E1049", m.span, format!("`{}` is not an address space of `{}`", m.name, d.target.dotted()));
+                        ok = false;
+                    }
+                },
                 ast::VectorsItem::Memory(m) => match self.lookup_item(scope, &m.name) {
                     Some(sp) if self.prog.item(sp).kind == ItemKind::Space => memory = Some(sp),
                     _ => {
@@ -2567,7 +2623,7 @@ impl Checker<'_> {
                     span,
                     ..
                 } => {
-                    if !MOO_REGS.contains(&name.name.as_str()) {
+                    if !json && !MOO_REGS.contains(&name.name.as_str()) {
                         let msg = format!(
                             "`{}` is not a register of the vector format (registers: {})",
                             name.name,
@@ -2587,7 +2643,20 @@ impl Checker<'_> {
                         ok = false;
                         continue;
                     }
-                    let bits = if MOO_REGS_32.contains(&name.name.as_str()) {
+                    let bits = if json {
+                        let mut probe = FnCtx::new(scope, HashMap::new(), None);
+                        let errors_before = self.diags[module].error_count();
+                        let t = self.check_expr(&mut probe, place, None);
+                        if self.diags[module].error_count() > errors_before {
+                            ok = false;
+                            continue;
+                        }
+                        match t.ty {
+                            Ty::UInt(w) | Ty::SInt(w) if w <= 32 => w,
+                            Ty::Bool => 1,
+                            _ => 16,
+                        }
+                    } else if MOO_REGS_32.contains(&name.name.as_str()) {
                         32
                     } else {
                         16
@@ -2648,7 +2717,7 @@ impl Checker<'_> {
             }
         }
         let Some(format) = format else {
-            self.error(module, "E1049", d.span, "`vectors` needs `format moo;`");
+            self.error(module, "E1049", d.span, "`vectors` needs `format moo;` or `format json;`");
             return None;
         };
         let Some(memory) = memory else {
@@ -2674,6 +2743,7 @@ impl Checker<'_> {
             glob,
             format,
             memory,
+            ports,
             open,
             regs,
             harness_cycles,

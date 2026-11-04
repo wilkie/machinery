@@ -1822,6 +1822,9 @@ impl<'a> Gen<'a> {
         }
         let (tr_hot, tr_cold) = self.trace_fields();
         latch_fields.push_str(tr_hot);
+        if self.isa.istream.as_ref().is_some_and(|i| i.opcode.is_some()) {
+            latch_fields.push_str("    /// Opcode bytes fetched this step (`istream { opcode }`).\n    pub opcodes: u8,\n");
+        }
         let mut s = format!(
             "#[derive(Clone, Debug)]\n/// Laid out as declared (`repr(C)`): the latches and the per-step state\n/// first, then the registers, then the bus. Left to the compiler, the\n/// order shifted as fields were added, and with it the speed: five unused\n/// fields cost a fifth of the 386's.\n#[repr(C)]\npub struct {isa_name}<B: Bus = Flat> {{\n{latch_fields}    /// Bytes decoded this step, and the extra decoder clocks on each.\n    pub fetched: u8,\n    /// The istream's window this step (`istream {{ window ...; }}`): from\n    /// byte `win_from`, `win_len` bytes at consecutive addresses from\n    /// `win_base`.\n    pub win_from: u8,\n    pub win_len: u32,\n    pub win_base: u64,\n    /// Execution cycles of the last step beyond its bus transfers (the\n    /// timing table: the instruction, its prefixes, a delivered fault).\n    pub cycles: u32,\n    /// Prefix cycles accumulated while decoding.\n    pub prefix_cycles: u32,\n    /// Of `cycles`, the instruction's own timing-table entry.\n    pub entry_cycles: u32,\n    /// The decoder matched an instruction's opcode bytes during this step\n    /// (so an undefined-opcode fault is a real one, not a gap in the\n    /// description).\n    pub known_opcode: bool,\n    /// Set by `halt`; `step` does nothing while halted.\n    pub halted: bool,\n    /// This step decoded an instruction (`last` is it), and its schedule.\n    pub decoded: bool,\n    /// Data accesses made this step (a fault's delivery follows those the\n    /// instruction made).\n    pub accesses: u8,\n    /// Where the last step started, and whether this one started there too.\n    pub last_start: u64,\n    pub restarted: bool,\n    /// Held in reset (`istream {{ reset ...; }}`).\n    pub in_reset: bool,\n    /// Shut down: a fault while delivering a double fault.\n    pub shutdown: bool,\n    pub mode: {mode_ty},\n    pub decode_at: [u8; 16],\n    /// The last instruction decoded by `step`.\n    pub last: Option<Instr>,\n    /// A fault raised and delivered during the last `step`/`run`.\n    pub last_fault: Option<Fault>,\n"
 
@@ -1844,6 +1847,9 @@ impl<'a> Gen<'a> {
             );
         }
         s.push_str(&self.trace_init());
+        if self.isa.istream.as_ref().is_some_and(|i| i.opcode.is_some()) {
+            s.push_str("            opcodes: 0,\n");
+        }
         s.push_str(self.jit_init());
         s.push_str("        };\n        m.reset_latches();\n        m\n    }\n");
         // Reset: architectural state to zero, then the isa's `fn reset()`.
@@ -2429,6 +2435,15 @@ impl<'a> Gen<'a> {
             self.out,
             "    pub fn istream_next(&mut self) -> Result<u8, Fault> {{ self.fetched = self.fetched.wrapping_add(1); Ok(self.fn_{next}()? as u8) }}"
         );
+        // `istream { opcode }`: after each opcode byte, counted (a replay
+        // makes the same calls).
+        if let Some(h) = istream.opcode {
+            let _ = writeln!(
+                self.out,
+                "    /// An opcode byte was fetched (`istream {{ opcode }}`).\n    #[inline]\n    pub fn istream_opcode(&mut self) -> Result<(), Fault> {{ self.opcodes = self.opcodes.wrapping_add(1); self.fn_{}() }}",
+                ident(&self.fns[&h].name)
+            );
+        }
         if let Some(w) = istream.window {
             // Byte `fetched` of the step: within the window it is the
             // window's base plus how far the stream has come; past it the
@@ -2506,12 +2521,27 @@ impl<'a> Gen<'a> {
         fn emit_node(g: &Gen, node: &Node, depth: usize, undefined: &str) -> R<String> {
             let mut out = String::new();
             if !node.leaves.is_empty() {
-                out.push_str(&g.emit_leaf(&node.leaves, undefined)?);
+                // The most specific patterns win (SPEC 11.2d).
+                let fixed = |i: usize| -> u32 {
+                    g.isa.instructions[i]
+                        .encoding
+                        .iter()
+                        .take_while(|s| s.is_opcode())
+                        .map(|s| match s {
+                            hir::EncodingStep::Opcode { bytes, .. } => bytes.iter().map(|b| b.mask.count_ones()).sum::<u32>(),
+                            _ => 0,
+                        })
+                        .sum()
+                };
+                let top = node.leaves.iter().map(|&i| fixed(i)).max().unwrap_or(0);
+                let leaves: Vec<usize> = node.leaves.iter().copied().filter(|&i| fixed(i) == top).collect();
+                out.push_str(&g.emit_leaf(&leaves, undefined)?);
                 return Ok(out);
             }
+            let hook = if g.isa.istream.as_ref().is_some_and(|i| i.opcode.is_some()) { "self.istream_opcode()?;\n" } else { "" };
             let _ = writeln!(
                 out,
-                "let b{depth} = self.istream_next()?;\nmatch b{depth} {{"
+                "let b{depth} = self.istream_next()?;\n{hook}match b{depth} {{"
             );
             // Group bytes whose subtrees generate identical code.
             let mut groups: Vec<(String, Vec<u8>)> = Vec::new();
@@ -2673,7 +2703,8 @@ impl<'a> Gen<'a> {
         } else {
             "sched.work[0] = self.entry_cycles as u16;"
         };
-        let prologue = format!("        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.entry_cycles = 0;\n        self.fetched = 0;\n        self.win_len = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{reset_check}        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n");
+        let opcodes_reset = if istream.opcode.is_some() { "        self.opcodes = 0;\n" } else { "" };
+        let prologue = format!("        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.entry_cycles = 0;\n        self.fetched = 0;\n        self.win_len = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{opcodes_reset}{reset_check}        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n");
         let tail = format!("        let cur: Option<Instr> = if self.decoded {{ self.last }} else {{ None }};\n        if self.decoded {{ {entry} }}\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n        if B::SCHEDULE {{\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        }} else {{\n        let _ = (before, performed, cur);\n        }}\n        self.bus.retire(self.cycles, sched);\n        r\n");
         s.push_str(&format!(
             "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n{prologue}{find}{tail}    }}\n"
@@ -3477,12 +3508,11 @@ impl<'a> Gen<'a> {
                 opt: false,
             };
             let value_name = self.local_name(&cx, r.value);
+            let vty = native(r.bits, false).1;
             let _ = writeln!(
                 load,
-                "            {:?} => {{ let {value_name}: u{} = *v as u{}; {}}}",
+                "            {:?} => {{ let {value_name}: {vty} = *v as {vty}; {}}}",
                 r.name,
-                r.bits,
-                r.bits,
                 self.block_stmts(&cx, &r.load)?
             );
             let _ = writeln!(
@@ -3501,6 +3531,16 @@ impl<'a> Gen<'a> {
             names.push(format!("{:?}", r.name));
         }
         let names = names.join(", ");
+        // JSON vectors: the ports a test reads answer its values; the ones
+        // it writes are compared after.
+        let json = v.format == "json";
+        let (load_ports, check_ports) = match v.ports.map(|p| ident(&self.spaces[&p].name)) {
+            Some(io) => (
+                format!("        for (a, val, w) in &t.ports {{ if !*w {{ m.bus.{io}.write_cell(*a as u64, *val as u128); }} }}\n"),
+                format!("        for (a, val, w) in &t.ports {{ if *w {{ let got = m.bus.{io}.read_cell(*a as u64) as u8; if got != *val {{ errors.push(format!(\"port {{a:#06x}}: expected {{val:#04x}} written, got {{got:#04x}}\")); }} }} }}\n"),
+            ),
+            None => (String::new(), String::new()),
+        };
         let _ = write!(
             self.out,
             r#"
@@ -3512,6 +3552,8 @@ pub mod vectors {{
     /// Where the vectors were found when this crate was generated.
     pub const GLOB: &str = {glob_abs:?};
     pub const REGS: &[&str] = &[{names}];
+    /// JSON vectors: one instruction a test, I/O given with it.
+    pub const JSON: bool = {json};
 
     fn load(m: &mut {isa_name}, st: &CpuState) -> Result<(), Fault> {{
 {open}        for (name, v) in &st.regs {{
@@ -3554,7 +3596,7 @@ pub mod vectors {{
         let mut first: Option<Instr> = None;
         let mut delivered: Option<Fault> = None;
         let mut trace: Vec<String> = Vec::new();
-        for n in 0..4096 {{
+{load_ports}        for n in 0..(if JSON {{ 1 }} else {{ 4096 }}) {{
             if m.halted {{ break; }}
             let before: Vec<String> = REGS.iter().filter(|r| **r == "cs" || **r == "ip").map(|r| format!("{{r}}={{:04x}}", read(&mut m, r).unwrap_or(0))).collect();
             let r = m.step();
@@ -3569,7 +3611,8 @@ pub mod vectors {{
         }}
         let _ = {undefined};
         let mut errors = Vec::new();
-        if !m.halted {{ errors.push("did not halt".to_string()); }}
+        if !JSON && !m.halted {{ errors.push("did not halt".to_string()); }}
+{check_ports}
         // Flag conditions describe the state before the instruction
         // (`undefined: [OF if CL != 1]` must not see `shl cl, cl`'s result).
         let mut pre = <{isa_name}>::new();
@@ -3653,7 +3696,8 @@ pub mod vectors {{
         for path in files {{
             let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
             if !filter.is_empty() && !filter.iter().any(|p| fname.starts_with(p.as_str())) {{ continue; }}
-            let tests = match rt::vectors::read_moo(&path) {{ Ok(t) => t, Err(e) => {{ eprintln!("{{e}}"); all.failed += 1; continue; }} }};
+            let read = if JSON {{ rt::vectors::read_json(&path, REGS) }} else {{ rt::vectors::read_moo(&path) }};
+            let tests = match read {{ Ok(t) => t, Err(e) => {{ eprintln!("{{e}}"); all.failed += 1; continue; }} }};
             let mut r = Report::default();
             for t in &tests {{
                 r.total += 1;

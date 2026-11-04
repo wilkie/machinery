@@ -1691,6 +1691,53 @@ system PcAt386 {
   must a loop that rewrites its own operand; so must random 386 code
   (`targets/i386/vga_test.rs`: each instruction tried on a copy of the
   machine first, so the loop runs, its faults returning through an IRET).
+  **Speculation.** The compiler picks the registers a compiled run
+  speculates on: plain registers the isa's fns read, that no istream hook
+  writes itself and at most three instructions write (on the 386 CR0, CR2,
+  CR3; operand registers, which kinds select, never). They are watched, so
+  a write ends the run like a write to the key does. A compiled run checks
+  them where it is entered (a guard), and the emitter knows them, and the
+  run key's registers (the 386's CS), as constants in every step past its
+  check and again past the gate (an interrupt's path, which leaves the run,
+  may have forgotten them). A run whose guard turns it away eight times is
+  compiled again for the values then.
+
+  **Trial inlining.** At a call of a fn too big to inline when the crate
+  is generated, the emitter can try it inlined, where what is known folds
+  it, under a budget of host instructions (`Em::try_inline`: a branch on a
+  constant, flipped to the call when the trial is over budget; nested
+  trials have budgets of their own, and a failed trial's dead code does
+  not count against the one around it). Measured, it does not yet pay: the
+  386's real-mode memory read, folded, is still some 380 instructions, and
+  the budget defaults to 0 (`MACHINE_JIT_TRIAL` sets it at run time,
+  `MACHINE_JIT_TRIALS` reports each trial; `MACHINE_JIT_HOT` sets the
+  entries before a run is compiled).
+
+  **Branch joins.** A branch of the emitted code no longer stores what it
+  deferred when it ends: it jumps to a block of its own, and the join
+  decides. When only one branch comes back (the other raised or left the
+  run), it goes on with its stores still deferred; only when several do,
+  each stores what it owes. A segment check that raises, or an inlined fn
+  that returns, no longer forces every deferred store out, so flags that
+  a later instruction overwrites before anything reads them are never
+  stored, and their computation, unused, is dropped by Cranelift: flag
+  liveness, without an analysis.
+
+  **Direct memory, any width.** The board's direct memory is reached in
+  host code for 8- to 64-bit accesses and buses wider than a byte: a range
+  check on its first and last byte, an unaligned host load or store, the
+  bus units it spans at their cost, the 386's split charge (lowered from
+  its timing table), and for a write the recorded-code check on its ends.
+  An external fn whose wire is not driven is its constant; one that is a
+  call cannot change the processor's registers (its handler has only the
+  bus), so what the emitter knows survives it.
+
+  Measured: the Z80 checksum runs at 1.67 times the decode core (90 M
+  instructions/s against 54); a real-mode 386 checksum loop at about 1.5
+  times the trace core (`bench_hot_loop` in `targets/i386/vga_test.rs`:
+  some 45 M/s against 32). A DOS boot, mostly code run a few times, is
+  bound by compiling and entering runs.
+
 - **Concessions** (with `core: jit`): profile options that give up some
   of what the exact profiles keep, for speed, each one named. The crate
   says whether it has any (`system::EXACT`), and tests that compare time

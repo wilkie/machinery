@@ -419,4 +419,36 @@ mod tests {
             assert_eq!((w.q as i128, w.r as i128), (a / b, a % b), "{a} / {b}");
         }
     }
+
+    #[test]
+    fn a_trial_inline_is_kept_or_falls_back() {
+        // out = a * 3 + 1: inlined when it fits, else "called" (a different
+        // computation, to tell them apart), with a local live across.
+        for (budget, want) in [(1000usize, 3 * 7 + 1), (2, 7 + 100)] {
+            let mut t = T { a: 7, ..T::default() };
+            run_t(&mut t, |e, _| {
+                let keep = e.local(N::U64, V::K(5));
+                let av = e.read(&A);
+                let av = e.cast(av, N::U8, N::U64);
+                let r = e.try_inline(
+                    budget,
+                    |e| {
+                        let mut x = av;
+                        // Enough work to pass a small budget.
+                        for _ in 0..3 {
+                            x = e.op(Op::Add, x, av, N::U64);
+                        }
+                        let x = e.op(Op::Sub, x, av, N::U64);
+                        e.op(Op::Add, x, V::K(1), N::U64)
+                    },
+                    |e| e.op(Op::Add, av, V::K(100), N::U64),
+                );
+                let k = e.get(keep);
+                let r = e.op(Op::Add, r, k, N::U64);
+                let r = e.op(Op::Sub, r, V::K(5), N::U64);
+                e.write(&OUT, r);
+            });
+            assert_eq!(t.out, want, "budget {budget}");
+        }
+    }
 }

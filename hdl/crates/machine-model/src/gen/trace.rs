@@ -62,6 +62,8 @@ pub(crate) struct TracePlan {
     pub watched: Vec<Cell>,
     /// The registers the istream's `next` fn advances.
     pub pc: Vec<DefId>,
+    /// Registers the JIT core speculates on (`jit_spec_regs`).
+    pub spec: Vec<DefId>,
 }
 
 struct Reads<'g, 'a> {
@@ -198,7 +200,93 @@ impl Reads<'_, '_> {
 impl Gen<'_> {
     /// What the trace core needs to know of the isa; None without an
     /// istream window (instructions at consecutive addresses).
-    pub(crate) fn plan_trace(&self) -> R<TracePlan> {
+    /// The registers the JIT core compiles a run for the values of (a
+    /// guard at entry checks them; a write ends the run): plain registers
+    /// that the isa's fns read (the mode the memory path and the decoder's
+    /// helpers branch on), that no istream hook writes (they change every
+    /// step), and that at most three instructions write themselves (on the
+    /// 386: CR0, CR3, the debug and test registers).
+    fn jit_spec_regs(&self, pc: &[DefId], key: &[DefId]) -> Vec<DefId> {
+        use std::collections::{HashMap, HashSet};
+        fn root(e: &Expr) -> Option<DefId> {
+            match &e.kind {
+                H::Register(d) | H::RegField(d, _) | H::RegView(d, _) => Some(*d),
+                H::Field(b, _) | H::Index(b, _) | H::Slice(b, ..) => root(b),
+                _ => None,
+            }
+        }
+        let mut read: HashSet<DefId> = HashSet::new();
+        for f in self.fns.values() {
+            machine_sema::hir::visit_block(&f.body, &mut |_| {}, &mut |x| {
+                if let H::Register(d) | H::RegField(d, _) = &x.kind {
+                    read.insert(*d);
+                }
+            });
+        }
+        // What the istream's hooks write themselves: every step (the Z80's
+        // R, the 386's interrupt shadow). What fns they call write is a rare
+        // path (an interrupt delivered), and a write still ends the run.
+        let ist = self.isa.istream.as_ref().unwrap();
+        let mut hooks: Vec<DefId> = vec![ist.next];
+        hooks.extend(ist.opcode);
+        hooks.extend(ist.boundary);
+        let mut every: HashSet<DefId> = HashSet::new();
+        for f in hooks {
+            let Some(fb) = self.fns.get(&f) else { continue };
+            machine_sema::hir::visit_block(&fb.body, &mut |st| {
+                if let S::Assign(p, _) = &st.kind {
+                    if let Some(d) = root(p) {
+                        every.insert(d);
+                    }
+                }
+            }, &mut |_| {});
+        }
+        // Registers an operand kind selects are the instructions' operands:
+        // written all the time, whatever the count of direct writes says.
+        for k in self.kinds.values() {
+            for r in &k.rules {
+                if r.kind != machine_sema::hir::RuleKind::Select {
+                    continue;
+                }
+                let mut on = |x: &Expr| {
+                    if let H::Register(d) | H::RegField(d, _) | H::RegView(d, _) = &x.kind {
+                        every.insert(*d);
+                    }
+                };
+                match &r.body {
+                    ArmBody::Expr(x) => machine_sema::hir::visit_expr(x, &mut |_| {}, &mut on),
+                    ArmBody::Block(b) => machine_sema::hir::visit_block(b, &mut |_| {}, &mut on),
+                }
+            }
+        }
+        let mut writers: HashMap<DefId, usize> = HashMap::new();
+        for i in &self.isa.instructions {
+            let Some(b) = &i.semantics else { continue };
+            let mut mine: HashSet<DefId> = HashSet::new();
+            machine_sema::hir::visit_block(b, &mut |st| {
+                if let S::Assign(p, _) = &st.kind {
+                    if let Some(d) = root(p) {
+                        mine.insert(d);
+                    }
+                }
+            }, &mut |_| {});
+            for d in mine {
+                *writers.entry(d).or_default() += 1;
+            }
+        }
+        let mut out: Vec<DefId> = self
+            .regs
+            .iter()
+            .filter(|(d, (_, r))| {
+                matches!(r.ty, Ty::UInt(_)) && read.contains(d) && !every.contains(d) && !pc.contains(d) && !key.contains(d) && writers.get(d).copied().unwrap_or(0) <= 3
+            })
+            .map(|(d, _)| *d)
+            .collect();
+        out.sort();
+        out
+    }
+
+    pub(crate) fn plan_trace(&self, jit: bool) -> R<TracePlan> {
         let ist = self.isa.istream.as_ref().ok_or_else(|| GenError::new("`core: trace` needs an istream"))?;
         if ist.window.is_none() {
             return Err(GenError::new("`core: trace` needs `istream { window ... }`: instructions at consecutive addresses"));
@@ -295,8 +383,16 @@ impl Gen<'_> {
                 Cell::Mode => key_mode = true,
             }
         }
-        let watched = addr.cells.into_iter().filter(not_pc).collect();
-        Ok(TracePlan { key, key_mode, watched, pc })
+        let mut watched: Vec<Cell> = addr.cells.into_iter().filter(not_pc).collect();
+        // The JIT core's speculated registers: watched, so a write ends the
+        // run and, inside one, they hold the values its entry checked.
+        let spec = if jit { self.jit_spec_regs(&pc, &key) } else { Vec::new() };
+        for d in &spec {
+            if !watched.contains(&Cell::Reg(*d)) {
+                watched.push(Cell::Reg(*d));
+            }
+        }
+        Ok(TracePlan { key, key_mode, watched, pc, spec })
     }
 
     /// The epoch bump after an assignment to `place`, when it writes

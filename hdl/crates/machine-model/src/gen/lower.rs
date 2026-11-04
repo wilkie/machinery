@@ -349,21 +349,38 @@ impl Gen<'_> {
                 if cx.timing && self.jit_raisers.borrow().contains(d) {
                     return Err(GenError::new("lowering: a timing entry that may raise"));
                 }
-                let mut s = String::from("{ let mut av: Vec<(machine_jit::V, machine_jit::N)> = Vec::new(); ");
-                for (a, p) in args.iter().zip(&f.params) {
+                // The arguments once; then the fn inlined if what is known
+                // folds it small (`try_inline`), else called.
+                let mut s = String::from("{ ");
+                let mut inline_args = Vec::new();
+                let mut flat = String::from("let mut av: Vec<(machine_jit::V, machine_jit::N)> = Vec::new(); ");
+                for (i, (a, p)) in args.iter().zip(&f.params).enumerate() {
                     let t = &f.locals[*p as usize].ty;
-                    let ns = self.jleaf_ns(t)?;
-                    let _ = write!(s, "let v = {}; for (x, n) in v.into_iter().zip({ns}) {{ let x = e.cast(x, n, machine_jit::N::U64); av.push((x, machine_jit::N::U64)); }} ", self.jagg(cx, a)?);
+                    if Self::jagg_ty(t) {
+                        let _ = write!(s, "let a{i} = {}; ", self.jagg(cx, a)?);
+                        inline_args.push(format!(", a{i}.clone()"));
+                        let _ = write!(flat, "for (x, n) in a{i}.iter().copied().zip({}) {{ let x = e.cast(x, n, machine_jit::N::U64); av.push((x, machine_jit::N::U64)); }} ", self.jleaf_ns(t)?);
+                    } else {
+                        let _ = write!(s, "let a{i} = {}; ", self.jexpr(cx, a)?);
+                        inline_args.push(format!(", a{i}"));
+                        let _ = write!(flat, "let x = e.cast(a{i}, {}, machine_jit::N::U64); av.push((x, machine_jit::N::U64)); ", self.jn(t)?);
+                    }
                 }
                 let rn = match &f.ret {
                     Ty::Unit | Ty::Never => "machine_jit::N::U8",
                     t => self.jn(t)?,
                 };
-                let _ = write!(s, "let r = e.call(Self::jit_call_{} as *const () as usize, &av, {rn}, false); ", ident(&f.name));
-                if self.jit_raisers.borrow().contains(d) {
-                    s.push_str("let p = e.load(std::mem::offset_of!(Self, jit_pending), machine_jit::N::Bool); e.exit_if(p, true, |_| {}); ");
+                let pending = if self.jit_raisers.borrow().contains(d) {
+                    "let p = e.load(std::mem::offset_of!(Self, jit_pending), machine_jit::N::Bool); e.exit_if(p, true, |_| {}); "
+                } else {
+                    ""
+                };
+                let call = format!("{flat}let r = e.call(Self::jit_call_{} as *const () as usize, &av, {rn}, false); {pending}r", ident(&f.name));
+                if self.jit_fns.borrow().contains(d) {
+                    let _ = write!(s, "e.try_inline(Self::jit_trial_budget(), |e| Self::jf_{}(e{}), |e| {{ {call} }}) }}", ident(&f.name), inline_args.concat());
+                } else {
+                    let _ = write!(s, "{call} }}");
                 }
-                s.push_str("r }");
                 return Ok(s);
             }
             // An external fn: the wire level the board keeps (a load), else
@@ -387,7 +404,7 @@ impl Gen<'_> {
                 }
                 let _ = write!(
                     s,
-                    "match B::jit_ext({:?}) {{ Some(off) if av.is_empty() => e.load(std::mem::offset_of!(Self, bus) + off, {rn}), _ => e.call(Self::jit_ext_{} as *const () as usize, &av, {rn}, false) }} }}",
+                    "match B::jit_ext({:?}) {{ Some(Ok(off)) if av.is_empty() => e.load(std::mem::offset_of!(Self, bus) + off, {rn}), Some(Err(v)) if av.is_empty() => machine_jit::V::K(v), _ => e.call(Self::jit_ext_{} as *const () as usize, &av, {rn}, true) }} }}",
                     f.name,
                     ident(&f.name)
                 );
@@ -826,10 +843,10 @@ impl Gen<'_> {
         Err(GenError::new(format!("lowering: kind `{}` has no such rule", kind.name)))
     }
 
-    /// Whether `d` is the istream's space with no split charge: its bytes
-    /// may be the board's direct memory.
+    /// Whether `d` is the istream's space: its accesses may be the board's
+    /// direct memory (the split charge, if any, made with them).
     fn jdirect_space(&self, d: DefId) -> bool {
-        self.isa.split_cycles.is_none() && self.isa.istream.as_ref().is_some_and(|i| i.space == d)
+        self.isa.istream.as_ref().is_some_and(|i| i.space == d)
     }
 
     fn jbits(bits: u32) -> R<u32> {
@@ -848,11 +865,13 @@ impl Gen<'_> {
         let bits = Self::jbits(bits)?;
         // A byte of the istream space: in host code when the board's memory
         // is direct.
-        if bits == 8 && self.jdirect_space(d) {
+        if self.jdirect_space(d) {
+            let nb = nname_bits(bits);
             return Ok(format!(
-                "{{ let a = {}; let a = e.cast(a, {}, machine_jit::N::U64); let v = Self::jm_read8(e, a, Self::jit_sp_{sp}_read8 as *const () as usize, {pure}); e.cast(v, machine_jit::N::U8, {}) }}",
+                "{{ let a = {}; let a = e.cast(a, {}, machine_jit::N::U64); let v = Self::jm_read(e, a, {}, Self::jit_sp_{sp}_read{bits} as *const () as usize, {pure}); e.cast(v, {nb}, {}) }}",
                 self.jexpr(cx, addr)?,
                 self.jn(&addr.ty)?,
+                bits / 8,
                 self.jn(ty)?
             ));
         }
@@ -871,13 +890,15 @@ impl Gen<'_> {
         let sp = ident(&self.spaces[&d].name);
         let pure = self.isa.split_cycles.is_none();
         let bits = Self::jbits(bits)?;
-        if bits == 8 && self.jdirect_space(d) {
+        if self.jdirect_space(d) {
+            let nb = nname_bits(bits);
             return Ok(format!(
-                "let a = {}; let a = e.cast(a, {}, machine_jit::N::U64); let v = {}; let v = e.cast(v, {}, machine_jit::N::U8); Self::jm_write8(e, a, v, Self::jit_sp_{sp}_write8 as *const () as usize, {pure});",
+                "let a = {}; let a = e.cast(a, {}, machine_jit::N::U64); let v = {}; let v = e.cast(v, {}, {nb}); Self::jm_write(e, a, v, {}, Self::jit_sp_{sp}_write{bits} as *const () as usize, {pure});",
                 self.jexpr(cx, addr)?,
                 self.jn(&addr.ty)?,
                 self.jexpr(cx, v)?,
-                self.jn(&v.ty)?
+                self.jn(&v.ty)?,
+                bits / 8
             ));
         }
         Ok(format!(
@@ -1516,6 +1537,10 @@ impl Gen<'_> {
 
 fn ty_signed(ty: &Ty) -> bool {
     matches!(ty, Ty::SInt(_))
+}
+
+fn nname_bits(bits: u32) -> &'static str {
+    nname(native(bits, false).0, false)
 }
 
 fn nname(w: u32, signed: bool) -> &'static str {

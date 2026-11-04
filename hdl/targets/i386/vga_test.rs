@@ -617,3 +617,27 @@ fn random_programs_agree_with_stepping() {
     }
     eprintln!("{} ({}): {compiled} of 200 programs compiled, {made} steps, {bytes} bytes of code", machine_board386_vga::system::PROFILE, machine_board386_vga::system::CORE);
 }
+
+/// Speed in steady state: a real-mode checksum loop over 32 KB of RAM
+/// (`xor ax,ax; xor bx,bx; mov si,0; mov cx,4000h; l: mov dx,[si]; add
+/// ax,dx; xor bx,ax; rol bx,1; add si,2; dec cx; jnz l; jmp 0`), timed while
+/// it runs. Run with `cargo test --release -- --ignored --nocapture
+/// bench_hot_loop`.
+#[test]
+#[ignore]
+fn bench_hot_loop() {
+    const LOOP: &[u8] = &[
+        0x31, 0xC0, 0x31, 0xDB, 0xBE, 0x00, 0x00, 0xB9, 0x00, 0x40, 0x8B, 0x14, 0x01, 0xD0, 0x31, 0xC3, 0xD1, 0xC3, 0x83, 0xC6, 0x02, 0x49,
+        0x75, 0xF2, 0xEB, 0xE6,
+    ];
+    for _ in 0..3 {
+        let mut a = boot(rom(TO_RAM));
+        a.board().ram.cells[0x10000..0x10000 + LOOP.len()].copy_from_slice(LOOP);
+        a.code_changed();
+        let wall = std::time::Instant::now();
+        let n = a.run_until(20_000_000, |s| s.cpu.halted || s.cpu.shutdown).unwrap();
+        let w = wall.elapsed().as_secs_f64();
+        assert_eq!(n, 20_000_000, "the loop ran");
+        eprintln!("{} ({}): {n} instructions, {:.1} M/s", machine_board386_vga::system::PROFILE, machine_board386_vga::system::CORE, n as f64 / w / 1e6);
+    }
+}

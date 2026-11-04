@@ -23,19 +23,23 @@ use machine_sema::ty::Ty;
 /// Entries into a run before it is compiled.
 const HOT: u32 = 64;
 
+/// The host instructions an outlined fn may take, inlined at a call where
+/// what is known folds it (`Em::try_inline`).
+const JIT_TRIAL: usize = 0;
+
 impl Gen<'_> {
     pub(crate) fn jit_fields(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n"
+        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n"
     }
 
     pub(crate) fn jit_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n"
+        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n"
     }
 
     /// The trace's fields for compiled code (inside `Trace`).
@@ -43,14 +47,14 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "    /// Compiled code for the run after its first instruction, what each\n    /// of its steps was compiled with, and how often the run has been\n    /// entered.\n    pub code: machine_jit::Code,\n    pub jit_steps: Vec<JitStep>,\n    pub hits: u32,\n"
+        "    /// Compiled code for the run after its first instruction, what each\n    /// of its steps was compiled with, and how often the run has been\n    /// entered.\n    pub code: machine_jit::Code,\n    pub jit_steps: Vec<JitStep>,\n    pub hits: u32,\n    /// Entries its guard turned away: past a few, it is compiled again\n    /// for the values then.\n    pub guard_fails: u32,\n"
     }
 
     pub(crate) fn jit_trace_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "code: machine_jit::Code::default(), jit_steps: Vec::new(), hits: 0, "
+        "code: machine_jit::Code::default(), jit_steps: Vec::new(), hits: 0, guard_fails: 0, "
     }
 
     /// What a compiled step is compiled with (beside the trace types).
@@ -152,11 +156,15 @@ impl Gen<'_> {
                 let _ = &calls;
                 let fetch: Vec<Option<u128>> = steps.iter().map(|j| self.bus.jit_fetch_time(j.page, j.phys, j.step.len as u32)).collect();
                 let units: Vec<Option<(u64, u64, u128)>> = steps.iter().map(|j| self.bus.jit_fetch_units(j.page, j.phys, j.step.len as u32)).collect();
+                // The speculated registers' values now (the run is compiled
+                // for them), and the run's key.
+                let spec = self.jit_spec_values();
+                let key = t.key;
                 self.jit.compile_with(steps.len(), 2, |e, k| {{
                     let checked = k == 0 || lowered[k - 1];
                     // Only reached from a lowered step before it.
                     let follows = k >= 2 && lowered[k - 1];
-                    lowered[k] = Self::jit_emit_step(e, &steps[k], k, checked, follows, fetch[k], units[k]);
+                    lowered[k] = Self::jit_emit_step(e, &steps[k], k, checked, follows, fetch[k], units[k], &spec, &key);
                 }})
             }}
             None => None,
@@ -164,6 +172,12 @@ impl Gen<'_> {
         if let Some(t) = self.traces[slot].as_mut() {{
             t.code = machine_jit::Code::new(code);
         }}
+    }}
+    /// Entries into a run before it is compiled (`HOT` in the generator;
+    /// `MACHINE_JIT_HOT` overrides it, for tuning).
+    fn jit_hot() -> u32 {{
+        static H: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+        *H.get_or_init(|| std::env::var("MACHINE_JIT_HOT").ok().and_then(|v| v.parse().ok()).unwrap_or({HOT}))
     }}
     /// Runs `c`, compiled code of this machine's current run, from step
     /// `from`; the steps it made.
@@ -183,6 +197,19 @@ impl Gen<'_> {
         let f: extern "C" fn(*mut Self, u32) -> u32 = unsafe {{ std::mem::transmute(c) }};
         let n = f(self as *mut Self, from);
         self.jit_pending = false;
+        if self.jit_guard_failed {{
+            // Compiled for other values of the speculated registers: past a
+            // few refusals, compiled again for the values now.
+            self.jit_guard_failed = false;
+            if let Some(t) = self.traces[self.tr_cur as usize].as_mut() {{
+                t.guard_fails += 1;
+                if t.guard_fails >= 8 {{
+                    t.code = machine_jit::Code::default();
+                    t.hits = 0;
+                    t.guard_fails = 0;
+                }}
+            }}
+        }}
         if {sync_run} {{
             // `sync: run`: the devices, once for the run.
             self.bus.after_step();
@@ -234,7 +261,7 @@ impl Gen<'_> {
             }};
             let code = match code {{
                 Some(c) => Some(c),
-                None if len > 0 && self.traces[slot].as_ref().is_some_and(|t| t.hits == {HOT}) => {{
+                None if len > 0 && self.traces[slot].as_ref().is_some_and(|t| t.hits == Self::jit_hot()) => {{
                     self.jit_compile(slot);
                     self.traces[slot].as_ref().and_then(|t| t.code.addr())
                 }}
@@ -474,93 +501,135 @@ impl Gen<'_> {
         m.bus.jit_code_hit(mem as u32, k as usize);
         0
     }}
-    /// A byte read at `a` (a u64) in the istream space: in host code when it
-    /// falls in the board's direct memory, else the `shim` call.
+    /// The native type of an access of `n` bytes.
+    fn jm_n(n: u32) -> machine_jit::N {{
+        match n {{ 1 => machine_jit::N::U8, 2 => machine_jit::N::U16, 4 => machine_jit::N::U32, _ => machine_jit::N::U64 }}
+    }}
+    /// A read of `n` bytes at `a` (a u64) in the istream space: in host code
+    /// when it falls in the board's direct memory, else the `shim` call
+    /// (which charges the access and any split itself).
     #[allow(clippy::all)]
-    fn jm_read8(e: &mut machine_jit::Em, a: machine_jit::V, shim: usize, pure: bool) -> machine_jit::V {{
+    fn jm_read(e: &mut machine_jit::Em, a: machine_jit::V, n: u32, shim: usize, pure: bool) -> machine_jit::V {{
         let mems = B::jit_mems();
         match B::jit_board() {{
             Some(b) if !mems.is_empty() => {{
                 let a = e.op(machine_jit::Op::And, a, machine_jit::V::K(mems[0].amask as u128), machine_jit::N::U64);
-                Self::jm_access(e, a, None, mems, b, shim, pure)
+                Self::jm_access(e, a, n, None, mems, b, shim, pure)
             }}
-            _ => e.call(shim, &[(a, machine_jit::N::U64)], machine_jit::N::U8, pure),
+            _ => e.call(shim, &[(a, machine_jit::N::U64)], Self::jm_n(n), pure),
         }}
     }}
-    /// A byte write of `v` (a u8) at `a`, as `jm_read8`.
+    /// A write of `v` (`n` bytes) at `a`, as `jm_read`.
     #[allow(clippy::all)]
-    fn jm_write8(e: &mut machine_jit::Em, a: machine_jit::V, v: machine_jit::V, shim: usize, pure: bool) {{
+    fn jm_write(e: &mut machine_jit::Em, a: machine_jit::V, v: machine_jit::V, n: u32, shim: usize, pure: bool) {{
         let mems = B::jit_mems();
         match B::jit_board() {{
             Some(b) if !mems.is_empty() => {{
                 let a = e.op(machine_jit::Op::And, a, machine_jit::V::K(mems[0].amask as u128), machine_jit::N::U64);
-                let _ = Self::jm_access(e, a, Some(v), mems, b, shim, pure);
+                let _ = Self::jm_access(e, a, n, Some(v), mems, b, shim, pure);
             }}
             _ => {{
-                let v = e.cast(v, machine_jit::N::U8, machine_jit::N::U64);
+                let v = e.cast(v, Self::jm_n(n), machine_jit::N::U64);
                 let _ = e.call(shim, &[(a, machine_jit::N::U64), (v, machine_jit::N::U64)], machine_jit::N::U64, pure);
             }}
         }}
     }}
     #[allow(clippy::all)]
-    fn jm_access(e: &mut machine_jit::Em, a: machine_jit::V, v: Option<machine_jit::V>, mems: &'static [JitMem], b: JitBoard, shim: usize, pure: bool) -> machine_jit::V {{
+    fn jm_access(e: &mut machine_jit::Em, a: machine_jit::V, n: u32, v: Option<machine_jit::V>, mems: &'static [JitMem], b: JitBoard, shim: usize, pure: bool) -> machine_jit::V {{
+        let nn = Self::jm_n(n);
         let Some((m, rest)) = mems.split_first() else {{
             return match v {{
-                None => e.call(shim, &[(a, machine_jit::N::U64)], machine_jit::N::U8, pure),
+                None => e.call(shim, &[(a, machine_jit::N::U64)], nn, pure),
                 Some(v) => {{
-                    let v = e.cast(v, machine_jit::N::U8, machine_jit::N::U64);
+                    let v = e.cast(v, nn, machine_jit::N::U64);
                     let _ = e.call(shim, &[(a, machine_jit::N::U64), (v, machine_jit::N::U64)], machine_jit::N::U64, pure);
                     machine_jit::V::K(0)
                 }}
             }};
         }};
         if v.is_some() && m.write.is_none() {{
-            return Self::jm_access(e, a, v, rest, b, shim, pure);
+            return Self::jm_access(e, a, n, v, rest, b, shim, pure);
         }}
-        let inside = if m.lo == 0 && m.hi >= m.amask {{
+        // Within the range, and (a mirrored memory) not wrapping inside
+        // the access.
+        let last = e.op(machine_jit::Op::Add, a, machine_jit::V::K((n - 1) as u128), machine_jit::N::U64);
+        let mut inside = if m.lo == 0 && m.hi >= m.amask && n == 1 {{
             machine_jit::V::K(1)
         }} else {{
             let ge = e.op(machine_jit::Op::Ge, a, machine_jit::V::K(m.lo as u128), machine_jit::N::U64);
-            let le = e.op(machine_jit::Op::Le, a, machine_jit::V::K(m.hi as u128), machine_jit::N::U64);
+            let le = e.op(machine_jit::Op::Le, last, machine_jit::V::K(m.hi as u128), machine_jit::N::U64);
             e.op(machine_jit::Op::And, ge, le, machine_jit::N::Bool)
         }};
-        e.if_val(inside, machine_jit::N::U8, |e| {{
+        if m.mask != u64::MAX && n > 1 {{
+            let i = e.op(machine_jit::Op::And, a, machine_jit::V::K(m.mask as u128), machine_jit::N::U64);
+            let il = e.op(machine_jit::Op::Add, i, machine_jit::V::K((n - 1) as u128), machine_jit::N::U64);
+            let fits = e.op(machine_jit::Op::Le, il, machine_jit::V::K(m.mask as u128), machine_jit::N::U64);
+            inside = e.op(machine_jit::Op::And, inside, fits, machine_jit::N::Bool);
+        }}
+        e.if_val(inside, nn, |e| {{
+            // The access, as the shim counts it, and its split.
+            let acc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, accesses), n: machine_jit::N::U8, bump: 0 }});
+            let acc = e.op(machine_jit::Op::Add, acc, machine_jit::V::K(1), machine_jit::N::U8);
+            e.store(std::mem::offset_of!(Self, accesses), machine_jit::N::U8, acc);
+            let a32 = e.cast(a, machine_jit::N::U64, machine_jit::N::U32);
+            let sc = Self::jit_split(e, a32, machine_jit::V::K(n as u128));
+            if sc != machine_jit::V::K(0) {{
+                let cy = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, cycles), n: machine_jit::N::U32, bump: 0 }});
+                let cy = e.op(machine_jit::Op::Add, cy, sc, machine_jit::N::U32);
+                e.store(std::mem::offset_of!(Self, cycles), machine_jit::N::U32, cy);
+            }}
             let i = if m.mask == u64::MAX {{ a }} else {{ e.op(machine_jit::Op::And, a, machine_jit::V::K(m.mask as u128), machine_jit::N::U64) }};
             let base = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, jit_ptrs) + 8 * m.cells, n: machine_jit::N::U64, bump: 0 }});
             let p = e.op(machine_jit::Op::Add, base, i, machine_jit::N::U64);
             let (r, cost) = match v {{
-                None => (e.load_at(p, machine_jit::N::U8), m.read),
+                None => (e.load_at(p, nn), m.read),
                 Some(v) => {{
-                    e.store_at(p, machine_jit::N::U8, v);
-                    // Recorded code written: its page's stamp moves on.
+                    e.store_at(p, nn, v);
+                    // Recorded code written (its first or last byte's block):
+                    // its page's stamp moves on.
                     if let Some(c) = m.code {{
                         let cb = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, jit_ptrs) + 8 * c, n: machine_jit::N::U64, bump: 0 }});
-                        let pg = e.op(machine_jit::Op::Shr, i, machine_jit::V::K(12), machine_jit::N::U64);
-                        let off = e.op(machine_jit::Op::Shl, pg, machine_jit::V::K(2), machine_jit::N::U64);
-                        let wp = e.op(machine_jit::Op::Add, cb, off, machine_jit::N::U64);
-                        let word = e.load_at(wp, machine_jit::N::U32);
-                        let blk = e.op(machine_jit::Op::Shr, i, machine_jit::V::K(7), machine_jit::N::U64);
-                        let blk = e.op(machine_jit::Op::And, blk, machine_jit::V::K(31), machine_jit::N::U64);
-                        let blk = e.cast(blk, machine_jit::N::U64, machine_jit::N::U32);
-                        let bit = e.op(machine_jit::Op::Shl, machine_jit::V::K(1), blk, machine_jit::N::U32);
-                        let hit = e.op(machine_jit::Op::And, word, bit, machine_jit::N::U32);
-                        let hit = e.op(machine_jit::Op::Ne, hit, machine_jit::V::K(0), machine_jit::N::U32);
-                        e.cold(hit, |e| {{
-                            let _ = e.call(Self::jit_code_hit_c as *const () as usize, &[(machine_jit::V::K(m.mem as u128), machine_jit::N::U64), (i, machine_jit::N::U64)], machine_jit::N::U64, true);
-                        }});
+                        let mut ends = vec![i];
+                        if n > 1 {{
+                            ends.push(e.op(machine_jit::Op::Add, i, machine_jit::V::K((n - 1) as u128), machine_jit::N::U64));
+                        }}
+                        for k in ends {{
+                            let pg = e.op(machine_jit::Op::Shr, k, machine_jit::V::K(12), machine_jit::N::U64);
+                            let off = e.op(machine_jit::Op::Shl, pg, machine_jit::V::K(2), machine_jit::N::U64);
+                            let wp = e.op(machine_jit::Op::Add, cb, off, machine_jit::N::U64);
+                            let word = e.load_at(wp, machine_jit::N::U32);
+                            let blk = e.op(machine_jit::Op::Shr, k, machine_jit::V::K(7), machine_jit::N::U64);
+                            let blk = e.op(machine_jit::Op::And, blk, machine_jit::V::K(31), machine_jit::N::U64);
+                            let blk = e.cast(blk, machine_jit::N::U64, machine_jit::N::U32);
+                            let bit = e.op(machine_jit::Op::Shl, machine_jit::V::K(1), blk, machine_jit::N::U32);
+                            let hit = e.op(machine_jit::Op::And, word, bit, machine_jit::N::U32);
+                            let hit = e.op(machine_jit::Op::Ne, hit, machine_jit::V::K(0), machine_jit::N::U32);
+                            e.cold(hit, |e| {{
+                                let _ = e.call(Self::jit_code_hit_c as *const () as usize, &[(machine_jit::V::K(m.mem as u128), machine_jit::N::U64), (k, machine_jit::N::U64)], machine_jit::N::U64, true);
+                            }});
+                        }}
                     }}
                     (machine_jit::V::K(0), m.write.unwrap_or(0))
                 }}
             }};
+            // The bus units it spans, each at its cost.
+            let units = if m.unit == 1 {{
+                machine_jit::V::K(n as u128)
+            }} else {{
+                let sh = m.unit.trailing_zeros() as u128;
+                let u1 = e.op(machine_jit::Op::Shr, last, machine_jit::V::K(sh), machine_jit::N::U64);
+                let u0 = e.op(machine_jit::Op::Shr, a, machine_jit::V::K(sh), machine_jit::N::U64);
+                let d = e.op(machine_jit::Op::Sub, u1, u0, machine_jit::N::U64);
+                e.op(machine_jit::Op::Add, d, machine_jit::V::K(1), machine_jit::N::U64)
+            }};
+            let units = e.cast(units, machine_jit::N::U64, machine_jit::N::U128);
+            let t = e.op(machine_jit::Op::Mul, units, machine_jit::V::K(cost), machine_jit::N::U128);
             let bus = std::mem::offset_of!(Self, bus);
             let now = e.read(&machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }});
-            let now = e.op(machine_jit::Op::Add, now, machine_jit::V::K(cost), machine_jit::N::U128);
+            let now = e.op(machine_jit::Op::Add, now, t, machine_jit::N::U128);
             e.store(bus + b.now, machine_jit::N::U128, now);
-            let acc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, accesses), n: machine_jit::N::U8, bump: 0 }});
-            let acc = e.op(machine_jit::Op::Add, acc, machine_jit::V::K(1), machine_jit::N::U8);
-            e.store(std::mem::offset_of!(Self, accesses), machine_jit::N::U8, acc);
             r
-        }}, |e| Self::jm_access(e, a, v, rest, b, shim, pure))
+        }}, |e| Self::jm_access(e, a, n, v, rest, b, shim, pure))
     }}
     /// `step`'s prologue, for a lowered step whose gate does not lower: 0
     /// when the instruction is to run, else 1 (the step was made another
@@ -609,7 +678,7 @@ impl Gen<'_> {
     /// `follows`: the step is reached only from a lowered step before it,
     /// which retired with the processor running, not shut down, and the
     /// epoch as it was unless its writes bumped it.
-    fn jit_emit_step(e: &mut machine_jit::Em, j: &JitStep, k: usize, checked: bool, follows: bool, fetch: Option<u128>, units: Option<(u64, u64, u128)>) -> bool {{
+    fn jit_emit_step(e: &mut machine_jit::Em, j: &JitStep, k: usize, checked: bool, follows: bool, fetch: Option<u128>, units: Option<(u64, u64, u128)>, spec: &[u128], key: &TKey) -> bool {{
         let s = &j.step;
         if B::SCHEDULE || !{lowers} {{
             let r = e.call(Self::jit_step_fn(&s.instr), &[(machine_jit::V::K(j as *const JitStep as usize as u128), machine_jit::N::U64)], machine_jit::N::U32, false);
@@ -645,6 +714,27 @@ impl Gen<'_> {
             let r = e.call(Self::jit_code_c as *const () as usize, &[(machine_jit::V::K(j.page as u128), machine_jit::N::U64), (machine_jit::V::K(j.stamp as u128), machine_jit::N::U64)], machine_jit::N::U32, true);
             e.exit_on(r);
         }}
+        // Speculation: where the run is entered, the speculated registers
+        // must hold what it was compiled for; then (the epoch unchanged:
+        // a write to one would have ended the run) they, and the key's
+        // registers, are known values.
+        let places = Self::jit_spec_places();
+        if k < 2 {{
+            for (i, (off, n)) in places.iter().enumerate() {{
+                let v = e.load(*off, *n);
+                let bad = e.op(machine_jit::Op::Ne, v, machine_jit::V::K(spec[i]), *n);
+                e.exit_if(bad, false, |e| e.store(std::mem::offset_of!(Self, jit_guard_failed), machine_jit::N::Bool, machine_jit::V::K(1)));
+            }}
+        }}
+        let assume = |e: &mut machine_jit::Em| {{
+            for (i, (off, n)) in places.iter().enumerate() {{
+                e.assume(*off, *n, spec[i]);
+            }}
+            Self::jit_key_assume(e, key);
+            // Past the run's check: the run goes on.
+            e.assume(std::mem::offset_of!(Self, tr_on), machine_jit::N::Bool, 1);
+        }};
+        assume(e);
         // `step`'s prologue.
         e.store(std::mem::offset_of!(Self, cycles), machine_jit::N::U32, machine_jit::V::K(0));
         e.store(std::mem::offset_of!(Self, accesses), machine_jit::N::U8, machine_jit::V::K(0));
@@ -667,7 +757,12 @@ impl Gen<'_> {
             e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, halted), n: machine_jit::N::Bool, bump: 0 }})
         }};
         e.exit_if(h, true, |e| {{ let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, false); }});
+        // Past the check: the processor runs.
+        e.assume(std::mem::offset_of!(Self, halted), machine_jit::N::Bool, 0);
         }}
+        // Past the gate, the step is the instruction's: what an interrupt's
+        // path (which left the run) forgot holds again.
+        assume(e);
         e.store(std::mem::offset_of!(Self, tr_rec_now), machine_jit::N::Bool, machine_jit::V::K(0));
         // The state as decoding left it.
         e.store(std::mem::offset_of!(Self, fetched), machine_jit::N::U8, machine_jit::V::K(s.len as u128));
@@ -876,6 +971,66 @@ impl Gen<'_> {
             quiet_arms = quiet.iter().map(|n| format!("            Instr::{n}(_) => true,\n")).collect::<String>(),
             lowers_arms = lowered.iter().map(|n| format!("            Instr::{n}(_) => true,\n")).collect::<String>(),
         );
+        // The split charge of a data access (`split =>`), lowered.
+        let split = match &self.isa.split_cycles {
+            Some(t) => {
+                let lx = super::lower::Lx { locals: &t.locals, ops: None, src: None, timing: true };
+                let mut bind = String::new();
+                for (i, p) in t.params.iter().enumerate() {
+                    let _ = write!(bind, "let l{p} = e.local(machine_jit::N::U32, {}); ", if i == 0 { "a" } else { "w" });
+                }
+                match self.jexpr(&lx, &t.expr) {
+                    Ok(x) => format!("{bind}{{ let v = {x}; e.cast(v, {}, machine_jit::N::U32) }}", self.jn(&t.expr.ty).unwrap_or("machine_jit::N::U32")),
+                    Err(_) => "{ let _ = (a, w); e.trap(); machine_jit::V::K(0) }".to_string(),
+                }
+            }
+            None => "{ let _ = (a, w); machine_jit::V::K(0) }".to_string(),
+        };
+        let _ = write!(self.out, "    /// The split charge of a data access at `a` of `w` bytes.\n    #[allow(unused_variables, clippy::all)]\n    fn jit_split(e: &mut machine_jit::Em, a: machine_jit::V, w: machine_jit::V) -> machine_jit::V {{\n        {split}\n    }}\n");
+        // The speculated registers (the trace plan's), and the key's
+        // registers' leaves.
+        let mut places = Vec::new();
+        let mut values = Vec::new();
+        for d in &plan.spec {
+            let (_, r) = self.regs[d];
+            let n = ident(&r.name);
+            places.push(format!("(std::mem::offset_of!(Self, r.{n}), {})", self.jn(&r.ty)?));
+            values.push(format!("machine_jit::Native::bits(self.r.{n})"));
+        }
+        let mut key_assume = String::new();
+        for d in &plan.key {
+            let (_, r) = self.regs[d];
+            let n = ident(&r.name);
+            fn walk(g: &Gen, path: &str, ty: &Ty, out: &mut Vec<(String, Ty)>) {
+                match ty {
+                    Ty::Bundle(b) => {
+                        for f in &g.bundles[b].fields {
+                            walk(g, &format!("{path}.{}", ident(&f.name)), &f.ty, out);
+                        }
+                    }
+                    t => out.push((path.to_string(), t.clone())),
+                }
+            }
+            let mut leaves = Vec::new();
+            walk(self, "", &r.ty, &mut leaves);
+            for (path, t) in leaves {
+                if matches!(t, Ty::Array(..) | Ty::Tuple(_)) {
+                    continue;
+                }
+                let _ = writeln!(key_assume, "        e.assume(std::mem::offset_of!(Self, r.{n}{path}), {}, machine_jit::Native::bits(key.r_{n}{path}));", self.jn(&t)?);
+            }
+        }
+        if plan.key_mode {
+            let _ = writeln!(key_assume, "        e.assume(std::mem::offset_of!(Self, mode), {}, machine_jit::Native::bits(key.mode));", self.jn(&match self.isa.mode { Some(m) => Ty::Enum(m), None => Ty::UInt(8) })?);
+        }
+        let _ = write!(
+            self.out,
+            "    /// The registers compiled runs speculate on: where they are.\n    fn jit_spec_places() -> [(usize, machine_jit::N); {n}] {{\n        [{}]\n    }}\n    /// Their values now.\n    fn jit_spec_values(&self) -> [u128; {n}] {{\n        [{}]\n    }}\n    /// The run's key: its registers hold these values in the run.\n    #[allow(unused_variables)]\n    fn jit_key_assume(e: &mut machine_jit::Em, key: &TKey) {{\n{key_assume}    }}\n",
+            places.join(", "),
+            values.join(", "),
+            n = plan.spec.len()
+        );
+        let _ = write!(self.out, "    /// The host instructions an outlined fn may take inlined (`JIT_TRIAL`\n    /// in the generator; `MACHINE_JIT_TRIAL` overrides it, for tuning).\n    #[allow(dead_code)]\n    fn jit_trial_budget() -> usize {{\n        static B: std::sync::OnceLock<usize> = std::sync::OnceLock::new();\n        *B.get_or_init(|| std::env::var(\"MACHINE_JIT_TRIAL\").ok().and_then(|v| v.parse().ok()).unwrap_or({JIT_TRIAL}))\n    }}\n");
         self.out.push_str(&out);
         Ok(())
     }

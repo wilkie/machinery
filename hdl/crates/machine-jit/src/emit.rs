@@ -191,7 +191,7 @@ enum Known {
 
 /// An open region: what was known at its start, where its returns go,
 /// and what each return left known.
-type Region = (State, Block, Vec<Option<State>>);
+type Region = (State, Block, Vec<Option<(State, Block)>>);
 
 #[derive(Clone)]
 struct State {
@@ -243,13 +243,20 @@ pub struct Em<'a, 'f> {
     /// Fields that calls change behind the code's back: never remembered.
     volatile: Vec<(usize, usize)>,
     bumped: bool,
+    /// Inside a trial (`try_inline`): the instruction count past which it
+    /// stops emitting.
+    trial_limit: Option<usize>,
+    trial_over: bool,
+    /// Instructions of trials that failed (dead code): not counted against
+    /// a trial that contains them.
+    wasted: usize,
     /// Fields written but not yet stored.
     dirty: Vec<(usize, N)>,
 }
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, from: Value, out: Block) -> Self {
-        Em { b, ptr, cc, m, from, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, dirty: Vec::new() }
+        Em { b, ptr, cc, m, from, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new() }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -401,6 +408,7 @@ impl<'a, 'f> Em<'a, 'f> {
 
     /// Read a place.
     pub fn read(&mut self, p: &Place) -> V {
+        self.trial_check();
         if !self.live {
             return V::K(0);
         }
@@ -527,6 +535,108 @@ impl<'a, 'f> Em<'a, 'f> {
         self.epochs = Some(offs);
     }
 
+    /// A trial past its budget emits no more (the rest is dead code).
+    fn trial_check(&mut self) {
+        if let Some(l) = self.trial_limit {
+            if self.live && self.emitted() > l {
+                // Dead from here: the block ends, as at any exit.
+                self.b.ins().trap(cranelift_codegen::ir::TrapCode::user(4).unwrap());
+                self.live = false;
+                self.trial_over = true;
+            }
+        }
+    }
+
+    /// Instructions emitted that may run (failed trials' are not).
+    fn emitted(&self) -> usize {
+        self.b.func.dfg.num_insts() - self.wasted
+    }
+
+    /// The machine's field at `off` holds `v` (a check the code made says
+    /// so): remembered, nothing stored. Not when the code has written it
+    /// since (its own value is the one to keep).
+    pub fn assume(&mut self, off: usize, n: N, v: u128) {
+        if !self.live {
+            return;
+        }
+        let w = n.width() as usize / 8;
+        if self.dirty.iter().any(|(o, m)| off < o + m.width() as usize / 8 && *o < off + w) {
+            return;
+        }
+        self.regs.retain(|(o, m), _| *o + m.width() as usize / 8 <= off || off + w <= *o);
+        self.regs.insert((off, n), Known::K(v & n.mask()));
+    }
+
+    /// `inline` when it emits at most `budget` host instructions (what is
+    /// known folds it: a big fn may be small here), else `fallback`. The
+    /// trial is a branch on a constant, set to the fallback when the trial
+    /// is too big (it is then never run; a trial stops emitting past its
+    /// budget).
+    pub fn try_inline<T>(&mut self, budget: usize, inline: impl FnOnce(&mut Self) -> T, fallback: impl FnOnce(&mut Self) -> T) -> T {
+        if !self.live {
+            return fallback(self);
+        }
+        let t = self.b.create_block();
+        let f = self.b.create_block();
+        let one = self.b.ins().iconst(types::I8, 1);
+        let one_inst = self.b.func.dfg.value_def(one).unwrap_inst();
+        self.b.ins().brif(one, t, &[], f, &[]);
+        self.b.seal_block(t);
+        self.b.seal_block(f);
+        let before = self.state();
+        let (regions, bumped) = (self.regions.len(), self.bumped);
+        self.b.switch_to_block(t);
+        let n0 = self.emitted();
+        // Nested in another trial: within what is left of its budget too.
+        let (outer_limit, outer_over) = (self.trial_limit, self.trial_over);
+        let limit = match outer_limit {
+            Some(l) => l.min(n0 + budget),
+            None => n0 + budget,
+        };
+        self.trial_limit = Some(limit);
+        self.trial_over = false;
+        let r = inline(self);
+        let over = self.trial_over || self.emitted() > limit;
+        if std::env::var_os("MACHINE_JIT_TRIALS").is_some() {
+            eprintln!("machine-jit: trial of {} instructions (budget {budget}){}", self.emitted() - n0, if over { ", over" } else { "" });
+        }
+        self.trial_limit = outer_limit;
+        self.trial_over = outer_over;
+        if !over {
+            // Kept: on to a block of its own; the other branch never runs.
+            let cont = if self.live {
+                let c = self.b.create_block();
+                self.b.ins().jump(c, &[]);
+                self.b.seal_block(c);
+                Some(c)
+            } else {
+                None
+            };
+            self.b.switch_to_block(f);
+            self.b.ins().trap(cranelift_codegen::ir::TrapCode::user(4).unwrap());
+            match cont {
+                Some(c) => {
+                    self.b.switch_to_block(c);
+                    self.live = true;
+                }
+                None => self.live = false,
+            }
+            return r;
+        }
+        // Too big: the branch goes to the fallback, and the trial is dead.
+        if self.live {
+            self.b.ins().trap(cranelift_codegen::ir::TrapCode::user(4).unwrap());
+        }
+        self.wasted += self.emitted() - n0;
+        self.b.func.dfg.replace(one_inst).iconst(types::I8, 0);
+        self.regions.truncate(regions);
+        self.restore(&before);
+        self.bumped = bumped;
+        self.live = true;
+        self.b.switch_to_block(f);
+        fallback(self)
+    }
+
     /// The code that reaches here stops the host (the interpreter would
     /// panic: `unreachable`, an index out of bounds).
     pub fn trap(&mut self) {
@@ -635,7 +745,6 @@ impl<'a, 'f> Em<'a, 'f> {
         self.ret();
         match self.regions.pop() {
             Some(Some((before, join, ends))) => {
-                self.b.seal_block(join);
                 self.enter(&before, join, &ends);
             }
             _ => self.live = false,
@@ -726,7 +835,8 @@ impl<'a, 'f> Em<'a, 'f> {
                 }
             }
             V::D(cv) => {
-                self.flush();
+                // No flush: each branch keeps the stores it owes, and the
+                // join decides (`enter`).
                 let tb = self.b.create_block();
                 let fb = self.b.create_block();
                 self.b.ins().brif(cv, tb, &[], fb, &[]);
@@ -742,7 +852,6 @@ impl<'a, 'f> Em<'a, 'f> {
                 self.b.switch_to_block(fb);
                 f(self);
                 let b = self.leave(&before, join);
-                self.b.seal_block(join);
                 self.enter(&before, join, &[a, b]);
             }
         }
@@ -773,9 +882,10 @@ impl<'a, 'f> Em<'a, 'f> {
 
     /// A branch's end: what it leaves known, its known locals (those from
     /// before the branch) put in their variables (the other branch may
-    /// leave them otherwise), and a jump to `join`. None when it left the
-    /// code.
-    fn leave(&mut self, before: &State, join: Block) -> Option<State> {
+    /// leave them otherwise), and a jump to a block of its own (where the
+    /// join, knowing whether another branch comes back, stores what it owes
+    /// or not). None when it left the code.
+    fn leave(&mut self, before: &State, _join: Block) -> Option<(State, Block)> {
         if !self.live {
             return None;
         }
@@ -787,24 +897,49 @@ impl<'a, 'f> Em<'a, 'f> {
                 self.b.def_var(s.var, x);
             }
         }
-        self.flush();
         let st = self.state();
-        self.b.ins().jump(join, &[]);
+        let pad = self.b.create_block();
+        self.b.ins().jump(pad, &[]);
+        self.b.seal_block(pad);
         self.live = false;
-        Some(st)
+        Some((st, pad))
     }
 
-    /// After the branches: what every branch that comes back left known.
-    fn enter(&mut self, before: &State, join: Block, ends: &[Option<State>]) {
-        let ends: Vec<&State> = ends.iter().flatten().collect();
+    /// After the branches. One that comes back: it goes on as it was, its
+    /// deferred stores still owed (so a branch that raised or exited costs
+    /// the other nothing). Several: each stores what it owes, and they meet
+    /// at `join`, which keeps what all of them left known.
+    fn enter(&mut self, before: &State, join: Block, ends: &[Option<(State, Block)>]) {
+        let ends: Vec<&(State, Block)> = ends.iter().flatten().collect();
         self.slots.truncate(before.slots.len());
-        if ends.is_empty() {
-            // No branch comes back: the join is never reached.
-            self.live = false;
-            return;
+        match ends.as_slice() {
+            [] => {
+                self.b.seal_block(join);
+                self.live = false;
+                return;
+            }
+            [(st, pad)] => {
+                self.b.seal_block(join);
+                self.b.switch_to_block(*pad);
+                self.restore(st);
+                self.slots.truncate(before.slots.len());
+                self.live = true;
+                return;
+            }
+            _ => {}
         }
+        for (st, pad) in &ends {
+            self.b.switch_to_block(*pad);
+            self.restore(st);
+            self.live = true;
+            self.flush();
+            self.b.ins().jump(join, &[]);
+        }
+        self.b.seal_block(join);
+        self.slots.truncate(before.slots.len());
         self.b.switch_to_block(join);
         self.live = true;
+        let ends: Vec<&State> = ends.iter().map(|(st, _)| st).collect();
         for i in 0..self.slots.len() {
             let first = ends[0].slots[i];
             self.slots[i].k = if ends.iter().all(|e| e.slots[i] == first) { first } else { None };
@@ -815,7 +950,7 @@ impl<'a, 'f> Em<'a, 'f> {
                 // A host value made in one branch does not reach the join.
                 let ok = match v {
                     Known::K(_) => true,
-                    Known::D(_) => ends.len() == 1 || before.regs.get(key) == Some(v),
+                    Known::D(_) => before.regs.get(key) == Some(v),
                 };
                 if ok {
                     regs.insert(*key, *v);
@@ -827,8 +962,10 @@ impl<'a, 'f> Em<'a, 'f> {
     }
 
     fn restore(&mut self, st: &State) {
+        // Locals made since `st` are gone; ones it had that are gone now
+        // (released at a join) stay gone.
         self.slots.truncate(st.slots.len());
-        for (i, k) in st.slots.iter().enumerate() {
+        for (i, k) in st.slots.iter().enumerate().take(self.slots.len()) {
             self.slots[i].k = *k;
         }
         self.regs = st.regs.clone();
@@ -1012,6 +1149,7 @@ impl<'a, 'f> Em<'a, 'f> {
     /// `a op b`, both of type `n` (a shift's amount of any type); a
     /// comparison's result is a bool.
     pub fn op(&mut self, op: Op, a: V, b: V, n: N) -> V {
+        self.trial_check();
         if !self.live {
             return V::K(0);
         }

@@ -1273,13 +1273,13 @@ impl<'a> Gen<'a> {
                                     }
                                 };
                                 let _ = writeln!(pages, "        if addr >= {:#x} && addr <= {:#x} {{ return Some((({k} as u32) << 24) | ({} >> 12) as u32); }}", r.lo, r.hi, index("addr"));
-                                // Byte accesses, four memories at most (eight pointers).
-                                if k < 4 && unit_bytes == 1 {
+                                // Four memories at most (eight pointers).
+                                if k < 4 {
                                     let abits = match &msp.addr { Ty::UInt(b) => *b, _ => 64 };
                                     let am = if abits >= 64 { u64::MAX } else { (1u64 << abits) - 1 };
                                     let mk = if d.mask == u128::MAX { u64::MAX } else { d.mask as u64 };
                                     let write = if d.read_only { "None".to_string() } else { format!("Some({} * {period})", wbase as u128 + d.wait) };
-                                    let _ = write!(jit_mems, "JitMem {{ amask: {am:#x}, lo: {:#x}, hi: {:#x}, mask: {mk:#x}, read: {} * {period}, write: {write}, cells: {}, code: Some({}), mem: {k} }}, ", r.lo, r.hi, rbase as u128 + d.wait, 2 * k, 2 * k + 1);
+                                    let _ = write!(jit_mems, "JitMem {{ amask: {am:#x}, lo: {:#x}, hi: {:#x}, mask: {mk:#x}, read: {} * {period}, write: {write}, unit: {unit_bytes}, cells: {}, code: Some({}), mem: {k} }}, ", r.lo, r.hi, rbase as u128 + d.wait, 2 * k, 2 * k + 1);
                                     if !jit_ptrs.contains(&format!("out[{}]", 2 * k)) {
                                         let _ = writeln!(jit_ptrs, "        out[{}] = {cells}.as_ptr() as usize; out[{}] = {cells}_code.as_ptr() as usize;", 2 * k, 2 * k + 1);
                                         let _ = writeln!(jit_hits, "            {k} => {{ {cells}_stamps[k >> 12] = {cells}_stamps[k >> 12].wrapping_add(1); {cells}_code[k >> 12] = 0; {cells}_writes = {cells}_writes.wrapping_add(1); }}");
@@ -1436,17 +1436,26 @@ impl<'a> Gen<'a> {
                     let hir::StmtKind::Return(Some(x)) = &st.kind else { continue };
                     let hir::ExprKind::Port(_, pi, false) = &x.kind else { continue };
                     let src = sys.wires.iter().find(|w| w.target == (proc_idx as u32, *pi)).map(|w| &w.source);
-                    if let Some(hir::WireSource::Port((si, sp))) = src {
-                        let _ = writeln!(
-                            exts,
-                            "            {:?} => Some(std::mem::offset_of!(Board, sig.w_{}_{})),",
-                            self.prog.item_name(*def),
-                            ident(&insts[*si as usize].name),
-                            ident(&insts[*si as usize].comp.ports[*sp as usize].name)
-                        );
+                    match src {
+                        Some(hir::WireSource::Port((si, sp))) => {
+                            let _ = writeln!(
+                                exts,
+                                "            {:?} => Some(Ok(std::mem::offset_of!(Board, sig.w_{}_{}))),",
+                                self.prog.item_name(*def),
+                                ident(&insts[*si as usize].name),
+                                ident(&insts[*si as usize].comp.ports[*sp as usize].name)
+                            );
+                        }
+                        // Strapped, or not driven (its type's default).
+                        Some(hir::WireSource::Const(v)) => {
+                            let _ = writeln!(exts, "            {:?} => Some(Err({})),", self.prog.item_name(*def), *v as u128);
+                        }
+                        None => {
+                            let _ = writeln!(exts, "            {:?} => Some(Err(0)),", self.prog.item_name(*def));
+                        }
                     }
                 }
-                let _ = write!(bus_impl, "    fn jit_ext(name: &str) -> Option<usize> {{\n        match name {{\n{exts}            _ => None,\n        }}\n    }}\n");
+                let _ = write!(bus_impl, "    fn jit_ext(name: &str) -> Option<Result<usize, u128>> {{\n        match name {{\n{exts}            _ => None,\n        }}\n    }}\n");
                 let _ = write!(bus_impl, "    fn jit_mems() -> &'static [JitMem] {{\n        Board::JIT_MEMS\n    }}\n    fn jit_mem_ptrs(&self, out: &mut [usize; 8]) {{\n        let _ = &out;\n{}    }}\n    #[allow(unused_variables)]\n    fn jit_code_hit(&mut self, mem: u32, k: usize) {{\n        match mem {{\n{}            _ => {{}}\n        }}\n    }}\n", jit_ptrs, jit_hits);
                 bus_impl.push_str("    fn jit_board() -> Option<JitBoard> {\n        Board::JIT_BOARD\n    }\n    fn jit_fetch_time(&self, page: u32, addr: u64, n: u32) -> Option<u128> {\n        if Board::JIT_BOARD.is_some_and(|b| b.serial) { self.direct_jit_time(page, addr, n) } else { None }\n    }\n    fn jit_fetch_units(&self, page: u32, addr: u64, n: u32) -> Option<(u64, u64, u128)> {\n        self.direct_jit_units(page, addr, n)\n    }\n");
             }

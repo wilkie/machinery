@@ -146,6 +146,7 @@ impl Engine {
             b.seal_block(entry);
             let machine = b.block_params(entry)[0];
             let from = b.block_params(entry)[1];
+
             // The way out: the steps made so far.
             let out = b.create_block();
             b.append_block_param(out, types::I32);

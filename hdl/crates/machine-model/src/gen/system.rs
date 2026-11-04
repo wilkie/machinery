@@ -1190,8 +1190,12 @@ impl<'a> Gen<'a> {
         // they touch; code is charged once a unit, as a one-unit buffer.
         let mut direct = String::new();
         let mut direct_hooks = (String::new(), String::new(), String::new());
-        // The JIT core: the code-write counters' offsets in the board.
+        // The JIT core: the code-write counters' offsets in the board, the
+        // direct memory's ranges, their pointers, and code hits.
         let mut jit_writes = String::new();
+        let mut jit_mems = String::new();
+        let mut jit_ptrs = String::new();
+        let mut jit_hits = String::new();
         if prof.is_some_and(|p| p.direct_memory) {
             if cpu_retire {
                 return Err(GenError::new(format!(
@@ -1266,6 +1270,18 @@ impl<'a> Gen<'a> {
                                     }
                                 };
                                 let _ = writeln!(pages, "        if addr >= {:#x} && addr <= {:#x} {{ return Some((({k} as u32) << 24) | ({} >> 12) as u32); }}", r.lo, r.hi, index("addr"));
+                                // Byte accesses, four memories at most (eight pointers).
+                                if k < 4 && unit_bytes == 1 {
+                                    let abits = match &msp.addr { Ty::UInt(b) => *b, _ => 64 };
+                                    let am = if abits >= 64 { u64::MAX } else { (1u64 << abits) - 1 };
+                                    let mk = if d.mask == u128::MAX { u64::MAX } else { d.mask as u64 };
+                                    let write = if d.read_only { "None".to_string() } else { format!("Some({} * {period})", wbase as u128 + d.wait) };
+                                    let _ = write!(jit_mems, "JitMem {{ amask: {am:#x}, lo: {:#x}, hi: {:#x}, mask: {mk:#x}, read: {} * {period}, write: {write}, cells: {}, code: Some({}), mem: {k} }}, ", r.lo, r.hi, rbase as u128 + d.wait, 2 * k, 2 * k + 1);
+                                    if !jit_ptrs.contains(&format!("out[{}]", 2 * k)) {
+                                        let _ = writeln!(jit_ptrs, "        out[{}] = {cells}.as_ptr() as usize; out[{}] = {cells}_code.as_ptr() as usize;", 2 * k, 2 * k + 1);
+                                        let _ = writeln!(jit_hits, "            {k} => {{ {cells}_stamps[k >> 12] = {cells}_stamps[k >> 12].wrapping_add(1); {cells}_code[k >> 12] = 0; {cells}_writes = {cells}_writes.wrapping_add(1); }}");
+                                    }
+                                }
                                 let _ = writeln!(skips, "        if addr >= {:#x} && last <= {:#x} {{ let (u0, u1) = (addr / {unit_bytes}, last / {unit_bytes}); let c = u1 - u0 + 1 - (u0 == self.direct_code) as u64; self.direct_code = u1; let t = c as clock::Time * {} * {period}; self.sig.now += t; self.code_time += t; return true; }}", r.lo, r.hi, rbase as u128 + d.wait);
                             }
                             let _ = writeln!(fetches, "        if addr >= {:#x} && addr <= {:#x} {{ let u = addr / {unit_bytes}; if u != self.direct_code {{ self.direct_code = u; let t = {} * {period}; self.sig.now += t; self.code_time += t; }} return Some({cells}[{}]); }}", r.lo, r.hi, rbase as u128 + d.wait, index("addr"));
@@ -1400,6 +1416,7 @@ impl<'a> Gen<'a> {
                 "    #[inline]\n    fn after_step(&mut self) {{ self.board_sync(); }}\n    #[inline]\n    fn halted_cycle(&mut self) {{ self.sig.now += clock::C{cpu_clock}; }}\n"
             );
             if self.jit {
+                let _ = write!(bus_impl, "    fn jit_mems() -> &'static [JitMem] {{\n        Board::JIT_MEMS\n    }}\n    fn jit_mem_ptrs(&self, out: &mut [usize; 8]) {{\n        let _ = &out;\n{}    }}\n    #[allow(unused_variables)]\n    fn jit_code_hit(&mut self, mem: u32, k: usize) {{\n        match mem {{\n{}            _ => {{}}\n        }}\n    }}\n", jit_ptrs, jit_hits);
                 bus_impl.push_str("    fn jit_board() -> Option<JitBoard> {\n        Board::JIT_BOARD\n    }\n    fn jit_fetch_time(&self, page: u32, addr: u64, n: u32) -> Option<u128> {\n        if Board::JIT_BOARD.is_some_and(|b| b.serial) { self.direct_jit_time(page, addr, n) } else { None }\n    }\n");
             }
             if cpu.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Reset)) {
@@ -1573,7 +1590,7 @@ impl<'a> Gen<'a> {
             };
             let _ = write!(
                 o,
-                "    impl Board {{\n        /// How this board keeps time, for the JIT core.\n        pub const JIT_BOARD: Option<JitBoard> = {board};\n    }}\n"
+                "    impl Board {{\n        /// How this board keeps time, for the JIT core.\n        pub const JIT_BOARD: Option<JitBoard> = {board};\n        /// Its direct memory in the istream space, for the JIT core.\n        pub const JIT_MEMS: &'static [JitMem] = &[{}];\n    }}\n", if board == "None" { String::new() } else { jit_mems.clone() }
             );
         }
         let mut deliver = String::new();

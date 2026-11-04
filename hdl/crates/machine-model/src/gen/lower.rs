@@ -442,6 +442,16 @@ impl Gen<'_> {
                 s
             }
             Builtin::Restarted => "e.read(&machine_jit::Place::Mem { off: std::mem::offset_of!(Self, restarted), n: machine_jit::N::Bool, bump: 0 })".to_string(),
+            // After the instruction: the istream's address is where the
+            // step started (`phys`, known when compiling).
+            Builtin::Repeats => {
+                let ist = self.isa.istream.as_ref().ok_or_else(|| GenError::new("lowering: repeats() without an istream"))?;
+                let f = self.fns[&ist.address];
+                if !self.jit_fns.borrow().contains(&ist.address) {
+                    return Err(GenError::new("lowering: the istream's address fn does not lower"));
+                }
+                format!("{{ let a = Self::jf_{}(e); let a = e.cast(a, {}, machine_jit::N::U64); e.op(machine_jit::Op::Eq, a, machine_jit::V::K(phys as u128), machine_jit::N::U64) }}", ident(&f.name), self.jn(&f.ret)?)
+            }
             _ => return Err(GenError::new(format!("lowering: builtin {}", b.name()))),
         })
     }
@@ -460,6 +470,12 @@ impl Gen<'_> {
         Err(GenError::new(format!("lowering: kind `{}` has no such rule", kind.name)))
     }
 
+    /// Whether `d` is the istream's space with no split charge: its bytes
+    /// may be the board's direct memory.
+    fn jdirect_space(&self, d: DefId) -> bool {
+        self.isa.split_cycles.is_none() && self.isa.istream.as_ref().is_some_and(|i| i.space == d)
+    }
+
     fn jbits(bits: u32) -> R<u32> {
         match bits {
             8 | 16 | 32 | 64 => Ok(bits),
@@ -474,6 +490,16 @@ impl Gen<'_> {
         let sp = ident(&self.spaces[&d].name);
         let pure = self.isa.split_cycles.is_none();
         let bits = Self::jbits(bits)?;
+        // A byte of the istream space: in host code when the board's memory
+        // is direct.
+        if bits == 8 && self.jdirect_space(d) {
+            return Ok(format!(
+                "{{ let a = {}; let a = e.cast(a, {}, machine_jit::N::U64); let v = Self::jm_read8(e, a, Self::jit_sp_{sp}_read8 as *const () as usize, {pure}); e.cast(v, machine_jit::N::U8, {}) }}",
+                self.jexpr(cx, addr)?,
+                self.jn(&addr.ty)?,
+                self.jn(ty)?
+            ));
+        }
         Ok(format!(
             "{{ let a = {}; let a = e.cast(a, {}, machine_jit::N::U64); e.call(Self::jit_sp_{sp}_read{bits} as *const () as usize, &[(a, machine_jit::N::U64)], {}, {pure}) }}",
             self.jexpr(cx, addr)?,
@@ -489,6 +515,15 @@ impl Gen<'_> {
         let sp = ident(&self.spaces[&d].name);
         let pure = self.isa.split_cycles.is_none();
         let bits = Self::jbits(bits)?;
+        if bits == 8 && self.jdirect_space(d) {
+            return Ok(format!(
+                "let a = {}; let a = e.cast(a, {}, machine_jit::N::U64); let v = {}; let v = e.cast(v, {}, machine_jit::N::U8); Self::jm_write8(e, a, v, Self::jit_sp_{sp}_write8 as *const () as usize, {pure});",
+                self.jexpr(cx, addr)?,
+                self.jn(&addr.ty)?,
+                self.jexpr(cx, v)?,
+                self.jn(&v.ty)?
+            ));
+        }
         Ok(format!(
             "let a = {}; let a = e.cast(a, {}, machine_jit::N::U64); let v = {}; let v = e.cast(v, {}, machine_jit::N::U64); let _ = e.call(Self::jit_sp_{sp}_write{bits} as *const () as usize, &[(a, machine_jit::N::U64), (v, machine_jit::N::U64)], machine_jit::N::U64, {pure});",
             self.jexpr(cx, addr)?,
@@ -776,16 +811,20 @@ impl Gen<'_> {
 
     /// An instruction's timing entry and semantics as `jt_<name>(e, ops)`
     /// and `jx_<name>(e, ops)`, when both lower.
+    /// Whether `i`'s timing entry is evaluated after it runs (`repeats()`).
+    pub(crate) fn jtiming_after(i: &hir::Instruction) -> bool {
+        let mut after = false;
+        if let Some(t) = &i.timing {
+            hir::visit_expr(t, &mut |_| {}, &mut |x| after |= matches!(&x.kind, H::Builtin(Builtin::Repeats, _)));
+        }
+        after
+    }
+
     pub(crate) fn jinstr(&self, i: &hir::Instruction) -> R<String> {
         let n = ident(&i.name);
         let ops_ty = Self::ops_struct_name(i);
         let timing = match &i.timing {
             Some(t) => {
-                let mut uses_repeats = false;
-                hir::visit_expr(t, &mut |_| {}, &mut |x| uses_repeats |= matches!(&x.kind, H::Builtin(Builtin::Repeats, _)));
-                if uses_repeats {
-                    return Err(GenError::new("lowering: a timing entry after the instruction"));
-                }
                 let cx = Lx { locals: &i.timing_locals, ops: Some(i), src: None };
                 let t = self.jexpr(&cx, t)?;
                 format!("{{ let v = {t}; let _ = ops; v }}")
@@ -799,7 +838,7 @@ impl Gen<'_> {
         };
         let attrs = "    #[allow(unused_variables, unused_mut, clippy::all)]\n";
         Ok(format!(
-            "{attrs}    fn jt_{n}(e: &mut machine_jit::Em, ops: &{ops_ty}) -> machine_jit::V {{\n        {timing}\n    }}\n{attrs}    fn jx_{n}(e: &mut machine_jit::Em, ops: &{ops_ty}) {{\n        let ret = e.local(machine_jit::N::U8, machine_jit::V::K(0));\n        e.region_begin();\n        {body}        e.region_end();\n    }}\n"
+            "{attrs}    fn jt_{n}(e: &mut machine_jit::Em, ops: &{ops_ty}, phys: u64) -> machine_jit::V {{\n        {timing}\n    }}\n{attrs}    fn jx_{n}(e: &mut machine_jit::Em, ops: &{ops_ty}) {{\n        let ret = e.local(machine_jit::N::U8, machine_jit::V::K(0));\n        e.region_begin();\n        {body}        e.region_end();\n    }}\n"
         ))
     }
 }

@@ -194,6 +194,7 @@ type Region = (State, Block, Vec<Option<State>>);
 struct State {
     slots: Vec<Option<u128>>,
     regs: HashMap<(usize, N), Known>,
+    dirty: Vec<(usize, N)>,
 }
 
 
@@ -236,11 +237,13 @@ pub struct Em<'a, 'f> {
     /// Fields that calls change behind the code's back: never remembered.
     volatile: Vec<(usize, usize)>,
     bumped: bool,
+    /// Fields written but not yet stored.
+    dirty: Vec<(usize, N)>,
 }
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, from: Value, out: Block) -> Self {
-        Em { b, ptr, cc, m, from, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false }
+        Em { b, ptr, cc, m, from, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, dirty: Vec::new() }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -250,6 +253,9 @@ impl<'a, 'f> Em<'a, 'f> {
 
     pub(crate) fn begin_step(&mut self, k: usize, block: Block, entry: bool) {
         if self.live {
+            if entry {
+                self.flush();
+            }
             self.b.ins().jump(block, &[]);
         }
         self.b.switch_to_block(block);
@@ -263,11 +269,17 @@ impl<'a, 'f> Em<'a, 'f> {
 
     pub(crate) fn finish(&mut self, n: usize) {
         if self.live {
+            self.flush();
             let c = self.b.ins().iconst(types::I32, n as i64);
             let c = self.b.ins().isub(c, self.from);
             self.b.ins().jump(self.out, &[c.into()]);
             self.live = false;
         }
+    }
+
+    /// The machine pointer.
+    fn base(&mut self) -> Value {
+        self.m
     }
 
     fn val(&mut self, v: V, n: N) -> Value {
@@ -296,7 +308,29 @@ impl<'a, 'f> Em<'a, 'f> {
         if !self.live {
             return V::K(0);
         }
-        V::D(self.b.ins().load(n.ir(), MemFlags::trusted(), self.m, off as i32))
+        self.flush_overlapping(off, n, None);
+        let m = self.base();
+        V::D(self.b.ins().load(n.ir(), MemFlags::trusted(), m, off as i32))
+    }
+
+    /// The `n` at host address `p` (a u64 the code computed): memory
+    /// outside the machine, which the emitter does not remember.
+    pub fn load_at(&mut self, p: V, n: N) -> V {
+        if !self.live {
+            return V::K(0);
+        }
+        let a = self.val(p, N::U64);
+        V::D(self.b.ins().load(n.ir(), MemFlags::trusted(), a, 0))
+    }
+
+    /// Store `v` (an `n`) at host address `p`.
+    pub fn store_at(&mut self, p: V, n: N, v: V) {
+        if !self.live {
+            return;
+        }
+        let a = self.val(p, N::U64);
+        let x = self.val(v, n);
+        self.b.ins().store(MemFlags::trusted(), x, a, 0);
     }
 
     /// Store `v` in the field at `off`.
@@ -306,21 +340,56 @@ impl<'a, 'f> Em<'a, 'f> {
         }
         // The field holds it already.
         if let V::K(c) = v {
-            if !self.is_volatile(off, n) && self.regs.get(&(off, n)) == Some(&Known::K(c & n.mask())) {
+            if self.regs.get(&(off, n)) == Some(&Known::K(c & n.mask())) {
                 return;
             }
         }
-        let x = self.val(v, n);
-        self.b.ins().store(MemFlags::trusted(), x, self.m, off as i32);
-        // A register written outside `write` is no longer known.
-        self.regs.retain(|(o, m), _| *o + m.width() as usize / 8 <= off || off + n.width() as usize / 8 <= *o);
-        if self.is_volatile(off, n) {
+        // Other fields it overlaps are written first, then forgotten.
+        self.flush_overlapping(off, n, Some((off, n)));
+        self.regs.retain(|(o, m), _| (*o, *m) == (off, n) || *o + m.width() as usize / 8 <= off || off + n.width() as usize / 8 <= *o);
+        // Stored when the machine must hold it (a call, an exit, a join).
+        let k = match v {
+            V::K(c) => Known::K(c & n.mask()),
+            V::D(x) => Known::D(x),
+        };
+        self.regs.insert((off, n), k);
+        if !self.dirty.contains(&(off, n)) {
+            self.dirty.push((off, n));
+        }
+    }
+
+    /// Store every field written since the machine last held it.
+    pub fn flush(&mut self) {
+        if !self.live {
+            self.dirty.clear();
             return;
         }
-        if let V::K(c) = v {
-            self.regs.insert((off, n), Known::K(c & n.mask()));
-        } else {
-            self.regs.insert((off, n), Known::D(x));
+        for (off, n) in std::mem::take(&mut self.dirty) {
+            let x = match self.regs.get(&(off, n)) {
+                Some(Known::K(c)) => {
+                    let c = *c;
+                    self.konst(n, c)
+                }
+                Some(Known::D(v)) => *v,
+                None => continue,
+            };
+            { let m = self.base(); self.b.ins().store(MemFlags::trusted(), x, m, off as i32); }
+        }
+    }
+
+    /// Store the written fields overlapping `n` at `off` (but `except`).
+    fn flush_overlapping(&mut self, off: usize, n: N, except: Option<(usize, N)>) {
+        let w = n.width() as usize / 8;
+        let hit: Vec<(usize, N)> = self.dirty.iter().copied().filter(|(o, m)| Some((*o, *m)) != except && off < o + m.width() as usize / 8 && *o < off + w).collect();
+        for (o, m) in hit {
+            self.dirty.retain(|d| *d != (o, m));
+            if let Some(k) = self.regs.get(&(o, m)).copied() {
+                let x = match k {
+                    Known::K(c) => self.konst(m, c),
+                    Known::D(v) => v,
+                };
+                { let m = self.base(); self.b.ins().store(MemFlags::trusted(), x, m, o as i32); }
+            }
         }
     }
 
@@ -330,12 +399,12 @@ impl<'a, 'f> Em<'a, 'f> {
             return V::K(0);
         }
         match p {
-            Place::Mem { off, n, .. } if self.is_volatile(*off, *n) => V::D(self.b.ins().load(n.ir(), MemFlags::trusted(), self.m, *off as i32)),
             Place::Mem { off, n, .. } => match self.regs.get(&(*off, *n)) {
                 Some(Known::K(c)) => V::K(*c),
                 Some(Known::D(v)) => V::D(*v),
                 None => {
-                    let v = self.b.ins().load(n.ir(), MemFlags::trusted(), self.m, *off as i32);
+                    self.flush_overlapping(*off, *n, None);
+                    let m = self.base(); let v = self.b.ins().load(n.ir(), MemFlags::trusted(), m, *off as i32);
                     self.regs.insert((*off, *n), Known::D(v));
                     V::D(v)
                 }
@@ -418,16 +487,11 @@ impl<'a, 'f> Em<'a, 'f> {
     }
 
     /// `n` bytes at `off` change behind the code's back (by calls it
-    /// declares pure): read from the machine each time.
+    /// declares pure, too): forgotten at every call.
     pub fn set_volatile(&mut self, off: usize, n: usize) {
         if !self.volatile.contains(&(off, n)) {
             self.volatile.push((off, n));
         }
-    }
-
-    fn is_volatile(&self, off: usize, n: N) -> bool {
-        let w = n.width() as usize / 8;
-        self.volatile.iter().any(|(o, l)| off < o + l && *o < off + w)
     }
 
     /// The machine's epochs (u64 fields), which a write to a place bumps
@@ -515,7 +579,14 @@ impl<'a, 'f> Em<'a, 'f> {
     /// Forget what is known of the machine's fields (after a call that may
     /// have changed them).
     pub fn forget(&mut self) {
+        self.flush();
         self.regs.clear();
+    }
+
+    /// Forget the fields calls change (`set_volatile`).
+    fn forget_volatile(&mut self) {
+        let vol = self.volatile.clone();
+        self.regs.retain(|(o, m), _| !vol.iter().any(|(vo, vl)| *o < vo + vl && *vo < o + m.width() as usize / 8));
     }
 
     // -- locals ---------------------------------------------------------------------
@@ -557,7 +628,7 @@ impl<'a, 'f> Em<'a, 'f> {
     }
 
     fn state(&self) -> State {
-        State { slots: self.slots.iter().map(|s| s.k).collect(), regs: self.regs.clone() }
+        State { slots: self.slots.iter().map(|s| s.k).collect(), regs: self.regs.clone(), dirty: self.dirty.clone() }
     }
 
     // -- control --------------------------------------------------------------------
@@ -576,6 +647,7 @@ impl<'a, 'f> Em<'a, 'f> {
                 }
             }
             V::D(cv) => {
+                self.flush();
                 let tb = self.b.create_block();
                 let fb = self.b.create_block();
                 self.b.ins().brif(cv, tb, &[], fb, &[]);
@@ -636,6 +708,7 @@ impl<'a, 'f> Em<'a, 'f> {
                 self.b.def_var(s.var, x);
             }
         }
+        self.flush();
         let st = self.state();
         self.b.ins().jump(join, &[]);
         self.live = false;
@@ -671,6 +744,7 @@ impl<'a, 'f> Em<'a, 'f> {
             }
         }
         self.regs = regs;
+        self.dirty.clear();
     }
 
     fn restore(&mut self, st: &State) {
@@ -679,6 +753,7 @@ impl<'a, 'f> Em<'a, 'f> {
             self.slots[i].k = *k;
         }
         self.regs = st.regs.clone();
+        self.dirty = st.dirty.clone();
     }
 
     /// Where the locals stand: locals made after it are released by
@@ -725,6 +800,7 @@ impl<'a, 'f> Em<'a, 'f> {
         if !self.live {
             return;
         }
+        self.flush();
         let c = self.b.ins().iconst(types::I32, self.k as i64 + made as i64);
         let c = self.b.ins().isub(c, self.from);
         self.b.ins().jump(self.out, &[c.into()]);
@@ -748,6 +824,9 @@ impl<'a, 'f> Em<'a, 'f> {
                 self.b.seal_block(eb);
                 self.b.seal_block(cb);
                 self.b.switch_to_block(eb);
+                let dirty = self.dirty.clone();
+                self.flush();
+                self.dirty = dirty;
                 let made = self.b.ins().icmp_imm(IntCC::Equal, rv, 1);
                 let made = self.b.ins().uextend(types::I32, made);
                 let c = self.b.ins().iconst(types::I32, self.k as i64);
@@ -781,7 +860,7 @@ impl<'a, 'f> Em<'a, 'f> {
                 r
             }
         };
-        let mut a = vec![self.m];
+        let mut a = vec![self.base()];
         for (v, n) in args {
             let x = self.val(*v, *n);
             let x = match n.width() {
@@ -791,11 +870,15 @@ impl<'a, 'f> Em<'a, 'f> {
             };
             a.push(x);
         }
+        // The machine holds what the code wrote before the call sees it.
+        self.flush();
         let fp = self.b.ins().iconst(self.ptr, f as i64);
         let call = self.b.ins().call_indirect(sig, fp, &a);
         let r = self.b.inst_results(call)[0];
-        if !pure {
-            self.forget();
+        if pure {
+            self.forget_volatile();
+        } else {
+            self.regs.clear();
         }
         let r = match ret.width() {
             64 => r,

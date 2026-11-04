@@ -28,14 +28,14 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n"
+        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n"
     }
 
     pub(crate) fn jit_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n"
+        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n"
     }
 
     /// The trace's fields for compiled code (inside `Trace`).
@@ -174,6 +174,7 @@ impl Gen<'_> {
         if !self.jit_code_ok(page, stamp) {{
             return 0;
         }}
+        self.bus.jit_mem_ptrs(&mut self.jit_ptrs);
         // SAFETY: `c` is this machine's compiled code for its current run,
         // which is live: runs are only replaced while stepping, not while
         // compiled code runs.
@@ -357,7 +358,8 @@ impl Gen<'_> {
         let pc_mask = if super::native(*pcbits, false).0 >= 64 { u64::MAX } else { (1u64 << super::native(*pcbits, false).0) - 1 };
         let mut arms = String::new();
         for n in &lowered {
-            let _ = writeln!(arms, "            Instr::{n}(ops) => {{ let t = Self::jt_{n}(e, &ops); Some((t, Box::new(move |e: &mut machine_jit::Em| Self::jx_{n}(e, &ops)) as Box<dyn FnOnce(&mut machine_jit::Em)>)) }}");
+            let after = self.isa.instructions.iter().find(|i| ident(&i.name) == *n).is_some_and(Self::jtiming_after);
+            let _ = writeln!(arms, "            Instr::{n}(ops) => Some((Box::new(move |e: &mut machine_jit::Em| Self::jt_{n}(e, &ops, phys)) as Box<dyn FnOnce(&mut machine_jit::Em) -> machine_jit::V>, Box::new(move |e: &mut machine_jit::Em| Self::jx_{n}(e, &ops)) as Box<dyn FnOnce(&mut machine_jit::Em)>, {after})),");
         }
         let _ = write!(
             out,
@@ -406,6 +408,100 @@ impl Gen<'_> {
         // SAFETY: called by compiled code with its machine.
         let m = unsafe {{ &mut *m }};
         if m.jit_code_ok(page as u32, stamp as u32) {{ 0 }} else {{ 2 }}
+    }}
+    extern "C" fn jit_code_hit_c(m: *mut Self, mem: u64, k: u64) -> u64 {{
+        // SAFETY: called by compiled code with its machine.
+        let m = unsafe {{ &mut *m }};
+        m.bus.jit_code_hit(mem as u32, k as usize);
+        0
+    }}
+    /// A byte read at `a` (a u64) in the istream space: in host code when it
+    /// falls in the board's direct memory, else the `shim` call.
+    #[allow(clippy::all)]
+    fn jm_read8(e: &mut machine_jit::Em, a: machine_jit::V, shim: usize, pure: bool) -> machine_jit::V {{
+        let mems = B::jit_mems();
+        match B::jit_board() {{
+            Some(b) if !mems.is_empty() => {{
+                let a = e.op(machine_jit::Op::And, a, machine_jit::V::K(mems[0].amask as u128), machine_jit::N::U64);
+                Self::jm_access(e, a, None, mems, b, shim, pure)
+            }}
+            _ => e.call(shim, &[(a, machine_jit::N::U64)], machine_jit::N::U8, pure),
+        }}
+    }}
+    /// A byte write of `v` (a u8) at `a`, as `jm_read8`.
+    #[allow(clippy::all)]
+    fn jm_write8(e: &mut machine_jit::Em, a: machine_jit::V, v: machine_jit::V, shim: usize, pure: bool) {{
+        let mems = B::jit_mems();
+        match B::jit_board() {{
+            Some(b) if !mems.is_empty() => {{
+                let a = e.op(machine_jit::Op::And, a, machine_jit::V::K(mems[0].amask as u128), machine_jit::N::U64);
+                let _ = Self::jm_access(e, a, Some(v), mems, b, shim, pure);
+            }}
+            _ => {{
+                let v = e.cast(v, machine_jit::N::U8, machine_jit::N::U64);
+                let _ = e.call(shim, &[(a, machine_jit::N::U64), (v, machine_jit::N::U64)], machine_jit::N::U64, pure);
+            }}
+        }}
+    }}
+    #[allow(clippy::all)]
+    fn jm_access(e: &mut machine_jit::Em, a: machine_jit::V, v: Option<machine_jit::V>, mems: &'static [JitMem], b: JitBoard, shim: usize, pure: bool) -> machine_jit::V {{
+        let Some((m, rest)) = mems.split_first() else {{
+            return match v {{
+                None => e.call(shim, &[(a, machine_jit::N::U64)], machine_jit::N::U8, pure),
+                Some(v) => {{
+                    let v = e.cast(v, machine_jit::N::U8, machine_jit::N::U64);
+                    let _ = e.call(shim, &[(a, machine_jit::N::U64), (v, machine_jit::N::U64)], machine_jit::N::U64, pure);
+                    machine_jit::V::K(0)
+                }}
+            }};
+        }};
+        if v.is_some() && m.write.is_none() {{
+            return Self::jm_access(e, a, v, rest, b, shim, pure);
+        }}
+        let inside = if m.lo == 0 && m.hi >= m.amask {{
+            machine_jit::V::K(1)
+        }} else {{
+            let ge = e.op(machine_jit::Op::Ge, a, machine_jit::V::K(m.lo as u128), machine_jit::N::U64);
+            let le = e.op(machine_jit::Op::Le, a, machine_jit::V::K(m.hi as u128), machine_jit::N::U64);
+            e.op(machine_jit::Op::And, ge, le, machine_jit::N::Bool)
+        }};
+        e.if_val(inside, machine_jit::N::U8, |e| {{
+            let i = if m.mask == u64::MAX {{ a }} else {{ e.op(machine_jit::Op::And, a, machine_jit::V::K(m.mask as u128), machine_jit::N::U64) }};
+            let base = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, jit_ptrs) + 8 * m.cells, n: machine_jit::N::U64, bump: 0 }});
+            let p = e.op(machine_jit::Op::Add, base, i, machine_jit::N::U64);
+            let (r, cost) = match v {{
+                None => (e.load_at(p, machine_jit::N::U8), m.read),
+                Some(v) => {{
+                    e.store_at(p, machine_jit::N::U8, v);
+                    // Recorded code written: its page's stamp moves on.
+                    if let Some(c) = m.code {{
+                        let cb = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, jit_ptrs) + 8 * c, n: machine_jit::N::U64, bump: 0 }});
+                        let pg = e.op(machine_jit::Op::Shr, i, machine_jit::V::K(12), machine_jit::N::U64);
+                        let off = e.op(machine_jit::Op::Shl, pg, machine_jit::V::K(2), machine_jit::N::U64);
+                        let wp = e.op(machine_jit::Op::Add, cb, off, machine_jit::N::U64);
+                        let word = e.load_at(wp, machine_jit::N::U32);
+                        let blk = e.op(machine_jit::Op::Shr, i, machine_jit::V::K(7), machine_jit::N::U64);
+                        let blk = e.op(machine_jit::Op::And, blk, machine_jit::V::K(31), machine_jit::N::U64);
+                        let blk = e.cast(blk, machine_jit::N::U64, machine_jit::N::U32);
+                        let bit = e.op(machine_jit::Op::Shl, machine_jit::V::K(1), blk, machine_jit::N::U32);
+                        let hit = e.op(machine_jit::Op::And, word, bit, machine_jit::N::U32);
+                        let hit = e.op(machine_jit::Op::Ne, hit, machine_jit::V::K(0), machine_jit::N::U32);
+                        e.if_(hit, |e| {{
+                            let _ = e.call(Self::jit_code_hit_c as *const () as usize, &[(machine_jit::V::K(m.mem as u128), machine_jit::N::U64), (i, machine_jit::N::U64)], machine_jit::N::U64, true);
+                        }}, |_| {{}});
+                    }}
+                    (machine_jit::V::K(0), m.write.unwrap_or(0))
+                }}
+            }};
+            let bus = std::mem::offset_of!(Self, bus);
+            let now = e.read(&machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }});
+            let now = e.op(machine_jit::Op::Add, now, machine_jit::V::K(cost), machine_jit::N::U128);
+            e.store(bus + b.now, machine_jit::N::U128, now);
+            let acc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, accesses), n: machine_jit::N::U8, bump: 0 }});
+            let acc = e.op(machine_jit::Op::Add, acc, machine_jit::V::K(1), machine_jit::N::U8);
+            e.store(std::mem::offset_of!(Self, accesses), machine_jit::N::U8, acc);
+            r
+        }}, |e| Self::jm_access(e, a, v, rest, b, shim, pure))
     }}
     /// A step made by its prologue alone (shut down, halted).
     extern "C" fn jit_idle_c(m: *mut Self) -> u64 {{
@@ -523,7 +619,7 @@ impl Gen<'_> {
             (Some(_), Some(_)) if Self::jit_quiet(&instr) => true,
             (Some(b), Some(f)) => {{
                 let bus = std::mem::offset_of!(Self, bus);
-                let now = e.load(bus + b.now, machine_jit::N::U128);
+                let now = e.read(&machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }});
                 let now = e.op(machine_jit::Op::Add, now, machine_jit::V::K(f), machine_jit::N::U128);
                 e.store(bus + b.now, machine_jit::N::U128, now);
                 e.store(bus + b.code_time, machine_jit::N::U128, machine_jit::V::K(f));
@@ -537,11 +633,23 @@ impl Gen<'_> {
         }}
         // The instruction: its timing entry on the state before it, then
         // its semantics.
-        let Some((t, body)) = Self::jit_instr(e, instr) else {{ unreachable!() }};
-        e.store(std::mem::offset_of!(Self, entry_cycles), machine_jit::N::U32, t);
-        let c = e.op(machine_jit::Op::Add, t, machine_jit::V::K(s.prefix_cycles as u128), machine_jit::N::U32);
-        e.store(std::mem::offset_of!(Self, cycles), machine_jit::N::U32, c);
-        body(e);
+        let Some((timing, body, after)) = Self::jit_instr(instr, j.phys) else {{ unreachable!() }};
+        let mut entry = |e: &mut machine_jit::Em, timing: Box<dyn FnOnce(&mut machine_jit::Em) -> machine_jit::V>| {{
+            let t = timing(e);
+            e.store(std::mem::offset_of!(Self, entry_cycles), machine_jit::N::U32, t);
+            let c = e.op(machine_jit::Op::Add, t, machine_jit::V::K(s.prefix_cycles as u128), machine_jit::N::U32);
+            e.store(std::mem::offset_of!(Self, cycles), machine_jit::N::U32, c);
+        }};
+        if after {{
+            // The entry asks how the step ended: the prefixes' cycles while
+            // it runs, as `run_<name>` keeps them.
+            e.store(std::mem::offset_of!(Self, cycles), machine_jit::N::U32, machine_jit::V::K(s.prefix_cycles as u128));
+            body(e);
+            entry(e, timing);
+        }} else {{
+            entry(e, timing);
+            body(e);
+        }}
         let Some(b) = board else {{
             let r = e.call(Self::jit_retire_c as *const () as usize, &[
                 (machine_jit::V::K(&s.instr as *const Instr as usize as u128), machine_jit::N::U64),
@@ -600,10 +708,10 @@ impl Gen<'_> {
         e.exit_if(stop, true, |_| {{}});
         true
     }}
-    /// A lowered instruction: its timing entry (emitted now) and its
-    /// semantics (to emit).
+    /// A lowered instruction: its timing entry and its semantics, to emit,
+    /// and whether the entry follows the semantics (`repeats()`).
     #[allow(unused_variables, clippy::all)]
-    fn jit_instr(e: &mut machine_jit::Em, i: Instr) -> Option<(machine_jit::V, Box<dyn FnOnce(&mut machine_jit::Em)>)> {{
+    fn jit_instr(i: Instr, phys: u64) -> Option<(Box<dyn FnOnce(&mut machine_jit::Em) -> machine_jit::V>, Box<dyn FnOnce(&mut machine_jit::Em)>, bool)> {{
         match i {{
 {arms}            _ => None,
         }}

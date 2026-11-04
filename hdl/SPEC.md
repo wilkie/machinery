@@ -1632,7 +1632,9 @@ system PcAt386 {
   writes). What does not lower (a fault raised, a loop, a bundle, a timing
   entry that needs `repeats()`, an isa that resets through its istream)
   is a call of the instruction's step as the interpreter makes it; the
-  generator decides per instruction, so nothing is approximated.
+  generator decides per instruction, so nothing is approximated. A timing
+  entry that asks `repeats()` is emitted after the semantics, comparing the
+  istream's address with the step's own (a constant).
   `MACHINE_JIT_LOWERING` set while generating lists what does not lower and
   why; `MACHINE_JIT_DUMP` at run time prints the compiled code.
 
@@ -1649,18 +1651,27 @@ system PcAt386 {
   emitter. Facts a lowered step guarantees are not checked again by the
   step after it: the processor runs and is not shut down, the epoch is
   unchanged unless its writes bumped it, and a store of a value a field
-  already holds is dropped.
+  already holds is dropped. Stores to the machine are deferred until it
+  must hold them (a call, an exit, a join), so a run of flag writes is one
+  store.
 
-  On the Z80, 94 of its 102 instructions lower (the block repeats, whose
-  timing needs `repeats()`, do not); the checksum runs at about 88 M
-  instructions/s, against 61 for the decode core and 58 for the trace
+  The board also describes its direct memory in the istream space
+  (`Bus::jit_mems`: ranges, index masks, costs, which memory) and hands
+  over its pointers when compiled code is entered (`Bus::jit_mem_ptrs`). A
+  lowered byte access there is a range check (folded when the range is the
+  whole space), a load or store, and the time; a write checks the page's
+  code bitmap and calls the board only when it hits recorded code
+  (`Bus::jit_code_hit`), which then ends the run at its check.
+
+  On the Z80 every instruction lowers; the checksum runs at about 91 M
+  instructions/s, against 64 for the decode core and 57 for the trace
   core. What is left is mostly the compiled steps themselves, entering a
-  run from Rust (`System::run`, about an eighth), memory accesses (calls
-  to the board) and compiling. Cranelift's optimiser is off: the emitter
+  run from Rust (`System::run`, about an eighth) and compiling. Cranelift's optimiser is off: the emitter
   folds what it would, and compiling is cheaper. The 386 does not lower
   (its reset line), and runs as before. Random straight-line code with
   random operands, registers and memory, run compiled and stepped, must
-  agree to the register, byte and clock (`targets/z80/board_test.rs`).
+  agree to the register, byte and clock (`targets/z80/board_test.rs`), as
+  must a loop that rewrites its own operand.
 - `wire inst.in_port = other.out_port;` connects an output to an input of
   the same type; `wire inst.in_port = <constant>;` straps a pin (`wire
   pic1.sp = true;`). Each input is driven at most once; an output may

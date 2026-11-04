@@ -190,3 +190,37 @@ fn random_programs_agree_with_stepping() {
         assert!(compiled >= 150, "only {compiled} of 200 programs were compiled");
     }
 }
+
+/// Code that rewrites itself inside a hot loop: `INC (HL)` increments the
+/// operand of the `ADD A,n` in its own run, 10240 times. Every core (the
+/// JIT's compiled writes too) must notice and agree with stepping.
+#[test]
+fn self_modifying_code_agrees_with_stepping() {
+    const SMC: &[u8] = &[
+        0x01, 0x28, 0x00, // LD BC,0028h: B = 0 (256), C = 40
+        0x21, 0x07, 0x00, // LD HL,0007h: the ADD's operand
+        0xC6, 0x00, //       loop: ADD A,n
+        0x34, //             INC (HL)
+        0x10, 0xFB, //       DJNZ loop
+        0x0D, //             DEC C
+        0x20, 0xF8, //       JR NZ,loop
+        0x76, //             HALT
+    ];
+    let mut a = boot(SMC);
+    let mut b = a.clone();
+    let mut na = 0;
+    while !a.cpu.halted {
+        a.step().unwrap();
+        na += 1;
+    }
+    let nb = b.run(1_000_000).unwrap();
+    assert!(b.cpu.halted);
+    assert_eq!(na, nb, "steps made");
+    assert_eq!(a.cpu.r, b.cpu.r, "registers");
+    assert_eq!(a.now(), b.now(), "time");
+    assert_eq!(a.board().ram.cells[7], b.board().ram.cells[7], "the operand");
+    // 10240 increments of the operand from 0: it wraps back to 0, and A
+    // sums 40 times 0 + 1 + ... + 255 (mod 256).
+    assert_eq!(b.board().ram.cells[7], 0);
+    assert_eq!(b.cpu.r.AF >> 8, (40 * (255 * 256 / 2) % 256) as u16);
+}

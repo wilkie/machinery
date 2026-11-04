@@ -2009,12 +2009,20 @@ isa I386 {
         flags { undefined: [OF, SF, ZF, AF, PF, CF]; }
         semantics {
             if W == 32 {
-                let n = ((((EDX as u64) << 32) | (EAX as u64)) as i64) as i128;
-                let d = ((src as i32) as i64) as i128;
+                // EDX:EAX in 64 bits, checked before dividing, as the chip
+                // does: the quotient's magnitude is |n| / |d|, at most
+                // 2^31 - 1, or 2^31 when it is negative. Both limits fit in
+                // 64 bits (|d| <= 2^31), and so does |n| (2^63 at most), so
+                // nothing is wider than the registers, and the division
+                // that follows cannot overflow (i64::MIN / -1 is caught).
+                let n = (((EDX as u64) << 32) | (EAX as u64)) as i64;
+                let d = (src as i32) as i64;
                 if d == 0 { raise DE; }
-                let q = n / d;
-                if q > 2147483647 || q < -2147483648 { raise DE; }
-                EAX = q as u32;
+                let an = if n < 0 { 0 - (n as u64) } else { n as u64 };
+                let ad = if d < 0 { 0 - (d as u64) } else { d as u64 };
+                let limit = if (n < 0) != (d < 0) { (ad << 31) + ad } else { ad << 31 };
+                if an >= limit { raise DE; }
+                EAX = (n / d) as u32;
                 EDX = (n % d) as u32;
             } else {
                 let n = ((((DX as u32) << 16) | (AX as u32)) as i32) as i64;

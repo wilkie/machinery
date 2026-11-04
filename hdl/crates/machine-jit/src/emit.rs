@@ -998,6 +998,8 @@ impl<'a, 'f> Em<'a, 'f> {
                 let y = self.val(b, n);
                 self.b.ins().imul(x, y)
             }
+            // The host has no 128-bit division: Rust's, through a call.
+            Op::Div | Op::Rem if n.width() == 128 => return self.wide_div(op, x, b, n),
             Op::Div | Op::Rem => {
                 let y = self.val(b, n);
                 match (op, n.signed()) {
@@ -1058,6 +1060,27 @@ impl<'a, 'f> Em<'a, 'f> {
             }
         };
         V::D(v)
+    }
+
+    /// A 128-bit division or remainder by [`wide_div`], a half a call.
+    fn wide_div(&mut self, op: Op, x: Value, b: V, n: N) -> V {
+        let y = self.val(b, n);
+        let (alo, ahi) = (self.b.ins().ireduce(types::I64, x), {
+            let h = self.b.ins().ushr_imm(x, 64);
+            self.b.ins().ireduce(types::I64, h)
+        });
+        let (blo, bhi) = (self.b.ins().ireduce(types::I64, y), {
+            let h = self.b.ins().ushr_imm(y, 64);
+            self.b.ins().ireduce(types::I64, h)
+        });
+        let code = (op == Op::Rem) as u128 | ((n.signed() as u128) << 1);
+        let args = |hi: bool| -> [(V, N); 5] {
+            [(V::K(code | ((hi as u128) << 2)), N::U64), (V::D(alo), N::U64), (V::D(ahi), N::U64), (V::D(blo), N::U64), (V::D(bhi), N::U64)]
+        };
+        let lo = self.call(wide_div as *const () as usize, &args(false), N::U64, true);
+        let hi = self.call(wide_div as *const () as usize, &args(true), N::U64, true);
+        let (V::D(lo), V::D(hi)) = (lo, hi) else { return V::K(0) };
+        V::D(self.b.ins().iconcat(lo, hi))
     }
 
     fn add_k(&mut self, x: Value, c: u128, n: N) -> Value {
@@ -1305,4 +1328,23 @@ fn fold(op: Op, x: u128, y: u128, n: N) -> u128 {
         }
     };
     r & m
+}
+
+/// 128-bit division for hosts without it: `op` bit 0 the remainder, bit 1
+/// signed, bit 2 the result's high half. A zero divisor (or the signed
+/// quotient that overflows) panics, as the interpreter's does.
+extern "C" fn wide_div(_machine: usize, op: u64, alo: u64, ahi: u64, blo: u64, bhi: u64) -> u64 {
+    let a = ((ahi as u128) << 64) | alo as u128;
+    let b = ((bhi as u128) << 64) | blo as u128;
+    let r = match op & 3 {
+        0 => a / b,
+        1 => a % b,
+        2 => ((a as i128) / (b as i128)) as u128,
+        _ => ((a as i128) % (b as i128)) as u128,
+    };
+    if op & 4 != 0 {
+        (r >> 64) as u64
+    } else {
+        r as u64
+    }
 }

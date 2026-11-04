@@ -705,8 +705,6 @@ impl Gen<'_> {
             Le => ("Le", self.jn(&a.ty)?, false),
             Gt => ("Gt", self.jn(&a.ty)?, false),
             Ge => ("Ge", self.jn(&a.ty)?, false),
-            // The host has no 128-bit division.
-            Div | Rem if self.jwidth(ty)? >= 128 => return Err(GenError::new("lowering: a 128-bit division")),
             Div => ("Div", self.jn(ty)?, false),
             Rem => ("Rem", self.jn(ty)?, false),
             _ => unreachable!(),

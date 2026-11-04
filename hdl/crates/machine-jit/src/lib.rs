@@ -387,4 +387,36 @@ mod tests {
         assert_eq!(f(&mut t, 1), 2, "from the second, all made");
         assert_eq!(t.out, 18);
     }
+
+    #[repr(C)]
+    #[derive(Default, Debug)]
+    struct W {
+        a: u128,
+        b: u128,
+        q: u128,
+        r: u128,
+    }
+
+    #[test]
+    fn wide_division_by_a_call() {
+        let a_ = Place::Mem { off: std::mem::offset_of!(W, a), n: N::I128, bump: 0 };
+        let b_ = Place::Mem { off: std::mem::offset_of!(W, b), n: N::I128, bump: 0 };
+        let mut e = Engine::default();
+        let f = e
+            .compile_with(1, 1, |e, _| {
+                let a = e.read(&a_);
+                let b = e.read(&b_);
+                let q = e.op(Op::Div, a, b, N::I128);
+                let r = e.op(Op::Rem, a, b, N::I128);
+                e.store(std::mem::offset_of!(W, q), N::I128, q);
+                e.store(std::mem::offset_of!(W, r), N::I128, r);
+            })
+            .expect("compiled");
+        let f: extern "C" fn(*mut W, u32) -> u32 = unsafe { std::mem::transmute(f) };
+        for (a, b) in [(-(1i128 << 100) - 12345, 7i128), (i64::MIN as i128, -1), (99, -100), (1i128 << 120, (1i128 << 64) + 3)] {
+            let mut w = W { a: a as u128, b: b as u128, ..W::default() };
+            assert_eq!(f(&mut w, 0), 1);
+            assert_eq!((w.q as i128, w.r as i128), (a / b, a % b), "{a} / {b}");
+        }
+    }
 }

@@ -98,3 +98,95 @@ fn bench_checksum() {
         );
     }
 }
+
+/// xorshift64*: the random programs' source.
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+}
+
+/// Instructions that leave the straight line: not in a random block.
+const BRANCHES: &[&str] = &["Jp", "Jp_cc", "Jp_hl", "Jr", "Jr_cc", "Djnz", "Call", "Call_cc", "Ret", "Ret_cc", "Retn", "Rst", "Halt"];
+
+/// A random program: `n` random instructions (any but branches and HALT,
+/// each decoded to find its length) at 0000h, then JP 0000h.
+fn random_program(rng: &mut Rng, n: usize) -> Vec<u8> {
+    let mut code = Vec::new();
+    let mut scratch = System::new();
+    for _ in 0..n {
+        let bytes: Vec<u8> = (0..6).map(|_| rng.next() as u8).collect();
+        scratch.board().ram.cells[..6].copy_from_slice(&bytes);
+        scratch.reset();
+        if scratch.cpu.step().is_err() {
+            continue;
+        }
+        let Some(i) = scratch.cpu.last else { continue };
+        let name = machine_board_z80::Z80::<machine_board_z80::system::Board>::instr_name(&i);
+        if BRANCHES.contains(&name) {
+            continue;
+        }
+        code.extend_from_slice(&bytes[..scratch.cpu.fetched as usize]);
+    }
+    code.extend_from_slice(&[0xC3, 0x00, 0x00]);
+    code
+}
+
+/// A machine with random RAM and registers, `program` at 0000h.
+fn random_machine(rng: &mut Rng, program: &[u8]) -> System {
+    let mut sys = System::new();
+    for c in sys.board().ram.cells.iter_mut() {
+        *c = rng.next() as u8;
+    }
+    sys.board().ram.cells[..program.len()].copy_from_slice(program);
+    sys.reset();
+    let r = &mut sys.cpu.r;
+    for p in [&mut r.AF, &mut r.BC, &mut r.DE, &mut r.HL, &mut r.IX, &mut r.IY, &mut r.SP, &mut r.AF_, &mut r.BC_, &mut r.DE_, &mut r.HL_, &mut r.WZ] {
+        *p = rng.next() as u16;
+    }
+    r.I = rng.next() as u8;
+    r.R = rng.next() as u8;
+    sys
+}
+
+/// Every core agrees with stepping, instruction by instruction: random
+/// straight-line code (most of the isa, with random operands, registers and
+/// memory) in a loop, made by `run` (on the JIT build: compiled, once hot)
+/// and by `step` (the trace core's ordinary steps), to the same registers,
+/// memory and time.
+#[test]
+fn random_programs_agree_with_stepping() {
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let mut compiled = 0;
+    for seed in 0..200 {
+        let program = random_program(&mut rng, 24);
+        let mut init = Rng(rng.next() | 1);
+        let mut a = random_machine(&mut init, &program);
+        let mut b = a.clone();
+        let steps = 60_000;
+        let mut na = 0;
+        while na < steps && !a.cpu.halted {
+            a.step().unwrap();
+            na += 1;
+        }
+        let nb = b.run(steps).unwrap();
+        compiled += usize::from(b.cpu.compiled_runs() > 0);
+        assert_eq!(na, nb, "program {seed}: steps made");
+        assert_eq!(a.cpu.r, b.cpu.r, "program {seed}: registers ({program:02x?})");
+        assert_eq!(a.now(), b.now(), "program {seed}: time");
+        let (ra, rb) = (&a.board().ram.cells, &b.board().ram.cells);
+        if let Some(k) = (0..ra.len()).find(|&k| ra[k] != rb[k]) {
+            panic!("program {seed}: RAM differs at {k:04x}: {:02x} stepped, {:02x} run ({program:02x?})", ra[k], rb[k]);
+        }
+    }
+    // Random code may overwrite itself or sit in one long block move, but
+    // most programs are compiled code by the end.
+    eprintln!("{} ({}): {compiled} of 200 programs compiled", machine_board_z80::system::PROFILE, machine_board_z80::system::CORE);
+    if machine_board_z80::system::CORE == "jit" {
+        assert!(compiled >= 150, "only {compiled} of 200 programs were compiled");
+    }
+}

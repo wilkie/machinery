@@ -1606,26 +1606,45 @@ system PcAt386 {
   polling devices, about the same (-3% to +7%).
 - `core: jit;` (with `memory: direct`) is the trace core with runs entered
   often (64 times) compiled to host code (Cranelift, through the
-  `machine-jit` crate, the one that may use `unsafe`). A compiled run is
-  a call a step to a step function generated for that instruction, which
-  makes it exactly as `step` and `System::step` would: the run's checks,
-  `step`'s prologue, the state set as decoding left it (from a record the
-  code passes it, not looked up), the instruction's handler inlined,
-  `step`'s tail, the devices caught up; anything else ends it. Runs are
-  compiled whole and entered at their first step when the link from the
-  run before leads to them (chained), else after an ordinary step entered
-  them. `System::run_until` checks its stop condition between bursts (a
-  run, as far as it goes), so at most a run apart: the machine's behaviour
-  is the same, but a host acting on a condition acts up to a run later
-  than with the other cores. The instructions' semantics and the work
-  between them stay Rust; the compiled code replaces only the dispatch, so
-  it runs at about the trace core's speed (the Z80 checksum: 54 M
-  instructions/s against the trace core's 57; a 386 DOS boot within 7%).
-  Each step is some 200 host instructions of bookkeeping (clearing and
-  restoring per-step state, the opcode hook replayed, time in 128 bits)
-  around a handler of a few; compiling a run's steps into the host code
-  with what they were decoded with as constants, and simple instructions'
-  semantics with them, is where it gains.
+  `machine-jit` crate, the one that may use `unsafe`). Runs are compiled
+  whole and entered at their first step when the link from the run before
+  leads to them (chained), else after an ordinary step entered them.
+  `System::run_until` checks its stop condition between bursts (a run, as
+  far as it goes), so at most a run apart: the machine's behaviour is the
+  same, but a host acting on a condition acts up to a run later than with
+  the other cores.
+
+  A step is compiled by the machine's own generated code, which builds the
+  host code through an emitter (`machine_jit::Em`) with what the step was
+  decoded with in hand: its operands, latches, pc and length are constants
+  then, and every operation on them folds, so an operand's choice of
+  register (`r.select(z)`), a prefix's latch (`match index`), a jump's
+  target or a timing entry cost the compiled code nothing. The compiler
+  derives this from the description: for each isa fn, operand kind rule
+  and instruction it writes an emitter following the interpreter's code
+  rule for rule (native widths, wrapping arithmetic brought back to the
+  declared width, Rust's shift and cast semantics; registers written
+  through to the machine with what is known of them remembered, locals in
+  host registers). A lowered step is the run's check, `step`'s prologue (the
+  isa's boundary fn inlined), the state as decoding left it, the timing
+  entry and the semantics in host code, then one call that retires it
+  (`step`'s tail, the devices caught up, the run's code checked for
+  writes). What does not lower (a fault raised, a loop, a bundle, a timing
+  entry that needs `repeats()`, an isa that resets through its istream)
+  is a call of the instruction's step as the interpreter makes it; the
+  generator decides per instruction, so nothing is approximated.
+  `MACHINE_JIT_LOWERING` set while generating lists what does not lower and
+  why; `MACHINE_JIT_DUMP` at run time prints the compiled code.
+
+  On the Z80, 94 of its 102 instructions lower (the block repeats, whose
+  timing needs `repeats()`, do not); the checksum runs at 56 M
+  instructions/s, against the trace core's 57: the board's per-step work
+  behind the retiring call (time in 128 bits, devices, the code check) is
+  now most of what is left, and lowering it needs the board to describe its
+  time keeping to the JIT. The 386 does not lower (its reset line), and
+  runs as before. Random straight-line code with random operands, registers
+  and memory, run compiled and stepped, must agree to the register, byte
+  and clock (`targets/z80/board_test.rs`).
 - `wire inst.in_port = other.out_port;` connects an output to an input of
   the same type; `wire inst.in_port = <constant>;` straps a pin (`wire
   pic1.sp = true;`). Each input is driven at most once; an output may

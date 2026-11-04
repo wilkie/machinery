@@ -14,6 +14,7 @@ use std::fmt::Write as _;
 
 mod forms;
 mod jit;
+mod lower;
 mod system;
 mod trace;
 
@@ -147,6 +148,10 @@ pub struct Gen<'a> {
     /// the JIT core (`core: jit;`), which builds on it.
     trace: Option<trace::TracePlan>,
     jit: bool,
+    /// The isa fns the JIT lowering inlines (`gen/lower.rs`).
+    jit_fns: std::cell::RefCell<std::collections::HashSet<DefId>>,
+    /// The kind rules it lowers: (kind, rule index).
+    jit_rules: std::cell::RefCell<std::collections::HashSet<(DefId, u32)>>,
     /// Operand kinds with forms, and the forms of the copy being emitted
     /// (operand index, form).
     forms: HashMap<DefId, forms::FormKind>,
@@ -220,6 +225,8 @@ impl<'a> Gen<'a> {
             memo_rec: std::cell::Cell::new(false),
             trace: None,
             jit: false,
+            jit_fns: Default::default(),
+            jit_rules: Default::default(),
             forms: HashMap::new(),
             form_ctx: std::cell::RefCell::new(Vec::new()),
         })
@@ -1864,6 +1871,11 @@ impl<'a> Gen<'a> {
             "    /// Processor reset: architectural state to zero{}.\n    pub fn reset(&mut self) {{\n        self.r = Regs::default();\n        self.mode = 0;\n        self.halted = false;\n        self.shutdown = false;\n        self.last = None;\n        self.last_fault = None;\n        self.reset_latches();\n{}    }}\n",
             if reset_fn.is_some() { ", then the isa's `fn reset()`" } else { "" },
             if reset_fn.is_some() { "        self.fn_reset().expect(\"fn reset() raised a fault\");\n" } else { "" }
+        );
+        let _ = write!(
+            s,
+            "    /// Runs the JIT core has compiled (0 for the other cores).\n    pub fn compiled_runs(&self) -> usize {{\n        {}\n    }}\n",
+            if self.jit { "self.jit.count()" } else { "0" }
         );
         s.push_str("    /// Per-instruction state back to its reset values.\n    pub fn reset_latches(&mut self) {\n");
         for l in &self.isa.latches {

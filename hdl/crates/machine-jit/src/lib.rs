@@ -14,7 +14,10 @@
 //! code replaces what happens between them (dispatch, finding the next
 //! instruction of the run and what decoding it left behind).
 
-use cranelift_codegen::ir::condcodes::IntCC;
+mod emit;
+
+pub use emit::{k, n_of, Count, Em, Native, Op, Pat, Place, Slot, N, V};
+
 use cranelift_codegen::ir::{types, AbiParam, InstBuilder};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
@@ -83,7 +86,11 @@ pub const LIMIT: usize = 16384;
 
 fn new_module() -> Option<JITModule> {
     let mut flags = settings::builder();
-    flags.set("opt_level", "none").ok()?;
+    flags.set("opt_level", "speed").ok()?;
+    // The verifier checks what the emitter builds; on with
+    // `MACHINE_JIT_VERIFY` (and in this crate's tests).
+    let verify = cfg!(test) || std::env::var_os("MACHINE_JIT_VERIFY").is_some();
+    flags.set("enable_verifier", if verify { "true" } else { "false" }).ok()?;
     let isa = cranelift_native::builder().ok()?.finish(settings::Flags::new(flags)).ok()?;
     Some(JITModule::new(JITBuilder::with_isa(isa, default_libcall_names())))
 }
@@ -108,22 +115,31 @@ impl Engine {
     /// u32) -> u32`, entered at call `from`, answering the steps it made.
     /// None if the code generator is unavailable.
     pub fn compile(&mut self, calls: &[Call]) -> Option<usize> {
+        self.compile_with(calls.len(), calls.len(), |e, k| {
+            let r = e.call(calls[k].run, &[(V::K(calls[k].arg as u128), N::U64)], N::U32, false);
+            e.exit_on(r);
+        })
+    }
+
+    /// The host function for a run of `steps` steps, each emitted by
+    /// `emit(emitter, k)`: `extern "C" fn(*mut machine, from: u32) -> u32`,
+    /// entered at step `from` (one of the first `entries`), answering the
+    /// steps it made. A step that falls off its end goes on to the next
+    /// (what is known of the machine with it, past the entries). None if the
+    /// code generator is unavailable or the code is not valid.
+    pub fn compile_with(&mut self, steps: usize, entries: usize, mut emit: impl FnMut(&mut Em, usize)) -> Option<usize> {
         if self.module.is_none() {
             self.module = new_module();
         }
         let m = self.module.as_mut()?;
         let ptr = m.target_config().pointer_type();
+        let cc = m.target_config().default_call_conv;
         let mut ctx = m.make_context();
         ctx.func.signature.params.push(AbiParam::new(ptr));
         ctx.func.signature.params.push(AbiParam::new(types::I32));
         ctx.func.signature.returns.push(AbiParam::new(types::I32));
-        let mut run_sig = m.make_signature();
-        run_sig.params.push(AbiParam::new(ptr));
-        run_sig.params.push(AbiParam::new(ptr));
-        run_sig.returns.push(AbiParam::new(types::I32));
         {
             let mut b = FunctionBuilder::new(&mut ctx.func, &mut self.fbc);
-            let run_ref = b.import_signature(run_sig);
             let entry = b.create_block();
             b.append_block_params_for_function_params(entry);
             b.switch_to_block(entry);
@@ -134,9 +150,9 @@ impl Engine {
             let out = b.create_block();
             b.append_block_param(out, types::I32);
             // A block a step, entered by `from` (past the end: none made).
-            let steps: Vec<_> = calls.iter().map(|_| b.create_block()).collect();
+            let blocks: Vec<_> = (0..steps).map(|_| b.create_block()).collect();
             let mut switch = Switch::new();
-            for (k, blk) in steps.iter().enumerate() {
+            for (k, blk) in blocks.iter().enumerate().take(entries) {
                 switch.set_entry(k as u128, *blk);
             }
             let none = b.create_block();
@@ -145,36 +161,17 @@ impl Engine {
             b.seal_block(none);
             let zero = b.ins().iconst(types::I32, 0);
             b.ins().jump(out, &[zero.into()]);
-            for (k, c) in calls.iter().enumerate() {
-                b.switch_to_block(steps[k]);
-                let f = b.ins().iconst(ptr, c.run as i64);
-                let a = b.ins().iconst(ptr, c.arg as i64);
-                let call = b.ins().call_indirect(run_ref, f, &[machine, a]);
-                let r = b.inst_results(call)[0];
-                let next = b.create_block();
-                let stop = b.create_block();
-                b.ins().brif(r, stop, &[], next, &[]);
-                // 1: made, then stop; 2: not made.
-                b.switch_to_block(stop);
-                b.seal_block(stop);
-                let made = b.ins().icmp_imm(IntCC::Equal, r, 1);
-                let here = b.ins().iconst(types::I32, k as i64);
-                let after = b.ins().iconst(types::I32, k as i64 + 1);
-                let n = b.ins().select(made, after, here);
-                let n = b.ins().isub(n, from);
-                b.ins().jump(out, &[n.into()]);
-                b.switch_to_block(next);
-                b.seal_block(next);
-                let to = steps.get(k + 1).copied().unwrap_or(out);
-                if to == out {
-                    let n = b.ins().iconst(types::I32, calls.len() as i64);
-                    let n = b.ins().isub(n, from);
-                    b.ins().jump(out, &[n.into()]);
-                } else {
-                    b.ins().jump(to, &[]);
+            {
+                let mut e = Em::new(&mut b, ptr, cc, machine, from, out);
+                for (k, blk) in blocks.iter().enumerate() {
+                    e.begin_step(k, *blk, k < entries);
+                    let mark = e.mark();
+                    emit(&mut e, k);
+                    e.release(mark);
                 }
+                e.finish(steps);
             }
-            for blk in &steps {
+            for blk in &blocks {
                 b.seal_block(*blk);
             }
             b.switch_to_block(out);
@@ -186,7 +183,22 @@ impl Engine {
         let name = format!("run{}", self.next);
         self.next += 1;
         let id = m.declare_function(&name, Linkage::Local, &ctx.func.signature).ok()?;
-        m.define_function(id, &mut ctx).ok()?;
+        let dump = std::env::var_os("MACHINE_JIT_DUMP").is_some();
+        if dump {
+            ctx.set_disasm(true);
+        }
+        if let Err(err) = m.define_function(id, &mut ctx) {
+            if std::env::var_os("MACHINE_JIT_DEBUG").is_some() {
+                eprintln!("machine-jit: {err:?}\n{}", ctx.func.display());
+            }
+            m.clear_context(&mut ctx);
+            return None;
+        }
+        if dump {
+            if let Some(c) = ctx.compiled_code() {
+                eprintln!("machine-jit: {name} ({steps} steps)\n{}", c.vcode.as_deref().unwrap_or(""));
+            }
+        }
         m.clear_context(&mut ctx);
         m.finalize_definitions().ok()?;
         self.count += 1;
@@ -230,5 +242,145 @@ mod tests {
         assert_eq!(f(&mut m, 3), 0, "entered past the end");
         e.clear();
         assert_eq!(e.count(), 0);
+    }
+
+    #[repr(C)]
+    #[derive(Default, Debug)]
+    struct T {
+        a: u8,
+        b: u8,
+        w: u16,
+        x: u32,
+        y: i32,
+        out: u64,
+    }
+
+    fn run_t(t: &mut T, emit: impl FnMut(&mut Em, usize)) -> u32 {
+        let mut e = Engine::default();
+        let f = e.compile_with(1, 1, emit).expect("compiled");
+        let f: extern "C" fn(*mut T, u32) -> u32 = unsafe { std::mem::transmute(f) };
+        f(t, 0)
+    }
+
+    const A: Place = Place::Mem { off: std::mem::offset_of!(T, a), n: N::U8, bump: 0 };
+    const W: Place = Place::Mem { off: std::mem::offset_of!(T, w), n: N::U16, bump: 0 };
+    const X: Place = Place::Mem { off: std::mem::offset_of!(T, x), n: N::U32, bump: 0 };
+    const Y: Place = Place::Mem { off: std::mem::offset_of!(T, y), n: N::I32, bump: 0 };
+    const OUT: Place = Place::Mem { off: std::mem::offset_of!(T, out), n: N::U64, bump: 0 };
+
+    #[test]
+    fn locals_merge_across_a_computed_branch() {
+        // let l = 5; if a > 10 { l = a + 1 } else { l = 7 }; out = l * 3 (in u64)
+        for (a, want) in [(20u8, 63u64), (3, 21)] {
+            let mut t = T { a, ..T::default() };
+            let n = run_t(&mut t, |e, _| {
+                let l = e.local(N::U8, V::K(5));
+                let av = e.read(&A);
+                let c = e.op(Op::Gt, av, V::K(10), N::U8);
+                e.if_(
+                    c,
+                    |e| {
+                        let av = e.read(&A);
+                        let v = e.op(Op::Add, av, V::K(1), N::U8);
+                        e.set(l, v)
+                    },
+                    |e| e.set(l, V::K(7)),
+                );
+                let v = e.get(l);
+                let v = e.cast(v, N::U8, N::U64);
+                let v = e.op(Op::Mul, v, V::K(3), N::U64);
+                e.write(&OUT, v);
+            });
+            assert_eq!(n, 1);
+            assert_eq!(t.out, want, "a = {a}");
+        }
+    }
+
+    #[test]
+    fn a_local_known_in_one_branch_and_unchanged_in_the_other() {
+        for (a, want) in [(1u8, 9u64), (0, 4)] {
+            let mut t = T { a, ..T::default() };
+            run_t(&mut t, |e, _| {
+                let l = e.local(N::U64, V::K(4));
+                let av = e.read(&A);
+                e.if_(av, |e| e.set(l, V::K(9)), |_| {});
+                let v = e.get(l);
+                e.write(&OUT, v);
+            });
+            assert_eq!(t.out, want);
+        }
+    }
+
+    #[test]
+    fn bits_places_and_folding() {
+        let mut t = T { w: 0xABCD, ..T::default() };
+        run_t(&mut t, |e, _| {
+            // The high byte of w, as a u8; known arithmetic folds.
+            let hi = Place::Bits { off: std::mem::offset_of!(T, w), reg: N::U16, shift: 8, width: 8, n: N::U8, bump: 0 };
+            let v = e.read(&hi);
+            let k = e.op(Op::Add, V::K(250), V::K(10), N::U8);
+            assert_eq!(k, V::K(4), "u8 arithmetic wraps when folded");
+            let v = e.op(Op::Xor, v, k, N::U8);
+            e.write(&A, v);
+            // Bit 0 of w set as a one-bit field.
+            let lo = Place::Bits { off: std::mem::offset_of!(T, w), reg: N::U16, shift: 0, width: 1, n: N::Bool, bump: 0 };
+            e.write(&lo, V::K(0));
+            let w = e.read(&W);
+            let w = e.cast(w, N::U16, N::U64);
+            e.write(&OUT, w);
+        });
+        assert_eq!(t.a, 0xAB ^ 4);
+        assert_eq!(t.out, 0xABCC);
+    }
+
+    #[test]
+    fn shifts_past_the_width_and_signed_values() {
+        for (x, y) in [(3u32, -64i32), (40, 7), (31, i32::MIN)] {
+            let mut t = T { x, y, ..T::default() };
+            run_t(&mut t, |e, _| {
+                let one = V::K(1);
+                let xv = e.read(&X);
+                let s = e.op(Op::Shl, one, xv, N::U32);
+                let yv = e.read(&Y);
+                let r = e.op(Op::Shr, yv, xv, N::I32);
+                let lt = e.op(Op::Lt, yv, V::K(0), N::I32);
+                let r = e.cast(r, N::I32, N::I64);
+                let r = e.cast(r, N::I64, N::U64);
+                let s = e.cast(s, N::U32, N::U64);
+                let lt = e.cast(lt, N::Bool, N::U64);
+                let lt = e.op(Op::Shl, lt, V::K(63), N::U64);
+                let v = e.op(Op::Xor, r, s, N::U64);
+                let v = e.op(Op::Xor, v, lt, N::U64);
+                e.write(&OUT, v);
+            });
+            let r = y.checked_shr(x).unwrap_or(if y < 0 { -1 } else { 0 }) as i64 as u64;
+            let s = 1u32.checked_shl(x).unwrap_or(0) as u64;
+            let want = r ^ s ^ (((y < 0) as u64) << 63);
+            assert_eq!(t.out, want, "x = {x}, y = {y}");
+        }
+    }
+
+    #[test]
+    fn exits_count_the_steps_made() {
+        let mut e = Engine::default();
+        let f = e
+            .compile_with(3, 3, |e, k| {
+                let av = e.read(&A);
+                let stop = e.op(Op::Eq, av, V::K(k as u128), N::U8);
+                e.exit_if(stop, false, |_| {});
+                let v = e.op(Op::Add, av, V::K(0), N::U8);
+                let v = e.cast(v, N::U8, N::U64);
+                let o = e.read(&OUT);
+                let o = e.op(Op::Add, o, v, N::U64);
+                e.write(&OUT, o);
+            })
+            .expect("compiled");
+        let f: extern "C" fn(*mut T, u32) -> u32 = unsafe { std::mem::transmute(f) };
+        let mut t = T { a: 2, ..T::default() };
+        assert_eq!(f(&mut t, 0), 2, "stopped at the third");
+        assert_eq!(t.out, 4);
+        let mut t = T { a: 9, ..T::default() };
+        assert_eq!(f(&mut t, 1), 2, "from the second, all made");
+        assert_eq!(t.out, 18);
     }
 }

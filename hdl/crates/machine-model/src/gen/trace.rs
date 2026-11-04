@@ -302,10 +302,19 @@ impl Gen<'_> {
     /// The epoch bump after an assignment to `place`, when it writes
     /// watched state.
     pub(super) fn trace_bump(&self, cx: &Cx, place: &Expr) -> String {
-        let Some(p) = self.trace.as_ref() else { return String::new() };
         if cx.comp.is_some() {
             return String::new();
         }
+        self.trace_bump_in(cx.recv, place)
+    }
+
+    /// The epoch bumps a write to `place` makes, on the processor (`self`).
+    pub(super) fn trace_bump_text(&self, place: &Expr) -> String {
+        self.trace_bump_in("self", place)
+    }
+
+    fn trace_bump_in(&self, recv: &str, place: &Expr) -> String {
+        let Some(p) = self.trace.as_ref() else { return String::new() };
         let mut e = place;
         let written: Vec<Cell> = loop {
             match &e.kind {
@@ -349,16 +358,16 @@ impl Gen<'_> {
         let outside = p.watched.iter().filter(|c| !in_key(c)).any(hits);
         let mut s = String::new();
         if any {
-            let _ = writeln!(s, "{0}.tr_epoch = {0}.tr_epoch.wrapping_add(1);", cx.recv);
+            let _ = writeln!(s, "{0}.tr_epoch = {0}.tr_epoch.wrapping_add(1);", recv);
         }
         if outside {
-            let _ = writeln!(s, "{0}.tr_aepoch = {0}.tr_aepoch.wrapping_add(1);", cx.recv);
+            let _ = writeln!(s, "{0}.tr_aepoch = {0}.tr_aepoch.wrapping_add(1);", recv);
         }
         if p.watched.iter().filter(|c| in_key(c)).any(hits) || written.iter().any(|w| match w {
             Cell::Reg(d) | Cell::Field(d, _) => p.key.contains(d),
             Cell::Mode => p.key_mode,
         }) {
-            let _ = writeln!(s, "{0}.tr_kepoch = {0}.tr_kepoch.wrapping_add(1);", cx.recv);
+            let _ = writeln!(s, "{0}.tr_kepoch = {0}.tr_kepoch.wrapping_add(1);", recv);
         }
         s
     }

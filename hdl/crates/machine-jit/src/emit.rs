@@ -649,6 +649,15 @@ impl<'a, 'f> Em<'a, 'f> {
         self.regs.clear();
     }
 
+    /// Store the written fields that calls change.
+    fn flush_volatile(&mut self) {
+        let vol = self.volatile.clone();
+        let hit: Vec<(usize, N)> = self.dirty.iter().copied().filter(|(o, m)| vol.iter().any(|(vo, vl)| *o < vo + vl && *vo < o + m.width() as usize / 8)).collect();
+        for (o, m) in hit {
+            self.flush_overlapping(o, m, None);
+        }
+    }
+
     /// Forget the fields calls change (`set_volatile`).
     fn forget_volatile(&mut self) {
         let vol = self.volatile.clone();
@@ -834,6 +843,46 @@ impl<'a, 'f> Em<'a, 'f> {
 
     pub fn release(&mut self, mark: usize) {
         self.slots.truncate(mark);
+    }
+
+    /// A rare path: when `c` holds, `f`, which may only make calls that
+    /// leave the processor's fields alone (the board's, declared volatile,
+    /// are forgotten after) and leave the run. The common path keeps what
+    /// it knows and the stores it has deferred.
+    pub fn cold(&mut self, c: V, f: impl FnOnce(&mut Self)) {
+        if !self.live {
+            return;
+        }
+        match c {
+            V::K(0) => {}
+            V::K(_) => {
+                f(self);
+                self.forget_volatile();
+            }
+            V::D(cv) => {
+                // What the rare path's calls change is forgotten after the
+                // join: written before it.
+                self.flush_volatile();
+                let cold = self.b.create_block();
+                let cont = self.b.create_block();
+                self.b.ins().brif(cv, cold, &[], cont, &[]);
+                self.b.seal_block(cold);
+                let before = self.state();
+                self.b.switch_to_block(cold);
+                f(self);
+                if self.live {
+                    // The common path still owes its deferred stores; the
+                    // machine already holds them here.
+                    self.flush();
+                    self.b.ins().jump(cont, &[]);
+                }
+                self.b.seal_block(cont);
+                self.restore(&before);
+                self.b.switch_to_block(cont);
+                self.live = true;
+                self.forget_volatile();
+            }
+        }
     }
 
     /// Leave the compiled run when `c` holds, after `then` (on that path

@@ -621,7 +621,7 @@ impl<'a> Gen<'a> {
         }
         let _ = write!(
             o,
-            "    #[allow(non_camel_case_types)]\n    #[derive(Clone, Copy, Debug, PartialEq)]\n    pub enum Event {{\n{events}    }}\n    /// Time and signal levels.\n    #[derive(Clone, Debug)]\n    pub struct Signals {{\n        /// Time in units of `BASE_NUM / BASE_DEN` seconds.\n        pub now: clock::Time,\n{sig_fields}        /// Edges not yet delivered.\n        pub events: Vec<Event>,\n    }}\n    impl Signals {{\n        pub fn new() -> Signals {{\n            Signals {{\n                now: 0,\n{sig_init}                events: Vec::new(),\n            }}\n        }}\n    }}\n"
+            "    #[allow(non_camel_case_types)]\n    #[derive(Clone, Copy, Debug, PartialEq)]\n    pub enum Event {{\n{events}    }}\n    /// Time and signal levels.\n    #[derive(Clone, Debug)]\n    pub struct Signals {{\n        /// Time in units of `BASE_NUM / BASE_DEN` seconds.\n        pub now: clock::Time,\n{sig_fields}        /// Edges not yet delivered, and whether there are any (for compiled\n        /// code, which cannot look into the queue).\n        pub events: Vec<Event>,\n        pub pending: bool,\n    }}\n    impl Signals {{\n        pub fn new() -> Signals {{\n            Signals {{\n                now: 0,\n{sig_init}                events: Vec::new(),\n                pending: false,\n            }}\n        }}\n    }}\n"
         );
 
         // Tick marks: the last time each device's clock was caught up to.
@@ -866,7 +866,7 @@ impl<'a> Gen<'a> {
                     let body = if at.is_none() {
                         String::new()
                     } else {
-                        format!("let i = {idx}; if self.sig.{f}[i] != value {{ self.sig.{f}[i] = value; self.sig.events.push(Event::{f}(i, value)); }}")
+                        format!("let i = {idx}; if self.sig.{f}[i] != value {{ self.sig.{f}[i] = value; self.sig.events.push(Event::{f}(i, value)); self.sig.pending = true; }}")
                     };
                     let _ = writeln!(
                         s,
@@ -1090,7 +1090,7 @@ impl<'a> Gen<'a> {
                             m,
                             "        fn read_{pn}(&mut self) -> {rt} {{ self.sig.{f} }}"
                         );
-                        let _ = writeln!(m, "        fn write_{pn}(&mut self, value: {rt}) {{ if self.sig.{f} != value {{ self.sig.{f} = value; self.sig.events.push(Event::{f}); }} }}");
+                        let _ = writeln!(m, "        fn write_{pn}(&mut self, value: {rt}) {{ if self.sig.{f} != value {{ self.sig.{f} = value; self.sig.events.push(Event::{f}); self.sig.pending = true; }} }}");
                     }
                     PortKind::In(t) | PortKind::AsyncIn(t) => {
                         let rt = self.rty(t)?;
@@ -1216,6 +1216,7 @@ impl<'a> Gen<'a> {
             let mut marks = String::new();
             let mut charges = String::new();
             let mut jit_times = String::new();
+            let mut jit_units = String::new();
             let mut numbered: Vec<(usize, String)> = Vec::new();
             if let Some(msp) = msp.filter(|s| s.cell_bits == 8 && s.little_endian) {
                 for b in sys.buses.iter().filter(|b| b.masters.iter().any(|(m, _)| *m as usize == proc_idx)) {
@@ -1265,6 +1266,7 @@ impl<'a> Gen<'a> {
                                         let _ = writeln!(stamps, "            {} => {cells}_stamps.get((page & 0xFF_FFFF) as usize).copied().unwrap_or(0),", numbered.len() - 1);
                                         let _ = writeln!(marks, "            {} => {{ if let Some(c) = {cells}_code.get_mut((page & 0xFF_FFFF) as usize) {{ *c |= bits; }} }}", numbered.len() - 1);
                                         let _ = writeln!(jit_times, "            {} => {{ let last = addr.wrapping_add(n as u64 - 1); Some((last / {unit_bytes} - addr / {unit_bytes} + 1) as clock::Time * {} * {period}) }}", numbered.len() - 1, rbase as u128 + d.wait);
+                                        let _ = writeln!(jit_units, "            {} => {{ let last = addr.wrapping_add(n as u64 - 1); Some((addr / {unit_bytes}, last / {unit_bytes}, {} * {period})) }}", numbered.len() - 1, rbase as u128 + d.wait);
                                         let _ = writeln!(charges, "            {} => {{ let last = addr.wrapping_add(n as u64 - 1); let (u0, u1) = (addr / {unit_bytes}, last / {unit_bytes}); let c = u1 - u0 + 1 - (u0 == self.direct_code) as u64; self.direct_code = u1; let t = c as clock::Time * {} * {period}; self.sig.now += t; self.code_time += t; true }}", numbered.len() - 1, rbase as u128 + d.wait);
                                         numbered.len() - 1
                                     }
@@ -1304,6 +1306,14 @@ impl<'a> Gen<'a> {
         fn direct_jit_time(&self, page: u32, addr: u64, n: u32) -> Option<clock::Time> {{
             match page >> 24 {{
 {jit_times}            _ => None,
+            }}
+        }}
+        /// The JIT core: the code units `n` bytes from `addr` span, and a
+        /// unit's time (an overlapped fetch: the unit last fetched is free).
+        #[allow(dead_code)]
+        fn direct_jit_units(&self, page: u32, addr: u64, n: u32) -> Option<(u64, u64, clock::Time)> {{
+            match page >> 24 {{
+{jit_units}            _ => None,
             }}
         }}
         fn direct_code_mark(&mut self, page: u32, addr: u64, n: u32) {{\n            let (b0, b1) = (((addr & 0xFFF) >> 7) as u32, (((addr & 0xFFF) + n as u64 - 1) >> 7).min(31) as u32);\n            let bits = (u32::MAX >> (31 - b1)) & (u32::MAX << b0);\n            match page >> 24 {{\n{marks}            _ => {{}}\n            }}\n        }}\n        #[inline]\n        fn direct_skip(&mut self, addr: u64, n: u32) -> bool {{\n        let last = addr.wrapping_add(n as u64 - 1);\n{skips}        false\n        }}\n")
@@ -1416,8 +1426,28 @@ impl<'a> Gen<'a> {
                 "    #[inline]\n    fn after_step(&mut self) {{ self.board_sync(); }}\n    #[inline]\n    fn halted_cycle(&mut self) {{ self.sig.now += clock::C{cpu_clock}; }}\n"
             );
             if self.jit {
+                // External fns the processor model answers with a wire level
+                // (`return port;`): their signal's offset.
+                let mut exts = String::new();
+                for h in &cpu.model.handlers {
+                    let HandlerKind::Extern { def } = &h.kind else { continue };
+                    let [st] = h.body.stmts.as_slice() else { continue };
+                    let hir::StmtKind::Return(Some(x)) = &st.kind else { continue };
+                    let hir::ExprKind::Port(_, pi, false) = &x.kind else { continue };
+                    let src = sys.wires.iter().find(|w| w.target == (proc_idx as u32, *pi)).map(|w| &w.source);
+                    if let Some(hir::WireSource::Port((si, sp))) = src {
+                        let _ = writeln!(
+                            exts,
+                            "            {:?} => Some(std::mem::offset_of!(Board, sig.w_{}_{})),",
+                            self.prog.item_name(*def),
+                            ident(&insts[*si as usize].name),
+                            ident(&insts[*si as usize].comp.ports[*sp as usize].name)
+                        );
+                    }
+                }
+                let _ = write!(bus_impl, "    fn jit_ext(name: &str) -> Option<usize> {{\n        match name {{\n{exts}            _ => None,\n        }}\n    }}\n");
                 let _ = write!(bus_impl, "    fn jit_mems() -> &'static [JitMem] {{\n        Board::JIT_MEMS\n    }}\n    fn jit_mem_ptrs(&self, out: &mut [usize; 8]) {{\n        let _ = &out;\n{}    }}\n    #[allow(unused_variables)]\n    fn jit_code_hit(&mut self, mem: u32, k: usize) {{\n        match mem {{\n{}            _ => {{}}\n        }}\n    }}\n", jit_ptrs, jit_hits);
-                bus_impl.push_str("    fn jit_board() -> Option<JitBoard> {\n        Board::JIT_BOARD\n    }\n    fn jit_fetch_time(&self, page: u32, addr: u64, n: u32) -> Option<u128> {\n        if Board::JIT_BOARD.is_some_and(|b| b.serial) { self.direct_jit_time(page, addr, n) } else { None }\n    }\n");
+                bus_impl.push_str("    fn jit_board() -> Option<JitBoard> {\n        Board::JIT_BOARD\n    }\n    fn jit_fetch_time(&self, page: u32, addr: u64, n: u32) -> Option<u128> {\n        if Board::JIT_BOARD.is_some_and(|b| b.serial) { self.direct_jit_time(page, addr, n) } else { None }\n    }\n    fn jit_fetch_units(&self, page: u32, addr: u64, n: u32) -> Option<(u64, u64, u128)> {\n        self.direct_jit_units(page, addr, n)\n    }\n");
             }
             if cpu.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Reset)) {
                 let _ = write!(
@@ -1581,7 +1611,7 @@ impl<'a> Gen<'a> {
                 "None".to_string()
             } else {
                 format!(
-                    "Some(JitBoard {{ now: std::mem::offset_of!(Board, sig.now), code_time: std::mem::offset_of!(Board, code_time), direct_code: std::mem::offset_of!(Board, direct_code), writes: &[{jit_writes}], clock: clock::C{cpu_clock}, serial: {}, due: {}, events: {}, idle: {} }})",
+                    "Some(JitBoard {{ now: std::mem::offset_of!(Board, sig.now), code_time: std::mem::offset_of!(Board, code_time), direct_code: std::mem::offset_of!(Board, direct_code), writes: &[{jit_writes}], clock: clock::C{cpu_clock}, serial: {}, due: {}, pending: std::mem::offset_of!(Board, sig.pending), events: {}, idle: {} }})",
                     self.isa.serial_fetch,
                     if sync_gate.is_empty() { "None" } else { "Some(std::mem::offset_of!(Board, marks.next_due))" },
                     !events.is_empty(),
@@ -1769,6 +1799,7 @@ impl<'a> Gen<'a> {
 {deliver}                    }}
                 }}
             }}
+            b.sig.pending = false;
         }}
     }}
     impl Default for System {{

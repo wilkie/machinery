@@ -366,6 +366,33 @@ impl Gen<'_> {
                 s.push_str("r }");
                 return Ok(s);
             }
+            // An external fn: the wire level the board keeps (a load), else
+            // a call of the bus's handler.
+            H::FnCall(d, args) if self.fns.get(d).is_some_and(|f| f.external) => {
+                let f = self.fns[d];
+                if Self::jagg_ty(&f.ret) || cx.timing {
+                    return Err(GenError::new("lowering: an external fn here"));
+                }
+                let rn = match &f.ret {
+                    Ty::Unit | Ty::Never => "machine_jit::N::U8",
+                    t => self.jn(t)?,
+                };
+                let mut s = String::from("{ let mut av: Vec<(machine_jit::V, machine_jit::N)> = Vec::new(); ");
+                for (a, p) in args.iter().zip(&f.params) {
+                    let t = &f.locals[*p as usize].ty;
+                    if Self::jagg_ty(t) {
+                        return Err(GenError::new("lowering: an external fn's record argument"));
+                    }
+                    let _ = write!(s, "let x = {}; let x = e.cast(x, {}, machine_jit::N::U64); av.push((x, machine_jit::N::U64)); ", self.jexpr(cx, a)?, self.jn(t)?);
+                }
+                let _ = write!(
+                    s,
+                    "match B::jit_ext({:?}) {{ Some(off) if av.is_empty() => e.load(std::mem::offset_of!(Self, bus) + off, {rn}), _ => e.call(Self::jit_ext_{} as *const () as usize, &av, {rn}, false) }} }}",
+                    f.name,
+                    ident(&f.name)
+                );
+                return Ok(s);
+            }
             H::FnCall(d, args) => {
                 let f = self.fns.get(d).ok_or_else(|| GenError::new("lowering: a fn of another isa"))?;
                 if f.external || !self.jit_fns.borrow().contains(d) {
@@ -1245,6 +1272,33 @@ impl Gen<'_> {
                 args.join(", "),
                 n = ident(&f.name)
             );
+        }
+        Ok(out)
+    }
+
+    /// Calls of the bus's external fns, for compiled code.
+    pub(crate) fn jit_ext_shims(&self) -> R<String> {
+        let mut out = String::new();
+        let mut fns: Vec<&&hir::FnBody> = self.fns.values().filter(|f| f.external).collect();
+        fns.sort_by(|a, b| a.name.cmp(&b.name));
+        for f in fns {
+            if Self::jagg_ty(&f.ret) || f.params.iter().any(|p| Self::jagg_ty(&f.locals[*p as usize].ty)) {
+                continue;
+            }
+            let mut ps = String::new();
+            let mut args = Vec::new();
+            for (i, p) in f.params.iter().enumerate() {
+                let _ = write!(ps, ", a{i}: u64");
+                args.push(match &f.locals[*p as usize].ty {
+                    Ty::Bool => format!("a{i} != 0"),
+                    t => format!("a{i} as {}", self.rty(t)?),
+                });
+            }
+            let ret = match &f.ret {
+                Ty::Unit | Ty::Never => format!("m.bus.ext_{}({}); 0", ident(&f.name), args.join(", ")),
+                _ => format!("m.bus.ext_{}({}) as u64", ident(&f.name), args.join(", ")),
+            };
+            let _ = write!(out, "    #[allow(clippy::all)]\n    extern \"C\" fn jit_ext_{}(m: *mut Self{ps}) -> u64 {{\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe {{ &mut *m }};\n        {ret}\n    }}\n", ident(&f.name));
         }
         Ok(out)
     }

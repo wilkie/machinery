@@ -1382,6 +1382,10 @@ impl<'a> Gen<'a> {
                     "    #[inline]\n    fn {n}_code_page(&mut self, addr: u64) -> Option<u32> {{ self.direct_code_page(addr & {amask}) }}\n    #[inline]\n    fn {n}_code_stamp(&mut self, page: u32) -> u32 {{ self.direct_code_stamp(page) }}\n    #[inline]\n    fn {n}_code_writes(&mut self) -> u64 {{ self.direct_code_writes() }}\n    fn {n}_code_mark(&mut self, page: u32, addr: u64, n: u32) {{ self.direct_code_mark(page, addr, n) }}\n    #[inline]\n    fn {n}_fetch_page(&mut self, page: u32, addr: u64, n: u32) {{\n        if !self.direct_charge(page, addr & {amask}, n) {{ self.{n}_fetch_skip(addr, n); }}\n    }}\n    #[inline]\n    fn {n}_fetch_skip(&mut self, addr: u64, n: u32) {{\n        if self.direct_skip(addr & {amask}, n) {{ return; }}\n        for i in 0..n {{ self.{n}_fetch(addr.wrapping_add(i as u64), 8); }}\n    }}\n"
                 );
             }
+            let _ = write!(
+                bus_impl,
+                "    #[inline]\n    fn after_step(&mut self) {{ self.board_sync(); }}\n    #[inline]\n    fn halted_cycle(&mut self) {{ self.sig.now += clock::C{cpu_clock}; }}\n"
+            );
             if cpu.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Reset)) {
                 let _ = write!(
                     bus_impl,
@@ -1607,6 +1611,14 @@ impl<'a> Gen<'a> {
         }
         // The trace core: runs forgotten at reset, and when the host has
         // written code memory or the processor's state directly.
+        let sync_next_board = sync_next.replace(&format!("let b = &mut self.{cpu_name}.bus;"), "let b = &mut *self;");
+        // With the JIT core, `stop` is checked between bursts (a step, and
+        // the rest of a compiled run it entered).
+        let run_loop = if self.jit {
+            "            let mut n = 0;\n            while n < max {{\n                if stop(self) {{\n                    return Ok(n);\n                }}\n                n += self.CPU.jit_burst(max - n)?;\n            }}\n            Ok(n)\n".replace("{{", "{").replace("}}", "}").replace("CPU", &cpu_name)
+        } else {
+            "            for n in 0..max {\n                if stop(self) {\n                    return Ok(n);\n                }\n                self.step()?;\n            }\n            Ok(max)\n".to_string()
+        };
         let (trace_reset, code_changed) = if self.trace.is_some() {
             (
                 format!("            self.{cpu_name}.trace_clear();\n"),
@@ -1666,14 +1678,7 @@ impl<'a> Gen<'a> {
         /// Run until `stop` holds (checked before each step) or `max` steps
         /// have run; returns how many ran.
         pub fn run_until(&mut self, max: u64, mut stop: impl FnMut(&mut System) -> bool) -> Result<u64, Fault> {{
-            for n in 0..max {{
-                if stop(self) {{
-                    return Ok(n);
-                }}
-                self.step()?;
-            }}
-            Ok(max)
-        }}
+{run_loop}        }}
 {with}        /// Catch every device up to the present, scheduled or not (before
         /// the host reads a device's state directly), and deliver edges.
         pub fn catch_up_all(&mut self) {{
@@ -1683,11 +1688,23 @@ impl<'a> Gen<'a> {
         /// Catch up every device that is due (a scheduled `on tick` runs
         /// only when its deadline has passed) and deliver signal edges.
         pub fn sync(&mut self) {{
-            let b = &mut self.{cpu_name}.bus;
-{sync_gate}{sync}            self.deliver();
-{sync_next}        }}
+            self.{cpu_name}.bus.board_sync();
+        }}
         fn deliver(&mut self) {{
-            let b = &mut self.{cpu_name}.bus;
+            self.{cpu_name}.bus.board_deliver();
+        }}
+    }}
+    impl Board {{
+        /// `System::sync`: the devices due caught up, and signal edges
+        /// delivered.
+        #[inline]
+        pub fn board_sync(&mut self) {{
+            let b = &mut *self;
+{sync_gate}{sync}            b.board_deliver();
+{sync_next_board}        }}
+        /// Signal edges delivered to the ports that observe them.
+        pub fn board_deliver(&mut self) {{
+            let b = &mut *self;
             let mut rounds = 0;
             while !b.sig.events.is_empty() {{
                 rounds += 1;

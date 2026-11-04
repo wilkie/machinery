@@ -103,6 +103,11 @@ pub fn package(name: &str, lib_rs: String, runtime_path: &Path) -> GeneratedCrat
     // Link-time optimisation: the processor (generic over its bus) is
     // compiled where it is used, the board's bus and device models here;
     // without it no bus access from the processor can be inlined.
+    // The JIT core links the code generator (the one crate allowed `unsafe`).
+    if lib_rs.contains("machine_jit::") {
+        let jit = runtime_path.parent().map(|p| p.join("machine-jit")).unwrap_or_default();
+        cargo_toml = cargo_toml.replace("\n[features]", &format!("machine-jit = {{ path = {:?} }}\n\n[features]", jit.display().to_string()));
+    }
     cargo_toml.push_str("\n[profile.release]\ndebug = 1\nlto = \"fat\"\ncodegen-units = 1\n\n[workspace]\n");
     GeneratedCrate {
         cargo_toml,

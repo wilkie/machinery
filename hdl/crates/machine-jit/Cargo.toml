@@ -1,0 +1,20 @@
+[package]
+name = "machine-jit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The JIT core's code generator for machines generated from Machine descriptions (Cranelift)."
+
+[dependencies]
+# Pinned: later releases need a newer rustc than this workspace's.
+cranelift-codegen = "=0.124.2"
+cranelift-frontend = "=0.124.2"
+cranelift-jit = "=0.124.2"
+cranelift-module = "=0.124.2"
+cranelift-native = "=0.124.2"
+
+# The one crate of the workspace that may use `unsafe`: compiled code is
+# entered through its address, and calls the machine through raw pointers.
+[lints.clippy]
+all = "warn"

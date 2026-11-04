@@ -370,6 +370,9 @@ system Board386 {
     /// The emulator with the trace core: runs of decoded instructions kept
     /// and run again.
     profile trace { default: model; memory: direct; core: trace; }
+    /// The emulator with the JIT core: runs entered often compiled to host
+    /// code.
+    profile jit { default: model; memory: direct; core: jit; }
 }
 
 /// The same board with a VGA in place of the EGA.
@@ -444,6 +447,9 @@ system Board386Vga {
     /// The emulator with the trace core: runs of decoded instructions kept
     /// and run again.
     profile trace { default: model; memory: direct; core: trace; }
+    /// The emulator with the JIT core: runs entered often compiled to host
+    /// code.
+    profile jit { default: model; memory: direct; core: jit; }
 }
 
 /// A 386 AT with a VGA: the 25 MHz 386 board with the PC/AT's system-board
@@ -537,4 +543,7 @@ system At386Vga {
     /// The emulator with the trace core: runs of decoded instructions kept
     /// and run again.
     profile trace { default: model; memory: direct; core: trace; }
+    /// The emulator with the JIT core: runs entered often compiled to host
+    /// code.
+    profile jit { default: model; memory: direct; core: jit; }
 }

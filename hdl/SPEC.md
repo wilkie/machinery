@@ -1576,6 +1576,22 @@ system PcAt386 {
   faster (decoding, fetching and translating the code address are done
   once per run), real-mode code about 27%; a DOS boot, mostly short loops
   polling devices, about the same (-3% to +7%).
+- `core: jit;` (with `memory: direct`) is the trace core with runs entered
+  often (64 times) compiled to host code (Cranelift, through the
+  `machine-jit` crate, the one that may use `unsafe`). A compiled run makes
+  the run's instructions after its first one after another, each exactly
+  as `step` and `System::step` would: the run's checks, `step`'s prologue,
+  the state set as decoding left it, the instruction's handler called
+  directly, `step`'s tail, the devices caught up; anything else ends it.
+  `System::run_until` checks its stop condition between bursts (a step,
+  and the rest of a compiled run it entered), so at most a run apart: the
+  machine's behaviour is the same, but a host acting on a condition acts
+  up to a run later than with the other cores. In this first form the
+  instructions' semantics stay in the generated handlers, and the
+  compiled code replaces only the dispatch between them; it is about 20%
+  slower than the trace core, which does the same work inline. Compiling
+  the work between instructions (the checks and stores) and then simple
+  instructions' semantics into the host code is where it gains.
 - `wire inst.in_port = other.out_port;` connects an output to an input of
   the same type; `wire inst.in_port = <constant>;` straps a pin (`wire
   pic1.sp = true;`). Each input is driven at most once; an output may

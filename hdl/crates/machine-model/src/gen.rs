@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 mod forms;
+mod jit;
 mod system;
 mod trace;
 
@@ -142,8 +143,10 @@ pub struct Gen<'a> {
     pub(crate) memo_cur: std::cell::RefCell<Option<MemoCur>>,
     /// Emitting a recording copy: reads of versioned state are recorded.
     pub(crate) memo_rec: std::cell::Cell<bool>,
-    /// The trace core (`core: trace;`), when the profile asks for it.
+    /// The trace core (`core: trace;`), when the profile asks for it; and
+    /// the JIT core (`core: jit;`), which builds on it.
     trace: Option<trace::TracePlan>,
+    jit: bool,
     /// Operand kinds with forms, and the forms of the copy being emitted
     /// (operand index, form).
     forms: HashMap<DefId, forms::FormKind>,
@@ -175,11 +178,12 @@ pub fn generate_system(
     // The profile's core: the trace core is planned before the processor is
     // emitted (assignments bump its epoch).
     let prof = profile.and_then(|n| sys.profiles.iter().find(|p| p.name == n));
-    if prof.is_some_and(|p| p.core == hir::Core::Trace) {
+    if prof.is_some_and(|p| matches!(p.core, hir::Core::Trace | hir::Core::Jit)) {
         if !prof.is_some_and(|p| p.direct_memory) {
-            return Err(GenError::new("`core: trace` needs `memory: direct` (code pages are counted in direct memory)"));
+            return Err(GenError::new("`core: trace` and `core: jit` need `memory: direct` (code pages are counted in direct memory)"));
         }
         g.trace = Some(g.plan_trace()?);
+        g.jit = prof.is_some_and(|p| p.core == hir::Core::Jit);
     }
     g.emit_all()?;
     g.emit_system(sys, proc_idx, profile)?;
@@ -215,6 +219,7 @@ impl<'a> Gen<'a> {
             memo_cur: std::cell::RefCell::new(None),
             memo_rec: std::cell::Cell::new(false),
             trace: None,
+            jit: false,
             forms: HashMap::new(),
             form_ctx: std::cell::RefCell::new(Vec::new()),
         })
@@ -1755,7 +1760,7 @@ impl<'a> Gen<'a> {
             let n = ident(&sp.name);
             let _ = writeln!(s, "    fn {n}_read(&mut self, addr: u64, bits: u32) -> u128;\n    fn {n}_write(&mut self, addr: u64, bits: u32, value: u128);");
         }
-        s.push_str("    /// An instruction (or an interrupt taken at a boundary) finished, having spent\n    /// `cycles` of execution beyond its bus transfers, to `schedule`.\n    #[allow(unused_variables)]\n    fn retire(&mut self, cycles: u32, schedule: Schedule) {}\n    /// The processor shut down (a fault while delivering a double fault);\n    /// it stays halted until reset.\n    fn shutdown(&mut self) {}\n    /// The processor was reset alone (`istream { reset }`): the\n    /// processor model's state with it.\n    fn processor_reset(&mut self) {}\n");
+        s.push_str("    /// An instruction (or an interrupt taken at a boundary) finished, having spent\n    /// `cycles` of execution beyond its bus transfers, to `schedule`.\n    #[allow(unused_variables)]\n    fn retire(&mut self, cycles: u32, schedule: Schedule) {}\n    /// The processor shut down (a fault while delivering a double fault);\n    /// it stays halted until reset.\n    fn shutdown(&mut self) {}\n    /// The processor was reset alone (`istream { reset }`): the\n    /// processor model's state with it.\n    fn processor_reset(&mut self) {}\n    /// After each step, as `System::step` makes it: the devices caught up\n    /// (the JIT core's compiled steps make it themselves).\n    fn after_step(&mut self) {}\n    /// A halted processor's step: one cycle of its clock.\n    fn halted_cycle(&mut self) {}\n");
         if let Some(ist) = &self.isa.istream {
             let n = ident(&self.spaces[&ist.space].name);
             let _ = writeln!(s, "    /// An instruction-stream fetch (a code bus cycle); a read by default.\n    fn {n}_fetch(&mut self, addr: u64, bits: u32) -> u128 {{ self.{n}_read(addr, bits) }}");
@@ -1823,6 +1828,7 @@ impl<'a> Gen<'a> {
         );
         s.push_str("    pub r: Regs,\n    pub run_sched: Schedule,\n");
         s.push_str(tr_cold);
+        s.push_str(self.jit_fields());
         s.push_str("    pub bus: B,\n");
         s.push_str("}\n");
         self.out.push_str(&s);
@@ -1838,6 +1844,7 @@ impl<'a> Gen<'a> {
             );
         }
         s.push_str(&self.trace_init());
+        s.push_str(self.jit_init());
         s.push_str("        };\n        m.reset_latches();\n        m\n    }\n");
         // Reset: architectural state to zero, then the isa's `fn reset()`.
         let reset_fn = self
@@ -2542,6 +2549,7 @@ impl<'a> Gen<'a> {
         }
         let _ = write!(self.out, "    /// Decodes and runs one instruction (prefixes included).\n    pub fn decode_run(&mut self) -> Result<(), Fault> {{\n'decode: loop {{\n{run}}}\n}}\n");
         self.emit_trace_fns()?;
+        self.emit_jit_fns()?;
 
         let mut s = String::from(
             "    pub fn exec(&mut self, i: Instr) -> Result<(), Fault> {\n        match i {\n",
@@ -2665,9 +2673,19 @@ impl<'a> Gen<'a> {
         } else {
             "sched.work[0] = self.entry_cycles as u16;"
         };
+        let prologue = format!("        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.entry_cycles = 0;\n        self.fetched = 0;\n        self.win_len = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{reset_check}        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n");
+        let tail = format!("        let cur: Option<Instr> = if self.decoded {{ self.last }} else {{ None }};\n        if self.decoded {{ {entry} }}\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n        if B::SCHEDULE {{\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        }} else {{\n        let _ = (before, performed, cur);\n        }}\n        self.bus.retire(self.cycles, sched);\n        r\n");
         s.push_str(&format!(
-            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n        self.reset_latches();\n        self.known_opcode = false;\n        self.last_fault = None;\n        self.cycles = 0;\n        self.prefix_cycles = 0;\n        self.entry_cycles = 0;\n        self.fetched = 0;\n        self.win_len = 0;\n        self.decode_at = [0; 16];\n        self.accesses = 0;\n{reset_check}        if self.shutdown {{ return Ok(()); }}\n{boundary}        if self.halted {{ return Ok(()); }}\n{find}        let cur: Option<Instr> = if self.decoded {{ self.last }} else {{ None }};\n        if self.decoded {{ {entry} }}\n        let before = self.cycles;\n        let performed = self.accesses;\n        let r = self.finish(r);\n        if B::SCHEDULE {{\n{deliver_schedule}        sched.length = self.fetched;\n        sched.decode = self.decode_at;\n        sched.start = start;\n        sched.next = self.fn_{address}().map(|a| a as u64).unwrap_or(u64::MAX);\n{room}        sched.halted = self.halted;\n        }} else {{\n        let _ = (before, performed, cur);\n        }}\n        self.bus.retire(self.cycles, sched);\n        r\n    }}\n"
+            "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n{prologue}{find}{tail}    }}\n"
         ));
+        // The JIT core: the step's prologue and tail, for a compiled
+        // instruction (the prologue sets `jit_go` when it leaves the step to
+        // the instruction).
+        if self.jit {
+            s.push_str(&format!(
+                "    /// `step`'s prologue, for the JIT core: `jit_go` when the instruction is to run.\n    #[inline]\n    fn jit_prologue(&mut self) -> Result<(), Fault> {{\n{prologue}        self.jit_go = true;\n        Ok(())\n    }}\n    /// `step`'s tail, for the JIT core.\n    #[inline]\n    fn jit_tail(&mut self, start: u64, r: Result<(), Fault>) -> Result<(), Fault> {{\n        let mut sched = Schedule::default();\n{tail}    }}\n"
+            ));
+        }
         let _ = write!(
             s,
             "    /// Place `bytes` at the instruction stream address and execute one instruction.\n    pub fn run_bytes(&mut self, bytes: &[u8]) -> Result<(), Fault> {{\n        let a = self.fn_{address}()? as u64;\n        for (i, b) in bytes.iter().enumerate() {{ self.bus.{space}_write(a + i as u64, {cell}, *b as u128); }}\n        self.step()\n    }}\n"

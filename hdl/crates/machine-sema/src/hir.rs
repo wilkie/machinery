@@ -1008,6 +1008,8 @@ pub enum Core {
     Decode,
     /// Runs of decoded instructions kept and run again (SPEC 12, "Cores").
     Trace,
+    /// Runs kept as by `Trace`, and those run often compiled to host code.
+    Jit,
 }
 
 #[derive(Clone, Debug, PartialEq)]

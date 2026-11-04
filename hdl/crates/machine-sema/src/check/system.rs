@@ -300,8 +300,9 @@ impl Checker<'_> {
                             match e.level.name.as_str() {
                                 "decode" => core = hir::Core::Decode,
                                 "trace" => core = hir::Core::Trace,
+                                "jit" => core = hir::Core::Jit,
                                 other => {
-                                    self.error(module, "E1049", e.level.span, format!("unknown core `{other}` (expected `decode` or `trace`)"));
+                                    self.error(module, "E1049", e.level.span, format!("unknown core `{other}` (expected `decode`, `trace` or `jit`)"));
                                     ok = false;
                                 }
                             }

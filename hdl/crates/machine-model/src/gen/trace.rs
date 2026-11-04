@@ -386,9 +386,10 @@ impl Gen<'_> {
             let r = self.regs[d].1;
             let _ = writeln!(step, "    pub pc_{}: {},", ident(&r.name), self.rty(&r.ty)?);
         }
+        let jit = self.jit_trace_fields();
         let _ = write!(
             self.out,
-            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start, and how many.\n    pub off: u16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n}}\n"
+            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start, and how many.\n    pub off: u16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n{jit}}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n}}\n"
         );
         Ok(())
     }
@@ -444,6 +445,8 @@ impl Gen<'_> {
             let _ = writeln!(runs, "            Instr::{n}(ops) => self.run_{n}(ops),", n = ident(&i.name));
         }
         let mask = TRACES - 1;
+        let jit_init = self.jit_trace_init();
+        let jit_clear = if self.jit { "        self.jit.clear();\n" } else { "" };
         let _ = write!(
             self.out,
             r#"    #[inline]
@@ -451,29 +454,39 @@ impl Gen<'_> {
     /// What the decoder reads: a run's key.
     #[inline]
     fn tkey(&self) -> TKey {{ TKey {{ {key}}} }}
-    /// The next instruction of the run being replayed, run, and where it
-    /// was; None when the run ends here (it stops replaying). Code memory's
-    /// write total is checked each time, the run's page when it has moved.
+    /// Can the run being replayed go on with its next instruction? When
+    /// not, it stops replaying (and nothing else changes).
     #[inline]
-    fn trace_go(&mut self) -> Option<(u64, Result<(), Fault>)> {{
+    fn trace_check(&mut self) -> bool {{
         let cur = self.tr_cur as usize;
         let idx = self.tr_idx as usize;
-        let t = self.traces[cur].as_ref()?;
-        let s = t.steps.get(idx)?;
+        let Some(t) = self.traces[cur].as_ref() else {{ self.tr_on = false; return false; }};
+        let Some(s) = t.steps.get(idx) else {{ self.tr_on = false; return false; }};
         if self.tr_epoch != self.tr_ep0 || self.r.{pc0} as u64 != t.pc.wrapping_add(s.off as u64) {{
             self.tr_on = false;
             self.tr_prev = cur as u32;
-            return None;
+            return false;
         }}
         let w = self.bus.{sp}_code_writes();
         if w != self.tr_w {{
             if self.bus.{sp}_code_stamp(t.page) != t.stamp {{
                 self.tr_on = false;
                 self.tr_prev = u32::MAX;
-                return None;
+                return false;
             }}
             self.tr_w = w;
         }}
+        true
+    }}
+    /// The next instruction of the run, checked: the state set as decoding
+    /// left it, and the run advanced. Its address, the instruction, its page
+    /// and length.
+    #[inline]
+    fn trace_restore(&mut self) -> (u64, Instr, u32, u8) {{
+        let cur = self.tr_cur as usize;
+        let idx = self.tr_idx as usize;
+        let t = self.traces[cur].as_ref().unwrap();
+        let s = &t.steps[idx];
         let phys = t.phys + s.off as u64;
         let page = t.page;
         let last = idx + 1 == t.steps.len();
@@ -488,6 +501,16 @@ impl Gen<'_> {
             self.tr_on = false;
             self.tr_prev = cur as u32;
         }}
+        (phys, instr, page, len)
+    }}
+    /// The next instruction of the run being replayed, run, and where it
+    /// was; None when the run ends here (it stops replaying).
+    #[inline]
+    fn trace_go(&mut self) -> Option<(u64, Result<(), Fault>)> {{
+        if !self.trace_check() {{
+            return None;
+        }}
+        let (phys, instr, page, len) = self.trace_restore();
         self.tr_phys = phys;
         self.restarted = phys == self.last_start;
         self.last_start = phys;
@@ -568,7 +591,7 @@ impl Gen<'_> {
             self.trace_close();
             if let Some(page) = self.bus.{sp}_code_page(start) {{
                 let stamp = self.bus.{sp}_code_stamp(page);
-                self.tr_rec = Some(Trace {{ phys: start, pc: self.r.{pc0} as u64, key: self.tkey(), page, stamp, ok_ep: self.tr_epoch, links: [TLink::default(); 2], steps: Vec::new() }});
+                self.tr_rec = Some(Trace {{ phys: start, pc: self.r.{pc0} as u64, key: self.tkey(), page, stamp, ok_ep: self.tr_epoch, links: [TLink::default(); 2], {jit_init}steps: Vec::new() }});
                 self.tr_rec_ep = self.tr_epoch;
             }}
         }}
@@ -620,7 +643,7 @@ impl Gen<'_> {
         self.tr_epoch = self.tr_epoch.wrapping_add(1);
         self.tr_aepoch = self.tr_aepoch.wrapping_add(1);
         self.tr_kepoch = self.tr_kepoch.wrapping_add(1);
-    }}
+{jit_clear}    }}
     /// Runs a decoded instruction.
     fn run_instr(&mut self, i: Instr) -> Result<(), Fault> {{
         match i {{

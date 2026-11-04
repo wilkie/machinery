@@ -1629,10 +1629,24 @@ system PcAt386 {
   isa's boundary fn inlined), the state as decoding left it, the timing
   entry and the semantics in host code, then one call that retires it
   (`step`'s tail, the devices caught up, the run's code checked for
-  writes). What does not lower (a fault raised, a loop, a bundle, a timing
-  entry that needs `repeats()`, an isa that resets through its istream)
-  is a call of the instruction's step as the interpreter makes it; the
-  generator decides per instruction, so nothing is approximated. A timing
+  writes). Records and tuples lower as their scalar leaves (a record
+  register's fields, a register view's bit fields, locals per leaf); a
+  register array indexed by a computed value is addressed from the machine,
+  bounds-checked; operand structures (a ModRM) are values known when
+  compiling, and a tail the decoder did not fetch can only be reached on a
+  path the code never takes (a trap there). `raise` calls a shim that
+  delivers the fault as the step's tail would, and the run ends. Units are
+  inlined like fns. A fn whose inlined size (its HIR and what it inlines)
+  passes a threshold is called instead, through a shim that runs the
+  interpreter's fn and delivers its fault (`jit_pending` then ends the
+  run): the 386's segment and paging work stays one call per access. When
+  the istream's prologue does not lower (the 386's reset line, its
+  boundary fn reaching the external `intr`), the step calls the
+  interpreter's prologue and lowers the rest; a step decoded with a lock
+  prefix is the interpreter's. What does not lower (a loop, a 128-bit
+  division, a union) is a call of the instruction's step as the
+  interpreter makes it; the generator decides per instruction, so nothing
+  is approximated. A timing
   entry that asks `repeats()` is emitted after the semantics, comparing the
   istream's address with the step's own (a constant).
   `MACHINE_JIT_LOWERING` set while generating lists what does not lower and
@@ -1667,11 +1681,16 @@ system PcAt386 {
   instructions/s, against 64 for the decode core and 57 for the trace
   core. What is left is mostly the compiled steps themselves, entering a
   run from Rust (`System::run`, about an eighth) and compiling. Cranelift's optimiser is off: the emitter
-  folds what it would, and compiling is cheaper. The 386 does not lower
-  (its reset line), and runs as before. Random straight-line code with
+  folds what it would, and compiling is cheaper. Every 386 instruction
+  lowers too; its board is not yet described to the JIT (overlapped
+  fetches, a 16-bit bus), so its steps still call the prologue, the fetch
+  charge and the retirement, and a DOS boot runs at about the trace core's
+  speed in POST (22 M/s), slower where it compiles or idles. Random straight-line code with
   random operands, registers and memory, run compiled and stepped, must
   agree to the register, byte and clock (`targets/z80/board_test.rs`), as
-  must a loop that rewrites its own operand.
+  must a loop that rewrites its own operand; so must random 386 code
+  (`targets/i386/vga_test.rs`: each instruction tried on a copy of the
+  machine first, so the loop runs, its faults returning through an IRET).
 - `wire inst.in_port = other.out_port;` connects an output to an input of
   the same type; `wire inst.in_port = <constant>;` straps a pin (`wire
   pic1.sp = true;`). Each input is driven at most once; an output may

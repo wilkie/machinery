@@ -34,6 +34,9 @@ pub(crate) struct Lx<'a> {
     pub ops: Option<&'a hir::Instruction>,
     /// In a kind's rule: the `from` operand's local (`src`).
     pub src: Option<LocalId>,
+    /// In a timing entry: a fault would make the entry 0 (the interpreter
+    /// evaluates it so), so nothing that raises lowers.
+    pub timing: bool,
 }
 
 impl Gen<'_> {
@@ -80,6 +83,323 @@ impl Gen<'_> {
         let w = self.jwidth(ty)?;
         let bits = if w >= 128 { v as u128 } else { (v as u128) & ((1u128 << w) - 1) };
         Ok(format!("machine_jit::V::K({bits:#x})"))
+    }
+
+    /// Whether values of `ty` are aggregates (records, tuples): lowered as
+    /// their scalar leaves.
+    pub(crate) fn jagg_ty(ty: &Ty) -> bool {
+        matches!(ty, Ty::Bundle(_) | Ty::Tuple(_))
+    }
+
+    /// The scalar leaves of `ty`, in declaration order.
+    pub(crate) fn jleaves(&self, ty: &Ty) -> R<Vec<Ty>> {
+        Ok(match ty {
+            Ty::Bundle(d) => {
+                let mut out = Vec::new();
+                for f in &self.bundles[d].fields {
+                    out.extend(self.jleaves(&f.ty)?);
+                }
+                out
+            }
+            Ty::Tuple(items) => {
+                let mut out = Vec::new();
+                for (_, t) in items {
+                    out.extend(self.jleaves(t)?);
+                }
+                out
+            }
+            Ty::Array(..) | Ty::Union(_) | Ty::Operand(_) | Ty::OperandTail(_) | Ty::Str => {
+                return Err(GenError::new(format!("lowering: a value of type {ty:?}")))
+            }
+            t => vec![t.clone()],
+        })
+    }
+
+    /// `[N, ...]` of `ty`'s leaves.
+    fn jleaf_ns(&self, ty: &Ty) -> R<String> {
+        let ns: R<Vec<&str>> = self.jleaves(ty)?.iter().map(|t| self.jn(t)).collect();
+        Ok(format!("[{}]", ns?.join(", ")))
+    }
+
+    /// The leaves field `i` of record (or tuple) type `ty` covers.
+    fn jfield_range(&self, ty: &Ty, i: u32) -> R<(usize, usize)> {
+        let items: Vec<Ty> = match ty {
+            Ty::Bundle(d) => self.bundles[d].fields.iter().map(|f| f.ty.clone()).collect(),
+            Ty::Tuple(items) => items.iter().map(|(_, t)| t.clone()).collect(),
+            _ => return Err(GenError::new("lowering: a field of a non-record")),
+        };
+        let mut at = 0;
+        for (k, t) in items.iter().enumerate() {
+            let n = self.jleaves(t)?.len();
+            if k == i as usize {
+                return Ok((at, n));
+            }
+            at += n;
+        }
+        Err(GenError::new("lowering: no such field"))
+    }
+
+    /// The places of a record register's leaves (`path` within `Regs`).
+    fn jreg_leaf_places(&self, path: &str, ty: &Ty, bump: u8, out: &mut Vec<String>) -> R<()> {
+        match ty {
+            Ty::Bundle(d) => {
+                for f in &self.bundles[d].fields {
+                    self.jreg_leaf_places(&format!("{path}.{}", ident(&f.name)), &f.ty, bump, out)?;
+                }
+            }
+            Ty::Tuple(_) | Ty::Array(..) => return Err(GenError::new("lowering: a register of this shape")),
+            t => out.push(format!("machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, {path}), n: {}, bump: {bump} }}", self.jn(t)?)),
+        }
+        Ok(())
+    }
+
+    /// An aggregate place's leaves, as code making `Vec<Place>`.
+    fn jagg_place(&self, cx: &Lx, e: &Expr) -> R<String> {
+        Ok(match &e.kind {
+            H::Register(d) => {
+                let (_, r) = self.regs[d];
+                let mut v = Vec::new();
+                self.jreg_leaf_places(&format!("r.{}", ident(&r.name)), &r.ty, self.jbump(e), &mut v)?;
+                format!("vec![{}]", v.join(", "))
+            }
+            H::RegView(d, i) => {
+                let (_, r) = self.regs[d];
+                let view = &r.views[*i as usize];
+                let mut v = Vec::new();
+                for ri in &view.mapping {
+                    let fe = Expr { kind: H::RegField(*d, *ri), ty: r.fields[*ri as usize].ty.clone(), span: e.span };
+                    v.push(self.jplace_reg(&fe)?);
+                }
+                format!("vec![{}]", v.join(", "))
+            }
+            H::Local(id) if Some(*id) != cx.src => format!("l{id}.iter().map(|s| machine_jit::Place::Local(*s)).collect::<Vec<_>>()"),
+            H::Field(base, i) | H::TupleField(base, i) => {
+                let (at, n) = self.jfield_range(&base.ty, *i)?;
+                format!("{{ let p = {}; p[{at}..{}].to_vec() }}", self.jagg_place(cx, base)?, at + n)
+            }
+            H::Index(base, idx) if matches!(base.ty, Ty::Array(..)) => {
+                // The index once, for every leaf.
+                let H::Register(d) = &base.kind else { return Err(GenError::new("lowering: an index into a non-register array")) };
+                let one = self.jelem_places_with(e, *d, "idx")?;
+                format!("{{ let idx = {{ let i = {}; e.cast(i, {}, machine_jit::N::U64) }}; vec![{}] }}", self.jexpr(cx, idx)?, self.jn(&idx.ty)?, one.join(", "))
+            }
+            _ => return Err(GenError::new("lowering: an aggregate place")),
+        })
+    }
+
+    /// The places of an element of register array `d`, one per leaf of the
+    /// element, at the index in variable `idx` (a `V`, a u64).
+    fn jelem_places_with(&self, whole: &Expr, d: DefId, idx: &str) -> R<Vec<String>> {
+        let (_, r) = self.regs[&d];
+        let Ty::Array(elem, count) = &r.ty else { return Err(GenError::new("lowering: an index into a non-array")) };
+        let bump = self.jbump(whole);
+        fn walk(g: &Gen, path: &str, ty: &Ty, v: &mut Vec<(String, Ty)>) {
+            match ty {
+                Ty::Bundle(b) => {
+                    for f in &g.bundles[b].fields {
+                        let p = if path.is_empty() { ident(&f.name) } else { format!("{path}.{}", ident(&f.name)) };
+                        walk(g, &p, &f.ty, v);
+                    }
+                }
+                t => v.push((path.to_string(), t.clone())),
+            }
+        }
+        let mut offs = Vec::new();
+        walk(self, "", elem, &mut offs);
+        let elem_ty = match &**elem {
+            Ty::Bundle(bd) => ident(&self.prog.item_name(*bd)),
+            t => self.rty(t)?,
+        };
+        let mut out = Vec::new();
+        for (path, t) in offs {
+            if matches!(t, Ty::Array(..) | Ty::Tuple(_)) {
+                return Err(GenError::new("lowering: an array element of this shape"));
+            }
+            let off = if path.is_empty() { "0".to_string() } else { format!("std::mem::offset_of!({elem_ty}, {path})") };
+            out.push(format!(
+                "machine_jit::Place::Elem {{ base: std::mem::offset_of!(Self, r.{}), stride: std::mem::size_of::<{elem_ty}>(), count: {count}, off: {off}, index: {idx}, n: {}, bump: {bump} }}",
+                ident(&r.name),
+                self.jn(&t)?
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Whether `e` names an aggregate place (read leaf by leaf).
+    fn jis_agg_place(e: &Expr) -> bool {
+        match &e.kind {
+            H::Register(_) | H::RegView(..) | H::Local(_) => true,
+            H::Field(b, _) | H::TupleField(b, _) => Self::jis_agg_place(b),
+            H::Index(b, _) => matches!(b.kind, H::Register(_)) && matches!(b.ty, Ty::Array(..)),
+            _ => false,
+        }
+    }
+
+    /// An aggregate value, as code making its leaves (`Vec<V>`).
+    pub(crate) fn jagg(&self, cx: &Lx, e: &Expr) -> R<String> {
+        if !Self::jagg_ty(&e.ty) {
+            return Ok(format!("vec![{}]", self.jexpr(cx, e)?));
+        }
+        let ns = self.jleaf_ns(&e.ty)?;
+        Ok(match &e.kind {
+            H::Local(id) if Some(*id) != cx.src => format!("l{id}.iter().map(|s| e.get(*s)).collect::<Vec<_>>()"),
+            _ if Self::jis_agg_place(e) => format!("{{ let p = {}; p.iter().map(|p| e.read(p)).collect::<Vec<_>>() }}", self.jagg_place(cx, e)?),
+            H::Field(base, i) | H::TupleField(base, i) => {
+                let (at, n) = self.jfield_range(&base.ty, *i)?;
+                format!("{{ let a = {}; a[{at}..{}].to_vec() }}", self.jagg(cx, base)?, at + n)
+            }
+            H::BundleLit(_, items) | H::Tuple(items) => {
+                let mut s = String::from("{ let mut a: Vec<machine_jit::V> = Vec::new(); ");
+                for x in items {
+                    let _ = write!(s, "let x = {}; a.extend(x); ", self.jagg(cx, x)?);
+                }
+                s.push_str("a }");
+                s
+            }
+            H::FnCall(..) | H::Call(..) => self.jcall(cx, e)?,
+            H::OperandRead(i) => {
+                let instr = cx.ops.ok_or_else(|| GenError::new("lowering: an operand outside an instruction"))?;
+                let b = &instr.operands[*i as usize];
+                let kind = self.kinds[&b.kind];
+                self.jrule_needed(kind, &[hir::RuleKind::Read, hir::RuleKind::Value])?;
+                let op = format!("ops.{}", ident(&b.name));
+                if kind.source.is_some() {
+                    format!("Self::jk_{}_read(e, &{op})", ident(&kind.name))
+                } else {
+                    format!("{{ let a = machine_jit::k({op}); Self::jk_{}_value(e, a) }}", ident(&kind.name))
+                }
+            }
+            H::If(c, then_b, Some(else_e)) => format!(
+                "{{ let ns = {ns}; let r: Vec<machine_jit::Slot> = ns.iter().map(|n| e.local(*n, machine_jit::V::K(0))).collect(); let c = {}; e.if_(c, |e| {{ let v = {}; for (s, x) in r.iter().zip(v) {{ e.set(*s, x); }} }}, |e| {{ let v = {}; for (s, x) in r.iter().zip(v) {{ e.set(*s, x); }} }}); r.iter().map(|s| e.get(*s)).collect::<Vec<_>>() }}",
+                self.jexpr(cx, c)?,
+                self.jagg_block(cx, then_b)?,
+                self.jagg(cx, else_e)?
+            ),
+            H::Ternary(c, a, b) => format!(
+                "{{ let ns = {ns}; let r: Vec<machine_jit::Slot> = ns.iter().map(|n| e.local(*n, machine_jit::V::K(0))).collect(); let c = {}; e.if_(c, |e| {{ let v = {}; for (s, x) in r.iter().zip(v) {{ e.set(*s, x); }} }}, |e| {{ let v = {}; for (s, x) in r.iter().zip(v) {{ e.set(*s, x); }} }}); r.iter().map(|s| e.get(*s)).collect::<Vec<_>>() }}",
+                self.jexpr(cx, c)?,
+                self.jagg(cx, a)?,
+                self.jagg(cx, b)?
+            ),
+            H::Match(scrut, arms) => {
+                let sn = self.jn(&scrut.ty)?;
+                let mut tail = "{}".to_string();
+                for arm in arms.iter().rev() {
+                    let body = match &arm.body {
+                        ArmBody::Expr(x) => self.jagg(cx, x)?,
+                        ArmBody::Block(b) => self.jagg_block(cx, b)?,
+                    };
+                    tail = format!("{{ let t = e.test(sc, {sn}, &{}); e.if_(t, |e| {{ let v = {body}; for (s, x) in r.iter().zip(v) {{ e.set(*s, x); }} }}, |e| {tail}); }}", self.jpats_of(&arm.patterns, &scrut.ty)?);
+                }
+                format!("{{ let ns = {ns}; let r: Vec<machine_jit::Slot> = ns.iter().map(|n| e.local(*n, machine_jit::V::K(0))).collect(); let sc = {}; {tail} r.iter().map(|s| e.get(*s)).collect::<Vec<_>>() }}", self.jexpr(cx, scrut)?)
+            }
+            H::Block(b) => self.jagg_block(cx, b)?,
+            _ => return Err(GenError::new(format!("lowering: an aggregate {:?}", std::mem::discriminant(&e.kind)))),
+        })
+    }
+
+    fn jagg_block(&self, cx: &Lx, b: &Block) -> R<String> {
+        let mut s = String::from("{ let mark = e.mark(); ");
+        let n = b.stmts.len();
+        let mut tail = None;
+        for (i, st) in b.stmts.iter().enumerate() {
+            if i + 1 == n {
+                if let S::Expr(x) = &st.kind {
+                    tail = Some(self.jagg(cx, x)?);
+                    continue;
+                }
+            }
+            s.push_str(&self.jstmt(cx, st)?);
+        }
+        let tail = tail.ok_or_else(|| GenError::new("lowering: an aggregate block without a value"))?;
+        let _ = write!(s, "let v = {tail}; e.release(mark); v }}");
+        Ok(s)
+    }
+
+    /// A value of an operand type (the fetched operand's struct, known when
+    /// compiling), as code making it.
+    fn joperand(&self, cx: &Lx, e: &Expr) -> R<String> {
+        Ok(match &e.kind {
+            H::Local(id) if Some(*id) == cx.src => "(*src)".to_string(),
+            H::Local(id) => format!("l{id}"),
+            H::OperandTail(base) => format!("({}).tail", self.joperand(cx, base)?),
+            // The tail the decoder fetched for this operand. In a branch the
+            // compiled code cannot take (the decoder chose the tail by the
+            // same condition), another tail is a trap.
+            H::TailOperand(base, d) => {
+                let Ty::OperandTail(owner) = &base.ty else { return Err(GenError::new("lowering: a tail of a non-tail")) };
+                let name = self.prog.item_name(*d);
+                format!(
+                    "(match ({}) {{ {}_Tail::{name}(v) => v, _ => {{ e.trap(); {}::from_bits(0) }} }})",
+                    self.joperand(cx, base)?,
+                    ident(&self.prog.item_name(*owner)),
+                    ident(&name)
+                )
+            }
+            _ => return Err(GenError::new("lowering: an operand value")),
+        })
+    }
+
+    /// A call of an isa fn or a unit, whatever its type (`V`, `Vec<V>`, or
+    /// nothing for a unit fn).
+    fn jcall(&self, cx: &Lx, e: &Expr) -> R<String> {
+        let (name, params, args): (String, Vec<Ty>, &Vec<Expr>) = match &e.kind {
+            H::FnCall(d, args) if self.jit_outlined.borrow().contains(d) => {
+                let f = self.fns[d];
+                if cx.timing && self.jit_raisers.borrow().contains(d) {
+                    return Err(GenError::new("lowering: a timing entry that may raise"));
+                }
+                let mut s = String::from("{ let mut av: Vec<(machine_jit::V, machine_jit::N)> = Vec::new(); ");
+                for (a, p) in args.iter().zip(&f.params) {
+                    let t = &f.locals[*p as usize].ty;
+                    let ns = self.jleaf_ns(t)?;
+                    let _ = write!(s, "let v = {}; for (x, n) in v.into_iter().zip({ns}) {{ let x = e.cast(x, n, machine_jit::N::U64); av.push((x, machine_jit::N::U64)); }} ", self.jagg(cx, a)?);
+                }
+                let rn = match &f.ret {
+                    Ty::Unit | Ty::Never => "machine_jit::N::U8",
+                    t => self.jn(t)?,
+                };
+                let _ = write!(s, "let r = e.call(Self::jit_call_{} as *const () as usize, &av, {rn}, false); ", ident(&f.name));
+                if self.jit_raisers.borrow().contains(d) {
+                    s.push_str("let p = e.load(std::mem::offset_of!(Self, jit_pending), machine_jit::N::Bool); e.exit_if(p, true, |_| {}); ");
+                }
+                s.push_str("r }");
+                return Ok(s);
+            }
+            H::FnCall(d, args) => {
+                let f = self.fns.get(d).ok_or_else(|| GenError::new("lowering: a fn of another isa"))?;
+                if f.external || !self.jit_fns.borrow().contains(d) {
+                    return Err(GenError::new(format!("lowering: fn `{}` is not lowered", f.name)));
+                }
+                if cx.timing && self.jit_raisers.borrow().contains(d) {
+                    return Err(GenError::new("lowering: a timing entry that may raise"));
+                }
+                (format!("jf_{}", ident(&f.name)), f.params.iter().map(|p| f.locals[*p as usize].ty.clone()).collect(), args)
+            }
+            H::Call(inst, args) => {
+                let u = &self.hir.units[inst.0 as usize];
+                if !self.jit_units.borrow().contains(&inst.0) {
+                    return Err(GenError::new("lowering: a unit that is not lowered"));
+                }
+                (format!("j{}", self.unit_fn_name(*inst)), u.params.iter().map(|p| u.locals[*p as usize].ty.clone()).collect(), args)
+            }
+            _ => return Err(GenError::new("lowering: not a call")),
+        };
+        let mut s = String::from("{ ");
+        let mut names = Vec::new();
+        for (i, (a, t)) in args.iter().zip(&params).enumerate() {
+            let v = if matches!(t, Ty::Operand(_)) {
+                self.joperand(cx, a)?
+            } else if Self::jagg_ty(t) {
+                self.jagg(cx, a)?
+            } else {
+                self.jexpr(cx, a)?
+            };
+            let _ = write!(s, "let a{i} = {v}; ");
+            names.push(format!(", a{i}"));
+        }
+        let _ = write!(s, "Self::{name}(e{}) }}", names.concat());
+        Ok(s)
     }
 
     /// The place of a register, its field, a latch or the mode, with the
@@ -160,6 +480,15 @@ impl Gen<'_> {
                 self.jplace(cx, else_e)?
             ),
             H::Block(b) => self.jplace_block(cx, b)?,
+            H::Field(base, i) | H::TupleField(base, i) if Self::jagg_ty(&base.ty) && !Self::jagg_ty(&e.ty) => {
+                let (at, _) = self.jfield_range(&base.ty, *i)?;
+                format!("{{ let p = {}; p[{at}].clone() }}", self.jagg_place(cx, base)?)
+            }
+            H::Index(base, idx) if matches!(base.ty, Ty::Array(..)) && !Self::jagg_ty(&e.ty) => {
+                let H::Register(d) = &base.kind else { return Err(GenError::new("lowering: an index into a non-register array")) };
+                let p = self.jelem_places_with(e, *d, "idx")?;
+                format!("{{ let idx = {{ let i = {}; e.cast(i, {}, machine_jit::N::U64) }}; {} }}", self.jexpr(cx, idx)?, self.jn(&idx.ty)?, p[0])
+            }
             _ => return Err(GenError::new(format!("lowering: a place {:?}", std::mem::discriminant(&e.kind)))),
         })
     }
@@ -295,6 +624,7 @@ impl Gen<'_> {
             }
             H::Block(b) => self.jblock_expr(cx, b)?,
             H::Register(_) | H::RegField(..) | H::Latch(_) | H::Mode(_) => format!("e.read(&{})", self.jplace_reg(e)?),
+            H::Index(base, _) if matches!(base.ty, Ty::Array(..)) => format!("{{ let p = {}; e.read(&p) }}", self.jplace(cx, e)?),
             H::OperandRead(i) => {
                 let instr = cx.ops.ok_or_else(|| GenError::new("lowering: an operand outside an instruction"))?;
                 let b = &instr.operands[*i as usize];
@@ -328,12 +658,7 @@ impl Gen<'_> {
             H::OperandField(base, i) => {
                 let Ty::Operand(d) = &base.ty else { unreachable!() };
                 let o = self.operands[d];
-                match &base.kind {
-                    H::Local(id) if Some(*id) == cx.src => {
-                        format!("machine_jit::k(src.{})", ident(&o.fields[*i as usize].name))
-                    }
-                    _ => return Err(GenError::new("lowering: a field of an operand other than the rule's")),
-                }
+                format!("machine_jit::k(({}).{})", self.joperand(cx, base)?, ident(&o.fields[*i as usize].name))
             }
             H::SpaceRead(d, bits, addr) => self.jspace_read(cx, *d, *bits, addr, &e.ty)?,
             H::SpaceCell(d, addr) if self.isa.split_cycles.is_none() => {
@@ -342,19 +667,14 @@ impl Gen<'_> {
             }
             H::SpaceWrite(d, bits, addr, v) => format!("{{ {} machine_jit::V::K(0) }}", self.jspace_write(cx, *d, *bits, addr, v)?),
             H::KindSelect(..) => format!("{{ let p = {}; e.read(&p) }}", self.jplace(cx, e)?),
-            H::FnCall(d, args) => {
-                let f = self.fns.get(d).ok_or_else(|| GenError::new("lowering: a fn of another isa"))?;
-                if f.external || !self.jit_fns.borrow().contains(d) {
-                    return Err(GenError::new(format!("lowering: fn `{}` is not lowered", f.name)));
+            H::FnCall(..) | H::Call(..) => self.jcall(cx, e)?,
+            H::Field(base, i) | H::TupleField(base, i) if Self::jagg_ty(&base.ty) => {
+                let (at, _) = self.jfield_range(&base.ty, *i)?;
+                if Self::jis_agg_place(base) {
+                    format!("{{ let p = {}; e.read(&p[{at}]) }}", self.jagg_place(cx, base)?)
+                } else {
+                    format!("{{ let a = {}; a[{at}] }}", self.jagg(cx, base)?)
                 }
-                let mut s = String::from("{ ");
-                let mut names = Vec::new();
-                for (i, a) in args.iter().enumerate() {
-                    let _ = write!(s, "let a{i} = {}; ", self.jexpr(cx, a)?);
-                    names.push(format!(", a{i}"));
-                }
-                let _ = write!(s, "Self::jf_{}(e{}) }}", ident(&f.name), names.concat());
-                s
             }
             _ => return Err(GenError::new(format!("lowering: an expression {:?}", std::mem::discriminant(&e.kind)))),
         })
@@ -385,7 +705,11 @@ impl Gen<'_> {
             Le => ("Le", self.jn(&a.ty)?, false),
             Gt => ("Gt", self.jn(&a.ty)?, false),
             Ge => ("Ge", self.jn(&a.ty)?, false),
-            _ => return Err(GenError::new("lowering: division")),
+            // The host has no 128-bit division.
+            Div | Rem if self.jwidth(ty)? >= 128 => return Err(GenError::new("lowering: a 128-bit division")),
+            Div => ("Div", self.jn(ty)?, false),
+            Rem => ("Rem", self.jn(ty)?, false),
+            _ => unreachable!(),
         };
         let text = format!("{{ let a = {at}; let b = {bt}; e.op(machine_jit::Op::{o}, a, b, {n}) }}");
         if fix {
@@ -410,6 +734,13 @@ impl Gen<'_> {
     }
 
     fn jbuiltin(&self, cx: &Lx, b: Builtin, args: &[Expr], ty: &Ty) -> R<String> {
+        match b {
+            Builtin::Unreachable => return Ok("{ e.trap(); machine_jit::V::K(0) }".to_string()),
+            Builtin::Assert => {
+                return Ok(format!("{{ let c = {}; let bad = e.not(c, machine_jit::N::Bool); e.if_(bad, |e| e.trap(), |_| {{}}); machine_jit::V::K(0) }}", self.jexpr(cx, &args[0])?))
+            }
+            _ => {}
+        }
         let mut pre = String::new();
         for (i, a) in args.iter().enumerate() {
             let _ = write!(pre, "let x{i} = {}; ", self.jexpr(cx, a)?);
@@ -552,6 +883,30 @@ impl Gen<'_> {
         Ok(s)
     }
 
+    /// A tuple `let`'s targets from `tv` (the value's leaves), from leaf
+    /// `at`.
+    fn jlet_tuple(&self, t: &LetTarget, ty: &Ty, at: &mut usize, s: &mut String) -> R<()> {
+        match t {
+            LetTarget::Tuple(items) => {
+                let Ty::Tuple(tys) = ty else { return Err(GenError::new("lowering: a tuple let of a non-tuple")) };
+                for (it, (_, tt)) in items.iter().zip(tys) {
+                    self.jlet_tuple(it, tt, at, s)?;
+                }
+            }
+            LetTarget::Discard => *at += self.jleaves(ty)?.len(),
+            LetTarget::Local(id) => {
+                let n = self.jleaves(ty)?.len();
+                if Self::jagg_ty(ty) {
+                    let _ = writeln!(s, "let l{id}: Vec<machine_jit::Slot> = {}.iter().zip(tv[{}..{}].iter()).map(|(n, x)| e.local(*n, *x)).collect();", self.jleaf_ns(ty)?, *at, *at + n);
+                } else {
+                    let _ = writeln!(s, "let l{id} = e.local({}, tv[{}]);", self.jn(ty)?, *at);
+                }
+                *at += n;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn jblock(&self, cx: &Lx, b: &Block) -> R<String> {
         let mut s = String::from("{ let mark = e.mark(); ");
         for st in &b.stmts {
@@ -563,12 +918,29 @@ impl Gen<'_> {
 
     fn jstmt(&self, cx: &Lx, st: &hir::Stmt) -> R<String> {
         Ok(match &st.kind {
+            S::Let(LetTarget::Local(id), Some(x)) if matches!(cx.locals[*id as usize].ty, Ty::Operand(_)) => {
+                format!("let l{id} = {};\n", self.joperand(cx, x)?)
+            }
+            S::Let(LetTarget::Local(id), Some(x)) if Self::jagg_ty(&cx.locals[*id as usize].ty) => {
+                let ns = self.jleaf_ns(&cx.locals[*id as usize].ty)?;
+                format!("let l{id}: Vec<machine_jit::Slot> = {{ let v = {}; {ns}.iter().zip(v).map(|(n, x)| e.local(*n, x)).collect() }};\n", self.jagg(cx, x)?)
+            }
             S::Let(LetTarget::Local(id), Some(x)) => {
                 format!("let l{id} = {{ let v = {}; e.local({}, v) }};\n", self.jexpr(cx, x)?, self.jn(&cx.locals[*id as usize].ty)?)
             }
+            S::Let(t @ LetTarget::Tuple(_), Some(x)) => {
+                let mut s = format!("let tv = {};\n", self.jagg(cx, x)?);
+                let mut at = 0;
+                self.jlet_tuple(t, &x.ty, &mut at, &mut s)?;
+                s
+            }
             S::Let(LetTarget::Discard, Some(x)) => format!("let _ = {};\n", self.jexpr(cx, x)?),
+            S::Let(LetTarget::Local(id), None) if Self::jagg_ty(&cx.locals[*id as usize].ty) => {
+                format!("let l{id}: Vec<machine_jit::Slot> = {}.iter().map(|n| e.local(*n, machine_jit::V::K(0))).collect();\n", self.jleaf_ns(&cx.locals[*id as usize].ty)?)
+            }
             S::Let(LetTarget::Local(id), None) => format!("let l{id} = e.local({}, machine_jit::V::K(0));\n", self.jn(&cx.locals[*id as usize].ty)?),
             S::Let(..) => return Err(GenError::new("lowering: a tuple let")),
+            S::Expr(x) if matches!(x.kind, H::FnCall(..) | H::Call(..)) => format!("let _ = {};\n", self.jcall(cx, x)?),
             S::Expr(x) => format!("let _ = {};\n", self.jexpr(cx, x)?),
             S::If(c, then_b, else_s) => {
                 let els = match else_s {
@@ -598,9 +970,25 @@ impl Gen<'_> {
                 let mask = if w >= 128 { u128::MAX } else { (1u128 << w) - 1 };
                 format!("for i in ({lo}i128)..({hi}i128) {{ let l{id} = e.local({n}, machine_jit::V::K((i as u128) & {mask:#x})); {} }}\n", self.jblock(cx, body)?)
             }
+            S::Return(Some(x)) if Self::jagg_ty(&x.ty) => format!("{{ let v = {}; for (s, x) in ret.iter().zip(v) {{ e.set(*s, x); }} e.ret(); }}\n", self.jagg(cx, x)?),
             S::Return(Some(x)) => format!("{{ let v = {}; e.set(ret, v); e.ret(); }}\n", self.jexpr(cx, x)?),
             S::Return(None) => "e.ret();\n".to_string(),
+            S::Assign(place, v) if Self::jagg_ty(&place.ty) => format!("{{ let v = {}; let p = {}; for (p, x) in p.iter().zip(v) {{ e.write(p, x); }} }}\n", self.jagg(cx, v)?, self.jagg_place(cx, place)?),
             S::Assign(place, v) => format!("{{ let v = {}; let p = {}; e.write(&p, v); }}\n", self.jexpr(cx, v)?, self.jplace(cx, place)?),
+            S::Raise(d, args) => {
+                if cx.timing {
+                    return Err(GenError::new("lowering: a raise in a timing entry"));
+                }
+                let f = self.faults[d];
+                let mut s = String::from("{ ");
+                let mut list = Vec::new();
+                for (i, (a, (_, t))) in args.iter().zip(&f.params).enumerate() {
+                    let _ = write!(s, "let x{i} = {}; let x{i} = e.cast(x{i}, {}, machine_jit::N::U64); ", self.jexpr(cx, a)?, self.jn(t)?);
+                    list.push(format!("(x{i}, machine_jit::N::U64)"));
+                }
+                let _ = writeln!(s, "let _ = e.call(Self::jit_raise_{} as *const () as usize, &[{}], machine_jit::N::U64, false); e.exit(true); }}", ident(&f.name), list.join(", "));
+                s
+            }
             S::OperandWrite(i, v) => {
                 let instr = cx.ops.ok_or_else(|| GenError::new("lowering: an operand outside an instruction"))?;
                 let b = &instr.operands[*i as usize];
@@ -617,6 +1005,8 @@ impl Gen<'_> {
             }
             S::SpaceWrite(d, bits, addr, v) => format!("{{ {} }}\n", self.jspace_write(cx, *d, *bits, addr, v)?),
             S::Halt => "e.store(std::mem::offset_of!(Self, halted), machine_jit::N::Bool, machine_jit::V::K(1));\n".to_string(),
+            S::Unreachable(_) => "e.trap();\n".to_string(),
+            S::Assert(c, _) => format!("{{ let c = {}; let bad = e.not(c, machine_jit::N::Bool); e.if_(bad, |e| e.trap(), |_| {{}}); }}\n", self.jexpr(cx, c)?),
             _ => return Err(GenError::new(format!("lowering: a statement {:?}", std::mem::discriminant(&st.kind)))),
         })
     }
@@ -646,24 +1036,245 @@ impl Gen<'_> {
         s
     }
 
-    fn jfn(&self, f: &hir::FnBody) -> R<String> {
-        let cx = Lx { locals: &f.locals, ops: None, src: None };
-        let mut params = String::new();
-        let mut bind = String::new();
-        for (i, p) in f.params.iter().enumerate() {
-            let _ = write!(params, ", a{i}: machine_jit::V");
-            let _ = write!(bind, "let l{p} = e.local({}, a{i}); ", self.jn(&f.locals[*p as usize].ty)?);
+    /// What does not lower, and why (`MACHINE_JIT_LOWERING`), after the
+    /// last pass.
+    pub(crate) fn jit_report(&self) {
+        if std::env::var_os("MACHINE_JIT_LOWERING").is_none() {
+            return;
         }
-        let rn = match &f.ret {
-            Ty::Unit => "machine_jit::N::U8",
-            t => self.jn(t)?,
-        };
-        let body = self.jblock(&cx, &f.body)?;
-        Ok(format!(
-            "    /// Lowered `fn {}`.\n    #[allow(unused_variables, unused_mut, clippy::all)]\n    fn jf_{}(e: &mut machine_jit::Em{params}) -> machine_jit::V {{\n        let ret = e.local({rn}, machine_jit::V::K(0));\n        e.region_begin();\n        {bind}{body}        e.region_end();\n        e.get(ret)\n    }}\n",
-            f.name,
-            ident(&f.name)
-        ))
+        let mut fns: Vec<&&hir::FnBody> = self.fns.values().filter(|f| !f.external && !self.jit_fns.borrow().contains(&f.def)).collect();
+        fns.sort_by(|a, b| a.name.cmp(&b.name));
+        for f in fns {
+            if let Err(e) = self.jfn(f) {
+                eprintln!("fn {}: {}", f.name, e.message);
+            }
+        }
+        let mut kinds: Vec<&&hir::OperandKind> = self.kinds.values().collect();
+        kinds.sort_by(|a, b| a.name.cmp(&b.name));
+        for k in kinds {
+            for r in &k.rules {
+                if let Err(e) = self.jrule(k, r) {
+                    eprintln!("kind {}.{}: {}", k.name, r.name, e.message);
+                }
+            }
+        }
+        for (i, u) in self.hir.units.iter().enumerate() {
+            if !self.jit_units.borrow().contains(&(i as u32)) {
+                if let Err(e) = self.junit(i as u32) {
+                    eprintln!("unit {}: {}", self.prog.item_name(u.def), e.message);
+                }
+            }
+        }
+    }
+
+    fn jfn(&self, f: &hir::FnBody) -> R<String> {
+        self.jbody_fn(&format!("jf_{}", ident(&f.name)), &format!("fn {}", f.name), &f.locals, &f.params, &f.ret, &f.body)
+    }
+
+    /// An inlined body (a fn's, a unit's): parameters bound to locals, its
+    /// returns joined, its value (`V`, or `Vec<V>` for an aggregate).
+    fn jbody_fn(&self, name: &str, what: &str, locals: &[Local], params: &[LocalId], ret: &Ty, body: &Block) -> R<String> {
+        let cx = Lx { locals, ops: None, src: None, timing: false };
+        let mut ps = String::new();
+        let mut bind = String::new();
+        for (i, p) in params.iter().enumerate() {
+            let t = &locals[*p as usize].ty;
+            match t {
+                Ty::Operand(d) => {
+                    let _ = write!(ps, ", a{i}: {}", ident(&self.prog.item_name(*d)));
+                    let _ = write!(bind, "let l{p} = a{i}; ");
+                }
+                t if Self::jagg_ty(t) => {
+                    let _ = write!(ps, ", a{i}: Vec<machine_jit::V>");
+                    let _ = write!(bind, "let l{p}: Vec<machine_jit::Slot> = {}.iter().zip(a{i}).map(|(n, x)| e.local(*n, x)).collect(); ", self.jleaf_ns(t)?);
+                }
+                t => {
+                    let _ = write!(ps, ", a{i}: machine_jit::V");
+                    let _ = write!(bind, "let l{p} = e.local({}, a{i}); ", self.jn(t)?);
+                }
+            }
+        }
+        let body = self.jblock(&cx, body)?;
+        let attrs = "    #[allow(unused_variables, unused_mut, clippy::all)]\n";
+        Ok(if Self::jagg_ty(ret) {
+            format!(
+                "    /// Lowered `{what}`.\n{attrs}    fn {name}(e: &mut machine_jit::Em{ps}) -> Vec<machine_jit::V> {{\n        let ret: Vec<machine_jit::Slot> = {}.iter().map(|n| e.local(*n, machine_jit::V::K(0))).collect();\n        e.region_begin();\n        {bind}{body}        e.region_end();\n        ret.iter().map(|s| e.get(*s)).collect()\n    }}\n",
+                self.jleaf_ns(ret)?
+            )
+        } else {
+            let rn = match ret {
+                Ty::Unit | Ty::Never => "machine_jit::N::U8",
+                t => self.jn(t)?,
+            };
+            format!(
+                "    /// Lowered `{what}`.\n{attrs}    fn {name}(e: &mut machine_jit::Em{ps}) -> machine_jit::V {{\n        let ret = e.local({rn}, machine_jit::V::K(0));\n        e.region_begin();\n        {bind}{body}        e.region_end();\n        e.get(ret)\n    }}\n"
+            )
+        })
+    }
+
+    /// The units that lower, each as `junit_<name>_<args>`.
+    pub(crate) fn jit_lower_units(&self) -> String {
+        let mut ok: HashSet<u32> = (0..self.hir.units.len() as u32).collect();
+        loop {
+            *self.jit_units.borrow_mut() = ok.clone();
+            let before = ok.len();
+            ok.retain(|i| self.junit(*i).is_ok());
+            if ok.len() == before {
+                break;
+            }
+        }
+        *self.jit_units.borrow_mut() = ok.clone();
+        let mut ids: Vec<u32> = ok.into_iter().collect();
+        ids.sort();
+        let mut s = String::new();
+        for i in ids {
+            if let Ok(t) = self.junit(i) {
+                s.push_str(&t);
+            }
+        }
+        s
+    }
+
+    fn junit(&self, i: u32) -> R<String> {
+        let u = &self.hir.units[i as usize];
+        let name = format!("j{}", self.unit_fn_name(hir::UnitInstId(i)));
+        self.jbody_fn(&name, &self.unit_fn_name(hir::UnitInstId(i)), &u.locals, &u.params, &u.ret, &u.body)
+    }
+
+    /// The fns too big to inline at every call (their HIR and what they
+    /// would inline, past `JIT_INLINE`): called through `jit_call_<name>`.
+    /// Only fns whose parameters are scalars or records and whose result is
+    /// a scalar (or nothing) can be.
+    pub(crate) fn jit_find_outlined(&self) {
+        const JIT_INLINE: usize = 300;
+        let mut cost: std::collections::HashMap<DefId, usize> = std::collections::HashMap::new();
+        let mut out: HashSet<DefId> = HashSet::new();
+        let mut defs: Vec<DefId> = self.fns.keys().copied().collect();
+        defs.sort();
+        // Callees first: a few rounds settle any order.
+        for _ in 0..8 {
+            for d in &defs {
+                let f = self.fns[d];
+                let n = std::cell::Cell::new(0usize);
+                let calls = std::cell::RefCell::new(Vec::new());
+                hir::visit_block(&f.body, &mut |_| n.set(n.get() + 1), &mut |x| {
+                    n.set(n.get() + 1);
+                    match &x.kind {
+                        H::FnCall(g, _) => calls.borrow_mut().push(*g),
+                        H::Call(u, _) => n.set(n.get() + 4 * self.hir.units[u.0 as usize].body.stmts.len()),
+                        _ => {}
+                    }
+                });
+                let mut c = n.get();
+                for g in calls.into_inner() {
+                    if !out.contains(&g) && g != *d {
+                        c += cost.get(&g).copied().unwrap_or(0);
+                    }
+                }
+                cost.insert(*d, c);
+                let ok_params = f.params.iter().all(|p| {
+                    let t = &f.locals[*p as usize].ty;
+                    !matches!(t, Ty::Operand(_) | Ty::OperandTail(_)) && self.jleaves(t).is_ok()
+                });
+                let ok_ret = !Self::jagg_ty(&f.ret) && self.jleaves(&f.ret).is_ok() || matches!(f.ret, Ty::Unit | Ty::Never);
+                if c > JIT_INLINE && ok_params && ok_ret && !f.external {
+                    out.insert(*d);
+                }
+            }
+        }
+        if std::env::var_os("MACHINE_JIT_LOWERING").is_some() {
+            let mut v: Vec<(&str, usize, bool)> = defs.iter().map(|d| (self.fns[d].name.as_str(), cost[d], out.contains(d))).collect();
+            v.sort_by_key(|x| std::cmp::Reverse(x.1));
+            for (n, c, o) in v.iter().take(30) {
+                eprintln!("cost {n}: {c}{}", if *o { " (called)" } else { "" });
+            }
+        }
+        *self.jit_outlined.borrow_mut() = out;
+    }
+
+    /// A Rust value of `ty` rebuilt from u64 leaves `a{at}..` (for a call
+    /// into the interpreter).
+    fn jrebuild(&self, ty: &Ty, at: &mut usize) -> R<String> {
+        Ok(match ty {
+            Ty::Bundle(d) => {
+                let bd = self.bundles[d];
+                let mut parts = Vec::new();
+                for f in &bd.fields {
+                    parts.push(format!("{}: {}", ident(&f.name), self.jrebuild(&f.ty, at)?));
+                }
+                format!("{} {{ {} }}", ident(&bd.name), parts.join(", "))
+            }
+            Ty::Tuple(items) => {
+                let mut parts = Vec::new();
+                for (_, t) in items {
+                    parts.push(self.jrebuild(t, at)?);
+                }
+                format!("({},)", parts.join(", "))
+            }
+            Ty::Bool => {
+                *at += 1;
+                format!("(a{} != 0)", *at - 1)
+            }
+            t => {
+                *at += 1;
+                format!("(a{} as {})", *at - 1, self.rty(t)?)
+            }
+        })
+    }
+
+    /// The shims of the outlined fns: the interpreter's fn, its fault
+    /// delivered as the step's tail would deliver it (`jit_pending` then
+    /// ends the run).
+    pub(crate) fn jit_outlined_shims(&self) -> R<String> {
+        let mut out = String::new();
+        let mut defs: Vec<DefId> = self.jit_outlined.borrow().iter().copied().collect();
+        defs.sort();
+        for d in defs {
+            let f = self.fns[&d];
+            let mut at = 0;
+            let mut args = Vec::new();
+            for p in &f.params {
+                args.push(self.jrebuild(&f.locals[*p as usize].ty, &mut at)?);
+            }
+            let ps: String = (0..at).map(|i| format!(", a{i}: u64")).collect();
+            let ok = match &f.ret {
+                Ty::Unit | Ty::Never => "0".to_string(),
+                _ => "v as u64".to_string(),
+            };
+            let _ = write!(
+                out,
+                "    #[allow(clippy::all, unused_variables)]\n    extern \"C\" fn jit_call_{n}(m: *mut Self{ps}) -> u64 {{\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe {{ &mut *m }};\n        match m.fn_{n}({}) {{\n            Ok(v) => {ok},\n            Err(f) => {{\n                if m.jit_last != 0 {{\n                    // SAFETY: the step's instruction, in its run.\n                    m.last = Some(unsafe {{ *(m.jit_last as usize as *const Instr) }});\n                    m.jit_last = 0;\n                }}\n                m.decoded = true;\n                m.last_fault = None;\n                let r = m.jit_tail(m.tr_phys, Err(f));\n                m.bus.after_step();\n                if let Err(f) = r {{\n                    m.jit_err = Some(f);\n                }}\n                m.jit_pending = true;\n                0\n            }}\n        }}\n    }}\n",
+                args.join(", "),
+                n = ident(&f.name)
+            );
+        }
+        Ok(out)
+    }
+
+    /// The fns that may raise a fault (themselves or a fn they call).
+    pub(crate) fn jit_find_raisers(&self) {
+        let mut raisers: HashSet<DefId> = HashSet::new();
+        loop {
+            let before = raisers.len();
+            for f in self.fns.values() {
+                if raisers.contains(&f.def) {
+                    continue;
+                }
+                let hit = std::cell::Cell::new(false);
+                hir::visit_block(&f.body, &mut |st| hit.set(hit.get() | matches!(st.kind, S::Raise(..))), &mut |x| {
+                    if let H::FnCall(g, _) = &x.kind {
+                        hit.set(hit.get() | raisers.contains(g));
+                    }
+                });
+                if hit.get() {
+                    raisers.insert(f.def);
+                }
+            }
+            if raisers.len() == before {
+                break;
+            }
+        }
+        *self.jit_raisers.borrow_mut() = raisers;
     }
 
     /// Whether an instruction's semantics (or a fn they call) reach a bus
@@ -747,13 +1358,9 @@ impl Gen<'_> {
         let mut ok = HashSet::new();
         for kind in kinds {
             for (ri, r) in kind.rules.iter().enumerate() {
-                match self.jrule(kind, r) {
-                    Ok(t) => {
-                        s.push_str(&t);
-                        ok.insert((kind.def, ri as u32));
-                    }
-                    Err(e) if std::env::var_os("MACHINE_JIT_LOWERING").is_some() => eprintln!("{}.{}: {:?}", kind.name, r.name, e),
-                    Err(_) => {}
+                if let Ok(t) = self.jrule(kind, r) {
+                    s.push_str(&t);
+                    ok.insert((kind.def, ri as u32));
                 }
             }
         }
@@ -763,7 +1370,7 @@ impl Gen<'_> {
 
     fn jrule(&self, kind: &hir::OperandKind, r: &hir::KindRule) -> R<String> {
         let src = kind.source.and(r.params.first().copied());
-        let cx = Lx { locals: &r.locals, ops: None, src };
+        let cx = Lx { locals: &r.locals, ops: None, src, timing: false };
         let k = ident(&kind.name);
         let mut params = String::new();
         let mut bind = String::new();
@@ -793,6 +1400,18 @@ impl Gen<'_> {
                     ArmBody::Block(b) => self.jblock(&cx, b)?,
                 };
                 format!("{attrs}    fn jk_{k}_write(e: &mut machine_jit::Em{params}) {{\n        {bind}{body}\n    }}\n")
+            }
+            _ if Self::jagg_ty(&r.ty) => {
+                let body = match &r.body {
+                    ArmBody::Expr(x) => self.jagg(&cx, x)?,
+                    ArmBody::Block(b) => self.jagg_block(&cx, b)?,
+                };
+                let name = match r.kind {
+                    hir::RuleKind::Value => "value".to_string(),
+                    hir::RuleKind::Read => "read".to_string(),
+                    _ => ident(&r.name),
+                };
+                format!("{attrs}    fn jk_{k}_{name}(e: &mut machine_jit::Em{params}) -> Vec<machine_jit::V> {{\n        {bind}{body}\n    }}\n")
             }
             _ => {
                 let body = match &r.body {
@@ -825,13 +1444,13 @@ impl Gen<'_> {
         let ops_ty = Self::ops_struct_name(i);
         let timing = match &i.timing {
             Some(t) => {
-                let cx = Lx { locals: &i.timing_locals, ops: Some(i), src: None };
+                let cx = Lx { locals: &i.timing_locals, ops: Some(i), src: None, timing: true };
                 let t = self.jexpr(&cx, t)?;
                 format!("{{ let v = {t}; let _ = ops; v }}")
             }
             None => "machine_jit::V::K(0)".to_string(),
         };
-        let cx = Lx { locals: &i.locals, ops: Some(i), src: None };
+        let cx = Lx { locals: &i.locals, ops: Some(i), src: None, timing: false };
         let body = match &i.semantics {
             Some(b) => self.jblock(&cx, b)?,
             None => String::new(),

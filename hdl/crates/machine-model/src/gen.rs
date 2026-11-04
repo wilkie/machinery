@@ -152,6 +152,11 @@ pub struct Gen<'a> {
     jit_fns: std::cell::RefCell<std::collections::HashSet<DefId>>,
     /// The kind rules it lowers: (kind, rule index).
     jit_rules: std::cell::RefCell<std::collections::HashSet<(DefId, u32)>>,
+    /// The units it lowers (by instance), and the fns that may raise.
+    jit_units: std::cell::RefCell<std::collections::HashSet<u32>>,
+    jit_raisers: std::cell::RefCell<std::collections::HashSet<DefId>>,
+    /// The fns compiled code calls rather than inlines.
+    jit_outlined: std::cell::RefCell<std::collections::HashSet<DefId>>,
     /// Operand kinds with forms, and the forms of the copy being emitted
     /// (operand index, form).
     forms: HashMap<DefId, forms::FormKind>,
@@ -227,6 +232,9 @@ impl<'a> Gen<'a> {
             jit: false,
             jit_fns: Default::default(),
             jit_rules: Default::default(),
+            jit_units: Default::default(),
+            jit_raisers: Default::default(),
+            jit_outlined: Default::default(),
             forms: HashMap::new(),
             form_ctx: std::cell::RefCell::new(Vec::new()),
         })

@@ -507,3 +507,113 @@ fn bench_system() {
     assert_eq!(sys.cpu.r.EIP, start, "the BIOS set mode 13h");
     measure("mode 13h frames (ISA writes, retrace polling)", &mut sys);
 }
+
+/// xorshift64*: the random programs' source.
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+}
+
+/// Instructions that leave the straight line (or stop): not in a block.
+const BRANCHES: &[&str] = &[
+    "Jcc", "Jcc_near<16>", "Jcc_near<32>", "Jmp_rel8", "Jmp_rel<16>", "Jmp_rel<32>", "Call_rel<16>", "Call_rel<32>", "Ret<16>", "Ret<32>",
+    "Ret_imm<16>", "Ret_imm<32>", "Call_rm<16>", "Call_rm<32>", "Jmp_rm<16>", "Jmp_rm<32>", "Loopne", "Loope", "Loop", "Jcxz", "Call_far<16>",
+    "Call_far<32>", "Jmp_far<16>", "Jmp_far<32>", "Call_far_mem<16>", "Call_far_mem<32>", "Jmp_far_mem<16>", "Jmp_far_mem<32>", "Retf<16>",
+    "Retf<32>", "Retf_imm<16>", "Retf_imm<32>", "Iret<16>", "Iret<32>", "Int3", "Int_imm8", "Into", "Hlt",
+];
+
+/// The ROM's jump to 1000:0000, where the random programs run.
+const TO_RAM: &[u8] = &[0xEA, 0x00, 0x00, 0x00, 0x10];
+
+/// `n` random instructions at 1000:0000 for machine `m` (at that address),
+/// each tried on a copy of it in the state the ones before leave: kept when
+/// it decodes, is not a branch or HLT, and runs without a fault. Then a
+/// jump back to their start. The program is written into `m`.
+fn random_program(rng: &mut Rng, m: &mut System, n: usize) -> Vec<u8> {
+    let mut code = Vec::new();
+    let mut probe = m.clone();
+    let mut tries = 0;
+    while code.len() < 4 * n && tries < 20 * n {
+        tries += 1;
+        let bytes: Vec<u8> = (0..12).map(|_| rng.next() as u8).collect();
+        let mut t = probe.clone();
+        let at = 0x10000 + code.len();
+        t.board().ram.cells[at..at + 12].copy_from_slice(&bytes);
+        t.code_changed();
+        if t.cpu.step().is_err() || t.cpu.last_fault.is_some() || t.cpu.halted {
+            continue;
+        }
+        let Some(i) = t.cpu.last else { continue };
+        let name = machine_board386_vga::I386::<machine_board386_vga::system::Board>::instr_name(&i);
+        if BRANCHES.contains(&name) || t.cpu.r.EIP as usize != code.len() + t.cpu.fetched as usize {
+            continue;
+        }
+        code.extend_from_slice(&bytes[..t.cpu.fetched as usize]);
+        probe = t;
+    }
+    // jmp near back to 0 (16-bit code): E9 rel16.
+    let back = -(code.len() as i32 + 3);
+    code.extend_from_slice(&[0xE9, back as u8, (back >> 8) as u8]);
+    m.board().ram.cells[0x10000..0x10000 + code.len()].copy_from_slice(&code);
+    m.code_changed();
+    code
+}
+
+/// Random straight-line 386 code (its operands, registers and the memory
+/// it touches random; port I/O included; a fault returns to the faulting
+/// instruction through the ROM's IRET) in a loop, made by `run` (on the JIT
+/// build: compiled, once hot) and by `step`: the same registers, memory and
+/// time.
+#[test]
+fn random_programs_agree_with_stepping() {
+    let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+    let mut compiled = 0;
+    let mut made = 0u64;
+    let mut bytes = 0;
+    for seed in 0..200 {
+        let mut a = boot(rom(TO_RAM));
+        let b = a.board();
+        for c in b.ram.cells[0x400..0x20000].iter_mut() {
+            *c = rng.next() as u8;
+        }
+        // Every vector: the IRET at F000:F065.
+        for v in 0..256 {
+            b.ram.cells[4 * v..4 * v + 4].copy_from_slice(&[0x65, 0xF0, 0x00, 0xF0]);
+        }
+        a.code_changed();
+        // The reset vector's jump to F000:0000, then the ROM's to 1000:0000.
+        a.step().unwrap();
+        a.step().unwrap();
+        assert_eq!((a.cpu.r.CS.selector, a.cpu.r.EIP), (0x1000, 0));
+        let r = &mut a.cpu.r;
+        for p in [&mut r.EAX, &mut r.EBX, &mut r.ECX, &mut r.EDX, &mut r.ESI, &mut r.EDI, &mut r.EBP] {
+            *p = rng.next() as u32;
+        }
+        r.ESP = 0x8000 + (rng.next() as u32 & 0x3FFE);
+        let program = random_program(&mut rng, &mut a, 16);
+        bytes += program.len();
+        let mut b = a.clone();
+        let steps = 20_000;
+        let mut na = 0;
+        while na < steps && !a.cpu.halted && !a.cpu.shutdown {
+            a.step().unwrap();
+            na += 1;
+        }
+        let nb = b.run_until(steps, |s| s.cpu.halted || s.cpu.shutdown).unwrap();
+        compiled += usize::from(b.cpu.compiled_runs() > 0);
+        assert_eq!(a.cpu.r, b.cpu.r, "program {seed}: registers after {na} / {nb} steps ({program:02x?})");
+        assert_eq!(na, nb, "program {seed}: steps made");
+        made += na;
+        assert_eq!(a.now(), b.now(), "program {seed}: time");
+        let (ra, rb) = (&a.board().ram.cells.clone(), &b.board().ram.cells);
+        if let Some(k) = (0..ra.len()).find(|&k| ra[k] != rb[k]) {
+            panic!("program {seed}: RAM differs at {k:05x}: {:02x} stepped, {:02x} run ({program:02x?})", ra[k], rb[k]);
+        }
+    }
+    eprintln!("{} ({}): {compiled} of 200 programs compiled, {made} steps, {bytes} bytes of code", machine_board386_vga::system::PROFILE, machine_board386_vga::system::CORE);
+}

@@ -28,14 +28,14 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n"
+        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n"
     }
 
     pub(crate) fn jit_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n"
+        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n"
     }
 
     /// The trace's fields for compiled code (inside `Trace`).
@@ -180,6 +180,7 @@ impl Gen<'_> {
         // compiled code runs.
         let f: extern "C" fn(*mut Self, u32) -> u32 = unsafe {{ std::mem::transmute(c) }};
         let n = f(self as *mut Self, from);
+        self.jit_pending = false;
         if self.jit_last != 0 {{
             // SAFETY: a step of this machine's run, which is live.
             self.last = Some(unsafe {{ *(self.jit_last as usize as *const Instr) }});
@@ -265,10 +266,35 @@ impl Gen<'_> {
         let mut out = String::new();
         // Kind rules and fns may use each other: a second pass sees what
         // the first lowered.
+        self.jit_find_raisers();
+        self.jit_find_outlined();
+        out.push_str(&self.jit_outlined_shims()?);
+        let _ = self.jit_lower_units();
         let _ = self.jit_lower_kinds();
         let _ = self.jit_lower_fns();
+        out.push_str(&self.jit_lower_units());
         out.push_str(&self.jit_lower_kinds());
         out.push_str(&self.jit_lower_fns());
+        self.jit_report();
+        // A fault raised by lowered code: delivered as the step's tail
+        // delivers it, then the run ends there.
+        for f in &self.isa.faults {
+            let n = ident(&f.name);
+            let mut ps = String::new();
+            let mut args = Vec::new();
+            for (i, (_, t)) in f.params.iter().enumerate() {
+                let _ = write!(ps, ", a{i}: u64");
+                args.push(match t {
+                    Ty::Bool => format!("a{i} != 0"),
+                    t => format!("a{i} as {}", self.rty(t)?),
+                });
+            }
+            let ctor = if args.is_empty() { format!("Fault::{n}") } else { format!("Fault::{n}({})", args.join(", ")) };
+            let _ = write!(
+                out,
+                "    #[allow(clippy::all)]\n    extern \"C\" fn jit_raise_{n}(m: *mut Self{ps}) -> u64 {{\n        // SAFETY: called by compiled code with its machine; `jit_last` is\n        // the step's instruction, in its run.\n        let m = unsafe {{ &mut *m }};\n        if m.jit_last != 0 {{\n            m.last = Some(unsafe {{ *(m.jit_last as usize as *const Instr) }});\n            m.jit_last = 0;\n        }}\n        m.decoded = true;\n        m.last_fault = None;\n        let r = m.jit_tail(m.tr_phys, Err({ctor}));\n        m.bus.after_step();\n        if let Err(f) = r {{\n            m.jit_err = Some(f);\n        }}\n        1\n    }}\n"
+            );
+        }
         // The instructions that lower.
         let mut lowered = Vec::new();
         let mut quiet = Vec::new();
@@ -304,7 +330,7 @@ impl Gen<'_> {
         let mut latch_resets = String::new();
         let mut latches_ok = true;
         for l in &self.isa.latches {
-            let lx = super::lower::Lx { locals: &[], ops: None, src: None };
+            let lx = super::lower::Lx { locals: &[], ops: None, src: None, timing: false };
             match self.jexpr(&lx, &l.init) {
                 Ok(v) => {
                     let _ = writeln!(
@@ -317,9 +343,14 @@ impl Gen<'_> {
                 Err(_) => latches_ok = false,
             }
         }
-        let lowers = gate_lowers && latches_ok && ist.lock.is_none();
+        let lowers = latches_ok;
+        // A step decoded with the lock prefix: the interpreter checks it.
+        let locked = match ist.lock {
+            Some(l) => format!("s.l_{} == 1", ident(&self.prog.item_name(l))),
+            None => "false".to_string(),
+        };
         let boundary = match ist.boundary {
-            _ if !lowers => String::new(),
+            _ if !lowers || !gate_lowers => String::new(),
             Some(b) => format!(
                 "        let taken = Self::jf_{}(e);\n        e.exit_if(taken, true, |e| {{ let _ = e.call(Self::jit_interrupt_c as *const () as usize, &[], machine_jit::N::U64, false); }});\n",
                 ident(&self.fns[&b].name)
@@ -503,6 +534,23 @@ impl Gen<'_> {
             r
         }}, |e| Self::jm_access(e, a, v, rest, b, shim, pure))
     }}
+    /// `step`'s prologue, for a lowered step whose gate does not lower: 0
+    /// when the instruction is to run, else 1 (the step was made another
+    /// way: reset, shut down, an interrupt, halted).
+    extern "C" fn jit_gate_c(m: *mut Self) -> u64 {{
+        // SAFETY: called by compiled code with its machine.
+        let m = unsafe {{ &mut *m }};
+        m.jit_go = false;
+        let r = m.jit_prologue();
+        if !m.jit_go {{
+            m.bus.after_step();
+            if let Err(f) = r {{
+                m.jit_err = Some(f);
+            }}
+            return 1;
+        }}
+        0
+    }}
     /// A step made by its prologue alone (shut down, halted).
     extern "C" fn jit_idle_c(m: *mut Self) -> u64 {{
         // SAFETY: called by compiled code with its machine.
@@ -543,7 +591,7 @@ impl Gen<'_> {
         let instr = s.instr;
         // Is the instruction lowered? (Its timing is emitted after the
         // prologue, so only the shape is asked here.)
-        if !Self::jit_lowers(&instr) {{
+        if !Self::jit_lowers(&instr) || {locked} {{
             let r = e.call(Self::jit_step_fn(&s.instr), &[(machine_jit::V::K(j as *const JitStep as usize as u128), machine_jit::N::U64)], machine_jit::N::U32, false);
             e.exit_on(r);
             return false;
@@ -573,6 +621,12 @@ impl Gen<'_> {
         e.store(std::mem::offset_of!(Self, cycles), machine_jit::N::U32, machine_jit::V::K(0));
         e.store(std::mem::offset_of!(Self, accesses), machine_jit::N::U8, machine_jit::V::K(0));
         e.store(std::mem::offset_of!(Self, win_len), machine_jit::N::U32, machine_jit::V::K(0));
+        if !{gate_lowers} {{
+            // The prologue's gate as the interpreter makes it (the reset
+            // line, shutdown, the boundary fn, halted).
+            let r = e.call(Self::jit_gate_c as *const () as usize, &[], machine_jit::N::U32, false);
+            e.exit_on(r);
+        }} else {{
 {latch_resets}        if !follows {{
             let sd = e.load(std::mem::offset_of!(Self, shutdown), machine_jit::N::Bool);
             e.exit_if(sd, true, |e| {{ let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, false); }});
@@ -585,6 +639,7 @@ impl Gen<'_> {
             e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, halted), n: machine_jit::N::Bool, bump: 0 }})
         }};
         e.exit_if(h, true, |e| {{ let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, false); }});
+        }}
         e.store(std::mem::offset_of!(Self, tr_rec_now), machine_jit::N::Bool, machine_jit::V::K(0));
         // The state as decoding left it.
         e.store(std::mem::offset_of!(Self, fetched), machine_jit::N::U8, machine_jit::V::K(s.len as u128));
@@ -633,6 +688,9 @@ impl Gen<'_> {
         }}
         // The instruction: its timing entry on the state before it, then
         // its semantics.
+        // `last`, as `run_<name>` sets it before the instruction runs (a
+        // fault delivered from the semantics sees it).
+        e.store(std::mem::offset_of!(Self, jit_last), machine_jit::N::U64, machine_jit::V::K(&s.instr as *const Instr as usize as u128));
         let Some((timing, body, after)) = Self::jit_instr(instr, j.phys) else {{ unreachable!() }};
         let mut entry = |e: &mut machine_jit::Em, timing: Box<dyn FnOnce(&mut machine_jit::Em) -> machine_jit::V>| {{
             let t = timing(e);
@@ -679,7 +737,6 @@ impl Gen<'_> {
         e.store(bus + b.code_time, machine_jit::N::U128, machine_jit::V::K(0));
         e.store(bus + b.direct_code, machine_jit::N::U64, machine_jit::V::K(u64::MAX as u128));
         e.store(std::mem::offset_of!(Self, decoded), machine_jit::N::Bool, machine_jit::V::K(1));
-        e.store(std::mem::offset_of!(Self, jit_last), machine_jit::N::U64, machine_jit::V::K(&s.instr as *const Instr as usize as u128));
         if (b.events && !quiet) || (!b.idle && b.due.is_none()) {{
             let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, false);
         }} else if let (false, Some(due)) = (b.idle, b.due) {{

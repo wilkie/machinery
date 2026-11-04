@@ -184,6 +184,9 @@ impl Engine {
         let name = format!("run{}", self.next);
         self.next += 1;
         let id = m.declare_function(&name, Linkage::Local, &ctx.func.signature).ok()?;
+        if std::env::var_os("MACHINE_JIT_CLIF").is_some() {
+            eprintln!("machine-jit: {name} ({steps} steps), IR:\n{}", ctx.func.display());
+        }
         let dump = std::env::var_os("MACHINE_JIT_DUMP").is_some();
         if dump {
             ctx.set_disasm(true);

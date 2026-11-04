@@ -154,6 +154,9 @@ pub enum Place {
     Bits { off: usize, reg: N, shift: u32, width: u32, n: N, bump: u8 },
     /// A local.
     Local(Slot),
+    /// A field of element `index` of an array of `count` elements of
+    /// `stride` bytes at `base`: the field at `off` within it, of type `n`.
+    Elem { base: usize, stride: usize, count: usize, off: usize, index: V, n: N, bump: u8 },
     /// The first arm whose patterns match `scrut` (of type `n`).
     Switch { scrut: V, n: N, arms: Vec<(Vec<Pat>, Place)> },
 }
@@ -216,6 +219,9 @@ pub enum Op {
     Le,
     Gt,
     Ge,
+    /// Division and remainder (a zero divisor traps, where Rust panics).
+    Div,
+    Rem,
 }
 
 /// Builds one compiled run (see the module docs).
@@ -427,6 +433,17 @@ impl<'a, 'f> Em<'a, 'f> {
             }
             Place::Local(s) => self.get(*s),
             Place::Switch { scrut, n, arms } => self.read_switch(*scrut, *n, arms),
+            Place::Elem { base, stride, count, off, index, n, bump } => match index {
+                V::K(k) if (*k as usize) < *count => self.read(&Place::Mem { off: base + (*k as usize) * stride + off, n: *n, bump: *bump }),
+                V::K(_) => {
+                    self.trap();
+                    V::K(0)
+                }
+                V::D(_) => {
+                    let a = self.elem_addr(*base, *stride, *count, *off, *index, false);
+                    V::D(self.b.ins().load(n.ir(), MemFlags::trusted(), a, 0))
+                }
+            },
         }
     }
 
@@ -443,7 +460,7 @@ impl<'a, 'f> Em<'a, 'f> {
 
     fn place_n(&self, p: &Place) -> N {
         match p {
-            Place::Mem { n, .. } | Place::Bits { n, .. } => *n,
+            Place::Mem { n, .. } | Place::Bits { n, .. } | Place::Elem { n, .. } => *n,
             Place::Local(s) => self.slots[s.0].n,
             Place::Switch { arms, .. } => arms.first().map(|(_, p)| self.place_n(p)).unwrap_or(N::U8),
         }
@@ -473,6 +490,16 @@ impl<'a, 'f> Em<'a, 'f> {
             }
             Place::Local(s) => self.set(*s, v),
             Place::Switch { scrut, n, arms } => self.write_switch(*scrut, *n, arms, v),
+            Place::Elem { base, stride, count, off, index, n, bump } => match index {
+                V::K(k) if (*k as usize) < *count => self.write(&Place::Mem { off: base + (*k as usize) * stride + off, n: *n, bump: *bump }, v),
+                V::K(_) => self.trap(),
+                V::D(_) => {
+                    let a = self.elem_addr(*base, *stride, *count, *off, *index, true);
+                    let x = self.val(v, *n);
+                    self.b.ins().store(MemFlags::trusted(), x, a, 0);
+                    self.bump(*bump);
+                }
+            },
         }
     }
 
@@ -498,6 +525,45 @@ impl<'a, 'f> Em<'a, 'f> {
     /// by its flags (1, 2, 4: the first, second, third).
     pub fn set_epochs(&mut self, offs: [usize; 3]) {
         self.epochs = Some(offs);
+    }
+
+    /// The code that reaches here stops the host (the interpreter would
+    /// panic: `unreachable`, an index out of bounds).
+    pub fn trap(&mut self) {
+        if !self.live {
+            return;
+        }
+        self.flush();
+        self.b.ins().trap(cranelift_codegen::ir::TrapCode::user(2).unwrap());
+        self.live = false;
+    }
+
+    /// The address of an array element's field, after its bounds check;
+    /// what the emitter remembers of the array is written first (and, for
+    /// a store, forgotten).
+    fn elem_addr(&mut self, base: usize, stride: usize, count: usize, off: usize, index: V, write: bool) -> Value {
+        let len = stride * count;
+        let hit: Vec<(usize, N)> = self.dirty.iter().copied().filter(|(o, _)| *o >= base && *o < base + len).collect();
+        if !hit.is_empty() {
+            self.flush();
+        }
+        if write {
+            self.regs.retain(|(o, _), _| !(*o >= base && *o < base + len));
+        }
+        let i = self.val(index, N::U64);
+        let ok = self.b.ins().icmp_imm(IntCC::UnsignedLessThan, i, count as i64);
+        let in_b = self.b.create_block();
+        let out_b = self.b.create_block();
+        self.b.ins().brif(ok, in_b, &[], out_b, &[]);
+        self.b.seal_block(in_b);
+        self.b.seal_block(out_b);
+        self.b.switch_to_block(out_b);
+        self.b.ins().trap(cranelift_codegen::ir::TrapCode::user(3).unwrap());
+        self.b.switch_to_block(in_b);
+        let scaled = self.b.ins().imul_imm(i, stride as i64);
+        let m = self.base();
+        let a = self.b.ins().iadd(m, scaled);
+        self.b.ins().iadd_imm(a, (base + off) as i64)
     }
 
     /// Whether a write bumped an epoch since the last call.
@@ -594,8 +660,12 @@ impl<'a, 'f> Em<'a, 'f> {
     /// A new local of type `n`, holding `v`.
     pub fn local(&mut self, n: N, v: V) -> Slot {
         let var = self.b.declare_var(n.ir());
-        let zero = self.konst(n, 0);
-        self.b.def_var(var, zero);
+        // Past an exit or a trap nothing is emitted (the slot is never
+        // read by code that runs).
+        if self.live {
+            let zero = self.konst(n, 0);
+            self.b.def_var(var, zero);
+        }
         self.slots.push(SlotState { var, n, k: Some(0) });
         let s = Slot(self.slots.len() - 1);
         self.set(s, v);
@@ -897,6 +967,11 @@ impl<'a, 'f> Em<'a, 'f> {
             return V::K(0);
         }
         if let (V::K(x), V::K(y)) = (a, b) {
+            // A known zero divisor: the code that reaches it traps.
+            if matches!(op, Op::Div | Op::Rem) && y & n.mask() == 0 {
+                self.trap();
+                return V::K(0);
+            }
             return V::K(fold(op, x, y, n));
         }
         // Identities that keep a value known.
@@ -922,6 +997,15 @@ impl<'a, 'f> Em<'a, 'f> {
             Op::Mul => {
                 let y = self.val(b, n);
                 self.b.ins().imul(x, y)
+            }
+            Op::Div | Op::Rem => {
+                let y = self.val(b, n);
+                match (op, n.signed()) {
+                    (Op::Div, false) => self.b.ins().udiv(x, y),
+                    (Op::Div, true) => self.b.ins().sdiv(x, y),
+                    (_, false) => self.b.ins().urem(x, y),
+                    (_, true) => self.b.ins().srem(x, y),
+                }
             }
             Op::And => {
                 let y = self.val(b, n);
@@ -1154,6 +1238,20 @@ fn fold(op: Op, x: u128, y: u128, n: N) -> u128 {
         Op::Add => x.wrapping_add(y),
         Op::Sub => x.wrapping_sub(y),
         Op::Mul => x.wrapping_mul(y),
+        Op::Div | Op::Rem => {
+            let y = y & m;
+            if y == 0 {
+                return 0;
+            }
+            if n.signed() {
+                let (a, b) = (sx, n.widen(y));
+                (if op == Op::Div { a.wrapping_div(b) } else { a.wrapping_rem(b) }) as u128
+            } else if op == Op::Div {
+                x / y
+            } else {
+                x % y
+            }
+        }
         Op::And => x & y,
         Op::Or => x | y,
         Op::Xor => x ^ y,

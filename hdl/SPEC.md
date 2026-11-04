@@ -1105,7 +1105,12 @@ evaluated in the context of the instruction's flag conditions: its
 operands (shapes and values), registers and latches on the state before
 it runs, and the isa's fns. `restarted()` is true when the step starts
 where the previous one did, which is how a repeated string instruction's
-later iterations are told from its first. An entry for a prefix is added
+later iterations are told from its first. `repeats()` is true when the
+step leaves the istream's address where it started: a repeating block
+instruction (the Z80's LDIR, CPIR) that runs again. Whether it does is
+known only after it ran, so an entry that uses `repeats()` is evaluated
+after the instruction (CPIR stops early on a match, which the state
+before cannot tell without reading memory). An entry for a prefix is added
 for each prefix byte decoded. `fault` is added when a fault is delivered,
 with the fault's `vector` in scope; `interrupt` is the cost of taking an
 interrupt at an instruction boundary. An instruction without an entry
@@ -1131,6 +1136,18 @@ The interpreter computes a step's cycles and hands them to the bus
 an instruction its data transfers plus the larger of its code fetches and
 its execution cycles: execution overlaps prefetching, so an instruction
 whose execution is shorter than its fetches costs its fetches (section 12).
+A processor with no prefetch says so in its table:
+
+```
+fetch => serial;
+```
+
+and then an instruction costs its code fetches, its data transfers and its
+execution cycles in turn (`fetch => overlapped;` is the default). The
+Z80's table (`targets/z80/timing.machine`) is of this kind: its transfers
+are three T-states each, and each entry carries the instruction's internal
+clocks plus one for each opcode fetch's refresh clock, so a board built
+with it is exact to the T-state, as all 1.6 million of its vectors are.
 
 The table is meant to be **measured**, not typed in from a datasheet.
 For the i286 it comes from the SingleStepTests cycle traces
@@ -1734,8 +1751,11 @@ Built into the language and the compiler:
    the rig, not the processor. `harness_cycles 1;` is how many cycles of
    each captured cycle trace belong to the rig (its start and end) rather
    than to the instruction. With a trace, a vector's measured execution
-   cycles are its cycles not spent in bus cycles (two clocks each on the
-   286), less the harness's; `machine vectors --timing` compares them with
+   cycles are its cycles not spent in bus transfers, less the harness's.
+   `transfer_cycles 3;` is how many clocks a transfer takes (by default two,
+   the 286's and 386's Ts and Tc, for `moo`; one for `json`, whose 8-bit
+   processors' traces mostly make a transfer a clock; three for the Z80's
+   T1 to T3); `machine vectors --timing` compares them with
    the timing table and reports exact and within-one-cycle shares per file
    and the worst instructions, and `--fit` suggests table entries.
    The generated runner loads the initial state, steps until `halt`,
@@ -1754,7 +1774,10 @@ Built into the language and the compiler:
    place it maps to. `ports io;` names the space the ports are on: a port
    the test reads answers its value, and one it writes is compared after.
    A JSON test is one instruction (one iteration of a repeating one), so
-   the runner makes one step rather than running to a `halt`.
+   the runner makes one step rather than running to a `halt`. Its trace is
+   a clock an entry, with the read or write strobe on one clock of each
+   transfer; a read whose next clock shows another address is an opcode
+   fetch (the refresh address follows it).
 5. **Conformance (differential)**: for every component with two levels, the
    compiler generates a harness that runs both from the same initial state
    and stimulus and compares the architectural projection (processors) at

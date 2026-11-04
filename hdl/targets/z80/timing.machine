@@ -1,0 +1,144 @@
+// Clocks (T-states) of each Z80 instruction beyond its bus transfers,
+// measured from the SingleStepTests Z80 cycle traces (one entry a clock).
+//
+// A transfer is three clocks (T1 to T3, `transfer_cycles 3` in the
+// vectors): an opcode fetch's fourth clock (the refresh) and an I/O
+// transfer's automatic wait state are counted here, with the processor's
+// internal clocks. So every entry includes one clock for each M1 cycle
+// it makes: a DD or FD prefix costs its one (`IndexIx`, `IndexIy`), a CB
+// or ED page one more. `machine vectors --isa Z80 --fit` suggested every
+// entry; the data-dependent ones are:
+//
+// - JR cc, CALL cc and DJNZ by whether they transfer (RET cc costs a clock
+//   more than RET either way).
+// - CB-page instructions on (HL) read it in a four-clock cycle.
+// - A repeating block instruction (LDIR, CPIR, INIR, OTIR and their
+//   decrementing forms) costs five clocks more on an iteration that runs
+//   again (`repeats()`).
+//
+// Interrupts are not taken yet, so the table has no `interrupt` entry.
+
+use z80::{Z80};
+
+timing on Z80 {
+    /// No prefetch: an instruction's clocks follow its fetches.
+    fetch => serial;
+    IndexIx => 1;
+    IndexIy => 1;
+
+    // 8-bit loads.
+    Ld_r_r => 1;
+    Ld_r_n => 1;
+    Ld_r_hl => 1;
+    Ld_hl_r => 1;
+    Ld_hl_n => 1;
+    Ld_r_ix => 6;
+    Ld_ix_r => 6;
+    Ld_ix_n => 3;
+    Ld_a_bc => 1;
+    Ld_a_de => 1;
+    Ld_bc_a => 1;
+    Ld_de_a => 1;
+    Ld_a_nn => 1;
+    Ld_nn_a => 1;
+    Ld_a_i => 3;
+    Ld_a_r => 3;
+    Ld_i_a => 3;
+    Ld_r_a => 3;
+
+    // 16-bit loads and the stack.
+    Ld_rp_nn => 1;
+    Ld_hl_inn => 1;
+    Ld_inn_hl => 1;
+    Ld_rp_inn => 2;
+    Ld_inn_rp => 2;
+    Ld_sp_hl => 3;
+    Push => 2;
+    Pop => 1;
+    Ex_de_hl => 1;
+    Ex_af_af => 1;
+    Exx => 1;
+    Ex_sp_hl => 4;
+
+    // Arithmetic.
+    Alu_r => 1;
+    Alu_n => 1;
+    Alu_hl => 1;
+    Alu_ix => 6;
+    Inc_r => 1;
+    Dec_r => 1;
+    Inc_hl => 2;
+    Dec_hl => 2;
+    Inc_ix => 7;
+    Dec_ix => 7;
+    Inc_rp => 3;
+    Dec_rp => 3;
+    Add_hl_rp => 8;
+    Adc_hl_rp => 9;
+    Sbc_hl_rp => 9;
+    Daa => 1;
+    Cpl => 1;
+    Neg => 2;
+    Ccf => 1;
+    Scf => 1;
+
+    // Rotates and bits.
+    Rlca => 1;
+    Rrca => 1;
+    Rla => 1;
+    Rra => 1;
+    Rld => 6;
+    Rrd => 6;
+    Cb_rot => if z == 6 { 3 } else { 2 };
+    Cb_bit => if z == 6 { 3 } else { 2 };
+    Cb_res => if z == 6 { 3 } else { 2 };
+    Cb_set => if z == 6 { 3 } else { 2 };
+    Ix_rot => 4;
+    Ix_bit => 4;
+    Ix_res => 4;
+    Ix_set => 4;
+
+    // Control.
+    Nop => 1;
+    Halt => 1;
+    Di => 1;
+    Ei => 1;
+    Im => 2;
+    Ed_nop => 2;
+    Jp => 1;
+    Jp_cc => 1;
+    Jp_hl => 1;
+    Jr => 6;
+    Jr_cc => if cond(c as u3) { 6 } else { 1 };
+    Djnz => if B != 1 { 7 } else { 2 };
+    Call => 2;
+    Call_cc => if cond(c) { 2 } else { 1 };
+    Ret => 1;
+    Ret_cc => 2;
+    Retn => 2;
+    Rst => 2;
+
+    // I/O.
+    In_a_n => 2;
+    In_r_c => 3;
+    Out_n_a => 2;
+    Out_c_r => 3;
+
+    // Block transfers.
+    Ldi => 4;
+    Ldd => 4;
+    Ldir => if repeats() { 9 } else { 4 };
+    Lddr => if repeats() { 9 } else { 4 };
+    Cpi => 7;
+    Cpd => 7;
+    Cpir => if repeats() { 12 } else { 7 };
+    Cpdr => if repeats() { 12 } else { 7 };
+    Ini => 4;
+    Ind => 4;
+    Inir => if repeats() { 9 } else { 4 };
+    Indr => if repeats() { 9 } else { 4 };
+    Outi => 4;
+    Outd => 4;
+    Otir => if repeats() { 9 } else { 4 };
+    Otdr => if repeats() { 9 } else { 4 };
+}

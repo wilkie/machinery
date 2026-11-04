@@ -1389,6 +1389,14 @@ impl Parser {
                     span: start.to(self.prev_span()),
                 })
             }
+            "transfer_cycles" => {
+                let value = self.parse_expr()?;
+                self.expect_semi()?;
+                Ok(VectorsItem::TransferCycles {
+                    value,
+                    span: start.to(self.prev_span()),
+                })
+            }
             "reg" => {
                 let name = self.expect_ident()?;
                 if self.eat_punct(Punct::Eq) {
@@ -1419,7 +1427,7 @@ impl Parser {
             other => Err(self.error(
                 "E0107",
                 key.span,
-                format!("unknown `vectors` item `{other}`; expected `format`, `memory`, `ports`, `open`, `harness_cycles` or `reg`"),
+                format!("unknown `vectors` item `{other}`; expected `format`, `memory`, `ports`, `open`, `harness_cycles`, `transfer_cycles` or `reg`"),
             )),
         }
     }

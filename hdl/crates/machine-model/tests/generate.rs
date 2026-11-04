@@ -760,6 +760,11 @@ fn target_z80(name: &str) -> SourceFile {
 /// vectors: a file from each page and prefix (the whole corpus, 1.6
 /// million vectors, is `machine vectors --isa Z80 targets/z80/z80.machine`).
 /// Skipped without the corpus.
+/// A file from each page and prefix, and the instructions whose timing
+/// depends on data (DJNZ, JR cc, CALL cc, the CB page on (HL), the
+/// repeating block instructions).
+const Z80_FILTER: &str = "00,0a,10,27,28,37,3f,76,86,c3,cd,d4,db,e3,cb 06,cb 46,cb 7e,dd 21,dd 34,dd 7e,dd e3,dd cb __ 06,fd cb __ 46,ed 42,ed 4a,ed 57,ed 67,ed a1,ed b0,ed b1,ed b2,ed bb";
+
 #[test]
 fn z80_target_passes_hardware_vectors() {
     let root = hdl_root();
@@ -768,7 +773,7 @@ fn z80_target_passes_hardware_vectors() {
         eprintln!("SingleStepTests Z80 corpus not found at {}; skipping hardware vectors", vectors.display());
         return;
     }
-    let checked = check_files(vec![target_z80("z80.machine")]);
+    let checked = check_files(vec![target_z80("z80.machine"), target_z80("timing.machine")]);
     assert!(!checked.has_errors());
     let src = generate_isa(&checked, "Z80").unwrap_or_else(|e| panic!("{e}"));
     let crate_ = package(&crate_name("Z80"), src, &root.join("crates").join("machine-runtime"));
@@ -784,7 +789,7 @@ fn z80_target_passes_hardware_vectors() {
         .arg(&vectors)
         .args([
             "--filter",
-            "00,0a,10,27,37,3f,76,86,c3,cd,db,e3,cb 06,cb 46,cb 7e,dd 21,dd 34,dd 7e,dd e3,dd cb __ 06,fd cb __ 46,ed 42,ed 4a,ed 57,ed 67,ed a1,ed b0,ed b1,ed b2,ed bb",
+            Z80_FILTER,
             "--max-failures",
             "5",
         ])
@@ -794,6 +799,20 @@ fn z80_target_passes_hardware_vectors() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "Z80 vectors failed:\n{stdout}\n{stderr}");
     assert!(stdout.contains(" 0 failed"), "{stdout}");
+    // And the timing table, to the T-state.
+    let output = Command::new(&cargo)
+        .args(["run", "--quiet", "--release", "--features", "vectors", "--bin", "vectors", "--manifest-path"])
+        .arg(dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
+        .arg("--")
+        .arg("--dir")
+        .arg(&vectors)
+        .args(["--timing", "--quiet", "--filter", Z80_FILTER])
+        .output()
+        .expect("run vector timing");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let total = stdout.lines().find(|l| l.starts_with("timing:")).unwrap_or_default();
+    assert!(total.contains(" 100.0% exact"), "Z80 timing:\n{stdout}");
 }
 
 /// The Z80 board on every core (decode, emulate, trace, JIT): the checksum
@@ -801,7 +820,7 @@ fn z80_target_passes_hardware_vectors() {
 #[test]
 fn z80_board_runs_on_every_core() {
     let root = hdl_root();
-    let checked = check_files(vec![target_z80("z80.machine"), target_z80("board.machine")]);
+    let checked = check_files(vec![target_z80("z80.machine"), target_z80("timing.machine"), target_z80("board.machine")]);
     assert!(!checked.has_errors());
     for profile in ["fast", "emulate", "trace", "jit"] {
         let src = generate_system(&checked, "BoardZ80", Some(profile)).unwrap_or_else(|e| panic!("{e}"));

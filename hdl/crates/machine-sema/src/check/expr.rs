@@ -2043,7 +2043,7 @@ impl Checker<'_> {
                 err(span)
             }
             Builtin::Schedule => self.check_schedule(cx, args, span),
-            Builtin::Restarted => {
+            Builtin::Restarted | Builtin::Repeats => {
                 if !cx.in_timing {
                     self.error(
                         cx.module,

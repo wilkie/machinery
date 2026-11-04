@@ -1,6 +1,7 @@
 //! Drives the crate generated from `board.machine`'s `BoardZ80` (any of its
 //! profiles: the decode, trace and JIT cores must agree): a checksum
-//! program, checked against the same computation in Rust.
+//! program, checked against the same computation in Rust, and its time
+//! against the T-states the Z80's datasheet gives its instructions.
 
 use machine_board_z80::system::System;
 
@@ -22,6 +23,25 @@ fn boot(program: &[u8]) -> System {
     sys.reset();
     sys
 }
+
+/// The program's T-states, from the datasheet's instruction timings (a
+/// conditional jump's taken / not-taken pair as `12/7`): the setup; the
+/// fill loop, 4096 times (LD (HL),A 7, RLCA 4, ADD A,n 7, INC HL 6, DEC BC
+/// 6, four 4-state loads and OR, JR NZ 12/7); LD HL,nn and LD (nn),HL; 1024
+/// passes, each LD IX,nn 14, LD HL,nn 10, LD B,n 7, 256 pairs (LD A,(IX+d)
+/// 19, RLC A 8, XOR (IX+d) 19, LD E,A 4, LD D,n 7, ADD HL,DE 11, INC IX 10
+/// twice, CALL 17 to LD A,H, XOR L, LD L,A 4 each and RET 10, DJNZ 13/8),
+/// then LD (nn),HL 16, LD HL,(nn) 16, DEC HL 6, LD (nn),HL 16, LD A,H 4,
+/// OR L 4, JR NZ 12/7; three LD rr,nn 10; LDIR over 4096 bytes (21 an
+/// element, 16 the last); HALT 4.
+const T_STATES: u64 = {
+    let setup = 10 + 10 + 10 + 7;
+    let fill = 4096 * (7 + 4 + 7 + 6 + 6 + 4 * 4 + 12) - 5;
+    let pair = 19 + 8 + 19 + 4 + 7 + 11 + 10 + 10 + 17 + (4 + 4 + 4 + 10) + 13;
+    let pass = 14 + 10 + 7 + (256 * pair - 5) + 16 + 16 + 6 + 16 + 4 + 4 + 12;
+    let copy = 3 * 10 + 4095 * 21 + 16;
+    setup + fill + 10 + 16 + (1024 * pass - 5) + copy + 4
+};
 
 /// The program's computation, in Rust: the pattern, and one pass's sum.
 fn expected() -> (Vec<u8>, u16) {
@@ -52,6 +72,8 @@ fn checksum_program_runs() {
     assert_eq!(&ram[0x2000..0x3000], &pattern[..], "copied by LDIR");
     assert_eq!(u16::from_le_bytes([ram[0xE002], ram[0xE003]]), sum, "the sum");
     assert_eq!((ram[0xE000], ram[0xE001]), (0, 0), "every pass made");
+    // The board's clock is 4 MHz.
+    assert_eq!((sys.seconds() * 4e6).round() as u64, T_STATES, "T-states");
     eprintln!("{} ({}): {n} instructions, {:.4} s emulated", machine_board_z80::system::PROFILE, machine_board_z80::system::CORE, sys.seconds());
 }
 

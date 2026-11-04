@@ -894,6 +894,7 @@ impl<'a> Gen<'a> {
             }
             Builtin::Sync => return Err(GenError::new("`sync` in an isa")),
             Builtin::Restarted => format!("{}.restarted", cx.recv),
+            Builtin::Repeats => format!("{}.repeats_now()", cx.recv),
             Builtin::Schedule => return Err(GenError::new("`schedule` is lowered by sema")),
         })
     }
@@ -2973,6 +2974,10 @@ impl<'a> Gen<'a> {
         s.push_str("        } Ok(m) })();\n        r.unwrap_or(0)\n    }\n");
 
         // timing
+        let address = self.isa.istream.as_ref().map(|st| ident(&self.fns[&st.address].name));
+        if let Some(a) = &address {
+            let _ = write!(s, "    /// `repeats()`: the step left the istream's address where it started.\n    #[allow(dead_code)]\n    fn repeats_now(&mut self) -> bool {{\n        self.fn_{a}().map(|a| a as u64).unwrap_or(u64::MAX) == self.last_start\n    }}\n");
+        }
         s.push_str("    /// Execution cycles of `i` beyond its bus transfers (its timing entry, on the state\n    /// before it runs; 0 without one).\n    pub fn timing_of(&mut self, i: &Instr) -> u32 {\n        let r: Result<u32, Fault> = (|| Ok(match *i {\n");
         let mut sched = String::from("    /// The schedule of `i` (its timing entry, on the state before it runs; a plain\n    /// count is all work before any step).\n    pub fn schedule_of(&mut self, i: &Instr) -> Schedule {\n        let r: Result<Schedule, Fault> = (|| Ok(match *i {\n");
         let any_schedule = instrs.iter().any(|i| i.schedule.is_some());
@@ -3042,10 +3047,19 @@ impl<'a> Gen<'a> {
                     ""
                 };
                 let call = self.exec_call(i);
+                let entry_now = format!("        self.entry_cycles = {{ let r: Result<u32, Fault> = (|| Ok({text}))(); r.unwrap_or(0) }};\n        self.cycles = self.entry_cycles + self.prefix_cycles;\n");
+                // An entry that asks whether the step repeats is evaluated
+                // after the instruction ran (a fault's delivery adds its
+                // cost to whatever the entry then gives).
+                let (entry, call) = if text.contains(".repeats_now()") {
+                    (String::new(), format!("        self.cycles = self.prefix_cycles;\n        let r = {{ {call} }};\n        if r.is_ok() {{\n{entry_now}        }}\n        r\n"))
+                } else {
+                    (entry_now, format!("        {call}\n"))
+                };
                 let rec = if self.trace.is_some() { "        if self.tr_rec_now { self.trace_record(i); }\n" } else { "" };
                 let _ = write!(
                     run_fns,
-                    "    #[inline]\n    #[allow(unused_variables, clippy::redundant_closure_call)]\n    fn run_{n}(&mut self, ops: {ops_ty}) -> Result<(), Fault> {{\n        let i = Instr::{n}(ops);\n        self.last = Some(i);\n        self.decoded = true;\n{rec}{sched_part}        self.entry_cycles = {{ let r: Result<u32, Fault> = (|| Ok({text}))(); r.unwrap_or(0) }};\n        self.cycles = self.entry_cycles + self.prefix_cycles;\n{lock_part}        {call}\n    }}\n"
+                    "    #[inline]\n    #[allow(unused_variables, clippy::redundant_closure_call)]\n    fn run_{n}(&mut self, ops: {ops_ty}) -> Result<(), Fault> {{\n        let i = Instr::{n}(ops);\n        self.last = Some(i);\n        self.decoded = true;\n{rec}{sched_part}{entry}{lock_part}{call}    }}\n"
                 );
             }
             let _ = writeln!(
@@ -3462,6 +3476,7 @@ impl<'a> Gen<'a> {
         let isa_name = ident(&self.isa.name);
         let mem = ident(&self.spaces[&v.memory].name);
         let harness = v.harness_cycles;
+        let transfer = v.transfer_cycles;
         let undefined = match self.isa.istream.as_ref().and_then(|s| s.undefined) {
             Some(f) => format!("Fault::{}", ident(&self.faults[&f].name)),
             None => {
@@ -3732,6 +3747,8 @@ pub mod vectors {{
 
     /// Cycles of each trace that belong to the capture rig.
     pub const HARNESS_CYCLES: u32 = {harness};
+    /// Clocks a bus transfer of a trace takes (`transfer_cycles`).
+    pub const TRANSFER_CYCLES: u32 = {transfer};
 
     /// One vector's timing: the table's prediction against the trace.
     #[derive(Debug, Clone)]
@@ -3769,8 +3786,8 @@ pub mod vectors {{
         let mut fault_vector: Option<u8> = None;
         let mut timed = true;
         let mut dynamic: i64 = 0;
-        for _ in 0..4096 {{
-            if m.halted {{ break; }}
+{load_ports}        for _ in 0..(if JSON {{ 1 }} else {{ 4096 }}) {{
+            if m.halted && !JSON {{ break; }}
             if m.step().is_err() {{ return None; }}
             // The rig's HALT is the harness's, not the instruction's.
             if m.halted && started {{ break; }}
@@ -3780,7 +3797,7 @@ pub mod vectors {{
                 // Faulted before an instruction decoded (an undefined
                 // opcode): only the delivery is timed.
                 if first.is_none() {{
-                    return Some(TimingSample {{ name: "(fault while decoding)", features: Vec::new(), dynamic: 0, predicted: m.cycles as i64, measured: c.execution(HARNESS_CYCLES), fault: true, fault_vector: m.last_fault.as_ref().and_then(|f| f.vector()), timed: true }});
+                    return Some(TimingSample {{ name: "(fault while decoding)", features: Vec::new(), dynamic: 0, predicted: m.cycles as i64, measured: c.execution(HARNESS_CYCLES, TRANSFER_CYCLES), fault: true, fault_vector: m.last_fault.as_ref().and_then(|f| f.vector()), timed: true }});
                 }}
             }}
             if let Some(i) = &m.last {{
@@ -3792,14 +3809,14 @@ pub mod vectors {{
             if let Some(f) = &m.last_fault {{ fault_vector = f.vector(); }}
             predicted += m.cycles as i64;
         }}
-        if !m.halted {{ return None; }}
+        if !JSON && !m.halted {{ return None; }}
         let i = first?;
         Some(TimingSample {{
             name: <{isa_name}>::instr_name(&i),
             features: pre.timing_features(&i),
             dynamic,
             predicted,
-            measured: c.execution(HARNESS_CYCLES),
+            measured: c.execution(HARNESS_CYCLES, TRANSFER_CYCLES),
             fault,
             fault_vector,
             timed,
@@ -3843,7 +3860,7 @@ pub mod vectors {{
         for path in files {{
             let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
             if !filter.is_empty() && !filter.iter().any(|p| fname.starts_with(p.as_str())) {{ continue; }}
-            let tests = match rt::vectors::read_moo(&path) {{ Ok(t) => t, Err(e) => {{ eprintln!("{{e}}"); continue; }} }};
+            let tests = match (if JSON {{ rt::vectors::read_json(&path, REGS) }} else {{ rt::vectors::read_moo(&path) }}) {{ Ok(t) => t, Err(e) => {{ eprintln!("{{e}}"); continue; }} }};
             let mut file = TimingTally::default();
             for t in &tests {{
                 if t.hash.as_ref().is_some_and(|h| revoked.contains(h)) {{ continue; }}

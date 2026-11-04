@@ -1246,6 +1246,9 @@ pub enum VectorsItem {
     /// `harness_cycles 1;`: cycles of each captured trace that belong to
     /// the rig (its start and end), not to the instruction.
     HarnessCycles { value: Expr, span: Span },
+    /// `transfer_cycles 3;`: clocks each bus transfer of a captured trace
+    /// takes (what is not execution).
+    TransferCycles { value: Expr, span: Span },
     /// `reg ax = AX;`: load assigns the place, compare reads it.
     Reg {
         name: Ident,

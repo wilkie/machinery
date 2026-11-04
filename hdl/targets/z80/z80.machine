@@ -905,6 +905,9 @@ vectors "../../../simulators/test/z80/SingleStepTests/v1/*.json" on Z80 {
     format json;
     memory mem;
     ports io;
+    /// A transfer is T1 to T3; an opcode fetch's refresh clock (T4) and an
+    /// I/O transfer's automatic wait state count as the instruction's own.
+    transfer_cycles 3;
     reg pc = PC;
     reg sp = SP;
     reg a = A;

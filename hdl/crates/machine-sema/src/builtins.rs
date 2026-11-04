@@ -24,6 +24,11 @@ pub enum Builtin {
     /// address the previous one did (a repeated string instruction's later
     /// iterations).
     Restarted,
+    /// `repeats() -> bool` in a timing expression: this step leaves the
+    /// istream's address where it started (a repeating block instruction
+    /// that runs again). An entry that uses it is evaluated after the
+    /// instruction runs.
+    Repeats,
     /// `schedule(w0, step, w1, ...) -> Schedule` in a timing expression
     /// (SPEC 11.2c).
     Schedule,
@@ -42,6 +47,7 @@ impl Builtin {
             "unreachable" => Builtin::Unreachable,
             "sync" => Builtin::Sync,
             "restarted" => Builtin::Restarted,
+            "repeats" => Builtin::Repeats,
             "schedule" => Builtin::Schedule,
             _ => return None,
         })
@@ -59,6 +65,7 @@ impl Builtin {
             Builtin::Unreachable => "unreachable",
             Builtin::Sync => "sync",
             Builtin::Restarted => "restarted",
+            Builtin::Repeats => "repeats",
             Builtin::Schedule => "schedule",
         }
     }

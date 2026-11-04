@@ -166,6 +166,7 @@ impl Checker<'_> {
             fault_cycles: None,
             interrupt_cycles: None,
             split_cycles: None,
+            serial_fetch: false,
             interrupt_schedule: None,
             fault_schedule: None,
         });
@@ -2519,6 +2520,7 @@ impl Checker<'_> {
         let mut regs: Vec<hir::VectorReg> = Vec::new();
         let mut open: Vec<(DefId, i128)> = Vec::new();
         let mut harness_cycles: u32 = 0;
+        let mut transfer_cycles: Option<u32> = None;
         let mut ports = None;
         // JSON vectors name their registers freely; each is as wide as the
         // place it maps to.
@@ -2555,6 +2557,16 @@ impl Checker<'_> {
                         }
                         Some(_) => {
                             self.error(module, "E1049", *span, "`harness_cycles` is a cycle count");
+                            ok = false;
+                        }
+                        None => ok = false,
+                    }
+                }
+                ast::VectorsItem::TransferCycles { value, span } => {
+                    match self.eval_const(scope, &HashMap::new(), value) {
+                        Some(ConstVal::Int(v)) if (1..=255).contains(&v) => transfer_cycles = Some(v as u32),
+                        Some(_) => {
+                            self.error(module, "E1049", *span, "`transfer_cycles` is a clock count from 1 to 255");
                             ok = false;
                         }
                         None => ok = false,
@@ -2737,6 +2749,7 @@ impl Checker<'_> {
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
         let glob = base.join(&d.glob.value).to_string_lossy().into_owned();
+        let transfer_cycles = transfer_cycles.unwrap_or(if format == "json" { 1 } else { 2 });
         Some(hir::VectorsInfo {
             def: id,
             isa,
@@ -2747,6 +2760,7 @@ impl Checker<'_> {
             open,
             regs,
             harness_cycles,
+            transfer_cycles,
         })
     }
 
@@ -2999,6 +3013,24 @@ impl Checker<'_> {
                 }
                 continue;
             }
+            if e.name.name == "fetch" {
+                // How code fetches combine with execution.
+                let how = match &e.value.kind {
+                    ast::ExprKind::Path(p) if p.segments.len() == 1 => Some(p.segments[0].name.as_str()),
+                    _ => None,
+                };
+                match how {
+                    Some("serial") if !d.schedules => self.isas[ii].serial_fetch = true,
+                    Some("overlapped") if !d.schedules => self.isas[ii].serial_fetch = false,
+                    _ => self.error(
+                        module,
+                        "E1055",
+                        e.name.span,
+                        "`fetch` is `serial` or `overlapped`, in a `timing` table",
+                    ),
+                }
+                continue;
+            }
             if e.name.name == "split" {
                 // A data access's extra cycles, by its address and width.
                 if d.schedules {
@@ -3059,7 +3091,7 @@ impl Checker<'_> {
                 .iter()
                 .position(|i| i.name == e.name.name)
             else {
-                let msg = format!("isa `{}` has no instruction `{}` (entries are instructions, prefixes, `fault`, `interrupt` and `split`)", d.target.dotted(), e.name.name);
+                let msg = format!("isa `{}` has no instruction `{}` (entries are instructions, prefixes, `fault`, `interrupt`, `split` and `fetch`)", d.target.dotted(), e.name.name);
                 self.error(module, "E1055", e.name.span, msg);
                 continue;
             };

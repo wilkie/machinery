@@ -579,7 +579,7 @@ impl<'a> Gen<'a> {
             sys.base_num,
             sys.base_den,
             profile.unwrap_or("default"),
-            if self.trace.is_some() { "trace" } else { "decode" },
+            if self.jit { "jit" } else if self.trace.is_some() { "trace" } else { "decode" },
             prof.is_some_and(|p| p.direct_memory)
         );
         for (i, c) in sys.clocks.iter().enumerate() {
@@ -1399,6 +1399,11 @@ impl<'a> Gen<'a> {
                     "    /// The processor model times the instruction from its schedule.\n    fn retire(&mut self, _cycles: u32, schedule: Schedule) {{\n        let c = {{\n            let mut ctx = {};\n            self.{cpu_name}.on_retire(&mut ctx, schedule)\n        }};\n        self.sig.now += c as clock::Time * clock::C{cpu_clock};\n        self.code_time = 0;\n    }}\n",
                     ctx_cpu("self")
                 );
+            } else if self.isa.serial_fetch {
+                let _ = write!(
+                bus_impl,
+                "    /// The board times instructions from their cycles: no schedule.\n    const SCHEDULE: bool = false;\n    /// Code fetches are serial with execution (`fetch => serial`): the\n    /// instruction's cycles follow them, and the next fetch is charged even\n    /// at the address of the last.\n    fn retire(&mut self, cycles: u32, _schedule: Schedule) {{\n        self.sig.now += cycles as clock::Time * clock::C{cpu_clock};\n        self.code_time = 0;\n        self.direct_code = u64::MAX;\n    }}\n"
+            );
             } else {
                 let _ = write!(
                 bus_impl,

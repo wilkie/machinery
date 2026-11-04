@@ -2,9 +2,10 @@
 // 8-bit bus, with 64 KB of RAM and I/O ports that read as all ones.
 //
 // `machine build --system BoardZ80 --out <dir> targets/z80/z80.machine
-// targets/z80/board.machine` generates the emulator crate. Time is the bus
-// cycles' (an opcode fetch four T-states, a memory or I/O transfer three);
-// the processor's own internal cycles are not modelled yet.
+// targets/z80/timing.machine targets/z80/board.machine` generates the
+// emulator crate. Time is the bus transfers' (three T-states each) and the
+// timing table's (an opcode fetch's refresh clock, an I/O wait state, the
+// processor's internal clocks): exact to the T-state for each instruction.
 
 use z80::{Z80};
 
@@ -24,13 +25,14 @@ bus Z80Bus {
     }
     roles { Master; Slave; }
 
-    /// An opcode fetch (M1): T1, T2 with the read, then T3 and T4 refresh.
+    /// An instruction-stream byte: T1, T2 with the read, T3. (An opcode
+    /// fetch's refresh clock, T4, is the timing table's.)
     transaction fetch(space: Space, addr: u16) -> (data: u8) {
         Master {
             cycle { addr = addr; mreq = true; rd = true; }
             wait until ready;
             cycle { let v = data; return v; }
-            cycle { } cycle { }
+            cycle { }
         }
     }
     /// A memory or I/O read: three T-states.

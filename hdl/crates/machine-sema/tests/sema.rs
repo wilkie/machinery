@@ -1377,6 +1377,12 @@ fn vectors_declarations() {
         &[],
     );
     assert_codes(&v("format xml; memory mem;"), &["E1049"]);
+    // Clocks a transfer takes: two for MOO traces unless said, 1 to 255.
+    let c = check_src(&v("format moo; memory mem;"));
+    assert_eq!(c.hir.vectors[0].transfer_cycles, 2);
+    let c = check_src(&v("format json; memory mem; transfer_cycles 3;"));
+    assert_eq!(c.hir.vectors[0].transfer_cycles, 3);
+    assert_codes(&v("format json; memory mem; transfer_cycles 0;"), &["E1049"]);
     // JSON vectors name their registers freely.
     assert_codes(&v("format json; memory mem; reg zz = AX;"), &[]);
     assert_codes(&v("format moo;"), &["E1049"]);
@@ -2080,6 +2086,14 @@ fn timing_tables_check() {
     // `restarted()` belongs to timing expressions.
     assert_codes(&table("Nop => if restarted() { 0 } else { 3 };"), &[]);
     assert_codes(&isa("fn f() -> bool { return restarted(); }"), &["E1020"]);
+    // `repeats()` too; and how fetches combine with execution.
+    assert_codes(&table("Nop => if repeats() { 8 } else { 3 };"), &[]);
+    assert_codes(&isa("fn f() -> bool { return repeats(); }"), &["E1020"]);
+    let c = check_src(&table("fetch => serial; Nop => 3;"));
+    assert_clean(&c);
+    assert!(c.hir.isas[0].serial_fetch);
+    assert!(!check_src(&table("fetch => overlapped;")).hir.isas[0].serial_fetch);
+    assert_codes(&table("fetch => sometimes;"), &["E1055"]);
     // A schedule belongs in a `schedules` table, as do `decode` entries.
     assert_codes(&table("Nop => schedule(3);"), &["E1055"]);
     assert_codes(&table("decode Imm8 => 1;"), &["E1055"]);

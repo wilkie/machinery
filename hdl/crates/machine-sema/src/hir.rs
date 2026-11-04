@@ -581,6 +581,10 @@ pub struct IsaInfo {
     /// =>` in a timing table, with `address` and `width` in scope): how the
     /// processor splits an access that crosses its natural boundary.
     pub split_cycles: Option<TimingExpr>,
+    /// Code fetches are serial with execution (`fetch => serial;` in a
+    /// timing table: a processor with no prefetch, whose instruction costs
+    /// its fetches and its execution); by default execution overlaps them.
+    pub serial_fetch: bool,
     /// `interrupt =>` and `fault =>` (with `vector`) in a `schedules` table.
     pub interrupt_schedule: Option<TimingExpr>,
     pub fault_schedule: Option<TimingExpr>,
@@ -636,6 +640,9 @@ pub struct VectorsInfo {
     pub regs: Vec<VectorReg>,
     /// Cycles of each trace that belong to the capture rig (`harness_cycles`).
     pub harness_cycles: u32,
+    /// Clocks a bus transfer takes in a trace (`transfer_cycles`; by
+    /// default two for `moo` traces, one for `json`'s).
+    pub transfer_cycles: u32,
 }
 
 /// Where instruction bytes come from.

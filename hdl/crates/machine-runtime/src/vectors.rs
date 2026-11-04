@@ -99,15 +99,12 @@ pub enum TraceCpu {
 }
 
 impl CycleSummary {
-    /// Clocks per bus cycle with no wait states: Ts, Tc on the 286, T1, T2
-    /// on the 386.
-    pub const BUS_CLOCKS: u32 = 2;
-
-    /// The cycles not spent in bus cycles, less `harness` (the fixed cost
-    /// of the test's start and end that no instruction owns): the
-    /// execution unit's time beyond what the bus did.
-    pub fn execution(&self, harness: u32) -> i64 {
-        self.total as i64 - (Self::BUS_CLOCKS * (self.code + self.data)) as i64 - harness as i64
+    /// The cycles not spent in bus cycles of `transfer` clocks each (Ts,
+    /// Tc on the 286; T1, T2 on the 386; T1 to T3 on the Z80), less
+    /// `harness` (the fixed cost of the test's start and end that no
+    /// instruction owns): the execution unit's time beyond what the bus did.
+    pub fn execution(&self, harness: u32, transfer: u32) -> i64 {
+        self.total as i64 - (transfer * (self.code + self.data)) as i64 - harness as i64
     }
 }
 
@@ -615,6 +612,40 @@ fn json_state(v: &Json, names: &[&'static str]) -> CpuState {
     st
 }
 
+/// A JSON cycle list (one `[address, data, "rwmi"]` entry a clock, the
+/// read or write strobe shown on one clock of each transfer) as a summary.
+/// A read whose data arrives on the next clock with another address on the
+/// pins is an opcode fetch: the refresh address follows it (the Z80's M1).
+fn json_cycles(c: &[Json]) -> CycleSummary {
+    let pins = |e: &Json| match e.arr().get(2) {
+        Some(Json::Str(s)) => s.clone(),
+        _ => String::new(),
+    };
+    let addr = |e: &Json| e.arr().first().and_then(Json::num);
+    let mut s = CycleSummary { total: c.len() as u32, ..CycleSummary::default() };
+    for (k, e) in c.iter().enumerate() {
+        let p = pins(e);
+        let (rd, wr, m, io) = (p.contains('r'), p.contains('w'), p.contains('m'), p.contains('i'));
+        if !(rd || wr) || !(m || io) {
+            continue;
+        }
+        let kind = match (rd, m) {
+            (true, true) if c.get(k + 1).is_some_and(|n| addr(n) != addr(e)) => BusKind::Code,
+            (true, true) => BusKind::MemRead,
+            (false, true) => BusKind::MemWrite,
+            (true, false) => BusKind::IoRead,
+            (false, false) => BusKind::IoWrite,
+        };
+        if kind == BusKind::Code {
+            s.code += 1;
+        } else {
+            s.data += 1;
+        }
+        s.bus.push((k as u32, kind));
+    }
+    s
+}
+
 /// The tests of a JSON vector file (SingleStepTests' 8-bit format, plain or
 /// gzipped): the registers named in `names`, RAM, the ports the instruction
 /// read or wrote, and its cycle count.
@@ -652,8 +683,9 @@ pub fn read_json(path: &Path, names: &[&'static str]) -> Result<Vec<MooTest>, Mo
             })
             .collect();
         let cycles = t.get("cycles").map(|c| c.arr().len() as u32);
+        let timing = t.get("cycles").map(|c| json_cycles(c.arr()));
         let bytes = initial.ram.iter().map(|(_, b)| *b).collect();
-        out.push(MooTest { index: k as u32, name, bytes, initial, final_, ports, cycles, ..Default::default() });
+        out.push(MooTest { index: k as u32, name, bytes, initial, final_, ports, cycles, timing, ..Default::default() });
     }
     Ok(out)
 }

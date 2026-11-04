@@ -708,6 +708,9 @@ impl Gen<'_> {
         }}
         let code = t.code.addr()?;
         let len = t.steps.len() as u64;
+        // The run before checked its code page at `tr_w`: the same page, at
+        // the same stamp, needs no check again.
+        let same = self.traces[prev].as_ref().is_some_and(|p| p.page == t.page && p.stamp == t.stamp);
         if !key_known {{
             if let Some(p) = self.traces[prev].as_mut() {{ p.links[li].kep = kep; }}
         }}
@@ -715,7 +718,9 @@ impl Gen<'_> {
         self.tr_cur = l.slot;
         self.tr_idx = 0;
         self.tr_ep0 = self.tr_epoch;
-        self.tr_w = u64::MAX;
+        if !same {{
+            self.tr_w = u64::MAX;
+        }}
         Some((code, len))
     }}
     /// A compiled step's `trace_restore`.

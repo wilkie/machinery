@@ -354,6 +354,12 @@ impl Gen<'_> {
         if outside {
             let _ = writeln!(s, "{0}.tr_aepoch = {0}.tr_aepoch.wrapping_add(1);", cx.recv);
         }
+        if p.watched.iter().filter(|c| in_key(c)).any(hits) || written.iter().any(|w| match w {
+            Cell::Reg(d) | Cell::Field(d, _) => p.key.contains(d),
+            Cell::Mode => p.key_mode,
+        }) {
+            let _ = writeln!(s, "{0}.tr_kepoch = {0}.tr_kepoch.wrapping_add(1);", cx.recv);
+        }
         s
     }
 
@@ -382,7 +388,7 @@ impl Gen<'_> {
         }
         let _ = write!(
             self.out,
-            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start, and how many.\n    pub off: u16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at epoch `ep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub slot: u32,\n}}\n"
+            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start, and how many.\n    pub off: u16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n}}\n"
         );
         Ok(())
     }
@@ -393,8 +399,8 @@ impl Gen<'_> {
             return ("", "");
         }
         (
-            "    /// The trace core: replaying run `tr_cur` (when `tr_on`) at\n    /// instruction `tr_idx`, entered at epoch `tr_ep0`; the epoch, bumped\n    /// by writes to what runs depend on; recording this step; code memory's\n    /// write total when last checked; the run that just ended.\n    pub tr_on: bool,\n    pub tr_rec_now: bool,\n    pub tr_idx: u32,\n    pub tr_cur: u32,\n    pub tr_prev: u32,\n    pub tr_epoch: u64,\n    pub tr_ep0: u64,\n    pub tr_aepoch: u64,\n    pub tr_w: u64,\n    pub tr_phys: u64,\n",
-            "    /// The runs kept, and the one being recorded (from epoch\n    /// `tr_rec_ep`).\n    pub traces: Box<[Option<Box<Trace>>]>,\n    pub tr_rec: Option<Box<Trace>>,\n    pub tr_rec_ep: u64,\n",
+            "    /// The trace core: replaying run `tr_cur` (when `tr_on`) at\n    /// instruction `tr_idx`, entered at epoch `tr_ep0`; the epoch, bumped\n    /// by writes to what runs depend on; recording this step; code memory's\n    /// write total when last checked; the run that just ended.\n    pub tr_on: bool,\n    pub tr_rec_now: bool,\n    pub tr_idx: u32,\n    pub tr_cur: u32,\n    pub tr_prev: u32,\n    pub tr_epoch: u64,\n    pub tr_ep0: u64,\n    pub tr_aepoch: u64,\n    pub tr_kepoch: u64,\n    pub tr_w: u64,\n    pub tr_phys: u64,\n",
+            "    /// The runs kept, and the one being recorded (from epoch\n    /// `tr_rec_ep`).\n    pub traces: Box<[Option<Trace>]>,\n    pub tr_rec: Option<Trace>,\n    pub tr_rec_ep: u64,\n",
         )
     }
 
@@ -402,7 +408,7 @@ impl Gen<'_> {
         if self.trace.is_none() {
             return String::new();
         }
-        format!("            tr_on: false,\n            tr_rec_now: false,\n            tr_idx: 0,\n            tr_cur: 0,\n            tr_prev: u32::MAX,\n            tr_epoch: 0,\n            tr_ep0: 0,\n            tr_aepoch: 0,\n            tr_w: u64::MAX,\n            tr_phys: 0,\n            traces: vec![None; {TRACES}].into_boxed_slice(),\n            tr_rec: None,\n            tr_rec_ep: 0,\n")
+        format!("            tr_on: false,\n            tr_rec_now: false,\n            tr_idx: 0,\n            tr_cur: 0,\n            tr_prev: u32::MAX,\n            tr_epoch: 0,\n            tr_ep0: 0,\n            tr_aepoch: 0,\n            tr_kepoch: 0,\n            tr_w: u64::MAX,\n            tr_phys: 0,\n            traces: vec![None; {TRACES}].into_boxed_slice(),\n            tr_rec: None,\n            tr_rec_ep: 0,\n")
     }
 
     /// The trace core's methods (inside the machine's impl).
@@ -452,7 +458,7 @@ impl Gen<'_> {
     fn trace_go(&mut self) -> Option<(u64, Result<(), Fault>)> {{
         let cur = self.tr_cur as usize;
         let idx = self.tr_idx as usize;
-        let t = self.traces[cur].as_deref()?;
+        let t = self.traces[cur].as_ref()?;
         let s = t.steps.get(idx)?;
         if self.tr_epoch != self.tr_ep0 || self.r.{pc0} as u64 != t.pc.wrapping_add(s.off as u64) {{
             self.tr_on = false;
@@ -469,6 +475,7 @@ impl Gen<'_> {
             self.tr_w = w;
         }}
         let phys = t.phys + s.off as u64;
+        let page = t.page;
         let last = idx + 1 == t.steps.len();
         let instr = s.instr;
         let len = s.len;
@@ -484,7 +491,7 @@ impl Gen<'_> {
         self.tr_phys = phys;
         self.restarted = phys == self.last_start;
         self.last_start = phys;
-        self.bus.{sp}_fetch_skip(phys, len as u32);
+        self.bus.{sp}_fetch_page(page, phys, len as u32);
         Some((phys, self.run_instr(instr)))
     }}
     /// The run the last one led to before, at this pc and epoch: entered
@@ -493,11 +500,18 @@ impl Gen<'_> {
     fn trace_follow(&mut self) -> Option<(u64, Result<(), Fault>)> {{
         let prev = self.tr_prev as usize;
         let pc = self.r.{pc0} as u64;
-        let l = *self.traces.get(prev)?.as_deref()?.links.iter().find(|l| l.pc == pc && l.ep == self.tr_aepoch)?;
-        let key = self.tkey();
-        let t = self.traces[l.slot as usize].as_deref()?;
-        if t.phys != l.phys || t.pc != pc || t.key != key {{
+        let li = self.traces.get(prev)?.as_ref()?.links.iter().position(|l| l.pc == pc && l.ep == self.tr_aepoch)?;
+        let l = self.traces[prev].as_ref()?.links[li];
+        // The key: unchanged since it was last found to hold, else compared.
+        let kep = self.tr_kepoch;
+        let key_known = l.kep == kep;
+        let key = if key_known {{ None }} else {{ Some(self.tkey()) }};
+        let t = self.traces[l.slot as usize].as_ref()?;
+        if t.phys != l.phys || t.pc != pc || key.is_some_and(|k| t.key != k) {{
             return None;
+        }}
+        if !key_known {{
+            if let Some(p) = self.traces[prev].as_mut() {{ p.links[li].kep = kep; }}
         }}
         self.tr_on = true;
         self.tr_cur = l.slot;
@@ -514,7 +528,7 @@ impl Gen<'_> {
         let pc = self.r.{pc0} as u64;
         let ep = self.tr_epoch;
         let aep = self.tr_aepoch;
-        let key_ok = match self.traces[slot].as_deref() {{
+        let key_ok = match self.traces[slot].as_ref() {{
             Some(t) if t.phys == start && t.pc == pc => t.ok_ep == ep || t.key == self.tkey(),
             _ => false,
         }};
@@ -523,12 +537,12 @@ impl Gen<'_> {
             return None;
         }}
         self.trace_close();
-        if let Some(t) = self.traces[slot].as_deref_mut() {{
+        if let Some(t) = self.traces[slot].as_mut() {{
             t.ok_ep = ep;
         }}
         let prev = self.tr_prev as usize;
-        if let Some(p) = self.traces.get_mut(prev).and_then(|t| t.as_deref_mut()) {{
-            let l = TLink {{ pc, phys: start, ep: aep, slot: slot as u32 }};
+        if let Some(p) = self.traces.get_mut(prev).and_then(|t| t.as_mut()) {{
+            let l = TLink {{ pc, phys: start, ep: aep, kep: self.tr_kepoch, slot: slot as u32 }};
             if p.links[0].pc == pc || p.links[0].ep != aep {{ p.links[0] = l; }} else {{ p.links[1] = l; }}
         }}
         self.tr_on = true;
@@ -543,7 +557,7 @@ impl Gen<'_> {
     #[inline(never)]
     fn trace_note(&mut self, start: u64) {{
         self.tr_prev = u32::MAX;
-        let follows = match self.tr_rec.as_deref() {{
+        let follows = match self.tr_rec.as_ref() {{
             Some(t) => {{
                 let off = t.steps.last().map(|s| s.off as u64 + s.len as u64).unwrap_or(0);
                 t.steps.len() < {STEPS} && start == t.phys + off && self.r.{pc0} as u64 == t.pc.wrapping_add(off) && self.tr_epoch == self.tr_rec_ep && start >> 12 == t.phys >> 12 && self.bus.{sp}_code_stamp(t.page) == t.stamp
@@ -554,7 +568,7 @@ impl Gen<'_> {
             self.trace_close();
             if let Some(page) = self.bus.{sp}_code_page(start) {{
                 let stamp = self.bus.{sp}_code_stamp(page);
-                self.tr_rec = Some(Box::new(Trace {{ phys: start, pc: self.r.{pc0} as u64, key: self.tkey(), page, stamp, ok_ep: self.tr_epoch, links: [TLink::default(); 2], steps: Vec::new() }}));
+                self.tr_rec = Some(Trace {{ phys: start, pc: self.r.{pc0} as u64, key: self.tkey(), page, stamp, ok_ep: self.tr_epoch, links: [TLink::default(); 2], steps: Vec::new() }});
                 self.tr_rec_ep = self.tr_epoch;
             }}
         }}
@@ -583,7 +597,7 @@ impl Gen<'_> {
         let n = self.fetched;
         let ok = self.win_from == 1 && n > 0 && (n as u32) <= self.win_len && (self.tr_phys + n as u64 - 1) >> 12 == self.tr_phys >> 12;
         let s = TStep {{ instr: i, off: 0, len: n, known: self.known_opcode, prefix_cycles: self.prefix_cycles, decode_at: self.decode_at, {save}}};
-        let page = match self.tr_rec.as_deref_mut() {{
+        let page = match self.tr_rec.as_mut() {{
             Some(t) if ok => {{
                 t.steps.push(TStep {{ off: (self.tr_phys - t.phys) as u16, ..s }});
                 t.page
@@ -605,6 +619,7 @@ impl Gen<'_> {
         self.tr_prev = u32::MAX;
         self.tr_epoch = self.tr_epoch.wrapping_add(1);
         self.tr_aepoch = self.tr_aepoch.wrapping_add(1);
+        self.tr_kepoch = self.tr_kepoch.wrapping_add(1);
     }}
     /// Runs a decoded instruction.
     fn run_instr(&mut self, i: Instr) -> Result<(), Fault> {{

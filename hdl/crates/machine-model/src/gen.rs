@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+mod forms;
 mod system;
 mod trace;
 
@@ -143,6 +144,10 @@ pub struct Gen<'a> {
     pub(crate) memo_rec: std::cell::Cell<bool>,
     /// The trace core (`core: trace;`), when the profile asks for it.
     trace: Option<trace::TracePlan>,
+    /// Operand kinds with forms, and the forms of the copy being emitted
+    /// (operand index, form).
+    forms: HashMap<DefId, forms::FormKind>,
+    form_ctx: std::cell::RefCell<Vec<(u32, u8)>>,
 }
 
 pub fn generate(prog: &Program, hir: &hir::Hir, isa_def: DefId) -> R<String> {
@@ -210,6 +215,8 @@ impl<'a> Gen<'a> {
             memo_cur: std::cell::RefCell::new(None),
             memo_rec: std::cell::Cell::new(false),
             trace: None,
+            forms: HashMap::new(),
+            form_ctx: std::cell::RefCell::new(Vec::new()),
         })
     }
 }
@@ -496,7 +503,9 @@ impl<'a> Gen<'a> {
                 let b = &instr.operands[*i as usize];
                 let kind = self.kinds[&b.kind];
                 let op = format!("ops.{}", ident(&b.name));
-                if kind.source.is_some() {
+                if let Some(f) = self.form_of(*i) {
+                    format!("{}.kind_{}_read_f{f}({op}){q}", cx.recv, ident(&kind.name))
+                } else if kind.source.is_some() {
                     format!("{}.kind_{}_read({op}){q}", cx.recv, ident(&kind.name))
                 } else if kind.rules.iter().any(|r| r.kind == hir::RuleKind::Value) {
                     format!("{}.kind_{}_value({op})", cx.recv, ident(&kind.name))
@@ -510,12 +519,17 @@ impl<'a> Gen<'a> {
                     .ok_or_else(|| GenError::new("operand outside an instruction"))?;
                 let b = &instr.operands[*i as usize];
                 let kind = self.kinds[&b.kind];
-                let rname = &kind.rules[*rule as usize].name;
+                let r = &kind.rules[*rule as usize];
+                // In a copy for a form, `is_mem` is the form's.
+                let suffix = match self.form_of(*i) {
+                    Some(f) if r.kind == hir::RuleKind::IsMem => format!("_f{f}"),
+                    _ => String::new(),
+                };
                 format!(
-                    "{}.kind_{}_{}(ops.{}){q}",
+                    "{}.kind_{}_{}{suffix}(ops.{}){q}",
                     cx.recv,
                     ident(&kind.name),
-                    ident(rname),
+                    ident(&r.name),
                     ident(&b.name)
                 )
             }
@@ -1084,7 +1098,13 @@ impl<'a> Gen<'a> {
                 let op = format!("ops.{}", ident(&b.name));
                 // The value first: it may itself borrow the machine.
                 let vt = self.expr(cx, v)?;
-                if kind.source.is_some() {
+                if let Some(f) = self.form_of(*i).filter(|_| self.forms.get(&b.kind).is_some_and(|k| k.write_forms)) {
+                    format!(
+                        "{{ let v = {vt}; {}.kind_{}_write_f{f}({op}, v)?; }}\n",
+                        cx.recv,
+                        ident(&kind.name)
+                    )
+                } else if kind.source.is_some() {
                     format!(
                         "{{ let v = {vt}; {}.kind_{}_write({op}, v)?; }}\n",
                         cx.recv,
@@ -1508,6 +1528,7 @@ impl<'a> Gen<'a> {
         self.line("use machine_runtime as rt;");
         self.line("");
         self.emit_trace_types()?;
+        self.forms = self.plan_forms();
 
         // Enums.
         for e in &self.hir.enums {
@@ -2255,7 +2276,7 @@ impl<'a> Gen<'a> {
                 }
             }
         }
-        Ok(())
+        self.emit_kind_forms(k)
     }
 
     /// A `read` rule that touches no memory and calls no fn can be inverted
@@ -2376,7 +2397,7 @@ impl<'a> Gen<'a> {
             ident(&i.name),
             Self::ops_struct_name(i)
         );
-        Ok(())
+        self.emit_exec_forms(i)
     }
 
     fn emit_decoder(&mut self) -> R<()> {
@@ -2971,10 +2992,11 @@ impl<'a> Gen<'a> {
                 } else {
                     ""
                 };
+                let call = self.exec_call(i);
                 let rec = if self.trace.is_some() { "        if self.tr_rec_now { self.trace_record(i); }\n" } else { "" };
                 let _ = write!(
                     run_fns,
-                    "    #[inline]\n    #[allow(unused_variables, clippy::redundant_closure_call)]\n    fn run_{n}(&mut self, ops: {ops_ty}) -> Result<(), Fault> {{\n        let i = Instr::{n}(ops);\n        self.last = Some(i);\n        self.decoded = true;\n{rec}{sched_part}        self.entry_cycles = {{ let r: Result<u32, Fault> = (|| Ok({text}))(); r.unwrap_or(0) }};\n        self.cycles = self.entry_cycles + self.prefix_cycles;\n{lock_part}        self.exec_{n}(ops)\n    }}\n"
+                    "    #[inline]\n    #[allow(unused_variables, clippy::redundant_closure_call)]\n    fn run_{n}(&mut self, ops: {ops_ty}) -> Result<(), Fault> {{\n        let i = Instr::{n}(ops);\n        self.last = Some(i);\n        self.decoded = true;\n{rec}{sched_part}        self.entry_cycles = {{ let r: Result<u32, Fault> = (|| Ok({text}))(); r.unwrap_or(0) }};\n        self.cycles = self.entry_cycles + self.prefix_cycles;\n{lock_part}        {call}\n    }}\n"
                 );
             }
             let _ = writeln!(

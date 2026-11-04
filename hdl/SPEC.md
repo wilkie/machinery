@@ -1451,6 +1451,20 @@ component designates), taking the cycles that costs. Because `fetch`
 sequences are typed by the same declarations, the compiler can derive the
 instruction's encoding and length from the routine.
 
+**Operand forms.** A kind whose `read` rule is an `if` on a condition of
+its operand's fields alone has two forms: the condition true, and false
+(the 386's `rm`: `m.mod == 3`, a register, else memory). The compiler
+gives the kind a form fn and its rules a copy per form with the `if`
+decided: `read`, `write` when it tests the same condition, `is_mem` when
+it is the condition or its negation. Each instruction with up to three
+such operands gets a copy of its semantics per combination of their
+forms, and `run_<name>` picks the copy once from the decoded operands, so
+the test is made once per instruction rather than at every access, and
+each copy's code is its own. Nothing in the description changes; the
+copies behave as the semantics for operands of those forms (the 386's
+hardware vectors are unchanged through the generated code). On the 386
+board this is 5-10% faster with either core.
+
 ### 11.4 Derived metadata
 
 From `isa` + `rtl`, the compiler produces: decode tables (both levels),

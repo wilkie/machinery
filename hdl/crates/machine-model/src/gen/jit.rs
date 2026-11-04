@@ -27,14 +27,14 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, the instruction's result, a fault to\n    /// return, and where the instruction was.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_res: Result<(), Fault>,\n    pub jit_err: Option<Fault>,\n    pub jit_start: u64,\n"
+        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n"
     }
 
     pub(crate) fn jit_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_res: Ok(()),\n            jit_err: None,\n            jit_start: 0,\n"
+        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n"
     }
 
     /// The trace's fields for compiled code (inside `Trace`).
@@ -42,14 +42,22 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "    /// Compiled code for the run after its first instruction, and how\n    /// often the run has been entered.\n    pub code: machine_jit::Code,\n    pub hits: u32,\n"
+        "    /// Compiled code for the run after its first instruction, what each\n    /// of its steps was compiled with, and how often the run has been\n    /// entered.\n    pub code: machine_jit::Code,\n    pub jit_steps: Vec<JitStep>,\n    pub hits: u32,\n"
     }
 
     pub(crate) fn jit_trace_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "code: machine_jit::Code::default(), hits: 0, "
+        "code: machine_jit::Code::default(), jit_steps: Vec::new(), hits: 0, "
+    }
+
+    /// What a compiled step is compiled with (beside the trace types).
+    pub(crate) fn jit_types(&self) -> &'static str {
+        if !self.jit {
+            return "";
+        }
+        "/// A compiled step's data: the step, and what checking and replaying it\n/// needs of its run (the pc it is at, its address, the run's page, stamp\n/// and slot, and whether it is the run's last).\n#[derive(Clone, Copy, Debug)]\npub struct JitStep {\n    pub step: TStep,\n    pub pc: u64,\n    pub phys: u64,\n    pub page: u32,\n    pub stamp: u32,\n    pub slot: u32,\n    pub last: bool,\n}\n"
     }
 
     /// The JIT core's methods (inside the machine's impl).
@@ -65,30 +73,23 @@ impl Gen<'_> {
             let n = ident(&i.name);
             let _ = write!(
                 shims,
-                "    extern \"C\" fn jit_run_{n}(m: *mut Self, i: *const Instr) -> u32 {{\n        // SAFETY: compiled code calls this with the machine it was entered\n        // with and a step of one of its runs, both live for the call.\n        let (m, i) = unsafe {{ (&mut *m, *i) }};\n        if let Instr::{n}(ops) = i {{ m.jit_res = m.run_{n}(ops); }}\n        0\n    }}\n"
+                "    /// A compiled `{n}` step: as `step` makes it from a run.\n    extern \"C\" fn jit_step_{n}(m: *mut Self, j: *const JitStep) -> u32 {{\n        // SAFETY: compiled code calls this with the machine it was entered\n        // with and a step of one of its runs, both live for the call.\n        let (m, j) = unsafe {{ (&mut *m, &*j) }};\n        m.jit_step(j, |m, i| match i {{ Instr::{n}(ops) => m.run_{n}(ops), _ => Ok(()) }})\n    }}\n"
             );
-            let _ = writeln!(fns, "            Instr::{n}(_) => Self::jit_run_{n} as *const () as usize,");
+            let _ = writeln!(fns, "            Instr::{n}(_) => Self::jit_step_{n} as *const () as usize,");
         }
         let _ = write!(
             self.out,
-            r#"{shims}    /// The handler a compiled step calls for `i`.
-    fn jit_run_fn(i: &Instr) -> usize {{
+            r#"{shims}    /// The compiled step for `i`.
+    fn jit_step_fn(i: &Instr) -> usize {{
         match i {{
 {fns}        }}
     }}
-    extern "C" fn jit_pre_c(m: *mut Self) -> u32 {{
-        // SAFETY: as for the handlers.
-        unsafe {{ &mut *m }}.jit_pre()
-    }}
-    extern "C" fn jit_post_c(m: *mut Self) -> u32 {{
-        // SAFETY: as for the handlers.
-        unsafe {{ &mut *m }}.jit_post()
-    }}
-    /// Before a compiled step: 0 to run it, 1 when the step ended another
-    /// way (an interrupt taken), 2 when the run cannot go on.
-    #[inline]
-    fn jit_pre(&mut self) -> u32 {{
-        if !self.trace_check() {{
+    /// A compiled step: 0 when it was made and the run goes on, 1 when it
+    /// was made and the run stops (an interrupt taken in its place, a
+    /// fault, the run's end), 2 when it was not made.
+    #[inline(always)]
+    fn jit_step(&mut self, j: &JitStep, run: impl FnOnce(&mut Self, Instr) -> Result<(), Fault>) -> u32 {{
+        if !self.jit_check(j) {{
             return 2;
         }}
         self.jit_go = false;
@@ -100,19 +101,14 @@ impl Gen<'_> {
         }}
         self.tr_rec_now = false;
         self.decoded = false;
-        let (phys, _, page, len) = self.trace_restore();
+        self.jit_restore(j);
+        let phys = j.phys;
         self.tr_phys = phys;
         self.restarted = phys == self.last_start;
         self.last_start = phys;
-        self.bus.{sp}_fetch_page(page, phys, len as u32);
-        self.jit_start = phys;
-        0
-    }}
-    /// After a compiled step: 0 to go on, 1 to stop.
-    #[inline]
-    fn jit_post(&mut self) -> u32 {{
-        let r = std::mem::replace(&mut self.jit_res, Ok(()));
-        let r = self.jit_tail(self.jit_start, r);
+        self.bus.{sp}_fetch_page(j.page, phys, j.step.len as u32);
+        let r = run(self, j.step.instr);
+        let r = self.jit_tail(phys, r);
         self.bus.after_step();
         if let Err(f) = r {{
             self.jit_err = Some(f);
@@ -120,19 +116,29 @@ impl Gen<'_> {
         }}
         u32::from(self.halted || !self.tr_on)
     }}
-    /// Compiles the run in `slot` (after its first instruction).
+    /// Compiles the run in `slot`.
     fn jit_compile(&mut self, slot: usize) {{
         if self.jit.count() >= machine_jit::LIMIT {{
             self.jit.clear();
             for t in self.traces.iter_mut().flatten() {{ t.code = machine_jit::Code::default(); }}
         }}
-        let calls: Vec<machine_jit::Call> = match self.traces[slot].as_ref() {{
-            Some(t) => t.steps[1..].iter().map(|s| machine_jit::Call {{
-                pre: Self::jit_pre_c as *const () as usize,
-                run: Self::jit_run_fn(&s.instr),
-                arg: &s.instr as *const Instr as usize,
-                post: Self::jit_post_c as *const () as usize,
-            }}).collect(),
+        let calls: Vec<machine_jit::Call> = match self.traces[slot].as_mut() {{
+            Some(t) => {{
+                let n = t.steps.len();
+                t.jit_steps = t.steps.iter().enumerate().map(|(k, s)| JitStep {{
+                    step: *s,
+                    pc: t.pc.wrapping_add(s.off as u64),
+                    phys: t.phys + s.off as u64,
+                    page: t.page,
+                    stamp: t.stamp,
+                    slot: slot as u32,
+                    last: k + 1 == n,
+                }}).collect();
+                t.jit_steps.iter().map(|j| machine_jit::Call {{
+                    run: Self::jit_step_fn(&j.step.instr),
+                    arg: j as *const JitStep as usize,
+                }}).collect()
+            }}
             None => return,
         }};
         let code = self.jit.compile(&calls);
@@ -140,40 +146,63 @@ impl Gen<'_> {
             t.code = machine_jit::Code::new(code);
         }}
     }}
-    /// One step as `System::step` makes it, then, when it entered a run, the
-    /// rest of the run compiled (at most `budget` steps in all); how many
+    /// Runs `c`, compiled code of this machine's current run, from step
+    /// `from`; the steps it made.
+    fn jit_enter(&mut self, c: usize, from: u32) -> u32 {{
+        // SAFETY: `c` is this machine's compiled code for its current run,
+        // which is live: runs are only replaced while stepping, not while
+        // compiled code runs.
+        let f: extern "C" fn(*mut Self, u32) -> u32 = unsafe {{ std::mem::transmute(c) }};
+        f(self as *mut Self, from)
+    }}
+    /// A run, as far as it goes (at most `budget` steps): when the last one
+    /// ended where a compiled run follows, that run from its start; else one
+    /// step as `System::step` makes it, and when that entered a run, the
+    /// rest of it compiled (once it has been entered `HOT` times). How many
     /// steps were made.
     pub fn jit_burst(&mut self, budget: u64) -> Result<u64, Fault> {{
+        if !self.tr_on && self.tr_prev != u32::MAX && !self.halted && !self.in_reset {{
+            if let Some((c, len)) = self.jit_follow() {{
+                if budget >= len {{
+                    let n = self.jit_enter(c, 0) as u64;
+                    if let Some(e) = self.jit_err.take() {{
+                        return Err(e);
+                    }}
+                    if n > 0 {{
+                        return Ok(n);
+                    }}
+                }}
+            }}
+        }}
         let was_halted = self.halted;
         let r = self.step();
         if was_halted && self.halted {{ self.bus.halted_cycle(); }}
         self.bus.after_step();
         r?;
         let mut n = 1;
-        if self.tr_on && self.tr_idx == 1 && budget > 1 {{
+        // The step entered a run (and made its first instruction, which may
+        // have been its last).
+        if self.tr_idx == 1 {{
             let slot = self.tr_cur as usize;
+            let start = self.last_start;
             let (code, len) = match self.traces[slot].as_mut() {{
-                Some(t) => {{
+                Some(t) if t.phys == start => {{
                     t.hits = t.hits.saturating_add(1);
                     (t.code.addr(), t.steps.len() as u64)
                 }}
-                None => (None, 0),
+                _ => (None, 0),
             }};
             let code = match code {{
                 Some(c) => Some(c),
-                None if len > 1 && self.traces[slot].as_ref().is_some_and(|t| t.hits == {HOT}) => {{
+                None if len > 0 && self.traces[slot].as_ref().is_some_and(|t| t.hits == {HOT}) => {{
                     self.jit_compile(slot);
                     self.traces[slot].as_ref().and_then(|t| t.code.addr())
                 }}
                 None => None,
             }};
             if let Some(c) = code {{
-                if budget - 1 >= len - 1 {{
-                    // SAFETY: `c` is this machine's compiled code for the run
-                    // in `slot`, which is live: runs are only replaced while
-                    // stepping, not while compiled code runs.
-                    let f: extern "C" fn(*mut Self) -> u32 = unsafe {{ std::mem::transmute(c) }};
-                    n += f(self as *mut Self) as u64;
+                if self.tr_on && len > 1 && budget >= len {{
+                    n += self.jit_enter(c, 1) as u64;
                     if let Some(e) = self.jit_err.take() {{
                         return Err(e);
                     }}

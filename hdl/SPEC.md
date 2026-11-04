@@ -1606,20 +1606,26 @@ system PcAt386 {
   polling devices, about the same (-3% to +7%).
 - `core: jit;` (with `memory: direct`) is the trace core with runs entered
   often (64 times) compiled to host code (Cranelift, through the
-  `machine-jit` crate, the one that may use `unsafe`). A compiled run makes
-  the run's instructions after its first one after another, each exactly
-  as `step` and `System::step` would: the run's checks, `step`'s prologue,
-  the state set as decoding left it, the instruction's handler called
-  directly, `step`'s tail, the devices caught up; anything else ends it.
-  `System::run_until` checks its stop condition between bursts (a step,
-  and the rest of a compiled run it entered), so at most a run apart: the
-  machine's behaviour is the same, but a host acting on a condition acts
-  up to a run later than with the other cores. In this first form the
-  instructions' semantics stay in the generated handlers, and the
-  compiled code replaces only the dispatch between them; it is about 20%
-  slower than the trace core, which does the same work inline. Compiling
-  the work between instructions (the checks and stores) and then simple
-  instructions' semantics into the host code is where it gains.
+  `machine-jit` crate, the one that may use `unsafe`). A compiled run is
+  a call a step to a step function generated for that instruction, which
+  makes it exactly as `step` and `System::step` would: the run's checks,
+  `step`'s prologue, the state set as decoding left it (from a record the
+  code passes it, not looked up), the instruction's handler inlined,
+  `step`'s tail, the devices caught up; anything else ends it. Runs are
+  compiled whole and entered at their first step when the link from the
+  run before leads to them (chained), else after an ordinary step entered
+  them. `System::run_until` checks its stop condition between bursts (a
+  run, as far as it goes), so at most a run apart: the machine's behaviour
+  is the same, but a host acting on a condition acts up to a run later
+  than with the other cores. The instructions' semantics and the work
+  between them stay Rust; the compiled code replaces only the dispatch, so
+  it runs at about the trace core's speed (the Z80 checksum: 54 M
+  instructions/s against the trace core's 57; a 386 DOS boot within 7%).
+  Each step is some 200 host instructions of bookkeeping (clearing and
+  restoring per-step state, the opcode hook replayed, time in 128 bits)
+  around a handler of a few; compiling a run's steps into the host code
+  with what they were decoded with as constants, and simple instructions'
+  semantics with them, is where it gains.
 - `wire inst.in_port = other.out_port;` connects an output to an input of
   the same type; `wire inst.in_port = <constant>;` straps a pin (`wire
   pic1.sp = true;`). Each input is driven at most once; an output may

@@ -391,6 +391,8 @@ impl Gen<'_> {
             self.out,
             "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start, and how many.\n    pub off: u16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n    /// Opcode bytes fetched (`istream {{ opcode }}` runs that often).\n    pub opcodes: u8,\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n{jit}}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n}}\n"
         );
+        let jt = self.jit_types();
+        self.out.push_str(jt);
         Ok(())
     }
 
@@ -658,6 +660,74 @@ impl Gen<'_> {
     }}
 "#
         );
+        if self.jit {
+            let _ = write!(
+                self.out,
+                r#"    /// A compiled step's `trace_check`, from what it was compiled with.
+    #[inline(always)]
+    fn jit_check(&mut self, j: &JitStep) -> bool {{
+        if self.tr_epoch != self.tr_ep0 || self.r.{pc0} as u64 != j.pc {{
+            self.tr_on = false;
+            self.tr_prev = j.slot;
+            return false;
+        }}
+        let w = self.bus.{sp}_code_writes();
+        if w != self.tr_w {{
+            if self.bus.{sp}_code_stamp(j.page) != j.stamp {{
+                self.tr_on = false;
+                self.tr_prev = u32::MAX;
+                return false;
+            }}
+            self.tr_w = w;
+        }}
+        true
+    }}
+    /// A run just ended: the run its link leads to, when that is compiled,
+    /// made the current run (as `trace_follow` would, without its first
+    /// step); its code and length.
+    fn jit_follow(&mut self) -> Option<(usize, u64)> {{
+        let prev = self.tr_prev as usize;
+        let pc = self.r.{pc0} as u64;
+        let li = self.traces.get(prev)?.as_ref()?.links.iter().position(|l| l.pc == pc && l.ep == self.tr_aepoch)?;
+        let l = self.traces[prev].as_ref()?.links[li];
+        let kep = self.tr_kepoch;
+        let key_known = l.kep == kep;
+        let key = if key_known {{ None }} else {{ Some(self.tkey()) }};
+        let t = self.traces[l.slot as usize].as_ref()?;
+        if t.phys != l.phys || t.pc != pc || key.is_some_and(|k| t.key != k) {{
+            return None;
+        }}
+        let code = t.code.addr()?;
+        let len = t.steps.len() as u64;
+        if !key_known {{
+            if let Some(p) = self.traces[prev].as_mut() {{ p.links[li].kep = kep; }}
+        }}
+        self.tr_on = true;
+        self.tr_cur = l.slot;
+        self.tr_idx = 0;
+        self.tr_ep0 = self.tr_epoch;
+        self.tr_w = u64::MAX;
+        Some((code, len))
+    }}
+    /// A compiled step's `trace_restore`.
+    #[inline(always)]
+    fn jit_restore(&mut self, j: &JitStep) {{
+        let s = &j.step;
+        self.fetched = s.len;
+        self.known_opcode = s.known;
+        self.prefix_cycles = s.prefix_cycles;
+        if B::SCHEDULE {{ self.decode_at = s.decode_at; }}
+        let opcodes = s.opcodes;
+{restore}        self.tr_idx += 1;
+{opcode_replay}
+        if j.last {{
+            self.tr_on = false;
+            self.tr_prev = j.slot;
+        }}
+    }}
+"#
+            );
+        }
         Ok(())
     }
 }

@@ -30,3 +30,8 @@ Run 2026-11-04 (Ryzen 9 3950X, WSL2; three runs, median):
 | DOSBox 0.74 normal core | 109 | 117 | approximate cycles |
 | DOSBox 0.74 dynamic core | 249 | 304 | approximate cycles |
 | QEMU 8.2 TCG | 2142 | 953 | no timing; few checks |
+
+Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
+The flags wait to be put in EFLAGS until it is needed whole, joins carry
+fields in registers past the devices' check, and a run whose end leads
+to its start goes round without returning to the dispatcher.

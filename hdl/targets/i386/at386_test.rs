@@ -285,3 +285,32 @@ fn bench_dos_boot() {
     let t = sys.seconds() + 2.0;
     timed(&mut sys, "idle", 400_000_000, |s| s.seconds() >= t);
 }
+
+/// For comparing with other emulators: boots the floppy image in
+/// `BENCH_DISK` (MS-DOS with an AUTOEXEC.BAT running a benchmark program),
+/// and reports the instructions and wall time between the program's
+/// markers at 0000:04F0 (0BEE0h at its start, 0BEEFh at its end), and from
+/// reset to the end. Run with `BENCH_DISK=... cargo test --release --
+/// --ignored --nocapture bench_compare`.
+#[test]
+#[ignore]
+fn bench_compare() {
+    let Some(path) = std::env::var_os("BENCH_DISK") else { return eprintln!("BENCH_DISK not set; skipping") };
+    let (Some(mut sys), Ok(d)) = (at(0), std::fs::read(path)) else { return skip() };
+    insert(&mut sys, &d);
+    let mark = |s: &mut System| u16::from_le_bytes([s.board().ram.cells[0x4F0], s.board().ram.cells[0x4F1]]);
+    let wall = std::time::Instant::now();
+    let n0 = sys.run_until(4_000_000_000, |s| mark(s) == 0xBEE0).unwrap();
+    let w0 = wall.elapsed().as_secs_f64();
+    let n1 = sys.run_until(40_000_000_000, |s| mark(s) == 0xBEEF).unwrap();
+    let w1 = wall.elapsed().as_secs_f64();
+    assert_eq!(mark(&mut sys), 0xBEEF, "the program finished");
+    println!(
+        "BENCH {} {} boot_instructions {n0} boot_seconds {w0:.3} run_instructions {n1} run_seconds {:.3} mips {:.1} emulated_seconds {:.3}",
+        machine_at386_vga::system::PROFILE,
+        machine_at386_vga::system::CORE,
+        w1 - w0,
+        n1 as f64 / (w1 - w0) / 1e6,
+        sys.seconds()
+    );
+}

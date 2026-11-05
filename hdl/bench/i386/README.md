@@ -1,0 +1,32 @@
+# 386 comparison
+
+The same two DOS programs on our 386 AT board and on other emulators, on
+one host, unthrottled: guest instructions per second in steady state.
+
+- `chk.asm`: a 16-bit checksum over 32 KB (memory and ALU), 8000 passes,
+  about 918 M instructions.
+- `mix.asm`: 32-bit arithmetic through calls, multiply and divide, string
+  moves and scans, a sieve; 36000 passes, about 994 M instructions. Its
+  data is on pages of its own (writes beside code make tools that watch
+  code by page retranslate it).
+
+Each marks its start and end at 0000:04F0 and then asks every tool to
+exit: port 0F4h (QEMU's `isa-debug-exit`), "Shutdown" to port 8900h
+(Bochs), and DOS (DOSBox). `build.sh` makes MS-DOS 3.30 boot disks running
+them (from `~/roms`; nothing of DOS is in the repository); `run.py` runs
+the tools. Ours is timed between the markers (`bench_compare` in
+`targets/i386/at386_test.rs`); the others by marginal time (N passes less
+0), which cancels startup and boot. Instruction counts are ours (a REP
+iteration counts as one).
+
+Run 2026-11-04 (Ryzen 9 3950X, WSL2; three runs, median):
+
+| tool | chk MIPS | mix MIPS | keeps |
+|---|---|---|---|
+| ours, trace core | 30 | 31 | exact cycles, devices each instruction |
+| ours, JIT | 56 | 45 | the same |
+| ours, JIT, `approx` | 67 | 50 | devices each run, approximate time |
+| Bochs 2.7 (sync=none) | 102 | 83 | instructions; no cycle timing |
+| DOSBox 0.74 normal core | 109 | 117 | approximate cycles |
+| DOSBox 0.74 dynamic core | 249 | 304 | approximate cycles |
+| QEMU 8.2 TCG | 2142 | 953 | no timing; few checks |

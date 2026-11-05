@@ -141,53 +141,14 @@ impl Engine {
         ctx.func.signature.params.push(AbiParam::new(ptr));
         ctx.func.signature.params.push(AbiParam::new(types::I32));
         ctx.func.signature.returns.push(AbiParam::new(types::I32));
-        {
-            let mut b = FunctionBuilder::new(&mut ctx.func, &mut self.fbc);
-            let entry = b.create_block();
-            b.append_block_params_for_function_params(entry);
-            b.switch_to_block(entry);
-            b.seal_block(entry);
-            let machine = b.block_params(entry)[0];
-            let from = b.block_params(entry)[1];
-            let made_base = b.declare_var(types::I32);
-            let neg = b.ins().ineg(from);
-            b.def_var(made_base, neg);
-
-            // The way out: the steps made so far.
-            let out = b.create_block();
-            b.append_block_param(out, types::I32);
-            // A block a step, entered by `from` (past the end: none made).
-            let blocks: Vec<_> = (0..steps).map(|_| b.create_block()).collect();
-            let mut switch = Switch::new();
-            for (k, blk) in blocks.iter().enumerate().take(entries) {
-                switch.set_entry(k as u128, *blk);
-            }
-            let none = b.create_block();
-            switch.emit(&mut b, from, none);
-            b.switch_to_block(none);
-            b.seal_block(none);
-            let zero = b.ins().iconst(types::I32, 0);
-            b.ins().jump(out, &[zero.into()]);
-            {
-                let mut e = Em::new(&mut b, ptr, cc, machine, out, made_base);
-                e.first = blocks.first().copied();
-                e.steps = steps;
-                for (k, blk) in blocks.iter().enumerate() {
-                    e.begin_step(k, *blk, k < entries);
-                    let mark = e.mark();
-                    emit(&mut e, k);
-                    e.release(mark);
-                }
-                e.finish(steps);
-            }
-            for blk in &blocks {
-                b.seal_block(*blk);
-            }
-            b.switch_to_block(out);
-            b.seal_block(out);
-            let n = b.block_params(out)[0];
-            b.ins().return_(&[n]);
-            b.finalize();
+        let sig = ctx.func.signature.clone();
+        // A run that goes round (`Em::loop_back`) is built twice: the first
+        // time says what it knows going round, and the second passes that
+        // to its first step instead of storing it.
+        let seen = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, &mut emit, None);
+        if let Some(plan) = seen.filter(|p| !p.is_empty()) {
+            ctx.func = cranelift_codegen::ir::Function::with_name_signature(Default::default(), sig);
+            let _ = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, &mut emit, Some(plan));
         }
         let name = format!("run{}", self.next);
         self.next += 1;
@@ -224,6 +185,77 @@ impl Engine {
         self.count += 1;
         Some(m.get_finalized_function(id) as usize)
     }
+}
+
+
+/// Emit a run's function into `func` (see `Engine::compile_with`); with
+/// `plan`, its first step takes what the run knows going round. What it
+/// knew going round, when it went round.
+#[allow(clippy::too_many_arguments)]
+fn build(
+    func: &mut cranelift_codegen::ir::Function,
+    fbc: &mut FunctionBuilderContext,
+    ptr: cranelift_codegen::ir::Type,
+    cc: cranelift_codegen::isa::CallConv,
+    steps: usize,
+    entries: usize,
+    emit: &mut impl FnMut(&mut Em, usize),
+    plan: Option<emit::LoopPlan>,
+) -> Option<emit::LoopPlan> {
+    let mut b = FunctionBuilder::new(func, fbc);
+    let entry = b.create_block();
+    b.append_block_params_for_function_params(entry);
+    b.switch_to_block(entry);
+    b.seal_block(entry);
+    let machine = b.block_params(entry)[0];
+    let from = b.block_params(entry)[1];
+    let made_base = b.declare_var(types::I32);
+    let neg = b.ins().ineg(from);
+    b.def_var(made_base, neg);
+
+    // The way out: the steps made so far.
+    let out = b.create_block();
+    b.append_block_param(out, types::I32);
+    // A block a step, entered by `from` (past the end: none made); with a
+    // plan, the first through a pad that loads what it takes.
+    let blocks: Vec<_> = (0..steps).map(|_| b.create_block()).collect();
+    let pad = plan.as_ref().map(|_| b.create_block());
+    let mut switch = Switch::new();
+    for (k, blk) in blocks.iter().enumerate().take(entries) {
+        switch.set_entry(k as u128, if k == 0 { pad.unwrap_or(*blk) } else { *blk });
+    }
+    let none = b.create_block();
+    switch.emit(&mut b, from, none);
+    b.switch_to_block(none);
+    b.seal_block(none);
+    let zero = b.ins().iconst(types::I32, 0);
+    b.ins().jump(out, &[zero.into()]);
+    let seen;
+    {
+        let mut e = Em::new(&mut b, ptr, cc, machine, out, made_base);
+        e.first = blocks.first().copied();
+        e.steps = steps;
+        if let (Some(plan), Some(pad), Some(first)) = (plan, pad, blocks.first().copied()) {
+            e.entry_pad(pad, first, plan);
+        }
+        for (k, blk) in blocks.iter().enumerate() {
+            e.begin_step(k, *blk, k < entries);
+            let mark = e.mark();
+            emit(&mut e, k);
+            e.release(mark);
+        }
+        e.finish(steps);
+        seen = e.take_seen();
+    }
+    for blk in &blocks {
+        b.seal_block(*blk);
+    }
+    b.switch_to_block(out);
+    b.seal_block(out);
+    let n = b.block_params(out)[0];
+    b.ins().return_(&[n]);
+    b.finalize();
+    seen
 }
 
 #[cfg(test)]
@@ -396,7 +428,7 @@ mod tests {
         // From step 0: five passes, ten steps; from step 1: one step
         // first, then four passes.
         for (from, a0, steps, out) in [(0u32, 0u8, 10u32, 5u64), (1, 1, 9, 5)] {
-            let mut t = T { a: a0, ..T::default() };
+            let mut t = T { a: a0, x: 0xF0F0_0000, ..T::default() };
             let mut e = Engine::default();
             let f = e
                 .compile_with(2, 2, |e, k| {
@@ -404,6 +436,11 @@ mod tests {
                         let a = e.read(&A);
                         let a = e.op(Op::Add, a, V::K(1), N::U8);
                         e.write(&A, a);
+                        // Bit 0 of x: a's low bit (a piece going round).
+                        let b0 = Place::Bits { off: std::mem::offset_of!(T, x), reg: N::U32, shift: 0, width: 1, n: N::Bool, bump: 0 };
+                        let odd = e.op(Op::And, a, V::K(1), N::U8);
+                        let odd = e.op(Op::Ne, odd, V::K(0), N::U8);
+                        e.write(&b0, odd);
                     } else {
                         let o = e.read(&OUT);
                         let o = e.op(Op::Add, o, V::K(1), N::U64);
@@ -419,6 +456,7 @@ mod tests {
             let f: extern "C" fn(*mut T, u32) -> u32 = unsafe { std::mem::transmute(f) };
             assert_eq!(f(&mut t, from), steps, "from {from}");
             assert_eq!((t.a, t.out), (5, out), "from {from}");
+            assert_eq!(t.x, 0xF0F0_0001, "from {from}");
         }
     }
 

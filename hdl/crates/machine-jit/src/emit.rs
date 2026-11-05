@@ -201,6 +201,22 @@ struct State {
     pieces: HashMap<(usize, N), Vec<Piece>>,
 }
 
+/// What a run knows of the machine where it goes round (`Em::loop_back`):
+/// the fields it has as host values (not known constants), the bits
+/// written into each (`Piece`s' shifts and widths), and those it owes.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LoopPlan {
+    carried: Vec<(usize, N)>,
+    shapes: Vec<Vec<(u32, u32)>>,
+    owed: Vec<(usize, N)>,
+}
+
+impl LoopPlan {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.carried.is_empty()
+    }
+}
+
 /// A bit field written into a cached field and not yet put in it: the
 /// field is its cached value with these bits replaced (`settle`). A read
 /// of the bits gets the value as written; bits written again before the
@@ -280,11 +296,17 @@ pub struct Em<'a, 'f> {
     /// The first step's block and the run's length (`loop_back`).
     pub(crate) first: Option<Block>,
     pub(crate) steps: usize,
+    /// Going round: what the first step takes (a second build), and what
+    /// a first build saw.
+    plan: Option<LoopPlan>,
+    seen: Option<LoopPlan>,
+    /// The first step's parameters: each carried field, and its bits.
+    loop_params: Vec<(Value, Vec<Value>)>,
 }
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, out: Block, made_base: Variable) -> Self {
-        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0 }
+        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new() }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -309,6 +331,21 @@ impl<'a, 'f> Em<'a, 'f> {
             self.regs.clear();
             self.pieces.clear();
             self.dirty.clear();
+            // The first step of a run that goes round: what it takes.
+            if k == 0 {
+                if let Some(plan) = self.plan.clone() {
+                    for ((key, (v, bits)), sh) in plan.carried.iter().zip(self.loop_params.clone()).zip(&plan.shapes) {
+                        self.regs.insert(*key, Known::D(v));
+                        if !sh.is_empty() {
+                            let ps = sh.iter().zip(bits).map(|(&(shift, width), b)| Piece { shift, width, v: V::D(b) }).collect();
+                            self.pieces.insert(*key, ps);
+                        }
+                        if plan.owed.contains(key) {
+                            self.dirty.push(*key);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1223,48 +1260,7 @@ impl<'a, 'f> Em<'a, 'f> {
             self.b.switch_to_block(*pad);
             self.restore(st);
             self.live = true;
-            let mut args = Vec::with_capacity(carried.len());
-            for (&(off, n), sh) in carried.iter().zip(&shapes) {
-                let mine: Option<Vec<Piece>> = self.pieces.get(&(off, n)).cloned().and_then(|mut ps| {
-                    ps.sort_by_key(|p| p.shift);
-                    (ps.iter().map(|p| (p.shift, p.width)).collect::<Vec<_>>() == *sh).then_some(ps)
-                });
-                let bits: Vec<V> = match &mine {
-                    Some(ps) if !sh.is_empty() => {
-                        self.pieces.remove(&(off, n));
-                        ps.iter().map(|p| p.v).collect()
-                    }
-                    _ => {
-                        self.settle_why("join", off, n);
-                        Vec::new()
-                    }
-                };
-                let x = match self.regs.get(&(off, n)).copied() {
-                    Some(Known::K(c)) => self.konst(n, c),
-                    Some(Known::D(v)) => v,
-                    None => {
-                        let m = self.base();
-                        self.b.ins().load(n.ir(), MemFlags::trusted(), m, off as i32)
-                    }
-                };
-                args.push(cranelift_codegen::ir::BlockArg::Value(x));
-                if bits.len() == sh.len() {
-                    for (b, nb) in bits.into_iter().zip(sh) {
-                        let _ = nb;
-                        let v = self.val(b, n);
-                        args.push(cranelift_codegen::ir::BlockArg::Value(v));
-                    }
-                } else {
-                    // The field whole: its bits taken out of it.
-                    for &(shift, width) in sh {
-                        let m = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
-                        let t = self.op(Op::Shr, V::D(x), V::K(shift as u128), n);
-                        let t = self.op(Op::And, t, V::K(m), n);
-                        let v = self.val(t, n);
-                        args.push(cranelift_codegen::ir::BlockArg::Value(v));
-                    }
-                }
-            }
+            let args = self.carry_args(&carried, &shapes);
             self.dirty.retain(|d| !common.contains(d) && !carried.contains(d));
             self.flush();
             self.b.ins().jump(join, &args);
@@ -1322,6 +1318,58 @@ impl<'a, 'f> Em<'a, 'f> {
         self.regs = regs;
         self.dirty = dirty;
         self.pieces = pieces;
+    }
+
+    /// The values of `carried` fields as this path has them, for a block
+    /// that takes them (and each field's bits in `shapes`) as parameters:
+    /// the bits as written where the path wrote the same, else taken out
+    /// of the field; a field it does not know, loaded.
+    fn carry_args(&mut self, carried: &[(usize, N)], shapes: &[Vec<(u32, u32)>]) -> Vec<cranelift_codegen::ir::BlockArg> {
+        let mut args = Vec::with_capacity(carried.len());
+        for (&(off, n), sh) in carried.iter().zip(shapes) {
+            let mine: Option<Vec<Piece>> = self.pieces.get(&(off, n)).cloned().and_then(|mut ps| {
+                ps.sort_by_key(|p| p.shift);
+                (ps.iter().map(|p| (p.shift, p.width)).collect::<Vec<_>>() == *sh).then_some(ps)
+            });
+            let bits: Vec<V> = match &mine {
+                Some(ps) if !sh.is_empty() => {
+                    self.pieces.remove(&(off, n));
+                    ps.iter().map(|p| p.v).collect()
+                }
+                _ => {
+                    self.settle_why("join", off, n);
+                    Vec::new()
+                }
+            };
+            let x = match self.regs.get(&(off, n)).copied() {
+                Some(Known::K(c)) => self.konst(n, c),
+                Some(Known::D(v)) => v,
+                None => {
+                    // The machine holds it (no other shape of it owed).
+                    self.flush_overlapping(off, n, Some((off, n)));
+                    let m = self.base();
+                    self.b.ins().load(n.ir(), MemFlags::trusted(), m, off as i32)
+                }
+            };
+            args.push(cranelift_codegen::ir::BlockArg::Value(x));
+            if bits.len() == sh.len() {
+                for (b, nb) in bits.into_iter().zip(sh) {
+                    let _ = nb;
+                    let v = self.val(b, n);
+                    args.push(cranelift_codegen::ir::BlockArg::Value(v));
+                }
+            } else {
+                // The field whole: its bits taken out of it.
+                for &(shift, width) in sh {
+                    let m = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
+                    let t = self.op(Op::Shr, V::D(x), V::K(shift as u128), n);
+                    let t = self.op(Op::And, t, V::K(m), n);
+                    let v = self.val(t, n);
+                    args.push(cranelift_codegen::ir::BlockArg::Value(v));
+                }
+            }
+        }
+        args
     }
 
     fn restore(&mut self, st: &State) {
@@ -1402,6 +1450,56 @@ impl<'a, 'f> Em<'a, 'f> {
         }
     }
 
+    /// The way in to the first step of a run built with `plan`: the
+    /// fields it takes, loaded.
+    pub(crate) fn entry_pad(&mut self, pad: Block, first: Block, plan: LoopPlan) {
+        self.loop_params = plan
+            .carried
+            .iter()
+            .zip(&plan.shapes)
+            .map(|((_, n), sh)| {
+                let b = self.b.append_block_param(first, n.ir());
+                let ps = sh.iter().map(|_| self.b.append_block_param(first, n.ir())).collect();
+                (b, ps)
+            })
+            .collect();
+        self.b.switch_to_block(pad);
+        self.b.seal_block(pad);
+        self.live = true;
+        self.regs.clear();
+        self.pieces.clear();
+        self.dirty.clear();
+        let args = self.carry_args(&plan.carried, &plan.shapes);
+        self.b.ins().jump(first, &args);
+        self.live = false;
+        self.plan = Some(plan);
+    }
+
+    /// What is known here, as a plan for going round: the fields held as
+    /// host values (known constants are stored, and known again past the
+    /// first step's checks), but not two shapes of the same bytes.
+    fn loop_seen(&self) -> LoopPlan {
+        let overlap = |a: &(usize, N), b: &(usize, N)| a.0 < b.0 + b.1.width() as usize / 8 && b.0 < a.0 + a.1.width() as usize / 8;
+        let held: Vec<(usize, N)> = self.regs.iter().filter(|(_, v)| matches!(v, Known::D(_))).map(|(k, _)| *k).collect();
+        let mut carried: Vec<(usize, N)> = held.iter().copied().filter(|k| !self.regs.keys().any(|o| o != k && overlap(o, k))).collect();
+        carried.sort_by_key(|(o, n)| (*o, n.width(), n.signed()));
+        let shapes = carried
+            .iter()
+            .map(|k| {
+                let mut sh: Vec<(u32, u32)> = self.pieces.get(k).map(|ps| ps.iter().map(|p| (p.shift, p.width)).collect()).unwrap_or_default();
+                sh.sort();
+                sh
+            })
+            .collect();
+        let owed = carried.iter().copied().filter(|k| self.dirty.contains(k)).collect();
+        LoopPlan { carried, shapes, owed }
+    }
+
+    /// What the run knew going round (a first build).
+    pub(crate) fn take_seen(&mut self) -> Option<LoopPlan> {
+        self.seen.take()
+    }
+
     /// The run's length.
     pub fn steps(&self) -> usize {
         self.steps
@@ -1437,11 +1535,27 @@ impl<'a, 'f> Em<'a, 'f> {
         let before = self.state();
         self.b.switch_to_block(lb);
         then(self);
+        let limit = self.trial_limit.take();
+        let args = match self.plan.clone() {
+            // Built to go round: the first step takes what is known.
+            Some(plan) => {
+                let args = self.carry_args(&plan.carried, &plan.shapes);
+                self.dirty.retain(|d| !plan.carried.contains(d));
+                args
+            }
+            None => {
+                if self.seen.is_none() {
+                    self.seen = Some(self.loop_seen());
+                }
+                Vec::new()
+            }
+        };
         self.flush();
+        self.trial_limit = limit;
         let bv = self.b.use_var(self.made_base);
         let nb = self.b.ins().iadd_imm(bv, self.steps as i64);
         self.b.def_var(self.made_base, nb);
-        self.b.ins().jump(first, &[]);
+        self.b.ins().jump(first, &args);
         self.restore(&before);
         self.b.switch_to_block(cont);
         self.live = true;

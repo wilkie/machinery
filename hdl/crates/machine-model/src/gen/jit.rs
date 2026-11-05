@@ -553,16 +553,25 @@ impl Gen<'_> {
         if v.is_some() && m.write.is_none() {{
             return Self::jm_access(e, a, n, v, rest, b, shim, pure);
         }}
-        // Within the range, and (a mirrored memory) not wrapping inside
-        // the access.
+        // The ranges of the same memory at the same costs (one split by
+        // a hole) share the access: one body for all of them. Only the
+        // first memory's: the others (ROM, as a rule) go by the bus.
+        let same = |x: &JitMem| x.amask == m.amask && x.mask == m.mask && x.read == m.read && x.write == m.write && x.unit == m.unit && x.cells == m.cells && x.code == m.code && x.mem == m.mem;
+        let group: Vec<&JitMem> = mems.iter().filter(|x| same(x)).collect();
+        // Within a range, and (a mirrored memory) not wrapping inside the
+        // access.
         let last = e.op(machine_jit::Op::Add, a, machine_jit::V::K((n - 1) as u128), machine_jit::N::U64);
-        let mut inside = if m.lo == 0 && m.hi >= m.amask && n == 1 {{
-            machine_jit::V::K(1)
-        }} else {{
-            let ge = e.op(machine_jit::Op::Ge, a, machine_jit::V::K(m.lo as u128), machine_jit::N::U64);
-            let le = e.op(machine_jit::Op::Le, last, machine_jit::V::K(m.hi as u128), machine_jit::N::U64);
-            e.op(machine_jit::Op::And, ge, le, machine_jit::N::Bool)
-        }};
+        let mut inside = machine_jit::V::K(0);
+        for g in &group {{
+            let one = if g.lo == 0 && g.hi >= g.amask && n == 1 {{
+                machine_jit::V::K(1)
+            }} else {{
+                let ge = e.op(machine_jit::Op::Ge, a, machine_jit::V::K(g.lo as u128), machine_jit::N::U64);
+                let le = e.op(machine_jit::Op::Le, last, machine_jit::V::K(g.hi as u128), machine_jit::N::U64);
+                e.op(machine_jit::Op::And, ge, le, machine_jit::N::Bool)
+            }};
+            inside = e.op(machine_jit::Op::Or, inside, one, machine_jit::N::Bool);
+        }}
         if m.mask != u64::MAX && n > 1 {{
             let i = e.op(machine_jit::Op::And, a, machine_jit::V::K(m.mask as u128), machine_jit::N::U64);
             let il = e.op(machine_jit::Op::Add, i, machine_jit::V::K((n - 1) as u128), machine_jit::N::U64);
@@ -617,23 +626,25 @@ impl Gen<'_> {
                 }}
             }};
             // The bus units it spans, each at its cost.
-            let units = if m.unit == 1 {{
-                machine_jit::V::K(n as u128)
+            // (`n` bytes span ceil(n / unit) units, or one more: a choice of
+            // two.)
+            let t = if m.unit == 1 {{
+                machine_jit::V::K(n as u128 * cost)
             }} else {{
                 let sh = m.unit.trailing_zeros() as u128;
                 let u1 = e.op(machine_jit::Op::Shr, last, machine_jit::V::K(sh), machine_jit::N::U64);
                 let u0 = e.op(machine_jit::Op::Shr, a, machine_jit::V::K(sh), machine_jit::N::U64);
                 let d = e.op(machine_jit::Op::Sub, u1, u0, machine_jit::N::U64);
-                e.op(machine_jit::Op::Add, d, machine_jit::V::K(1), machine_jit::N::U64)
+                let lo = (n as u64).div_ceil(m.unit) as u128;
+                let fewer = e.op(machine_jit::Op::Eq, d, machine_jit::V::K(lo - 1), machine_jit::N::U64);
+                e.select(fewer, machine_jit::V::K(lo * cost), machine_jit::V::K((lo + 1) * cost), machine_jit::N::U128)
             }};
-            let units = e.cast(units, machine_jit::N::U64, machine_jit::N::U128);
-            let t = e.op(machine_jit::Op::Mul, units, machine_jit::V::K(cost), machine_jit::N::U128);
             let bus = std::mem::offset_of!(Self, bus);
             let now = e.read(&machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }});
             let now = e.op(machine_jit::Op::Add, now, t, machine_jit::N::U128);
             e.store(bus + b.now, machine_jit::N::U128, now);
             r
-        }}, |e| Self::jm_access(e, a, n, v, rest, b, shim, pure))
+        }}, |e| Self::jm_access(e, a, n, v, &[], b, shim, pure))
     }}
     /// `step`'s prologue, for a lowered step whose gate does not lower: 0
     /// when the instruction is to run, else 1 (the step was made another

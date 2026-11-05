@@ -375,8 +375,8 @@ impl Gen<'_> {
                 let call_expr = machine_sema::hir::Expr { kind: machine_sema::hir::ExprKind::FnCall(r, Vec::new()), ty: Ty::Bool, span: Default::default() };
                 let lowered = self.jexpr(&line, &call_expr)?;
                 (
-                    format!("        // The reset line, or leaving reset: as the interpreter's\n        // prologue makes it.\n        let rl = {lowered};\n        let ir = e.load(std::mem::offset_of!(Self, in_reset), machine_jit::N::Bool);\n        let any = e.op(machine_jit::Op::Or, rl, ir, machine_jit::N::Bool);\n        e.if_(any, |e| {{ let r = e.call(Self::jit_reset_c as *const () as usize, &[], machine_jit::N::U32, false); e.exit_on(r); }}, |_| {{}});\n"),
-                    format!("    /// The prologue's reset line check: 1 when the step was the reset (or\n    /// held in it), 0 to go on (out of reset, if it was).\n    extern \"C\" fn jit_reset_c(m: *mut Self) -> u64 {{\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe {{ &mut *m }};\n        if {call} {{\n            if !m.in_reset {{ m.reset(); m.bus.processor_reset(); m.in_reset = true; }}\n            m.halted = true;\n            m.bus.after_step();\n            return 1;\n        }}\n        if m.in_reset {{ m.in_reset = false; m.halted = false; }}\n        0\n    }}\n"),
+                    format!("        // The reset line, or leaving reset: as the interpreter's\n        // prologue makes it.\n        let rl = {lowered};\n        let ir = e.load(std::mem::offset_of!(Self, in_reset), machine_jit::N::Bool);\n        let any = e.op(machine_jit::Op::Or, rl, ir, machine_jit::N::Bool);\n        e.if_(any, |e| {{ let r = e.call(Self::jit_reset_c as *const () as usize, &[], machine_jit::N::U32, false); e.exit_with(r); }}, |_| {{}});\n"),
+                    format!("    /// The prologue's reset line check: 1 when the step was the reset (or\n    /// held in it), 0 to go on (out of reset, if it was).\n    extern \"C\" fn jit_reset_c(m: *mut Self) -> u64 {{\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe {{ &mut *m }};\n        if {call} {{\n            if !m.in_reset {{ m.reset(); m.bus.processor_reset(); m.in_reset = true; }}\n            m.halted = true;\n            m.bus.after_step();\n            return 1;\n        }}\n        // Out of reset: the step is made by the interpreter, which sees it\n        // so too (the run is left: what the code knew may not hold).\n        if m.in_reset {{ m.in_reset = false; m.halted = false; }}\n        2\n    }}\n"),
                 )
             }
             _ => (String::new(), String::new()),
@@ -607,6 +607,7 @@ impl Gen<'_> {
                             e.cold(hit, |e| {{
                                 let _ = e.call(Self::jit_code_hit_c as *const () as usize, &[(machine_jit::V::K(m.mem as u128), machine_jit::N::U64), (k, machine_jit::N::U64)], machine_jit::N::U64, true);
                             }});
+                            e.note_code_write();
                         }}
                     }}
                     (machine_jit::V::K(0), m.write.unwrap_or(0))
@@ -763,6 +764,7 @@ impl Gen<'_> {
         // Past the gate, the step is the instruction's: what an interrupt's
         // path (which left the run) forgot holds again.
         assume(e);
+        let code0 = e.code_writes();
         e.store(std::mem::offset_of!(Self, tr_rec_now), machine_jit::N::Bool, machine_jit::V::K(0));
         // The state as decoding left it.
         e.store(std::mem::offset_of!(Self, fetched), machine_jit::N::U8, machine_jit::V::K(s.len as u128));
@@ -914,21 +916,32 @@ impl Gen<'_> {
         }};
         // The devices change no processor field: a rare path.
         // `sync: run`: the devices are caught up when the run returns.
-        if !{sync_run} {{
-            e.cold(need, |e| {{ let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, true); }});
-        }}
+        // The run's code: changed only by what this step called or wrote
+        // (direct writes that hit code note it), or by devices (checked as
+        // they run, below).
+        let code_check = |e: &mut machine_jit::Em| {{
         if !b.writes.is_empty() {{
-            let mut w = machine_jit::V::K(0);
-            for off in b.writes {{
-                let x = e.load(bus + off, machine_jit::N::U64);
-                w = e.op(machine_jit::Op::Add, w, x, machine_jit::N::U64);
+                let mut w = machine_jit::V::K(0);
+                for off in b.writes {{
+                    let x = e.load(bus + off, machine_jit::N::U64);
+                    w = e.op(machine_jit::Op::Add, w, x, machine_jit::N::U64);
+                }}
+                let tw = e.load(std::mem::offset_of!(Self, tr_w), machine_jit::N::U64);
+                let changed = e.op(machine_jit::Op::Ne, w, tw, machine_jit::N::U64);
+                e.cold(changed, |e| {{
+                    let r = e.call(Self::jit_code_c as *const () as usize, &[(machine_jit::V::K(j.page as u128), machine_jit::N::U64), (machine_jit::V::K(j.stamp as u128), machine_jit::N::U64)], machine_jit::N::U32, true);
+                    let bad = e.op(machine_jit::Op::Ne, r, machine_jit::V::K(0), machine_jit::N::U32);
+                    e.exit_if(bad, true, |_| {{}});
+                }});
             }}
-            let tw = e.load(std::mem::offset_of!(Self, tr_w), machine_jit::N::U64);
-            let changed = e.op(machine_jit::Op::Ne, w, tw, machine_jit::N::U64);
-            e.cold(changed, |e| {{
-                let r = e.call(Self::jit_code_c as *const () as usize, &[(machine_jit::V::K(j.page as u128), machine_jit::N::U64), (machine_jit::V::K(j.stamp as u128), machine_jit::N::U64)], machine_jit::N::U32, true);
-                let bad = e.op(machine_jit::Op::Ne, r, machine_jit::V::K(0), machine_jit::N::U32);
-                e.exit_if(bad, true, |_| {{}});
+        }};
+        if e.code_writes() != code0 {{
+            code_check(e);
+        }}
+        if !{sync_run} {{
+            e.cold(need, |e| {{
+                let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, true);
+                code_check(e);
             }});
         }}
         let h = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, halted), n: machine_jit::N::Bool, bump: 0 }});

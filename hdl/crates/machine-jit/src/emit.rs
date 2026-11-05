@@ -243,6 +243,9 @@ pub struct Em<'a, 'f> {
     /// Fields that calls change behind the code's back: never remembered.
     volatile: Vec<(usize, usize)>,
     bumped: bool,
+    /// Calls emitted that may write the machine's memory (code): see
+    /// `code_writes`.
+    code_calls: usize,
     /// Inside a trial (`try_inline`): the instruction count past which it
     /// stops emitting.
     trial_limit: Option<usize>,
@@ -256,7 +259,7 @@ pub struct Em<'a, 'f> {
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, from: Value, out: Block) -> Self {
-        Em { b, ptr, cc, m, from, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new() }
+        Em { b, ptr, cc, m, from, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new() }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -674,6 +677,39 @@ impl<'a, 'f> Em<'a, 'f> {
         let m = self.base();
         let a = self.b.ins().iadd(m, scaled);
         self.b.ins().iadd_imm(a, (base + off) as i64)
+    }
+
+    /// How many calls that may write memory have been emitted (code that
+    /// can change code), and a write that is known to (`note_code_write`):
+    /// a step with none since its start cannot have changed its run's code.
+    pub fn code_writes(&self) -> usize {
+        self.code_calls
+    }
+
+    pub fn note_code_write(&mut self) {
+        self.code_calls += 1;
+    }
+
+    /// Leave the compiled run whatever `r` (a step's answer from a call:
+    /// 1 made, else not made).
+    pub fn exit_with(&mut self, r: V) {
+        if !self.live {
+            return;
+        }
+        match r {
+            V::K(1) => self.exit(true),
+            V::K(_) => self.exit(false),
+            V::D(rv) => {
+                self.flush();
+                let made = self.b.ins().icmp_imm(IntCC::Equal, rv, 1);
+                let made = self.b.ins().uextend(types::I32, made);
+                let c = self.b.ins().iconst(types::I32, self.k as i64);
+                let c = self.b.ins().iadd(c, made);
+                let c = self.b.ins().isub(c, self.from);
+                self.b.ins().jump(self.out, &[c.into()]);
+                self.live = false;
+            }
+        }
     }
 
     /// Whether a write bumped an epoch since the last call.
@@ -1128,6 +1164,9 @@ impl<'a, 'f> Em<'a, 'f> {
         }
         // The machine holds what the code wrote before the call sees it.
         self.flush();
+        if !pure {
+            self.code_calls += 1;
+        }
         let fp = self.b.ins().iconst(self.ptr, f as i64);
         let call = self.b.ins().call_indirect(sig, fp, &a);
         let r = self.b.inst_results(call)[0];

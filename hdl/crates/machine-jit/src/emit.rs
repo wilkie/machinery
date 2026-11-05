@@ -198,6 +198,19 @@ struct State {
     slots: Vec<Option<u128>>,
     regs: HashMap<(usize, N), Known>,
     dirty: Vec<(usize, N)>,
+    pieces: HashMap<(usize, N), Vec<Piece>>,
+}
+
+/// A bit field written into a cached field and not yet put in it: the
+/// field is its cached value with these bits replaced (`settle`). A read
+/// of the bits gets the value as written; bits written again before the
+/// field is needed whole are never put in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Piece {
+    shift: u32,
+    width: u32,
+    /// The bits' value (masked to `width`, unshifted, of the field's type).
+    v: V,
 }
 
 
@@ -230,7 +243,6 @@ pub struct Em<'a, 'f> {
     pub(crate) ptr: Type,
     pub(crate) cc: CallConv,
     pub(crate) m: Value,
-    pub(crate) from: Value,
     pub(crate) out: Block,
     /// The step being emitted.
     pub(crate) k: usize,
@@ -260,11 +272,19 @@ pub struct Em<'a, 'f> {
     /// made (`exit_on_true_return`).
     ret_exits: Vec<Option<(Slot, usize, bool)>>,
     next_ret_exit: Option<(usize, bool)>,
+    /// Bit fields written into dirty fields, by field (see `Piece`).
+    pieces: HashMap<(usize, N), Vec<Piece>>,
+    /// Added to a step's number for the steps made: minus `from`, plus the
+    /// run's length for each time it went round (`loop_back`).
+    made_base: Variable,
+    /// The first step's block and the run's length (`loop_back`).
+    pub(crate) first: Option<Block>,
+    pub(crate) steps: usize,
 }
 
 impl<'a, 'f> Em<'a, 'f> {
-    pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, from: Value, out: Block) -> Self {
-        Em { b, ptr, cc, m, from, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None }
+    pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, out: Block, made_base: Variable) -> Self {
+        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0 }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -287,6 +307,8 @@ impl<'a, 'f> Em<'a, 'f> {
         // Entered from the switch too: nothing is known.
         if entry {
             self.regs.clear();
+            self.pieces.clear();
+            self.dirty.clear();
         }
     }
 
@@ -294,7 +316,8 @@ impl<'a, 'f> Em<'a, 'f> {
         if self.live {
             self.flush();
             let c = self.b.ins().iconst(types::I32, n as i64);
-            let c = self.b.ins().isub(c, self.from);
+            let bv = self.b.use_var(self.made_base);
+                let c = self.b.ins().iadd(c, bv);
             self.b.ins().jump(self.out, &[c.into()]);
             self.live = false;
         }
@@ -363,10 +386,12 @@ impl<'a, 'f> Em<'a, 'f> {
         }
         // The field holds it already.
         if let V::K(c) = v {
-            if self.regs.get(&(off, n)) == Some(&Known::K(c & n.mask())) {
+            if self.regs.get(&(off, n)) == Some(&Known::K(c & n.mask())) && !self.pieces.contains_key(&(off, n)) {
                 return;
             }
         }
+        // The whole field is written: its bits written before are not.
+        self.pieces.remove(&(off, n));
         // Other fields it overlaps are written first, then forgotten.
         self.flush_overlapping(off, n, Some((off, n)));
         self.regs.retain(|(o, m), _| (*o, *m) == (off, n) || *o + m.width() as usize / 8 <= off || off + n.width() as usize / 8 <= *o);
@@ -388,6 +413,7 @@ impl<'a, 'f> Em<'a, 'f> {
             return;
         }
         for (off, n) in std::mem::take(&mut self.dirty) {
+            self.settle_why("flush", off, n);
             let x = match self.regs.get(&(off, n)) {
                 Some(Known::K(c)) => {
                     let c = *c;
@@ -405,6 +431,7 @@ impl<'a, 'f> Em<'a, 'f> {
         let w = n.width() as usize / 8;
         let hit: Vec<(usize, N)> = self.dirty.iter().copied().filter(|(o, m)| Some((*o, *m)) != except && off < o + m.width() as usize / 8 && *o < off + w).collect();
         for (o, m) in hit {
+            self.settle_why("flush_overlapping", o, m);
             self.dirty.retain(|d| *d != (o, m));
             if let Some(k) = self.regs.get(&(o, m)).copied() {
                 let x = match k {
@@ -416,11 +443,78 @@ impl<'a, 'f> Em<'a, 'f> {
         }
     }
 
+    fn settle_why(&mut self, why: &str, off: usize, n: N) {
+        if self.live && self.pieces.contains_key(&(off, n)) && std::env::var_os("MACHINE_JIT_SETTLE").is_some() {
+            eprintln!("settle {why} k={} off={off:#x} {:?} cold={}", self.k, n, self.b.current_block().map(|b| self.b.func.layout.is_cold(b)).unwrap_or(false));
+            if std::env::var("MACHINE_JIT_SETTLE").as_deref() == Ok("bt") && why == "overlapping_read" {
+                eprintln!("{}", std::backtrace::Backtrace::force_capture());
+            }
+        }
+        self.settle(off, n);
+    }
+
+    /// Put the bit fields written into the field at `off` in it.
+    fn settle(&mut self, off: usize, n: N) {
+        let Some(ps) = self.pieces.remove(&(off, n)) else { return };
+        if !self.live {
+            return;
+        }
+        // Not a trial's to stop: a flush or a join puts the field in, and
+        // goes on emitting (the instructions count, after).
+        let limit = self.trial_limit.take();
+        self.settle_ops(off, n, &ps);
+        self.trial_limit = limit;
+    }
+
+    fn settle_ops(&mut self, off: usize, n: N, ps: &[Piece]) {
+        let base = match self.regs.get(&(off, n)) {
+            Some(Known::K(c)) => V::K(*c),
+            Some(Known::D(v)) => V::D(*v),
+            None => return,
+        };
+        let mut clear = 0u128;
+        let mut set = 0u128;
+        for p in ps {
+            let m = if p.width >= 128 { u128::MAX } else { (1u128 << p.width) - 1 };
+            clear |= m << p.shift;
+            if let V::K(c) = p.v {
+                set |= (c & m) << p.shift;
+            }
+        }
+        let mut x = self.op(Op::And, base, V::K(!clear & n.mask()), n);
+        x = self.op(Op::Or, x, V::K(set & n.mask()), n);
+        for p in ps {
+            if let V::D(_) = p.v {
+                let t = self.op(Op::Shl, p.v, V::K(p.shift as u128), n);
+                x = self.op(Op::Or, x, t, n);
+            }
+        }
+        let k = match x {
+            V::K(c) => Known::K(c & n.mask()),
+            V::D(v) => Known::D(v),
+        };
+        self.regs.insert((off, n), k);
+    }
+
+    /// Settle every field the bytes at `off` (`n` wide) overlap.
+    fn settle_overlapping(&mut self, off: usize, n: N) {
+        let w = n.width() as usize / 8;
+        let hit: Vec<(usize, N)> = self.pieces.keys().copied().filter(|(o, m)| off < o + m.width() as usize / 8 && *o < off + w).collect();
+        for (o, m) in hit {
+            self.settle_why("overlapping_read", o, m);
+        }
+    }
+
     /// Read a place.
     pub fn read(&mut self, p: &Place) -> V {
         self.trial_check();
         if !self.live {
             return V::K(0);
+        }
+        if let Place::Mem { off, n, .. } = p {
+            if !self.pieces.is_empty() {
+                self.settle_overlapping(*off, *n);
+            }
         }
         match p {
             Place::Mem { off, n, .. } => match self.regs.get(&(*off, *n)) {
@@ -434,10 +528,26 @@ impl<'a, 'f> Em<'a, 'f> {
                 }
             },
             Place::Bits { off, reg, shift, width, n, .. } => {
-                let whole = self.read(&Place::Mem { off: *off, n: *reg, bump: 0 });
-                let s = self.op(Op::Shr, whole, V::K(*shift as u128), *reg);
                 let mask = if *width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
-                let raw = self.op(Op::And, s, V::K(mask), *reg);
+                let lo = *shift;
+                let hi = shift + width;
+                let ps = self.pieces.get(&(*off, *reg)).cloned().unwrap_or_default();
+                let raw = if let Some(p) = ps.iter().find(|p| p.shift == lo && p.width == *width) {
+                    // The bits as written.
+                    p.v
+                } else {
+                    if ps.iter().any(|p| p.shift < hi && lo < p.shift + p.width) {
+                        self.settle_why("bits_read", *off, *reg);
+                    }
+                    // Other bits written leave these as the field has them.
+                    let whole = match self.regs.get(&(*off, *reg)) {
+                        Some(Known::K(c)) if self.pieces.contains_key(&(*off, *reg)) => V::K(*c),
+                        Some(Known::D(v)) if self.pieces.contains_key(&(*off, *reg)) => V::D(*v),
+                        _ => self.read(&Place::Mem { off: *off, n: *reg, bump: 0 }),
+                    };
+                    let s = self.op(Op::Shr, whole, V::K(*shift as u128), *reg);
+                    self.op(Op::And, s, V::K(mask), *reg)
+                };
                 match n {
                     N::Bool => self.op(Op::Ne, raw, V::K(0), *reg),
                     _ if n.signed() => {
@@ -497,13 +607,54 @@ impl<'a, 'f> Em<'a, 'f> {
             Place::Bits { off, reg, shift, width, bump, .. } => {
                 let mask = if *width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
                 let fv = self.cast(v, self.place_n(p), *reg);
-                let fv = self.op(Op::And, fv, V::K(mask), *reg);
-                let fv = self.op(Op::Shl, fv, V::K(*shift as u128), *reg);
-                let whole = self.read(&Place::Mem { off: *off, n: *reg, bump: 0 });
-                let keep = !(mask << shift) & reg.mask();
-                let kept = self.op(Op::And, whole, V::K(keep), *reg);
-                let nv = self.op(Op::Or, kept, fv, *reg);
-                self.store(*off, *reg, nv);
+                let fv = if self.place_n(p) == N::Bool || self.place_n(p).width() == *width && !self.place_n(p).signed() {
+                    // Already in range.
+                    fv
+                } else {
+                    self.op(Op::And, fv, V::K(mask), *reg)
+                };
+                // The bits wait in a piece: the field gets them when it is
+                // needed whole (`settle`).
+                let key = (*off, *reg);
+                // The field as cached (with its bits waiting), or loaded.
+                let whole = match self.regs.get(&key) {
+                    Some(Known::K(c)) => V::K(*c),
+                    Some(Known::D(v)) => V::D(*v),
+                    None => self.read(&Place::Mem { off: *off, n: *reg, bump: 0 }),
+                };
+                if !self.live {
+                    return;
+                }
+                let lo = *shift;
+                let hi = shift + width;
+                let mut ps = self.pieces.remove(&key).unwrap_or_default();
+                if ps.iter().any(|p| p.shift < hi && lo < p.shift + p.width && !(p.shift == lo && p.width == *width)) {
+                    // Overlapping other bits: put those in first.
+                    self.pieces.insert(key, ps);
+                    self.settle_why("bits_write", key.0, key.1);
+                    ps = Vec::new();
+                } else {
+                    ps.retain(|p| !(p.shift == lo && p.width == *width));
+                }
+                let base = match self.regs.get(&key) {
+                    Some(Known::K(c)) => V::K(*c),
+                    Some(Known::D(v)) => V::D(*v),
+                    None => whole,
+                };
+                // As `store` does for the field: overlapping fields written
+                // first, then forgotten; the field owed.
+                self.flush_overlapping(key.0, key.1, Some(key));
+                self.regs.retain(|(o, m), _| (*o, *m) == key || *o + m.width() as usize / 8 <= key.0 || key.0 + key.1.width() as usize / 8 <= *o);
+                let k = match base {
+                    V::K(c) => Known::K(c),
+                    V::D(x) => Known::D(x),
+                };
+                self.regs.insert(key, k);
+                if !self.dirty.contains(&key) {
+                    self.dirty.push(key);
+                }
+                ps.push(Piece { shift: lo, width: *width, v: fv });
+                self.pieces.insert(key, ps);
                 self.bump(*bump);
             }
             Place::Local(s) => self.set(*s, v),
@@ -713,7 +864,8 @@ impl<'a, 'f> Em<'a, 'f> {
                 let made = self.b.ins().uextend(types::I32, made);
                 let c = self.b.ins().iconst(types::I32, self.k as i64);
                 let c = self.b.ins().iadd(c, made);
-                let c = self.b.ins().isub(c, self.from);
+                let bv = self.b.use_var(self.made_base);
+                let c = self.b.ins().iadd(c, bv);
                 self.b.ins().jump(self.out, &[c.into()]);
                 self.live = false;
             }
@@ -828,15 +980,7 @@ impl<'a, 'f> Em<'a, 'f> {
     pub fn forget(&mut self) {
         self.flush();
         self.regs.clear();
-    }
-
-    /// Store the written fields that calls change.
-    fn flush_volatile(&mut self) {
-        let vol = self.volatile.clone();
-        let hit: Vec<(usize, N)> = self.dirty.iter().copied().filter(|(o, m)| vol.iter().any(|(vo, vl)| *o < vo + vl && *vo < o + m.width() as usize / 8)).collect();
-        for (o, m) in hit {
-            self.flush_overlapping(o, m, None);
-        }
+        self.pieces.clear();
     }
 
     /// Forget the fields calls change (`set_volatile`).
@@ -888,7 +1032,7 @@ impl<'a, 'f> Em<'a, 'f> {
     }
 
     fn state(&self) -> State {
-        State { slots: self.slots.iter().map(|s| s.k).collect(), regs: self.regs.clone(), dirty: self.dirty.clone() }
+        State { slots: self.slots.iter().map(|s| s.k).collect(), regs: self.regs.clone(), dirty: self.dirty.clone(), pieces: self.pieces.clone() }
     }
 
     // -- control --------------------------------------------------------------------
@@ -982,6 +1126,14 @@ impl<'a, 'f> Em<'a, 'f> {
     /// the other nothing). Several: each stores what it owes, and they meet
     /// at `join`, which keeps what all of them left known.
     fn enter(&mut self, before: &State, join: Block, ends: &[Option<(State, Block)>]) {
+        // The pads' stores and values are the branches' to finish: not a
+        // trial's to stop (it checks again past the join).
+        let limit = self.trial_limit.take();
+        self.enter_pads(before, join, ends);
+        self.trial_limit = limit;
+    }
+
+    fn enter_pads(&mut self, before: &State, join: Block, ends: &[Option<(State, Block)>]) {
         let ends: Vec<&(State, Block)> = ends.iter().flatten().collect();
         self.slots.truncate(before.slots.len());
         match ends.as_slice() {
@@ -1012,18 +1164,110 @@ impl<'a, 'f> Em<'a, 'f> {
                     continue;
                 }
                 let v = st.regs.get(key);
-                if v.is_some() && ends.iter().all(|(e, _)| e.regs.get(key) == v) {
+                let ps = st.pieces.get(key);
+                if v.is_some() && ends.iter().all(|(e, _)| e.regs.get(key) == v && e.pieces.get(key) == ps) {
                     common.push(*key);
                 }
             }
         }
+        // The other owed fields go on owed, their values passed to the join:
+        // a branch that does not know one (it called out: the machine holds
+        // it) loads it. Fields owed in shapes that overlap are stored
+        // instead.
+        let overlap = |a: &(usize, N), b: &(usize, N)| a.0 < b.0 + b.1.width() as usize / 8 && b.0 < a.0 + a.1.width() as usize / 8;
+        let mut owed: Vec<(usize, N)> = Vec::new();
+        for (st, _) in &ends {
+            for key in &st.dirty {
+                if !owed.contains(key) {
+                    owed.push(*key);
+                }
+            }
+        }
+        let carried: Vec<(usize, N)> = owed
+            .iter()
+            .copied()
+            .filter(|k| !common.contains(k) && !owed.iter().any(|o| o != k && overlap(o, k)))
+            .collect();
+        // A carried field's bits written in a branch go on as bits (one
+        // value each): the branches that wrote the same bits pass them as
+        // they are, the others the bits of the field as they have it.
+        // Different bits in different branches: the field, settled.
+        let shapes: Vec<Vec<(u32, u32)>> = carried
+            .iter()
+            .map(|key| {
+                let mut shape: Option<Vec<(u32, u32)>> = None;
+                for (st, _) in &ends {
+                    if let Some(ps) = st.pieces.get(key) {
+                        let mut sh: Vec<(u32, u32)> = ps.iter().map(|p| (p.shift, p.width)).collect();
+                        sh.sort();
+                        match &shape {
+                            None => shape = Some(sh),
+                            Some(s0) if *s0 == sh => {}
+                            Some(_) => return Vec::new(),
+                        }
+                    }
+                }
+                shape.unwrap_or_default()
+            })
+            .collect();
+        let params: Vec<(Value, Vec<Value>)> = carried
+            .iter()
+            .zip(&shapes)
+            .map(|((_, n), sh)| {
+                let b = self.b.append_block_param(join, n.ir());
+                let ps = sh.iter().map(|_| self.b.append_block_param(join, n.ir())).collect();
+                (b, ps)
+            })
+            .collect();
         for (st, pad) in &ends {
             self.b.switch_to_block(*pad);
             self.restore(st);
             self.live = true;
-            self.dirty.retain(|d| !common.contains(d));
+            let mut args = Vec::with_capacity(carried.len());
+            for (&(off, n), sh) in carried.iter().zip(&shapes) {
+                let mine: Option<Vec<Piece>> = self.pieces.get(&(off, n)).cloned().and_then(|mut ps| {
+                    ps.sort_by_key(|p| p.shift);
+                    (ps.iter().map(|p| (p.shift, p.width)).collect::<Vec<_>>() == *sh).then_some(ps)
+                });
+                let bits: Vec<V> = match &mine {
+                    Some(ps) if !sh.is_empty() => {
+                        self.pieces.remove(&(off, n));
+                        ps.iter().map(|p| p.v).collect()
+                    }
+                    _ => {
+                        self.settle_why("join", off, n);
+                        Vec::new()
+                    }
+                };
+                let x = match self.regs.get(&(off, n)).copied() {
+                    Some(Known::K(c)) => self.konst(n, c),
+                    Some(Known::D(v)) => v,
+                    None => {
+                        let m = self.base();
+                        self.b.ins().load(n.ir(), MemFlags::trusted(), m, off as i32)
+                    }
+                };
+                args.push(cranelift_codegen::ir::BlockArg::Value(x));
+                if bits.len() == sh.len() {
+                    for (b, nb) in bits.into_iter().zip(sh) {
+                        let _ = nb;
+                        let v = self.val(b, n);
+                        args.push(cranelift_codegen::ir::BlockArg::Value(v));
+                    }
+                } else {
+                    // The field whole: its bits taken out of it.
+                    for &(shift, width) in sh {
+                        let m = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
+                        let t = self.op(Op::Shr, V::D(x), V::K(shift as u128), n);
+                        let t = self.op(Op::And, t, V::K(m), n);
+                        let v = self.val(t, n);
+                        args.push(cranelift_codegen::ir::BlockArg::Value(v));
+                    }
+                }
+            }
+            self.dirty.retain(|d| !common.contains(d) && !carried.contains(d));
             self.flush();
-            self.b.ins().jump(join, &[]);
+            self.b.ins().jump(join, &args);
         }
         self.b.seal_block(join);
         self.slots.truncate(before.slots.len());
@@ -1036,6 +1280,11 @@ impl<'a, 'f> Em<'a, 'f> {
         }
         let mut regs = HashMap::new();
         for (key, v) in &ends[0].regs {
+            // A field with bits written in a branch is what that branch
+            // stored (unless the bits are the same in every branch: below).
+            if ends.iter().any(|e| e.pieces.contains_key(key)) {
+                continue;
+            }
             if ends.iter().all(|e| e.regs.get(key) == Some(v)) {
                 // A host value made in one branch does not reach the join.
                 let ok = match v {
@@ -1053,8 +1302,26 @@ impl<'a, 'f> Em<'a, 'f> {
                 regs.insert(*key, *v);
             }
         }
+        let mut pieces = HashMap::new();
+        for key in &common {
+            if let Some(ps) = ends[0].pieces.get(key) {
+                pieces.insert(*key, ps.clone());
+            }
+        }
+        // The carried fields: their values as passed, still owed.
+        let mut dirty = common;
+        for ((key, (p, bits)), sh) in carried.iter().zip(params).zip(&shapes) {
+            regs.retain(|k, _| k == key || !overlap(k, key));
+            regs.insert(*key, Known::D(p));
+            dirty.push(*key);
+            if !sh.is_empty() {
+                let ps = sh.iter().zip(bits).map(|(&(shift, width), v)| Piece { shift, width, v: V::D(v) }).collect();
+                pieces.insert(*key, ps);
+            }
+        }
         self.regs = regs;
-        self.dirty = common;
+        self.dirty = dirty;
+        self.pieces = pieces;
     }
 
     fn restore(&mut self, st: &State) {
@@ -1066,6 +1333,7 @@ impl<'a, 'f> Em<'a, 'f> {
         }
         self.regs = st.regs.clone();
         self.dirty = st.dirty.clone();
+        self.pieces = st.pieces.clone();
     }
 
     /// Where the locals stand: locals made after it are released by
@@ -1092,28 +1360,15 @@ impl<'a, 'f> Em<'a, 'f> {
                 f(self);
                 self.forget_volatile();
             }
-            V::D(cv) => {
-                // What the rare path's calls change is forgotten after the
-                // join: written before it.
-                self.flush_volatile();
-                let cold = self.b.create_block();
-                let cont = self.b.create_block();
-                self.b.ins().brif(cv, cold, &[], cont, &[]);
-                self.b.seal_block(cold);
-                let before = self.state();
-                self.b.switch_to_block(cold);
-                f(self);
-                if self.live {
-                    // The common path still owes its deferred stores; the
-                    // machine already holds them here.
-                    self.flush();
-                    self.b.ins().jump(cont, &[]);
-                }
-                self.b.seal_block(cont);
-                self.restore(&before);
-                self.b.switch_to_block(cont);
-                self.live = true;
-                self.forget_volatile();
+            V::D(_) => {
+                // A branch like any other: what the rare path's calls
+                // change it loads for the join (`enter`), so the common
+                // path keeps it, owed, where it is.
+                self.if_(c, |e| {
+                    let blk = e.b.current_block().expect("in a block");
+                    e.b.set_cold_block(blk);
+                    f(e)
+                }, |_| {});
             }
         }
     }
@@ -1147,6 +1402,51 @@ impl<'a, 'f> Em<'a, 'f> {
         }
     }
 
+    /// The run's length.
+    pub fn steps(&self) -> usize {
+        self.steps
+    }
+
+    /// The steps made, this step's included (a u32).
+    pub fn made_through(&mut self) -> V {
+        if !self.live {
+            return V::K(0);
+        }
+        let bv = self.b.use_var(self.made_base);
+        V::D(self.b.ins().iadd_imm(bv, self.k as i64 + 1))
+    }
+
+    /// When `c` holds, `then`, and the run again from its first step (the
+    /// machine's fields stored, as on entering it); else on. For a run whose
+    /// end leads back to its start, where the caller would enter it again.
+    pub fn loop_back(&mut self, c: V, then: impl FnOnce(&mut Self)) {
+        if !self.live {
+            return;
+        }
+        let Some(first) = self.first else { return };
+        let cv = match c {
+            V::K(0) => return,
+            V::K(_) => self.konst(N::Bool, 1),
+            V::D(v) => v,
+        };
+        let lb = self.b.create_block();
+        let cont = self.b.create_block();
+        self.b.ins().brif(cv, lb, &[], cont, &[]);
+        self.b.seal_block(lb);
+        self.b.seal_block(cont);
+        let before = self.state();
+        self.b.switch_to_block(lb);
+        then(self);
+        self.flush();
+        let bv = self.b.use_var(self.made_base);
+        let nb = self.b.ins().iadd_imm(bv, self.steps as i64);
+        self.b.def_var(self.made_base, nb);
+        self.b.ins().jump(first, &[]);
+        self.restore(&before);
+        self.b.switch_to_block(cont);
+        self.live = true;
+    }
+
     /// Leave the compiled run here.
     pub fn exit(&mut self, made: bool) {
         if !self.live {
@@ -1154,7 +1454,8 @@ impl<'a, 'f> Em<'a, 'f> {
         }
         self.flush();
         let c = self.b.ins().iconst(types::I32, self.k as i64 + made as i64);
-        let c = self.b.ins().isub(c, self.from);
+        let bv = self.b.use_var(self.made_base);
+                let c = self.b.ins().iadd(c, bv);
         self.b.ins().jump(self.out, &[c.into()]);
         self.live = false;
     }
@@ -1183,7 +1484,8 @@ impl<'a, 'f> Em<'a, 'f> {
                 let made = self.b.ins().uextend(types::I32, made);
                 let c = self.b.ins().iconst(types::I32, self.k as i64);
                 let c = self.b.ins().iadd(c, made);
-                let c = self.b.ins().isub(c, self.from);
+                let bv = self.b.use_var(self.made_base);
+                let c = self.b.ins().iadd(c, bv);
                 self.b.ins().jump(self.out, &[c.into()]);
                 self.b.switch_to_block(cb);
             }
@@ -1234,6 +1536,7 @@ impl<'a, 'f> Em<'a, 'f> {
             self.forget_volatile();
         } else {
             self.regs.clear();
+            self.pieces.clear();
         }
         let r = match ret.width() {
             64 => r,

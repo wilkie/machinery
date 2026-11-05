@@ -32,14 +32,14 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n"
+        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n    /// The steps compiled code may make before it returns (a run whose\n    /// end leads to its start goes round while they last).\n    pub jit_left: u64,\n"
     }
 
     pub(crate) fn jit_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n"
+        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n            jit_left: 0,\n"
     }
 
     /// The trace's fields for compiled code (inside `Trace`).
@@ -62,7 +62,7 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "/// A compiled step's data: the step, and what checking and replaying it\n/// needs of its run (the pc it is at, its address, the run's page, stamp\n/// and slot, and whether it is the run's last).\n#[derive(Clone, Copy, Debug)]\npub struct JitStep {\n    pub step: TStep,\n    pub pc: u64,\n    pub phys: u64,\n    pub page: u32,\n    pub stamp: u32,\n    pub slot: u32,\n    pub last: bool,\n}\n"
+        "/// A compiled step's data: the step, and what checking and replaying it\n/// needs of its run (the pc it is at, its address, the run's page, stamp\n/// and slot, and whether it is the run's last).\n#[derive(Clone, Copy, Debug)]\npub struct JitStep {\n    pub step: TStep,\n    pub pc: u64,\n    pub phys: u64,\n    pub page: u32,\n    pub stamp: u32,\n    pub slot: u32,\n    pub last: bool,\n    /// The run's pc (where it starts).\n    pub start: u64,\n}\n"
     }
 
     /// The JIT core's methods (inside the machine's impl).
@@ -141,6 +141,7 @@ impl Gen<'_> {
                     stamp: t.stamp,
                     slot: slot as u32,
                     last: k + 1 == n,
+                    start: t.pc,
                 }}).collect();
                 t.jit_steps.iter().map(|j| machine_jit::Call {{
                     run: Self::jit_step_fn(&j.step.instr),
@@ -231,6 +232,7 @@ impl Gen<'_> {
         if !self.tr_on && self.tr_prev != u32::MAX && !self.halted && !self.in_reset {{
             if let Some((c, len)) = self.jit_follow() {{
                 if budget >= len {{
+                    self.jit_left = budget;
                     let n = self.jit_enter(c, 0) as u64;
                     if let Some(e) = self.jit_err.take() {{
                         return Err(e);
@@ -269,6 +271,7 @@ impl Gen<'_> {
             }};
             if let Some(c) = code {{
                 if self.tr_on && len > 1 && budget >= len {{
+                    self.jit_left = budget - 1;
                     n += self.jit_enter(c, 1) as u64;
                     if let Some(e) = self.jit_err.take() {{
                         return Err(e);
@@ -945,6 +948,30 @@ impl Gen<'_> {
             }});
         }}
         let h = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, halted), n: machine_jit::N::Bool, bump: 0 }});
+        // The run's end, leading back to its start: round again, as the
+        // caller would enter it (by its link: the epoch unchanged, so the
+        // key and the code's page hold), while the steps allowed last.
+        // Not with `sync: run` (the devices wait for the run's end).
+        if j.last && !{sync_run} {{
+            let pc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, r.{pc0n}), n: {pc_n}, bump: 0 }});
+            let again = e.op(machine_jit::Op::Eq, pc, machine_jit::V::K((j.start & {pc_mask:#x}) as u128), {pc_n});
+            let ep = e.load(std::mem::offset_of!(Self, tr_epoch), machine_jit::N::U64);
+            let ep0 = e.load(std::mem::offset_of!(Self, tr_ep0), machine_jit::N::U64);
+            let same = e.op(machine_jit::Op::Eq, ep, ep0, machine_jit::N::U64);
+            let made = e.made_through();
+            let made = e.cast(made, machine_jit::N::U32, machine_jit::N::U64);
+            let need = e.op(machine_jit::Op::Add, made, machine_jit::V::K(e.steps() as u128), machine_jit::N::U64);
+            let left = e.load(std::mem::offset_of!(Self, jit_left), machine_jit::N::U64);
+            let fits = e.op(machine_jit::Op::Le, need, left, machine_jit::N::U64);
+            let running = e.not(h, machine_jit::N::Bool);
+            let c = e.op(machine_jit::Op::And, again, same, machine_jit::N::Bool);
+            let c = e.op(machine_jit::Op::And, c, fits, machine_jit::N::Bool);
+            let c = e.op(machine_jit::Op::And, c, running, machine_jit::N::Bool);
+            e.loop_back(c, |e| {{
+                e.store(std::mem::offset_of!(Self, tr_on), machine_jit::N::Bool, machine_jit::V::K(1));
+                e.store(std::mem::offset_of!(Self, tr_idx), machine_jit::N::U32, machine_jit::V::K(0));
+            }});
+        }}
         let on = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, tr_on), n: machine_jit::N::Bool, bump: 0 }});
         let off = e.not(on, machine_jit::N::Bool);
         let stop = e.op(machine_jit::Op::Or, h, off, machine_jit::N::Bool);

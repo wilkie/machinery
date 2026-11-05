@@ -149,6 +149,9 @@ impl Engine {
             b.seal_block(entry);
             let machine = b.block_params(entry)[0];
             let from = b.block_params(entry)[1];
+            let made_base = b.declare_var(types::I32);
+            let neg = b.ins().ineg(from);
+            b.def_var(made_base, neg);
 
             // The way out: the steps made so far.
             let out = b.create_block();
@@ -166,7 +169,9 @@ impl Engine {
             let zero = b.ins().iconst(types::I32, 0);
             b.ins().jump(out, &[zero.into()]);
             {
-                let mut e = Em::new(&mut b, ptr, cc, machine, from, out);
+                let mut e = Em::new(&mut b, ptr, cc, machine, out, made_base);
+                e.first = blocks.first().copied();
+                e.steps = steps;
                 for (k, blk) in blocks.iter().enumerate() {
                     e.begin_step(k, *blk, k < entries);
                     let mark = e.mark();
@@ -346,6 +351,75 @@ mod tests {
         });
         assert_eq!(t.a, 0xAB ^ 4);
         assert_eq!(t.out, 0xABCC);
+    }
+
+    #[test]
+    fn bit_fields_wait_to_be_put_in_their_field() {
+        // Flags in x: bit 0 and bit 6 written (computed, then known), bit 0
+        // read back as written, x read whole, then a branch that writes bit
+        // 6 on one side only; x as stored at the end.
+        for a in [0u8, 1, 2, 3] {
+            let mut t = T { a, x: 0xF0F0_0F0F, ..T::default() };
+            run_t(&mut t, |e, _| {
+                let off = std::mem::offset_of!(T, x);
+                let b0 = Place::Bits { off, reg: N::U32, shift: 0, width: 1, n: N::Bool, bump: 0 };
+                let b6 = Place::Bits { off, reg: N::U32, shift: 6, width: 1, n: N::Bool, bump: 0 };
+                let nib = Place::Bits { off, reg: N::U32, shift: 4, width: 4, n: N::U8, bump: 0 };
+                let av = e.read(&A);
+                let odd = e.op(Op::And, av, V::K(1), N::U8);
+                let odd = e.op(Op::Ne, odd, V::K(0), N::U8);
+                e.write(&b0, odd);
+                e.write(&b6, V::K(1));
+                e.write(&b0, V::K(0));
+                e.write(&b0, odd);
+                // Read back: as written, and a field the bits overlap.
+                let r = e.read(&b0);
+                let r = e.cast(r, N::Bool, N::U8);
+                e.write(&A, r);
+                let n = e.read(&nib);
+                let n = e.cast(n, N::U8, N::U64);
+                e.write(&OUT, n);
+                let two = e.op(Op::And, av, V::K(2), N::U8);
+                e.if_(two, |e| e.write(&b6, V::K(0)), |_| {});
+            });
+            let odd = (a & 1) as u32;
+            let six = if a & 2 != 0 { 0 } else { 1 };
+            assert_eq!(t.a, odd as u8, "a = {a}");
+            assert_eq!(t.out, 0x4, "the nibble with bit 6 set, a = {a}");
+            assert_eq!(t.x, (0xF0F0_0F0F & !0x41) | odd | (six << 6), "a = {a}");
+        }
+    }
+
+    #[test]
+    fn a_run_goes_round_and_counts_its_steps() {
+        // Step 0: a += 1. Step 1: out += 1, then round again while a < 5.
+        // From step 0: five passes, ten steps; from step 1: one step
+        // first, then four passes.
+        for (from, a0, steps, out) in [(0u32, 0u8, 10u32, 5u64), (1, 1, 9, 5)] {
+            let mut t = T { a: a0, ..T::default() };
+            let mut e = Engine::default();
+            let f = e
+                .compile_with(2, 2, |e, k| {
+                    if k == 0 {
+                        let a = e.read(&A);
+                        let a = e.op(Op::Add, a, V::K(1), N::U8);
+                        e.write(&A, a);
+                    } else {
+                        let o = e.read(&OUT);
+                        let o = e.op(Op::Add, o, V::K(1), N::U64);
+                        e.write(&OUT, o);
+                        let a = e.read(&A);
+                        let more = e.op(Op::Lt, a, V::K(5), N::U8);
+                        let made = e.made_through();
+                        assert!(matches!(made, V::D(_)));
+                        e.loop_back(more, |_| {});
+                    }
+                })
+                .expect("compiled");
+            let f: extern "C" fn(*mut T, u32) -> u32 = unsafe { std::mem::transmute(f) };
+            assert_eq!(f(&mut t, from), steps, "from {from}");
+            assert_eq!((t.a, t.out), (5, out), "from {from}");
+        }
     }
 
     #[test]

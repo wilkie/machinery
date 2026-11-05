@@ -86,7 +86,10 @@ pub const LIMIT: usize = 16384;
 
 fn new_module() -> Option<JITModule> {
     let mut flags = settings::builder();
-    flags.set("opt_level", "none").ok()?;
+    // Cranelift's own optimisation (`MACHINE_JIT_OPT=speed`): none by
+    // default, the emitter folding what it knows.
+    let opt = std::env::var("MACHINE_JIT_OPT").unwrap_or_else(|_| "none".to_string());
+    flags.set("opt_level", &opt).ok()?;
     // The verifier checks what the emitter builds; on with
     // `MACHINE_JIT_VERIFY` (and in this crate's tests).
     let verify = cfg!(test) || std::env::var_os("MACHINE_JIT_VERIFY").is_some();
@@ -202,6 +205,14 @@ impl Engine {
             if let Some(c) = ctx.compiled_code() {
                 eprintln!("machine-jit: {name} ({steps} steps)\n{}", c.vcode.as_deref().unwrap_or(""));
             }
+        }
+        // For profiling: the code and the step each byte range belongs to.
+        if let (Some(dir), Some(c)) = (std::env::var_os("MACHINE_JIT_BIN"), ctx.compiled_code()) {
+            let dir = std::path::Path::new(&dir);
+            let _ = std::fs::write(dir.join(format!("{name}.bin")), c.code_buffer());
+            let map: String = c.buffer.get_srclocs_sorted().iter()
+                .map(|r| format!("{:x} {:x} {}\n", r.start, r.end, r.loc.bits())).collect();
+            let _ = std::fs::write(dir.join(format!("{name}.steps")), map);
         }
         m.clear_context(&mut ctx);
         m.finalize_definitions().ok()?;

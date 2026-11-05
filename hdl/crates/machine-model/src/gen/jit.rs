@@ -407,7 +407,7 @@ impl Gen<'_> {
         let boundary = match ist.boundary {
             _ if !lowers || !gate_lowers => String::new(),
             Some(b) => format!(
-                "        let taken = Self::jf_{}(e);\n        e.exit_if(taken, true, |e| {{ let _ = e.call(Self::jit_interrupt_c as *const () as usize, &[], machine_jit::N::U64, false); }});\n",
+                "        // Where the fn returns true the step leaves the run, in place.\n        e.exit_on_true_return(Self::jit_interrupt_c as *const () as usize, true);\n        let taken = Self::jf_{}(e);\n        e.exit_if(taken, true, |e| {{ let _ = e.call(Self::jit_interrupt_c as *const () as usize, &[], machine_jit::N::U64, false); }});\n",
                 ident(&self.fns[&b].name)
             ),
             None => String::new(),
@@ -814,9 +814,9 @@ impl Gen<'_> {
                 let bus = std::mem::offset_of!(Self, bus);
                 let dc = e.read(&machine_jit::Place::Mem {{ off: bus + b.direct_code, n: machine_jit::N::U64, bump: 0 }});
                 let same = e.op(machine_jit::Op::Eq, dc, machine_jit::V::K(u0 as u128), machine_jit::N::U64);
-                let same = e.cast(same, machine_jit::N::Bool, machine_jit::N::U128);
-                let c = e.op(machine_jit::Op::Sub, machine_jit::V::K((u1 - u0 + 1) as u128), same, machine_jit::N::U128);
-                let t = e.op(machine_jit::Op::Mul, c, machine_jit::V::K(cost), machine_jit::N::U128);
+                // The units not in the buffer, each `cost`: a choice of two.
+                let n = (u1 - u0 + 1) as u128;
+                let t = e.select(same, machine_jit::V::K((n - 1) * cost), machine_jit::V::K(n * cost), machine_jit::N::U128);
                 let now = e.read(&machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }});
                 let now = e.op(machine_jit::Op::Add, now, t, machine_jit::N::U128);
                 e.store(bus + b.now, machine_jit::N::U128, now);

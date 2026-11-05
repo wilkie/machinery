@@ -255,11 +255,16 @@ pub struct Em<'a, 'f> {
     wasted: usize,
     /// Fields written but not yet stored.
     dirty: Vec<(usize, N)>,
+    /// A region's return that leaves the run: by region, the slot that
+    /// holds the return, the call made first and whether the step was
+    /// made (`exit_on_true_return`).
+    ret_exits: Vec<Option<(Slot, usize, bool)>>,
+    next_ret_exit: Option<(usize, bool)>,
 }
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, from: Value, out: Block) -> Self {
-        Em { b, ptr, cc, m, from, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new() }
+        Em { b, ptr, cc, m, from, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -277,6 +282,8 @@ impl<'a, 'f> Em<'a, 'f> {
         self.b.switch_to_block(block);
         self.k = k;
         self.live = true;
+        // The step's code carries its number, for reading dumps and profiles.
+        self.b.set_srcloc(cranelift_codegen::ir::SourceLoc::new(k as u32));
         // Entered from the switch too: nothing is known.
         if entry {
             self.regs.clear();
@@ -633,6 +640,7 @@ impl<'a, 'f> Em<'a, 'f> {
         self.wasted += self.emitted() - n0;
         self.b.func.dfg.replace(one_inst).iconst(types::I8, 0);
         self.regions.truncate(regions);
+        self.ret_exits.truncate(regions);
         self.restore(&before);
         self.bumped = bumped;
         self.live = true;
@@ -754,7 +762,27 @@ impl<'a, 'f> Em<'a, 'f> {
     /// A body that may `ret` from inside its branches (an inlined fn, an
     /// instruction's semantics): the code after `region_end` follows every
     /// `ret` and the body's end.
+    /// The next region begun with `region_begin_ret` (a fn's body): a
+    /// return of a known true value calls `call` and leaves the run (`made`
+    /// as for `exit`) where it is, instead of joining the other returns. For
+    /// a fn whose true result the caller would exit on (the paths that
+    /// leave share no stores with the ones that go on).
+    pub fn exit_on_true_return(&mut self, call: usize, made: bool) {
+        self.next_ret_exit = Some((call, made));
+    }
+
+    /// A region whose returns are in `ret` (see `exit_on_true_return`).
+    pub fn region_begin_ret(&mut self, ret: Slot) {
+        let ex = self.next_ret_exit.take().map(|(c, m)| (ret, c, m));
+        self.region_begin();
+        if let Some(top) = self.ret_exits.last_mut() {
+            *top = ex;
+        }
+    }
+
     pub fn region_begin(&mut self) {
+        self.next_ret_exit = None;
+        self.ret_exits.push(None);
         if !self.live {
             self.regions.push(None);
             return;
@@ -769,6 +797,13 @@ impl<'a, 'f> Em<'a, 'f> {
         if !self.live {
             return;
         }
+        if let Some(Some((slot, call, made))) = self.ret_exits.last().copied() {
+            if matches!(self.get(slot), V::K(v) if v != 0) {
+                let _ = self.call(call, &[], N::U64, false);
+                self.exit(made);
+                return;
+            }
+        }
         let Some(Some((before, join, _))) = self.regions.last() else { return };
         let (before, join) = (before.clone(), *join);
         let st = self.leave(&before, join);
@@ -779,6 +814,7 @@ impl<'a, 'f> Em<'a, 'f> {
 
     pub fn region_end(&mut self) {
         self.ret();
+        self.ret_exits.pop();
         match self.regions.pop() {
             Some(Some((before, join, ends))) => {
                 self.enter(&before, join, &ends);
@@ -964,10 +1000,28 @@ impl<'a, 'f> Em<'a, 'f> {
             }
             _ => {}
         }
+        // A store some branch owes, where every branch has the same value
+        // for the field (owed, or stored already: a branch that called out
+        // stored it first), stays owed past the join; each branch stores
+        // only the rest. Storing it again later, on a path that had stored
+        // it, is harmless.
+        let mut common: Vec<(usize, N)> = Vec::new();
+        for (st, _) in &ends {
+            for key in &st.dirty {
+                if common.contains(key) {
+                    continue;
+                }
+                let v = st.regs.get(key);
+                if v.is_some() && ends.iter().all(|(e, _)| e.regs.get(key) == v) {
+                    common.push(*key);
+                }
+            }
+        }
         for (st, pad) in &ends {
             self.b.switch_to_block(*pad);
             self.restore(st);
             self.live = true;
+            self.dirty.retain(|d| !common.contains(d));
             self.flush();
             self.b.ins().jump(join, &[]);
         }
@@ -993,8 +1047,14 @@ impl<'a, 'f> Em<'a, 'f> {
                 }
             }
         }
+        // The common stores' values (the same in every branch) are known.
+        for key in &common {
+            if let Some(v) = ends[0].regs.get(key) {
+                regs.insert(*key, *v);
+            }
+        }
         self.regs = regs;
-        self.dirty.clear();
+        self.dirty = common;
     }
 
     fn restore(&mut self, st: &State) {

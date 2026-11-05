@@ -1153,7 +1153,7 @@ impl Gen<'_> {
                 t => self.jn(t)?,
             };
             format!(
-                "    /// Lowered `{what}`.\n{attrs}    fn {name}(e: &mut machine_jit::Em{ps}) -> machine_jit::V {{\n        let ret = e.local({rn}, machine_jit::V::K(0));\n        e.region_begin();\n        {bind}{body}        e.region_end();\n        e.get(ret)\n    }}\n"
+                "    /// Lowered `{what}`.\n{attrs}    fn {name}(e: &mut machine_jit::Em{ps}) -> machine_jit::V {{\n        let ret = e.local({rn}, machine_jit::V::K(0));\n        e.region_begin_ret(ret);\n        {bind}{body}        e.region_end();\n        e.get(ret)\n    }}\n"
             )
         })
     }

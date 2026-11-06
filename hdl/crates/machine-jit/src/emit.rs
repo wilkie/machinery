@@ -316,11 +316,18 @@ pub struct Em<'a, 'f> {
     /// constant goes into both (a time charged one of two ways stays one
     /// of two values through the sums and the comparisons).
     sels: HashMap<Value, (Value, u128, u128)>,
+    /// What a condition says of a field: the field, its value when the
+    /// condition was made, the constant it was compared with, and whether
+    /// the condition holds when they are equal. A branch on it knows the
+    /// field on each side (`learn`).
+    facts: HashMap<Value, ((usize, N), Value, u128, bool)>,
+    /// Fields narrower than their native type (`declare_bits`).
+    bits: HashMap<(usize, N), u32>,
 }
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, out: Block, made_base: Variable) -> Self {
-        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), sels: HashMap::new() }
+        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new() }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -1164,11 +1171,13 @@ impl<'a, 'f> Em<'a, 'f> {
                 let before = self.state();
                 let join = self.b.create_block();
                 self.b.switch_to_block(tb);
+                self.learn(c, true);
                 t(self);
                 let a = self.leave(&before, join);
                 self.restore(&before);
                 self.live = true;
                 self.b.switch_to_block(fb);
+                self.learn(c, false);
                 f(self);
                 let b = self.leave(&before, join);
                 self.enter(&before, join, &[a, b]);
@@ -1508,11 +1517,13 @@ impl<'a, 'f> Em<'a, 'f> {
                 let before = self.state();
                 self.b.switch_to_block(eb);
                 self.b.set_cold_block(eb);
+                self.learn(c, true);
                 then(self);
                 self.exit(made);
                 self.restore(&before);
                 self.b.switch_to_block(cb);
                 self.live = true;
+                self.learn(c, false);
             }
         }
     }
@@ -1796,6 +1807,52 @@ impl<'a, 'f> Em<'a, 'f> {
     /// `a op b`, both of type `n` (a shift's amount of any type); a
     /// comparison's result is a bool.
     pub fn op(&mut self, op: Op, a: V, b: V, n: N) -> V {
+        let v = self.op_inner(op, a, b, n);
+        if let (Op::Eq | Op::Ne, V::D(r)) = (op, v) {
+            let (x, k) = match (a, b) {
+                (V::D(x), V::K(k)) | (V::K(k), V::D(x)) => (Some(x), k),
+                _ => (None, 0),
+            };
+            if let Some(x) = x {
+                if let Some(key) = self.regs.iter().find(|(_, v)| **v == Known::D(x)).map(|(k, _)| *k) {
+                    self.facts.insert(r, (key, x, k & key.1.mask(), op == Op::Eq));
+                }
+            }
+        }
+        v
+    }
+
+    /// The field at `off` holds at most `bits` bits (a register declared
+    /// narrower than its native type): a condition that it is not one
+    /// value says it is the other, for one bit.
+    pub fn declare_bits(&mut self, off: usize, n: N, bits: u32) {
+        self.bits.insert((off, n), bits);
+    }
+
+    /// On the side of a branch where `c` is `holds`: what it says of a
+    /// field, known (when the field still holds the value compared).
+    fn learn(&mut self, c: V, holds: bool) {
+        let V::D(cv) = c else { return };
+        let Some((key, x, k, eq)) = self.facts.get(&cv).copied() else {
+            // A bool field as the condition itself.
+            if let Some(key) = self.regs.iter().find(|(k, v)| k.1 == N::Bool && **v == Known::D(cv)).map(|(k, _)| *k) {
+                if !self.pieces.contains_key(&key) {
+                    self.regs.insert(key, Known::K(holds as u128));
+                }
+            }
+            return;
+        };
+        if self.regs.get(&key) != Some(&Known::D(x)) || self.pieces.contains_key(&key) {
+            return;
+        }
+        if eq == holds {
+            self.regs.insert(key, Known::K(k));
+        } else if self.bits.get(&key) == Some(&1) && k <= 1 {
+            self.regs.insert(key, Known::K(1 - k));
+        }
+    }
+
+    fn op_inner(&mut self, op: Op, a: V, b: V, n: N) -> V {
         self.trial_check();
         if !self.live {
             return V::K(0);
@@ -1977,7 +2034,13 @@ impl<'a, 'f> Em<'a, 'f> {
         match (a, n) {
             (V::K(x), N::Bool) => V::K((x == 0) as u128),
             (V::K(x), _) => V::K(!x & n.mask()),
-            (V::D(x), N::Bool) => V::D(self.b.ins().icmp_imm(IntCC::Equal, x, 0)),
+            (V::D(x), N::Bool) => {
+                let r = self.b.ins().icmp_imm(IntCC::Equal, x, 0);
+                if let Some((key, v, k, eq)) = self.facts.get(&x).copied() {
+                    self.facts.insert(r, (key, v, k, !eq));
+                }
+                V::D(r)
+            }
             (V::D(x), _) => V::D(self.b.ins().bnot(x)),
         }
     }

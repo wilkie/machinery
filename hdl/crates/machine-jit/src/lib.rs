@@ -538,6 +538,44 @@ mod tests {
     }
 
     #[test]
+    fn a_branch_knows_what_it_tested() {
+        // b (one bit) == 1: on that side b is known 1, on the other 0, so
+        // `b + 5` folds on both sides; a known field is not reloaded.
+        for b in [0u8, 1] {
+            let mut t = T { b, ..T::default() };
+            let bo = std::mem::offset_of!(T, b);
+            let bp = Place::Mem { off: bo, n: N::U8, bump: 0 };
+            run_t(&mut t, |e, _| {
+                e.declare_bits(bo, N::U8, 1);
+                let v = e.read(&bp);
+                let c = e.op(Op::Eq, v, V::K(1), N::U8);
+                let out = e.local(N::U64, V::K(0));
+                e.if_(
+                    c,
+                    |e| {
+                        let v = e.read(&bp);
+                        assert_eq!(v, V::K(1));
+                        e.set(out, V::K(6));
+                    },
+                    |e| {
+                        let v = e.read(&bp);
+                        assert_eq!(v, V::K(0));
+                        e.set(out, V::K(5));
+                    },
+                );
+                let o = e.get(out);
+                e.write(&OUT, o);
+                // Past an exit on b != 1 the code knows b is 1.
+                let v = e.read(&bp);
+                let ne = e.op(Op::Ne, v, V::K(1), N::U8);
+                e.exit_if(ne, false, |_| {});
+                assert_eq!(e.read(&bp), V::K(1));
+            });
+            assert_eq!(t.out, 5 + b as u64, "b = {b}");
+        }
+    }
+
+    #[test]
     fn shifts_past_the_width_and_signed_values() {
         for (x, y) in [(3u32, -64i32), (40, 7), (31, i32::MIN)] {
             let mut t = T { x, y, ..T::default() };

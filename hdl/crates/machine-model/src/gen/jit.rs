@@ -706,6 +706,9 @@ impl Gen<'_> {
     /// epoch as it was unless its writes bumped it.
     fn jit_emit_step(e: &mut machine_jit::Em, j: &JitStep, k: usize, checked: bool, follows: bool, fetch: Option<u128>, units: Option<(u64, u64, u128)>, spec: &[u128], key: &TKey) -> bool {{
         let s = &j.step;
+        if k == 0 {{
+            Self::jit_declare_bits(e);
+        }}
         if B::SCHEDULE || !{lowers} {{
             let r = e.call(Self::jit_step_fn(&s.instr), &[(machine_jit::V::K(j as *const JitStep as usize as u128), machine_jit::N::U64)], machine_jit::N::U32, false);
             e.exit_on(r);
@@ -1092,6 +1095,26 @@ impl Gen<'_> {
             values.join(", "),
             n = plan.spec.len()
         );
+        // Registers and latches narrower than their native type: a branch
+        // on one of them knows more (a one-bit field not 1 is 0).
+        let mut narrow = String::new();
+        let mut regs: Vec<_> = self.regs.values().collect();
+        regs.sort_by_key(|(i, _)| *i);
+        for (_, r) in regs {
+            if let (Ty::UInt(b), Ok(n)) = (&r.ty, self.jn(&r.ty)) {
+                if *b < super::native(*b, false).0 {
+                    let _ = writeln!(narrow, "        e.declare_bits(std::mem::offset_of!(Self, r.{}), {n}, {b});", ident(&r.name));
+                }
+            }
+        }
+        for l in &self.isa.latches {
+            if let (Ty::UInt(b), Ok(n)) = (&l.ty, self.jn(&l.ty)) {
+                if *b < super::native(*b, false).0 {
+                    let _ = writeln!(narrow, "        e.declare_bits(std::mem::offset_of!(Self, latch_{}), {n}, {b});", ident(&l.name));
+                }
+            }
+        }
+        let _ = write!(self.out, "    /// Registers and latches narrower than their native type.\n    #[allow(unused_variables)]\n    fn jit_declare_bits(e: &mut machine_jit::Em) {{\n{narrow}    }}\n");
         let _ = write!(self.out, "    /// The host instructions an outlined fn may take inlined (`JIT_TRIAL`\n    /// in the generator; `MACHINE_JIT_TRIAL` overrides it, for tuning).\n    #[allow(dead_code)]\n    fn jit_trial_budget() -> usize {{\n        static B: std::sync::OnceLock<usize> = std::sync::OnceLock::new();\n        *B.get_or_init(|| std::env::var(\"MACHINE_JIT_TRIAL\").ok().and_then(|v| v.parse().ok()).unwrap_or({JIT_TRIAL}))\n    }}\n");
         self.out.push_str(&out);
         Ok(())

@@ -809,8 +809,8 @@ impl Gen<'_> {
         if let Some(b) = board {{
             let bus = std::mem::offset_of!(Self, bus);
             e.set_volatile(bus + b.now, 16);
-            e.set_volatile(bus + b.code_time, 16);
-            e.set_volatile(bus + b.direct_code, 8);
+            // (The code time and unit change only with the processor's own
+            // fetches: the fetch shim says so.)
             e.set_volatile(bus + b.pending, 1);
         }}
         // The fetch, charged before the semantics as the bus would charge
@@ -848,8 +848,8 @@ impl Gen<'_> {
                 e.store(bus + b.direct_code, machine_jit::N::U64, machine_jit::V::K(u1 as u128));
                 false
             }}
-            (Some(_), _, _) => {{
-                let _ = e.call(Self::jit_fetch_c as *const () as usize, &[(machine_jit::V::K(j.page as u128), machine_jit::N::U64), (machine_jit::V::K(j.phys as u128), machine_jit::N::U64), (machine_jit::V::K(s.len as u128), machine_jit::N::U64)], machine_jit::N::U64, true);
+            (Some(b), _, _) => {{
+                let _ = e.call_touching(Self::jit_fetch_c as *const () as usize, &[(machine_jit::V::K(j.page as u128), machine_jit::N::U64), (machine_jit::V::K(j.phys as u128), machine_jit::N::U64), (machine_jit::V::K(s.len as u128), machine_jit::N::U64)], machine_jit::N::U64, &[(std::mem::offset_of!(Self, bus) + b.code_time, 16), (std::mem::offset_of!(Self, bus) + b.direct_code, 8)]);
                 false
             }}
             (None, _, _) => {{

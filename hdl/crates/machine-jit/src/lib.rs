@@ -496,6 +496,26 @@ mod tests {
     }
 
     #[test]
+    fn one_of_two_constants_stays_one_of_two() {
+        // t = a ? 5 : 9 (in u128); out = (100 - t) as u64, w = (t > 6) as u16.
+        for (a, out, w) in [(1u8, 95u64, 0u16), (0, 91, 1)] {
+            let mut t = T { a, ..T::default() };
+            run_t(&mut t, |e, _| {
+                let av = e.read(&A);
+                let c = e.op(Op::Ne, av, V::K(0), N::U8);
+                let tv = e.select(c, V::K(5), V::K(9), N::U128);
+                let d = e.op(Op::Sub, V::K(100), tv, N::U128);
+                let d = e.cast(d, N::U128, N::U64);
+                e.write(&OUT, d);
+                let g = e.op(Op::Gt, tv, V::K(6), N::U128);
+                let g = e.cast(g, N::Bool, N::U16);
+                e.write(&W, g);
+            });
+            assert_eq!((t.out, t.w), (out, w), "a = {a}");
+        }
+    }
+
+    #[test]
     fn shifts_past_the_width_and_signed_values() {
         for (x, y) in [(3u32, -64i32), (40, 7), (31, i32::MIN)] {
             let mut t = T { x, y, ..T::default() };

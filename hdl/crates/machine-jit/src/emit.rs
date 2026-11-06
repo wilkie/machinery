@@ -311,11 +311,16 @@ pub struct Em<'a, 'f> {
     loop_params: Vec<(Value, Vec<Value>)>,
     /// The pads the switch enters later entries through.
     pub(crate) entry_pads: HashMap<usize, Block>,
+    /// Values that are one of two known constants: the condition, the
+    /// value when it holds, and when not (`select`). Arithmetic with a
+    /// constant goes into both (a time charged one of two ways stays one
+    /// of two values through the sums and the comparisons).
+    sels: HashMap<Value, (Value, u128, u128)>,
 }
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, out: Block, made_base: Variable) -> Self {
-        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new() }
+        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), sels: HashMap::new() }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -1806,6 +1811,20 @@ impl<'a, 'f> Em<'a, 'f> {
             (Op::Shl | Op::Shr, x, V::K(0)) => return x,
             _ => {}
         }
+        // One of two constants with a constant (or two, chosen alike): one of
+        // two results.
+        if !matches!(op, Op::Div | Op::Rem) {
+            let arms = match (self.sel_of(a), self.sel_of(b), a, b) {
+                (Some((c, x0, x1)), None, _, V::K(k)) => Some((c, fold(op, x0, k, n), fold(op, x1, k, n))),
+                (None, Some((c, y0, y1)), V::K(k), _) => Some((c, fold(op, k, y0, n), fold(op, k, y1, n))),
+                (Some((c, x0, x1)), Some((c2, y0, y1)), _, _) if c == c2 => Some((c, fold(op, x0, y0, n), fold(op, x1, y1, n))),
+                _ => None,
+            };
+            if let Some((c, r0, r1)) = arms {
+                let rn = if matches!(op, Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge) { N::Bool } else { n };
+                return self.select(V::D(c), V::K(r0), V::K(r1), rn);
+            }
+        }
         let w = n.width() as u128;
         let x = self.val(a, n);
         let v = match op {
@@ -1973,6 +1992,10 @@ impl<'a, 'f> Em<'a, 'f> {
         if !self.live {
             return V::K(0);
         }
+        if let Some((c, x, y)) = self.sel_of(a) {
+            let f = |v: u128| (from.widen(v & from.mask()) as u128) & to.mask();
+            return self.select(V::D(c), V::K(f(x)), V::K(f(y)), to);
+        }
         match a {
             V::K(x) => V::K((from.widen(x & from.mask()) as u128) & to.mask()),
             V::D(x) => {
@@ -2004,9 +2027,27 @@ impl<'a, 'f> Em<'a, 'f> {
                 }
             }
             V::D(cv) => {
+                if let (V::K(x), V::K(y)) = (a, b) {
+                    let (x, y) = (x & n.mask(), y & n.mask());
+                    if x == y {
+                        return V::K(x);
+                    }
+                    let (xv, yv) = (self.konst(n, x), self.konst(n, y));
+                    let v = self.b.ins().select(cv, xv, yv);
+                    self.sels.insert(v, (cv, x, y));
+                    return V::D(v);
+                }
                 let (x, y) = (self.val(a, n), self.val(b, n));
                 V::D(self.b.ins().select(cv, x, y))
             }
+        }
+    }
+
+    /// `v` as one of two known constants, when it is.
+    fn sel_of(&self, v: V) -> Option<(Value, u128, u128)> {
+        match v {
+            V::D(x) => self.sels.get(&x).copied(),
+            V::K(_) => None,
         }
     }
 

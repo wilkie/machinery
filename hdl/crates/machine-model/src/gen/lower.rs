@@ -370,12 +370,19 @@ impl Gen<'_> {
                     Ty::Unit | Ty::Never => "machine_jit::N::U8",
                     t => self.jn(t)?,
                 };
+                // A fault the fn raised: delivered once the code has stored
+                // what it owes, and the run ends.
                 let pending = if self.jit_raisers.borrow().contains(d) {
-                    "let p = e.load(std::mem::offset_of!(Self, jit_pending), machine_jit::N::Bool); e.exit_if(p, true, |_| {}); "
+                    "let p = e.load(std::mem::offset_of!(Self, jit_pending), machine_jit::N::Bool); e.exit_if(p, true, |e| { let _ = e.call(Self::jit_deliver_c as *const () as usize, &[], machine_jit::N::U64, false); }); "
                 } else {
                     ""
                 };
-                let call = format!("{flat}let r = e.call(Self::jit_call_{} as *const () as usize, &av, {rn}, false); {pending}r", ident(&f.name));
+                // The registers the fn leaves alone stay in host values.
+                let invoke = match self.jit_call_ranges(*d) {
+                    Some((kept, read)) => format!("e.call_fx(Self::jit_call_{} as *const () as usize, &av, {rn}, &[{kept}], &[{read}])", ident(&f.name)),
+                    None => format!("e.call(Self::jit_call_{} as *const () as usize, &av, {rn}, false)", ident(&f.name)),
+                };
+                let call = format!("{flat}let r = {invoke}; {pending}r");
                 if self.jit_fns.borrow().contains(d) {
                     let _ = write!(s, "e.try_inline(Self::jit_trial_budget(), |e| Self::jf_{}(e{}), |e| {{ {call} }}) }}", ident(&f.name), inline_args.concat());
                 } else {
@@ -1272,7 +1279,7 @@ impl Gen<'_> {
     /// delivered as the step's tail would deliver it (`jit_pending` then
     /// ends the run).
     pub(crate) fn jit_outlined_shims(&self) -> R<String> {
-        let mut out = String::new();
+        let mut out = String::from("    /// A field's size (for `call_fx`'s ranges).\n    #[allow(dead_code)]\n    fn jit_fsize<T>(_: impl for<'a> Fn(&'a Self) -> &'a T) -> usize {\n        std::mem::size_of::<T>()\n    }\n    /// The fault an outlined fn raised (`jit_fault`), delivered as the\n    /// step's tail would deliver it (`jit_pending` then ends the run).\n    extern \"C\" fn jit_deliver_c(m: *mut Self) -> u64 {\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe { &mut *m };\n        let Some(f) = m.jit_fault.take() else { return 0 };\n        if m.jit_last != 0 {\n            // SAFETY: the step's instruction, in its run.\n            m.last = Some(unsafe { *(m.jit_last as usize as *const Instr) });\n            m.jit_last = 0;\n        }\n        m.decoded = true;\n        m.last_fault = None;\n        let r = m.jit_tail(m.tr_phys, Err(f));\n        m.bus.after_step();\n        if let Err(f) = r {\n            m.jit_err = Some(f);\n        }\n        0\n    }\n");
         let mut defs: Vec<DefId> = self.jit_outlined.borrow().iter().copied().collect();
         defs.sort();
         for d in defs {
@@ -1289,7 +1296,7 @@ impl Gen<'_> {
             };
             let _ = write!(
                 out,
-                "    #[allow(clippy::all, unused_variables)]\n    extern \"C\" fn jit_call_{n}(m: *mut Self{ps}) -> u64 {{\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe {{ &mut *m }};\n        match m.fn_{n}({}) {{\n            Ok(v) => {ok},\n            Err(f) => {{\n                if m.jit_last != 0 {{\n                    // SAFETY: the step's instruction, in its run.\n                    m.last = Some(unsafe {{ *(m.jit_last as usize as *const Instr) }});\n                    m.jit_last = 0;\n                }}\n                m.decoded = true;\n                m.last_fault = None;\n                let r = m.jit_tail(m.tr_phys, Err(f));\n                m.bus.after_step();\n                if let Err(f) = r {{\n                    m.jit_err = Some(f);\n                }}\n                m.jit_pending = true;\n                0\n            }}\n        }}\n    }}\n",
+                "    #[allow(clippy::all, unused_variables)]\n    extern \"C\" fn jit_call_{n}(m: *mut Self{ps}) -> u64 {{\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe {{ &mut *m }};\n        match m.fn_{n}({}) {{\n            Ok(v) => {ok},\n            Err(f) => {{\n                // Delivered by `jit_deliver_c`, once the code has stored\n                // what it owes.\n                m.jit_fault = Some(f);\n                m.jit_pending = true;\n                0\n            }}\n        }}\n    }}\n",
                 args.join(", "),
                 n = ident(&f.name)
             );
@@ -1322,6 +1329,98 @@ impl Gen<'_> {
             let _ = write!(out, "    #[allow(clippy::all)]\n    extern \"C\" fn jit_ext_{}(m: *mut Self{ps}) -> u64 {{\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe {{ &mut *m }};\n        {ret}\n    }}\n", ident(&f.name));
         }
         Ok(out)
+    }
+
+    /// The registers fn `d` (and the fns it calls) reads and writes; None
+    /// when it may touch any (an operand kind's, an external fn).
+    pub(crate) fn jit_reg_fx(&self, d: DefId) -> Option<(HashSet<DefId>, HashSet<DefId>)> {
+        fn root(e: &Expr) -> Option<DefId> {
+            match &e.kind {
+                H::Register(d) | H::RegField(d, _) | H::RegView(d, _) | H::Latch(d) => Some(*d),
+                H::Field(b, _) | H::Index(b, _) | H::Slice(b, ..) | H::TupleField(b, _) => root(b),
+                _ => None,
+            }
+        }
+        let reads = std::cell::RefCell::new(HashSet::new());
+        let writes = std::cell::RefCell::new(HashSet::new());
+        let all = std::cell::Cell::new(false);
+        let mut seen: HashSet<DefId> = HashSet::new();
+        let stack = std::cell::RefCell::new(vec![d]);
+        loop {
+            let Some(f) = stack.borrow_mut().pop() else { break };
+            if !seen.insert(f) {
+                continue;
+            }
+            let Some(fb) = self.fns.get(&f) else {
+                all.set(true);
+                continue;
+            };
+            if fb.external {
+                all.set(true);
+                continue;
+            }
+            hir::visit_block(
+                &fb.body,
+                &mut |st| match &st.kind {
+                    S::Assign(p, _) => {
+                        if let Some(r) = root(p) {
+                            writes.borrow_mut().insert(r);
+                        }
+                    }
+                    S::OperandWrite(..) => all.set(true),
+                    _ => {}
+                },
+                &mut |x| match &x.kind {
+                    H::Register(r) | H::RegField(r, _) | H::RegView(r, _) | H::Latch(r) => {
+                        reads.borrow_mut().insert(*r);
+                    }
+                    H::FnCall(g, _) => stack.borrow_mut().push(*g),
+                    H::KindSelect(..) | H::OperandField(..) | H::OperandTail(..) | H::TailOperand(..) => all.set(true),
+                    _ => {}
+                },
+            );
+        }
+        (!all.get()).then(|| (reads.into_inner(), writes.into_inner()))
+    }
+
+    /// For a call of fn `d`: the native registers and latches it leaves
+    /// alone, and those it only reads, as `call_fx`'s byte ranges (Rust);
+    /// the trace core's bookkeeping, which no isa fn touches, is left alone
+    /// too (but the epochs: a register's write bumps them).
+    fn jit_call_ranges(&self, d: DefId) -> Option<(String, String)> {
+        let (reads, writes) = self.jit_reg_fx(d)?;
+        let mut kept = String::new();
+        let mut read = String::new();
+        for f in ["tr_on", "tr_prev", "tr_idx", "tr_ep0", "tr_w", "tr_rec_now", "tr_phys", "jit_left", "jit_last", "jit_guard_failed", "last_start"] {
+            let _ = write!(kept, "(std::mem::offset_of!(Self, {f}), Self::jit_fsize(|m: &Self| &m.{f})), ");
+        }
+        for l in &self.isa.latches {
+            let Ok(n) = self.jn(&l.ty) else { continue };
+            let range = format!("(std::mem::offset_of!(Self, latch_{}), {n}.width() as usize / 8), ", ident(&l.name));
+            if writes.contains(&l.def) {
+                continue;
+            }
+            if reads.contains(&l.def) {
+                read.push_str(&range);
+            } else {
+                kept.push_str(&range);
+            }
+        }
+        let mut regs: Vec<(&DefId, &(usize, &hir::Register))> = self.regs.iter().collect();
+        regs.sort_by_key(|(d, _)| **d);
+        for (rd, (_, r)) in regs {
+            let Ok(n) = self.jn(&r.ty) else { continue };
+            let range = format!("(std::mem::offset_of!(Self, r.{}), {n}.width() as usize / 8), ", ident(&r.name));
+            if writes.contains(rd) {
+                continue;
+            }
+            if reads.contains(rd) {
+                read.push_str(&range);
+            } else {
+                kept.push_str(&range);
+            }
+        }
+        Some((kept, read))
     }
 
     /// The fns that may raise a fault (themselves or a fn they call).

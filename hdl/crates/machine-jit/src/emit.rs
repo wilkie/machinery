@@ -1611,6 +1611,20 @@ impl<'a, 'f> Em<'a, 'f> {
     /// machine is forgotten unless `pure` (it changes no field the code
     /// reads).
     pub fn call(&mut self, f: usize, args: &[(V, N)], ret: N, pure: bool) -> V {
+        self.call_with(f, args, ret, pure, None)
+    }
+
+    /// A call that may change the machine (not pure) but leaves the bytes
+    /// in `kept` alone (neither reads nor writes them) and only reads those
+    /// in `read`: what the code owes in `kept` stays owed (in host values),
+    /// what it knows of `kept` and `read` stays known. (A fault the callee
+    /// raises is not delivered by the call: what reads all the machine is
+    /// called after the code stores what it owes.)
+    pub fn call_fx(&mut self, f: usize, args: &[(V, N)], ret: N, kept: &[(usize, usize)], read: &[(usize, usize)]) -> V {
+        self.call_with(f, args, ret, false, Some((kept, read)))
+    }
+
+    fn call_with(&mut self, f: usize, args: &[(V, N)], ret: N, pure: bool, fx: Option<(&[(usize, usize)], &[(usize, usize)])>) -> V {
         if !self.live {
             return V::K(0);
         }
@@ -1638,19 +1652,38 @@ impl<'a, 'f> Em<'a, 'f> {
             };
             a.push(x);
         }
-        // The machine holds what the code wrote before the call sees it.
-        self.flush();
+        // The machine holds what the code wrote before the call sees it
+        // (all of it, but what the call leaves alone).
+        let within = |set: &[(usize, usize)], (o, n): (usize, N)| set.iter().any(|(so, sl)| o >= *so && o + n.width() as usize / 8 <= so + sl);
+        match fx {
+            None => self.flush(),
+            Some((kept, _)) => {
+                let limit = self.trial_limit.take();
+                let hit: Vec<(usize, N)> = self.dirty.iter().copied().filter(|k| !within(kept, *k)).collect();
+                for (o, m) in hit {
+                    self.flush_overlapping(o, m, None);
+                    // (flush_overlapping stores the fields over these bytes.)
+                }
+                self.trial_limit = limit;
+            }
+        }
         if !pure {
             self.code_calls += 1;
         }
         let fp = self.b.ins().iconst(self.ptr, f as i64);
         let call = self.b.ins().call_indirect(sig, fp, &a);
         let r = self.b.inst_results(call)[0];
-        if pure {
-            self.forget_volatile();
-        } else {
-            self.regs.clear();
-            self.pieces.clear();
+        match fx {
+            _ if pure => self.forget_volatile(),
+            None => {
+                self.regs.clear();
+                self.pieces.clear();
+            }
+            Some((kept, read)) => {
+                self.regs.retain(|k, _| within(kept, *k) || within(read, *k));
+                self.pieces.retain(|k, _| within(kept, *k));
+                self.forget_volatile();
+            }
         }
         let r = match ret.width() {
             64 => r,

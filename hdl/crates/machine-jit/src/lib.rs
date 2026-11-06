@@ -460,6 +460,34 @@ mod tests {
         }
     }
 
+    extern "C" fn sees(t: *mut T) -> u64 {
+        // SAFETY: the test's machine.
+        let t = unsafe { &mut *t };
+        // a is the code's to store later (left alone); b was stored.
+        t.out = (t.a as u64) << 8 | t.b as u64;
+        t.w = t.b as u16 + 1;
+        0
+    }
+
+    #[test]
+    fn a_call_that_leaves_fields_alone() {
+        let mut t = T { a: 1, b: 2, ..T::default() };
+        run_t(&mut t, |e, _| {
+            let ao = std::mem::offset_of!(T, a);
+            let bo = std::mem::offset_of!(T, b);
+            e.write(&A, V::K(7));
+            let b = Place::Mem { off: bo, n: N::U8, bump: 0 };
+            e.write(&b, V::K(9));
+            let _ = e.call_fx(sees as *const () as usize, &[], N::U64, &[(ao, 1)], &[(bo, 1)]);
+            // Still known: a (owed) and b (read); w is the call's.
+            assert_eq!(e.read(&A), V::K(7));
+            assert_eq!(e.read(&b), V::K(9));
+            assert!(matches!(e.read(&W), V::D(_)));
+        });
+        assert_eq!(t.out, 1 << 8 | 9, "the call saw a as it was, b as written");
+        assert_eq!((t.a, t.b, t.w), (7, 9, 10));
+    }
+
     #[test]
     fn shifts_past_the_width_and_signed_values() {
         for (x, y) in [(3u32, -64i32), (40, 7), (31, i32::MIN)] {

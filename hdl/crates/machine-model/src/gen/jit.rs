@@ -32,14 +32,14 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n    /// The steps compiled code may make before it returns (a run whose\n    /// end leads to its start goes round while they last).\n    pub jit_left: u64,\n"
+        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n    /// The steps compiled code may make before it returns (a run whose\n    /// end leads to its start goes round while they last).\n    pub jit_left: u64,\n    /// A fault an outlined fn raised, for `jit_deliver_c` to deliver.\n    pub jit_fault: Option<Fault>,\n"
     }
 
     pub(crate) fn jit_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n            jit_left: 0,\n"
+        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n            jit_left: 0,\n            jit_fault: None,\n"
     }
 
     /// The trace's fields for compiled code (inside `Trace`).

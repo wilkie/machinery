@@ -516,6 +516,28 @@ mod tests {
     }
 
     #[test]
+    fn a_lazy_flag_is_computed_where_it_is_needed() {
+        // Bit 0 of x: whether a is odd (lazy); leave when a > 5 (the flag is
+        // stored on the way out), else bit 0 is written again, from a
+        // different value.
+        for (a, made, bit) in [(7u8, 0u32, 1u32), (3, 1, 0), (9, 0, 1), (2, 1, 1)] {
+            let mut t = T { a, x: 0x100, ..T::default() };
+            let n = run_t(&mut t, |e, _| {
+                let b0 = Place::Bits { off: std::mem::offset_of!(T, x), reg: N::U32, shift: 0, width: 1, n: N::Bool, bump: 0 };
+                let av = e.read(&A);
+                let odd = e.op(Op::And, av, V::K(1), N::U8);
+                let odd = e.op(Op::Ne, odd, V::K(0), N::U8);
+                e.write(&b0, odd);
+                let big = e.op(Op::Gt, av, V::K(5), N::U8);
+                e.exit_if(big, false, |_| {});
+                let even = e.op(Op::Eq, odd, V::K(0), N::Bool);
+                e.write(&b0, even);
+            });
+            assert_eq!((n, t.x), (made, 0x100 | bit), "a = {a}");
+        }
+    }
+
+    #[test]
     fn shifts_past_the_width_and_signed_values() {
         for (x, y) in [(3u32, -64i32), (40, 7), (31, i32::MIN)] {
             let mut t = T { x, y, ..T::default() };

@@ -24,8 +24,11 @@ use machine_sema::ty::Ty;
 const HOT: u32 = 64;
 
 /// The host instructions an outlined fn may take, inlined at a call where
-/// what is known folds it (`Em::try_inline`).
-const JIT_TRIAL: usize = 0;
+/// what is known folds it (`Em::try_inline`). On the 386 benchmarks, 400
+/// saves 5-6% of a run's host instructions for about 13% more compiling
+/// (a memory read through a segment folds in real mode); larger budgets
+/// compile more than they save.
+const JIT_TRIAL: usize = 400;
 
 impl Gen<'_> {
     pub(crate) fn jit_fields(&self) -> &'static str {
@@ -546,7 +549,7 @@ impl Gen<'_> {
             let touched = [(std::mem::offset_of!(Self, cycles), 4), (std::mem::offset_of!(Self, accesses), 1)];
             return match v {{
                 None if pure => e.call(shim, &[(a, machine_jit::N::U64)], nn, pure),
-                None => e.call_touching(shim, &[(a, machine_jit::N::U64)], nn, &touched),
+                None => e.call_reading(shim, &[(a, machine_jit::N::U64)], nn, &touched),
                 Some(v) => {{
                     let v = e.cast(v, nn, machine_jit::N::U64);
                     if pure {{

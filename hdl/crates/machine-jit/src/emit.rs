@@ -1702,6 +1702,12 @@ impl<'a, 'f> Em<'a, 'f> {
         self.call_with(f, args, ret, false, Some(Fx::Touch(touched)))
     }
 
+    /// `call_touching`, for a call that writes no memory (a bus read):
+    /// the run's code is not checked after it.
+    pub fn call_reading(&mut self, f: usize, args: &[(V, N)], ret: N, touched: &[(usize, usize)]) -> V {
+        self.call_with(f, args, ret, true, Some(Fx::Touch(touched)))
+    }
+
     fn call_with(&mut self, f: usize, args: &[(V, N)], ret: N, pure: bool, fx: Option<Fx>) -> V {
         if !self.live {
             return V::K(0);
@@ -1762,6 +1768,10 @@ impl<'a, 'f> Em<'a, 'f> {
         let call = self.b.ins().call_indirect(sig, fp, &a);
         let r = self.b.inst_results(call)[0];
         match fx {
+            Some(Fx::Touch(touched)) => {
+                self.regs.retain(|k, _| !meets(touched, *k));
+                self.forget_volatile();
+            }
             _ if pure => self.forget_volatile(),
             None => {
                 self.regs.clear();
@@ -1770,10 +1780,6 @@ impl<'a, 'f> Em<'a, 'f> {
             Some(Fx::Keep(kept, read)) => {
                 self.regs.retain(|k, _| within(kept, *k) || within(read, *k));
                 self.pieces.retain(|k, _| within(kept, *k));
-                self.forget_volatile();
-            }
-            Some(Fx::Touch(touched)) => {
-                self.regs.retain(|k, _| !meets(touched, *k));
                 self.forget_volatile();
             }
         }

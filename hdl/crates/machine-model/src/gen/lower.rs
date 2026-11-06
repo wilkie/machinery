@@ -607,6 +607,15 @@ impl Gen<'_> {
                 }
             }
             H::Binary(op, a, b) => self.jbinary(cx, *op, a, b, &e.ty)?,
+            // Two constants: a select (no branch, and what follows knows
+            // the value is one of the two).
+            H::Ternary(c, a, b) if Self::jlit(a).is_some() && Self::jlit(b).is_some() => format!(
+                "{{ let c = {}; e.select(c, {}, {}, {}) }}",
+                self.jexpr(cx, c)?,
+                self.jexpr(cx, a)?,
+                self.jexpr(cx, b)?,
+                n()?
+            ),
             H::Ternary(c, a, b) => format!(
                 "{{ let c = {}; e.if_val(c, {}, |e| {}, |e| {}) }}",
                 self.jexpr(cx, c)?,
@@ -658,6 +667,19 @@ impl Gen<'_> {
             }
             H::If(c, then_b, else_e) => {
                 let ct = self.jexpr(cx, c)?;
+                let lits = match (else_e, Self::jlit_block(then_b)) {
+                    (Some(el), Some(a)) => {
+                        let b = match &el.kind {
+                            H::Block(b) => Self::jlit_block(b),
+                            _ => Self::jlit(el),
+                        };
+                        b.map(|b| (a, b))
+                    }
+                    _ => None,
+                };
+                if let (Some((a, b)), false) = (lits, matches!(e.ty, Ty::Unit | Ty::Never)) {
+                    return Ok(format!("{{ let c = {ct}; e.select(c, {}, {}, {}) }}", self.jexpr(cx, a)?, self.jexpr(cx, b)?, n()?));
+                }
                 match (else_e, &e.ty) {
                     (Some(el), Ty::Unit | Ty::Never) => format!(
                         "{{ let c = {ct}; e.if_(c, |e| {{ {}; }}, |e| {{ {}; }}); machine_jit::V::K(0) }}",
@@ -1329,6 +1351,26 @@ impl Gen<'_> {
             let _ = write!(out, "    #[allow(clippy::all)]\n    extern \"C\" fn jit_ext_{}(m: *mut Self{ps}) -> u64 {{\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe {{ &mut *m }};\n        {ret}\n    }}\n", ident(&f.name));
         }
         Ok(out)
+    }
+
+    /// `x`, when it is a literal (perhaps cast).
+    fn jlit(x: &Expr) -> Option<&Expr> {
+        match &x.kind {
+            H::Int(_) | H::Bool(_) => Some(x),
+            H::Cast(i) => Self::jlit(i).map(|_| x),
+            _ => None,
+        }
+    }
+
+    /// A block that is only a literal: the literal.
+    fn jlit_block(b: &Block) -> Option<&Expr> {
+        match b.stmts.as_slice() {
+            [st] => match &st.kind {
+                S::Expr(x) => Self::jlit(x),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// The registers fn `d` (and the fns it calls) reads and writes; None

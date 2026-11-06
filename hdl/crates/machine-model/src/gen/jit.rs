@@ -541,11 +541,19 @@ impl Gen<'_> {
     fn jm_access(e: &mut machine_jit::Em, a: machine_jit::V, n: u32, v: Option<machine_jit::V>, mems: &'static [JitMem], b: JitBoard, shim: usize, pure: bool) -> machine_jit::V {{
         let nn = Self::jm_n(n);
         let Some((m, rest)) = mems.split_first() else {{
+            // By the bus: the shim counts the access and its split cycles;
+            // the processor's state is not the bus's to change.
+            let touched = [(std::mem::offset_of!(Self, cycles), 4), (std::mem::offset_of!(Self, accesses), 1)];
             return match v {{
-                None => e.call(shim, &[(a, machine_jit::N::U64)], nn, pure),
+                None if pure => e.call(shim, &[(a, machine_jit::N::U64)], nn, pure),
+                None => e.call_touching(shim, &[(a, machine_jit::N::U64)], nn, &touched),
                 Some(v) => {{
                     let v = e.cast(v, nn, machine_jit::N::U64);
-                    let _ = e.call(shim, &[(a, machine_jit::N::U64), (v, machine_jit::N::U64)], machine_jit::N::U64, pure);
+                    if pure {{
+                        let _ = e.call(shim, &[(a, machine_jit::N::U64), (v, machine_jit::N::U64)], machine_jit::N::U64, pure);
+                    }} else {{
+                        let _ = e.call_touching(shim, &[(a, machine_jit::N::U64), (v, machine_jit::N::U64)], machine_jit::N::U64, &touched);
+                    }}
                     machine_jit::V::K(0)
                 }}
             }};

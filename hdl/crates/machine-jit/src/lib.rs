@@ -220,9 +220,15 @@ fn build(
     // plan, the first through a pad that loads what it takes.
     let blocks: Vec<_> = (0..steps).map(|_| b.create_block()).collect();
     let pad = plan.as_ref().map(|_| b.create_block());
+    // Later entries through pads too (`Em::begin_step`).
+    let pads: Vec<(usize, cranelift_codegen::ir::Block)> = (1..entries.min(steps)).map(|k| (k, b.create_block())).collect();
     let mut switch = Switch::new();
     for (k, blk) in blocks.iter().enumerate().take(entries) {
-        switch.set_entry(k as u128, if k == 0 { pad.unwrap_or(*blk) } else { *blk });
+        let to = match k {
+            0 => pad.unwrap_or(*blk),
+            _ => pads.iter().find(|(j, _)| *j == k).map(|(_, p)| *p).unwrap_or(*blk),
+        };
+        switch.set_entry(k as u128, to);
     }
     let none = b.create_block();
     switch.emit(&mut b, from, none);
@@ -235,6 +241,7 @@ fn build(
         let mut e = Em::new(&mut b, ptr, cc, machine, out, made_base);
         e.first = blocks.first().copied();
         e.steps = steps;
+        e.entry_pads = pads.into_iter().collect();
         if let (Some(plan), Some(pad), Some(first)) = (plan, pad, blocks.first().copied()) {
             e.entry_pad(pad, first, plan);
         }

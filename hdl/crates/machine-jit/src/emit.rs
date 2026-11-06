@@ -217,6 +217,13 @@ impl LoopPlan {
     }
 }
 
+/// What a call leaves of the machine (`Em::call_fx`, `Em::call_touching`).
+#[derive(Clone, Copy)]
+enum Fx<'s> {
+    Keep(&'s [(usize, usize)], &'s [(usize, usize)]),
+    Touch(&'s [(usize, usize)]),
+}
+
 /// A bit field written into a cached field and not yet put in it: the
 /// field is its cached value with these bits replaced (`settle`). A read
 /// of the bits gets the value as written; bits written again before the
@@ -302,11 +309,13 @@ pub struct Em<'a, 'f> {
     seen: Option<LoopPlan>,
     /// The first step's parameters: each carried field, and its bits.
     loop_params: Vec<(Value, Vec<Value>)>,
+    /// The pads the switch enters later entries through.
+    pub(crate) entry_pads: HashMap<usize, Block>,
 }
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, out: Block, made_base: Variable) -> Self {
-        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new() }
+        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new() }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -315,6 +324,58 @@ impl<'a, 'f> Em<'a, 'f> {
     }
 
     pub(crate) fn begin_step(&mut self, k: usize, block: Block, entry: bool) {
+        // An entry past the first, which the switch enters through a pad:
+        // the step before passes what it knows as host values, the pad
+        // loads them.
+        if entry && k > 0 {
+            if let Some(pad) = self.entry_pads.get(&k).copied() {
+                let plan = if self.live { self.loop_seen() } else { LoopPlan::default() };
+                let params: Vec<(Value, Vec<Value>)> = plan
+                    .carried
+                    .iter()
+                    .zip(&plan.shapes)
+                    .map(|((_, n), sh)| {
+                        let b = self.b.append_block_param(block, n.ir());
+                        let ps = sh.iter().map(|_| self.b.append_block_param(block, n.ir())).collect();
+                        (b, ps)
+                    })
+                    .collect();
+                let limit = self.trial_limit.take();
+                if self.live {
+                    let args = self.carry_args(&plan.carried, &plan.shapes);
+                    self.dirty.retain(|d| !plan.carried.contains(d));
+                    self.flush();
+                    self.b.ins().jump(block, &args);
+                }
+                self.b.switch_to_block(pad);
+                self.b.seal_block(pad);
+                self.live = true;
+                self.regs.clear();
+                self.pieces.clear();
+                self.dirty.clear();
+                let args = self.carry_args(&plan.carried, &plan.shapes);
+                self.b.ins().jump(block, &args);
+                self.trial_limit = limit;
+                self.b.switch_to_block(block);
+                self.k = k;
+                self.b.set_srcloc(cranelift_codegen::ir::SourceLoc::new(k as u32));
+                self.regs.clear();
+                self.pieces.clear();
+                self.dirty.clear();
+                for ((key, (v, bits)), sh) in plan.carried.iter().zip(params).zip(&plan.shapes) {
+                    self.regs.insert(*key, Known::D(v));
+                    if !sh.is_empty() {
+                        let ps = sh.iter().zip(bits).map(|(&(shift, width), b)| Piece { shift, width, v: V::D(b) }).collect();
+                        self.pieces.insert(*key, ps);
+                    }
+                    if plan.owed.contains(key) {
+                        self.dirty.push(*key);
+                    }
+                }
+                self.live = true;
+                return;
+            }
+        }
         if self.live {
             if entry {
                 self.flush();
@@ -483,7 +544,7 @@ impl<'a, 'f> Em<'a, 'f> {
     fn settle_why(&mut self, why: &str, off: usize, n: N) {
         if self.live && self.pieces.contains_key(&(off, n)) && std::env::var_os("MACHINE_JIT_SETTLE").is_some() {
             eprintln!("settle {why} k={} off={off:#x} {:?} cold={}", self.k, n, self.b.current_block().map(|b| self.b.func.layout.is_cold(b)).unwrap_or(false));
-            if std::env::var("MACHINE_JIT_SETTLE").as_deref() == Ok("bt") && why == "overlapping_read" {
+            if std::env::var("MACHINE_JIT_SETTLE").as_deref() == Ok("bt") {
                 eprintln!("{}", std::backtrace::Backtrace::force_capture());
             }
         }
@@ -1441,6 +1502,7 @@ impl<'a, 'f> Em<'a, 'f> {
                 self.b.seal_block(cb);
                 let before = self.state();
                 self.b.switch_to_block(eb);
+                self.b.set_cold_block(eb);
                 then(self);
                 self.exit(made);
                 self.restore(&before);
@@ -1591,9 +1653,12 @@ impl<'a, 'f> Em<'a, 'f> {
                 self.b.seal_block(eb);
                 self.b.seal_block(cb);
                 self.b.switch_to_block(eb);
-                let dirty = self.dirty.clone();
+                self.b.set_cold_block(eb);
+                // (What the flush settles is this path's: the other goes on
+                // as it was.)
+                let before = self.state();
                 self.flush();
-                self.dirty = dirty;
+                self.restore(&before);
                 let made = self.b.ins().icmp_imm(IntCC::Equal, rv, 1);
                 let made = self.b.ins().uextend(types::I32, made);
                 let c = self.b.ins().iconst(types::I32, self.k as i64);
@@ -1621,10 +1686,18 @@ impl<'a, 'f> Em<'a, 'f> {
     /// raises is not delivered by the call: what reads all the machine is
     /// called after the code stores what it owes.)
     pub fn call_fx(&mut self, f: usize, args: &[(V, N)], ret: N, kept: &[(usize, usize)], read: &[(usize, usize)]) -> V {
-        self.call_with(f, args, ret, false, Some((kept, read)))
+        self.call_with(f, args, ret, false, Some(Fx::Keep(kept, read)))
     }
 
-    fn call_with(&mut self, f: usize, args: &[(V, N)], ret: N, pure: bool, fx: Option<(&[(usize, usize)], &[(usize, usize)])>) -> V {
+    /// A call that reads and writes only the bytes in `touched` (and the
+    /// volatile fields): those are stored first and forgotten after; the
+    /// rest stays owed and known (a bus access's shim: the access count,
+    /// the cycles, the bus).
+    pub fn call_touching(&mut self, f: usize, args: &[(V, N)], ret: N, touched: &[(usize, usize)]) -> V {
+        self.call_with(f, args, ret, false, Some(Fx::Touch(touched)))
+    }
+
+    fn call_with(&mut self, f: usize, args: &[(V, N)], ret: N, pure: bool, fx: Option<Fx>) -> V {
         if !self.live {
             return V::K(0);
         }
@@ -1655,9 +1728,19 @@ impl<'a, 'f> Em<'a, 'f> {
         // The machine holds what the code wrote before the call sees it
         // (all of it, but what the call leaves alone).
         let within = |set: &[(usize, usize)], (o, n): (usize, N)| set.iter().any(|(so, sl)| o >= *so && o + n.width() as usize / 8 <= so + sl);
+        let meets = |set: &[(usize, usize)], (o, n): (usize, N)| set.iter().any(|(so, sl)| o < so + sl && *so < o + n.width() as usize / 8);
+        let vol = self.volatile.clone();
         match fx {
             None => self.flush(),
-            Some((kept, _)) => {
+            Some(Fx::Touch(touched)) => {
+                let limit = self.trial_limit.take();
+                let hit: Vec<(usize, N)> = self.dirty.iter().copied().filter(|k| meets(touched, *k) || meets(&vol, *k)).collect();
+                for (o, m) in hit {
+                    self.flush_overlapping(o, m, None);
+                }
+                self.trial_limit = limit;
+            }
+            Some(Fx::Keep(kept, _)) => {
                 let limit = self.trial_limit.take();
                 let hit: Vec<(usize, N)> = self.dirty.iter().copied().filter(|k| !within(kept, *k)).collect();
                 for (o, m) in hit {
@@ -1679,9 +1762,13 @@ impl<'a, 'f> Em<'a, 'f> {
                 self.regs.clear();
                 self.pieces.clear();
             }
-            Some((kept, read)) => {
+            Some(Fx::Keep(kept, read)) => {
                 self.regs.retain(|k, _| within(kept, *k) || within(read, *k));
                 self.pieces.retain(|k, _| within(kept, *k));
+                self.forget_volatile();
+            }
+            Some(Fx::Touch(touched)) => {
+                self.regs.retain(|k, _| !meets(touched, *k));
                 self.forget_volatile();
             }
         }

@@ -151,6 +151,10 @@ pub struct Gen<'a> {
     /// The JIT core's concessions (`sync: run`, `timing: approximate`).
     sync_run: bool,
     timing_approx: bool,
+    /// `sync: quantum(...)`, in time units; `events: block`.
+    sync_quantum: Option<u128>,
+    sync_block: bool,
+    events_block: bool,
     /// The isa fns the JIT lowering inlines (`gen/lower.rs`).
     jit_fns: std::cell::RefCell<std::collections::HashSet<DefId>>,
     /// The kind rules it lowers: (kind, rule index).
@@ -199,6 +203,13 @@ pub fn generate_system(
         g.trace = Some(g.plan_trace(g.jit)?);
         g.sync_run = prof.is_some_and(|p| p.sync_run);
         g.timing_approx = prof.is_some_and(|p| p.timing_approx);
+        g.events_block = prof.is_some_and(|p| p.events_block);
+        g.sync_block = prof.is_some_and(|p| p.sync_block);
+        // The quantum in time units (base_num / base_den seconds each).
+        g.sync_quantum = prof.and_then(|p| p.sync_quantum).map(|(n, d)| {
+            let units = n.saturating_mul(sys.base_den) / d.saturating_mul(sys.base_num).max(1);
+            units.max(1)
+        });
     }
     g.emit_all()?;
     g.emit_system(sys, proc_idx, profile)?;
@@ -237,6 +248,9 @@ impl<'a> Gen<'a> {
             jit: false,
             sync_run: false,
             timing_approx: false,
+            sync_quantum: None,
+            sync_block: false,
+            events_block: false,
             jit_fns: Default::default(),
             jit_rules: Default::default(),
             jit_units: Default::default(),

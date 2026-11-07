@@ -574,14 +574,14 @@ impl<'a> Gen<'a> {
         let mut o = String::new();
         let _ = write!(
             o,
-            "\n/// The system `{}`.\npub mod system {{\n    use super::*;\n\n    /// `e / p` for times: in 64 bits when both fit (an elapsed time is\n    /// short), else in 128.\n    #[inline(always)]\n    pub fn div_time(e: clock::Time, p: clock::Time) -> clock::Time {{\n        if (e | p) >> 64 == 0 {{ (e as u64 / p as u64) as clock::Time }} else {{ e / p }}\n    }}\n\n    /// The time unit is `BASE_NUM / BASE_DEN` seconds.\n    pub const BASE_NUM: u128 = {};\n    pub const BASE_DEN: u128 = {};\n    /// The profile this crate was built with, its core, and whether the\n    /// processor reaches memory directly (`memory: direct`: no A20 gate,\n    /// approximate time).\n    pub const PROFILE: &str = {:?};\n    pub const CORE: &str = {:?};\n    pub const DIRECT_MEMORY: bool = {};\n    /// No concession: time and device order as the decode core keeps them\n    /// (`sync: run` and `timing: approximate` make it false).\n    pub const EXACT: bool = {};\n    /// Clock periods in time units.\n    pub mod clock {{\n        /// A time: a count of the system's time unit. 128 bits, so that time\n        /// stays exact over any run however fine the unit the clocks need.\n        pub type Time = u128;\n",
+            "\n/// The system `{}`.\npub mod system {{\n    use super::*;\n\n    /// `e / p` for times: in 64 bits when both fit (an elapsed time is\n    /// short), else in 128.\n    #[inline(always)]\n    pub fn div_time(e: clock::Time, p: clock::Time) -> clock::Time {{\n        if (e | p) >> 64 == 0 {{ (e as u64 / p as u64) as clock::Time }} else {{ e / p }}\n    }}\n\n    /// The time unit is `BASE_NUM / BASE_DEN` seconds.\n    pub const BASE_NUM: u128 = {};\n    pub const BASE_DEN: u128 = {};\n    /// The profile this crate was built with, its core, and whether the\n    /// processor reaches memory directly (`memory: direct`: no A20 gate,\n    /// approximate time).\n    pub const PROFILE: &str = {:?};\n    pub const CORE: &str = {:?};\n    pub const DIRECT_MEMORY: bool = {};\n    /// No concession: time and device order as the decode core keeps them\n    /// (any concession: `sync: run`, `sync: quantum`, `events: block`,\n    /// `timing: approximate`, makes it false).\n    pub const EXACT: bool = {};\n    /// Clock periods in time units.\n    pub mod clock {{\n        /// A time: a count of the system's time unit. 128 bits, so that time\n        /// stays exact over any run however fine the unit the clocks need.\n        pub type Time = u128;\n",
             sys.name,
             sys.base_num,
             sys.base_den,
             profile.unwrap_or("default"),
             if self.jit { "jit" } else if self.trace.is_some() { "trace" } else { "decode" },
             prof.is_some_and(|p| p.direct_memory),
-            !(self.sync_run || self.timing_approx)
+            !(self.sync_run || self.timing_approx || self.sync_quantum.is_some() || self.sync_block || self.events_block)
         );
         for (i, c) in sys.clocks.iter().enumerate() {
             let _ = writeln!(

@@ -297,16 +297,64 @@ impl Checker<'_> {
                     let mut core = hir::Core::Decode;
                     let mut sync_run = false;
                     let mut timing_approx = false;
+                    let mut sync_quantum = None;
+                    let mut sync_block = false;
+                    let mut events_block = false;
                     for e in &p.entries {
                         let one = |n: &str| e.target.segments.len() == 1 && e.target.segments[0].name == n;
-                        if one("sync") || one("timing") {
-                            match (e.target.segments[0].name.as_str(), e.level.name.as_str()) {
-                                ("sync", "step") => sync_run = false,
-                                ("sync", "run") => sync_run = true,
+                        if one("sync") || one("timing") || one("events") {
+                            let what = e.target.segments[0].name.as_str();
+                            // Only `quantum` takes an argument: a time.
+                            if (what, e.level.name.as_str()) == ("sync", "quantum") {
+                                let q = match e.arg.as_ref().map(|a| &a.kind) {
+                                    Some(A::Quantity { text, unit, .. }) if matches!(unit, Unit::Ps | Unit::Ns | Unit::Us | Unit::Ms | Unit::S) => quantity_hz(text, *unit),
+                                    _ => None,
+                                };
+                                match q {
+                                    // A period's frequency, turned back into seconds.
+                                    Some(Ratio(n, d)) if n > 0 => {
+                                        sync_quantum = Some((d, n));
+                                        sync_run = false;
+                                        sync_block = false;
+                                    }
+                                    _ => {
+                                        self.error(module, "E1049", e.span, "`sync: quantum(...)` takes a time: `quantum(1 ms)`");
+                                        ok = false;
+                                    }
+                                }
+                                continue;
+                            }
+                            if e.arg.is_some() {
+                                self.error(module, "E1049", e.span, format!("`{what}: {}` takes no argument", e.level.name));
+                                ok = false;
+                                continue;
+                            }
+                            match (what, e.level.name.as_str()) {
+                                ("sync", "step") => {
+                                    sync_run = false;
+                                    sync_quantum = None;
+                                    sync_block = false;
+                                }
+                                ("sync", "run") => {
+                                    sync_run = true;
+                                    sync_quantum = None;
+                                    sync_block = false;
+                                }
+                                ("sync", "block") => {
+                                    sync_run = false;
+                                    sync_quantum = None;
+                                    sync_block = true;
+                                }
                                 ("timing", "exact") => timing_approx = false,
                                 ("timing", "approximate") => timing_approx = true,
+                                ("events", "instruction") => events_block = false,
+                                ("events", "block") => events_block = true,
                                 (what, other) => {
-                                    let expected = if what == "sync" { "`step` or `run`" } else { "`exact` or `approximate`" };
+                                    let expected = match what {
+                                        "sync" => "`step`, `block`, `run` or `quantum(<time>)`",
+                                        "events" => "`instruction` or `block`",
+                                        _ => "`exact` or `approximate`",
+                                    };
                                     self.error(module, "E1049", e.level.span, format!("unknown {what} `{other}` (expected {expected})"));
                                     ok = false;
                                 }
@@ -369,8 +417,8 @@ impl Checker<'_> {
                             ok = false;
                         }
                     }
-                    if (sync_run || timing_approx) && core != hir::Core::Jit {
-                        self.error(module, "E1049", p.name.span, "`sync: run` and `timing: approximate` are concessions of the JIT core (`core: jit`)");
+                    if (sync_run || timing_approx || sync_quantum.is_some() || sync_block || events_block) && core != hir::Core::Jit {
+                        self.error(module, "E1049", p.name.span, "`sync: run`, `sync: block`, `sync: quantum(...)`, `events: block` and `timing: approximate` are concessions of the JIT core (`core: jit`)");
                         ok = false;
                     }
                     profiles.push(hir::Profile {
@@ -379,6 +427,9 @@ impl Checker<'_> {
                         core,
                         sync_run,
                         timing_approx,
+                        sync_quantum,
+                        sync_block,
+                        events_block,
                         default,
                         overrides,
                     });

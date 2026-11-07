@@ -1172,6 +1172,8 @@ pub struct ProfileEntry {
     /// `default` or a component path like `vga.crtc`.
     pub target: Path,
     pub level: Ident,
+    /// An option's argument: `sync: quantum(1 ms)`.
+    pub arg: Option<Expr>,
     pub span: Span,
 }
 

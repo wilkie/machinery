@@ -1745,6 +1745,20 @@ system PcAt386 {
   - `sync: run` catches the devices up once a compiled run returns,
     rather than after each instruction: a device (and an interrupt it
     raises) can be seen up to a run late. Ordinary steps still sync each.
+  - `sync: block` catches the devices up at a compiled run's last step
+    (where it goes round or returns) when one is due or an edge waits:
+    device events keep their times, and the processor sees them up to a
+    run late (DOSBox's slices, which end at the next event).
+  - `sync: quantum(<time>)` catches them up there only once the quantum
+    since they last were has passed (MAME's scheduler quantum): devices
+    run late by up to the quantum. Reading a device still catches it up
+    first, but a device that moves on by itself can be read too late: at
+    1 ms the AT's keyboard controller sends its next byte before the BIOS
+    reads the last.
+  - `events: block` recognises the reset line and interrupts (the
+    istream's `boundary` fn) where a compiled run is entered or goes
+    round, not past each compiled step: an interrupt is taken up to a run
+    late, a loop's at its back-edge (QEMU's block starts).
   - `timing: approximate` charges a compiled step its code fetch as if
     the bus were serial and its cycles in one add, with no prefetch
     overlap: emulated time runs differently (on the 386 board, POST

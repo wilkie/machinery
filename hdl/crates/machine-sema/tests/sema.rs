@@ -1557,6 +1557,19 @@ fn systems_check() {
     assert!(p.sync_run && p.timing_approx);
     assert_codes(&system("profile p { default: model; memory: direct; core: trace; sync: run; }"), &["E1049"]);
     assert_codes(&system("profile p { default: model; memory: direct; core: jit; timing: loose; }"), &["E1049"]);
+    // A quantum (a time) and block events.
+    let c = check_src(&system("profile p { default: model; memory: direct; core: jit; sync: quantum(1 ms); events: block; }"));
+    assert_clean(&c);
+    let p = &c.hir.systems[0].profiles[0];
+    assert_eq!(p.sync_quantum, Some((1, 1000)));
+    assert!(p.events_block && !p.sync_run && !p.sync_block);
+    let c = check_src(&system("profile p { default: model; memory: direct; core: jit; sync: block; }"));
+    assert_clean(&c);
+    assert!(c.hir.systems[0].profiles[0].sync_block);
+    assert_codes(&system("profile p { default: model; memory: direct; core: jit; sync: quantum(4 MHz); }"), &["E1049"]);
+    assert_codes(&system("profile p { default: model; memory: direct; core: jit; sync: quantum; }"), &["E1049"]);
+    assert_codes(&system("profile p { default: model; memory: direct; core: jit; events: run; }"), &["E1049"]);
+    assert_codes(&system("profile p { default: model; memory: direct; core: trace; events: block; }"), &["E1049"]);
 }
 
 #[test]

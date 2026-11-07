@@ -1036,6 +1036,18 @@ pub struct Profile {
     /// serial and its cycles in one add.
     pub sync_run: bool,
     pub timing_approx: bool,
+    /// `sync: quantum(<time>)`: the devices are caught up at a run's
+    /// back-edge or return, once the quantum (seconds, `num / den`) has
+    /// passed since they last were, or one is due.
+    pub sync_quantum: Option<(u128, u128)>,
+    /// `sync: block`: the devices are caught up where a compiled run goes
+    /// round or returns, when one is due or an edge waits (DOSBox's
+    /// slices, which end at the next event).
+    pub sync_block: bool,
+    /// `events: block`: a compiled run recognises interrupts (and the
+    /// reset line, halting) where it is entered and where it goes round,
+    /// not at each instruction.
+    pub events_block: bool,
     pub default: Level,
     /// Instance paths (`vga`, `vga.crtc`) and their level.
     pub overrides: Vec<(String, Level)>,

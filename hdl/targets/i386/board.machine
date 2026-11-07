@@ -549,4 +549,9 @@ system At386Vga {
     /// The JIT with its concessions: devices caught up once a run, and a
     /// compiled step's time in one add (SPEC 12, "Concessions").
     profile approx { default: model; memory: direct; core: jit; sync: run; timing: approximate; }
+    /// The JIT as the fast PC emulators keep events: the devices caught up
+    /// where a run goes round or returns, when one is due (DOSBox's slices,
+    /// which end at the next event), interrupts recognised where a run is
+    /// entered or goes round (QEMU's block starts). Time exact.
+    profile blocks { default: model; memory: direct; core: jit; sync: block; events: block; }
 }

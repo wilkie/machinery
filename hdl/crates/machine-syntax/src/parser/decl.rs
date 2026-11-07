@@ -1286,10 +1286,19 @@ impl Parser {
                         let target = p.parse_path_dotted()?;
                         p.expect_punct(Punct::Colon)?;
                         let level = p.expect_ident()?;
-                        let span = target.span.to(level.span);
+                        // `sync: quantum(1 ms)`: an option's argument.
+                        let arg = if p.eat_punct(Punct::LParen) {
+                            let a = p.parse_expr()?;
+                            p.expect_punct(Punct::RParen)?;
+                            Some(a)
+                        } else {
+                            None
+                        };
+                        let span = target.span.to(p.prev_span());
                         Ok(ProfileEntry {
                             target,
                             level,
+                            arg,
                             span,
                         })
                     })?;

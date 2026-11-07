@@ -35,14 +35,14 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n    /// The steps compiled code may make before it returns (a run whose\n    /// end leads to its start goes round while they last).\n    pub jit_left: u64,\n    /// A fault an outlined fn raised, for `jit_deliver_c` to deliver.\n    pub jit_fault: Option<Fault>,\n"
+        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n    /// The steps compiled code may make before it returns (a run whose\n    /// end leads to its start goes round while they last).\n    pub jit_left: u64,\n    /// A fault an outlined fn raised, for `jit_deliver_c` to deliver.\n    pub jit_fault: Option<Fault>,\n    /// `sync: quantum(...)`: when the devices are next caught up.\n    pub jit_sync_at: u128,\n"
     }
 
     pub(crate) fn jit_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n            jit_left: 0,\n            jit_fault: None,\n"
+        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n            jit_left: 0,\n            jit_fault: None,\n            jit_sync_at: 0,\n"
     }
 
     /// The trace's fields for compiled code (inside `Trace`).
@@ -87,6 +87,8 @@ impl Gen<'_> {
             let _ = writeln!(fns, "            Instr::{n}(_) => Self::jit_step_{n} as *const () as usize,");
         }
         let sync_run = self.sync_run;
+        let quantum = self.sync_quantum.unwrap_or(0);
+        let sync_block = self.sync_block;
         let _ = write!(
             self.out,
             r#"{shims}    /// The compiled step for `i`.
@@ -214,9 +216,13 @@ impl Gen<'_> {
                 }}
             }}
         }}
-        if {sync_run} {{
-            // `sync: run`: the devices, once for the run.
+        if {sync_run} || {sync_block} {{
+            // `sync: run`: the devices, once for the run (`sync: block`:
+            // as it returns, as well as where it went round).
             self.bus.after_step();
+        }}
+        if {quantum}u128 != 0 && self.jit_bus_time(|b| Some(b.now)) >= self.jit_sync_at {{
+            self.jit_sync_quantum();
         }}
         if self.jit_last != 0 {{
             // SAFETY: a step of this machine's run, which is live.
@@ -681,6 +687,28 @@ impl Gen<'_> {
         m.bus.after_step();
         1
     }}
+    /// `sync: quantum(...)`: the devices caught up, and the next time they
+    /// are: when one is due, but not before the quantum has passed.
+    extern "C" fn jit_quantum_c(m: *mut Self) -> u64 {{
+        // SAFETY: called by compiled code with its machine.
+        let m = unsafe {{ &mut *m }};
+        m.jit_sync_quantum();
+        1
+    }}
+    fn jit_sync_quantum(&mut self) {{
+        self.bus.after_step();
+        let now = self.jit_bus_time(|b| Some(b.now));
+        let due = self.jit_bus_time(|b| b.due);
+        self.jit_sync_at = due.max(now.saturating_add({quantum}u128));
+    }}
+    /// A time the board keeps (`JitBoard`'s offsets): `now`, or `due`
+    /// (0 when the board has none: always due).
+    fn jit_bus_time(&self, f: impl Fn(&JitBoard) -> Option<usize>) -> u128 {{
+        let Some(off) = B::jit_board().and_then(|b| f(&b)) else {{ return 0 }};
+        // SAFETY: `off` is a `u128` field's offset within the bus (the
+        // board's own `jit_board`).
+        unsafe {{ ((&self.bus as *const B as *const u8).add(off) as *const u128).read_unaligned() }}
+    }}
     /// An interrupt taken at the boundary, in place of the step.
     extern "C" fn jit_interrupt_c(m: *mut Self) -> u64 {{
         // SAFETY: called by compiled code with its machine.
@@ -774,11 +802,18 @@ impl Gen<'_> {
             let r = e.call(Self::jit_gate_c as *const () as usize, &[], machine_jit::N::U32, false);
             e.exit_on(r);
         }} else {{
-{latch_resets}{reset_check}        if !follows {{
+{latch_resets}        // `events: block`: the reset line and interrupts are recognised
+        // where a run is entered or goes round, not past a compiled step.
+        let events_here = !({events_block} && follows);
+        if events_here {{
+{reset_check}        }}
+        if !follows {{
             let sd = e.load(std::mem::offset_of!(Self, shutdown), machine_jit::N::Bool);
             e.exit_if(sd, true, |e| {{ let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, false); }});
         }}
-{boundary}        // A boundary fn that takes no interrupt leaves `halted` as it was
+        if events_here {{
+{boundary}        }}
+        // A boundary fn that takes no interrupt leaves `halted` as it was
         // (false, after a lowered step).
         let h = if follows && !{boundary_wakes} {{
             machine_jit::V::K(0)
@@ -966,9 +1001,22 @@ impl Gen<'_> {
         if e.code_writes() != code0 {{
             code_check(e);
         }}
-        if !{sync_run} {{
+        if !{sync_run} && {quantum}u128 == 0 && (!{sync_block} || j.last) {{
+            // (`sync: block`: at the run's last step only, where it goes
+            // round or returns.)
             e.cold(need, |e| {{
                 let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, true);
+                code_check(e);
+            }});
+        }}
+        // `sync: quantum(...)`: the devices at the run's last step (where it
+        // goes round or returns), once the quantum since the last catch-up
+        // has passed or one is due.
+        if {quantum}u128 != 0 && j.last {{
+            let at = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, jit_sync_at), n: machine_jit::N::U128, bump: 0 }});
+            let late = e.op(machine_jit::Op::Ge, now, at, machine_jit::N::U128);
+            e.cold(late, |e| {{
+                let _ = e.call(Self::jit_quantum_c as *const () as usize, &[], machine_jit::N::U64, true);
                 code_check(e);
             }});
         }}
@@ -1028,6 +1076,9 @@ impl Gen<'_> {
             pc0n = ident(&pc0.name),
             sync_run = self.sync_run,
             timing_approx = self.timing_approx,
+            events_block = self.events_block,
+            quantum = self.sync_quantum.unwrap_or(0),
+            sync_block = self.sync_block,
             boundary_wakes = ist.boundary.is_some_and(|b| {
                 let mut halts = false;
                 machine_sema::hir::visit_block(&self.fns[&b].body, &mut |st| halts |= matches!(st.kind, machine_sema::hir::StmtKind::Halt), &mut |_| {});

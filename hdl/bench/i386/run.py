@@ -59,6 +59,8 @@ TOOLS = {
     "ours trace": ours("trace"),
     "ours jit": ours("jit"),
     "ours approx": ours("approx"),
+    "ours blocks": ours("blocks"),
+    "ours quantum": ours("quantum"),
     "bochs": bochs,
     "dosbox normal": dosbox("normal"),
     "dosbox dynamic": dosbox("dynamic"),

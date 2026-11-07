@@ -31,6 +31,25 @@ Run 2026-11-04 (Ryzen 9 3950X, WSL2; three runs, median):
 | DOSBox 0.74 dynamic core | 249 | 304 | approximate cycles |
 | QEMU 8.2 TCG | 2142 | 953 | no timing; few checks |
 
+Run 2026-11-07 (the same machine, under another user's load: medians
+were unreliable, so ours are the best of five interleaved runs; host
+instructions for the run, `perf stat`, are not affected by load):
+
+| tool | chk MIPS | mix MIPS | chk host instructions | keeps |
+|---|---|---|---|---|
+| ours, JIT | 144 | 84 | 111G | exact |
+| ours, JIT, `approx` | 126 | 67 | 126G | `sync: run` (no loops go round), approximate time |
+| ours, JIT, `blocks` | 206 | 92 | 76G | devices on time, seen at runs' back-edges; interrupts there; exact time |
+| ours, JIT, `quantum` | 200 | 92 | 77G | as `blocks`, the VGA caught up each ms |
+| Bochs 2.7 | 95 | 83 | | |
+| DOSBox 0.74 normal | 105 | 114 | | |
+| DOSBox 0.74 dynamic | 239 | 304 | | |
+| QEMU 8.2 TCG | 1942 | 879 | | |
+
+mix spends 40% of its host instructions outside compiled code: its REP
+string instructions run through the outlined string fns, an iteration a
+call, and its runs return to the dispatcher often.
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

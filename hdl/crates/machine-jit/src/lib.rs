@@ -576,6 +576,28 @@ mod tests {
     }
 
     #[test]
+    fn past_an_exit_on_either_both_are_known() {
+        // Leave when a == 3 or b == 4: past it, neither holds, and for a
+        // one-bit field that says what it is. `x and true` hands back x
+        // (no condition of itself).
+        let mut t = T { a: 1, b: 0, ..T::default() };
+        let (ao, bo) = (std::mem::offset_of!(T, a), std::mem::offset_of!(T, b));
+        let n = run_t(&mut t, |e, _| {
+            e.declare_bits(ao, N::U8, 1);
+            let a = e.read(&A);
+            let b = e.read(&Place::Mem { off: bo, n: N::U8, bump: 0 });
+            let ca = e.op(Op::Eq, a, V::K(0), N::U8);
+            let ca = e.op(Op::And, ca, V::K(1), N::Bool);
+            let cb = e.op(Op::Eq, b, V::K(4), N::U8);
+            let either = e.op(Op::Or, ca, cb, N::Bool);
+            e.exit_if(either, false, |_| {});
+            assert_eq!(e.read(&A), V::K(1), "a is not 0: one bit, so 1");
+            e.write(&OUT, V::K(9));
+        });
+        assert_eq!((n, t.out), (1, 9));
+    }
+
+    #[test]
     fn shifts_past_the_width_and_signed_values() {
         for (x, y) in [(3u32, -64i32), (40, 7), (31, i32::MIN)] {
             let mut t = T { x, y, ..T::default() };

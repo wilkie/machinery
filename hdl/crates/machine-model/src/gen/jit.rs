@@ -804,7 +804,7 @@ impl Gen<'_> {
             e.store(std::mem::offset_of!(Self, tr_prev), machine_jit::N::U32, machine_jit::V::K(j.slot as u128));
         }}
         e.store(std::mem::offset_of!(Self, tr_phys), machine_jit::N::U64, machine_jit::V::K(j.phys as u128));
-        let ls = e.load(std::mem::offset_of!(Self, last_start), machine_jit::N::U64);
+        let ls = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, last_start), n: machine_jit::N::U64, bump: 0 }});
         let rs = e.op(machine_jit::Op::Eq, ls, machine_jit::V::K(j.phys as u128), machine_jit::N::U64);
         e.store(std::mem::offset_of!(Self, restarted), machine_jit::N::Bool, rs);
         e.store(std::mem::offset_of!(Self, last_start), machine_jit::N::U64, machine_jit::V::K(j.phys as u128));

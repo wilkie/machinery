@@ -323,11 +323,14 @@ pub struct Em<'a, 'f> {
     facts: HashMap<Value, ((usize, N), Value, u128, bool)>,
     /// Fields narrower than their native type (`declare_bits`).
     bits: HashMap<(usize, N), u32>,
+    /// Conditions made of two (`and`, `or` of bools): a branch on one
+    /// learns of both where it can.
+    combos: HashMap<Value, (Op, V, V)>,
 }
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, out: Block, made_base: Variable) -> Self {
-        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new() }
+        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new(), combos: HashMap::new() }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -1808,6 +1811,12 @@ impl<'a, 'f> Em<'a, 'f> {
     /// comparison's result is a bool.
     pub fn op(&mut self, op: Op, a: V, b: V, n: N) -> V {
         let v = self.op_inner(op, a, b, n);
+        // (A new value only: an identity hands back an operand.)
+        if let (Op::And | Op::Or, N::Bool, V::D(r)) = (op, n, v) {
+            if V::D(r) != a && V::D(r) != b {
+                self.combos.insert(r, (op, a, b));
+            }
+        }
         if let (Op::Eq | Op::Ne, V::D(r)) = (op, v) {
             let (x, k) = match (a, b) {
                 (V::D(x), V::K(k)) | (V::K(k), V::D(x)) => (Some(x), k),
@@ -1833,6 +1842,14 @@ impl<'a, 'f> Em<'a, 'f> {
     /// field, known (when the field still holds the value compared).
     fn learn(&mut self, c: V, holds: bool) {
         let V::D(cv) = c else { return };
+        // Both true where `and` holds; both false where `or` does not.
+        if let Some((op, a, b)) = self.combos.get(&cv).copied() {
+            if (op == Op::And) == holds {
+                self.learn(a, holds);
+                self.learn(b, holds);
+            }
+            return;
+        }
         let Some((key, x, k, eq)) = self.facts.get(&cv).copied() else {
             // A bool field as the condition itself.
             if let Some(key) = self.regs.iter().find(|(k, v)| k.1 == N::Bool && **v == Known::D(cv)).map(|(k, _)| *k) {

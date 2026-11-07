@@ -1806,6 +1806,18 @@ impl<'a, 'f> Em<'a, 'f> {
         self.steps
     }
 
+    /// `n` (a u32) more steps made within this one (a repeated
+    /// instruction's elements run as a block).
+    pub fn add_made(&mut self, n: V) {
+        if !self.live {
+            return;
+        }
+        let x = self.val(n, N::U32);
+        let bv = self.b.use_var(self.made_base);
+        let nb = self.b.ins().iadd(bv, x);
+        self.b.def_var(self.made_base, nb);
+    }
+
     /// The steps made, this step's included (a u32).
     pub fn made_through(&mut self) -> V {
         if !self.live {

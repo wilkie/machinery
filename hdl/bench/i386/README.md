@@ -50,6 +50,12 @@ mix spends 40% of its host instructions outside compiled code: its REP
 string instructions run through the outlined string fns, an iteration a
 call, and its runs return to the dispatcher often.
 
+Then (2026-11-07, `blocks`): REP MOVS and STOS run through kernels (SPEC
+11.2, `repeat ... bulk`): mix's run takes 139G host instructions where it
+took 156G (11% fewer; chk has no REPs). The emulated time to the tick, the
+guest's memory (a hash of it) and the instruction count are the same with
+the kernels and without.
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

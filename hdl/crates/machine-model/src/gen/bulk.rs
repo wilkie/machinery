@@ -1,6 +1,6 @@
 //! The `bulk` check of a `repeat` clause, when the description is built: is
 //! the instruction's element (its semantics, once) a stream the cores may
-//! run as a block?
+//! run as a block? And, for a fill or a copy, the kernel that does.
 //!
 //! The element is evaluated abstractly, every fn it calls inlined. A value
 //! is a constant; an invariant (the same every element: latches, operands,
@@ -21,18 +21,58 @@
 //! results from it), a compare (two reads), a load (one read into a
 //! register), a port-in (a port read written to memory) or a port-out (a
 //! memory read written to a port). `bulk` claims at least one path is.
+//!
+//! The kernel (`bulk_<name>`, for the JIT core's `repeat: bulk(n)`) runs the
+//! element's own code dry (`probe_<name>`: its accesses noted, not made) at
+//! a few elements: how the registers move, where it reads and writes, and
+//! whether it faults. The paths are told apart where the code tells them
+//! apart, by running it; what the dry code may not run past is where a path
+//! stops being one the kernel can take (a branch on where the element is
+//! that is not a fault check holding on an interval of elements, anything
+//! not a stream): there it gives up. So every path the dry code finishes is
+//! a fill or copy whose fault checks, holding at the first and the last
+//! element, hold between; or it raised. When some path is neither (and is
+//! not stopped), the instruction has no kernel.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 
+use machine_sema::builtins::Builtin;
 use machine_sema::hir::{self, ArmBody, Block, Expr, ExprKind as H, LetTarget, LocalId, Pat, StmtKind as S};
 use machine_sema::program::DefId;
 use machine_sema::ty::Ty;
 use machine_syntax::ast::{BinaryOp, UnaryOp};
 
-use super::{Gen, GenError, R};
+use super::{ident, Gen, GenError, R};
 
 /// A place in a register: the register, its first bit and width.
 type Loc = (DefId, u32, u32);
+
+/// Where an element-dependent condition holds, over a run of elements whose
+/// pointers move without wrapping: on an interval of them, the rest being
+/// one too (a comparison of a pointer with an invariant); on an interval (a
+/// conjunction of those, an equality); outside one (a disjunction, an
+/// inequality); or anywhere.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Conv {
+    Half,
+    Convex,
+    Concave,
+    Other,
+}
+
+impl Conv {
+    fn not(self) -> Conv {
+        match self {
+            Conv::Convex => Conv::Concave,
+            Conv::Concave => Conv::Convex,
+            c => c,
+        }
+    }
+    fn interval(self) -> bool {
+        matches!(self, Conv::Half | Conv::Convex)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 enum Sv {
@@ -41,13 +81,18 @@ enum Sv {
     /// polarity (`!c` is `c` negated: the same choice).
     Inv(String),
     InvB(String, bool),
-    /// A register as the element found it, plus an invariant (or constant).
-    Aff(Loc, Box<Sv>),
+    /// A register as the element found it, plus an invariant (or constant);
+    /// and whether the value may have wrapped (overflowed its type).
+    Aff(Loc, Box<Sv>, bool),
+    /// A condition on where the element is; the comparison, when it is one;
+    /// the expression that made it.
+    Cond(Conv, Option<Box<(BinaryOp, Sv, Sv)>>, usize),
     /// The nth access's value as it was loaded, and a value computed from
     /// a load.
     Load(u32),
     Elem(u32),
-    Dep,
+    /// Anything else, and the expression that made it (0: none known).
+    Dep(usize),
     Agg(Vec<Sv>),
     Unit,
 }
@@ -60,9 +105,18 @@ impl Sv {
         match self {
             Sv::K(c) => c.to_string(),
             Sv::Inv(k) => k.clone(),
-            Sv::InvB(k, neg) => if *neg { format!("!{k}") } else { k.clone() },
+            Sv::InvB(k, neg) => {
+                if *neg {
+                    format!("!{k}")
+                } else {
+                    k.clone()
+                }
+            }
             other => format!("{other:?}"),
         }
+    }
+    fn wraps(&self) -> bool {
+        matches!(self, Sv::Aff(_, _, true))
     }
 }
 
@@ -83,9 +137,18 @@ struct Path {
     fresh: Vec<(String, u32)>,
     writes: Vec<(Loc, Sv)>,
     mem_reads: Vec<(DefId, Sv, u32)>,
-    mem_writes: Vec<(DefId, Sv, Sv)>,
+    mem_writes: Vec<(DefId, Sv, Sv, u32)>,
     loads: u32,
+    /// The expression each load is.
+    load_sites: Vec<usize>,
     fail: Option<String>,
+    /// It raised (the dry code raises too).
+    raised: bool,
+    /// It reached a statement the dry code does not run past.
+    stopped: bool,
+    /// Outside the element (the `next` clause, the timing entry): why the
+    /// path is not one a kernel takes.
+    kfail: Option<String>,
 }
 
 /// A stream's kind (`bulk`'s claim).
@@ -100,77 +163,228 @@ pub(crate) enum Shape {
     PortOut,
 }
 
+/// An instruction's kernel: how its fill or copy paths run as a block.
+impl Kernel {
+    pub(crate) fn fns(&self) -> &[DefId] {
+        &self.fns
+    }
+    pub(crate) fn stops(&self) -> &[usize] {
+        &self.stops
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Kernel {
+    shape: Shape,
+    /// The bits of each access.
+    bits: u32,
+    /// The registers that move: each whole register, and the width (from
+    /// bit 0) it moves in on some path; the count last (counted down by
+    /// one, the instruction repeating while it is not zero).
+    moving: Vec<(DefId, u32)>,
+    /// The registers the element may write, on any path, before it ends.
+    written: Vec<DefId>,
+    /// The fns the element may call.
+    fns: Vec<DefId>,
+    /// The statements and expressions its dry code stops at.
+    stops: Vec<usize>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Element,
+    /// The `next` clause and the timing entry: for the kernel only. In the
+    /// timing entry `restarted()` holds (the elements after the first).
+    Side { steady: bool },
+}
+
 struct Eval<'g, 'a> {
     g: &'g Gen<'a>,
-    /// The locations the element may write, anywhere (a register read that
-    /// none of them overlaps is an invariant).
+    /// The locations the element (and `next`) may write, anywhere (a
+    /// register read that none of them overlaps is an invariant).
     written: Vec<Loc>,
     mem: DefId,
     p: Path,
     depth: u32,
     /// The fns being evaluated (for saying where a path stops).
     at: Vec<String>,
+    phase: Phase,
+    /// The statement being evaluated, and those the dry code does not run
+    /// past.
+    site: usize,
+    stops: HashSet<usize>,
 }
 
-const MAX_PATHS: usize = 256;
+const MAX_PATHS: usize = 4096;
+
+fn site(st: &hir::Stmt) -> usize {
+    st as *const hir::Stmt as usize
+}
 
 impl Gen<'_> {
     /// Whether instruction `i`'s element is a stream on some path (`bulk`),
-    /// and which; an error naming why not.
-    pub(crate) fn bulk_shape(&self, i: &hir::Instruction) -> R<Shape> {
+    /// and which; an error naming why not. With it, its kernel, when its
+    /// fills or copies have one; the statements its dry code stops at go in
+    /// `bulk_stops`.
+    pub(crate) fn bulk_plan(&self, i: &hir::Instruction) -> R<(Shape, Result<Kernel, String>)> {
         let Some(sem) = &i.semantics else {
             return Err(GenError::new(format!("`{}`: `bulk` with no semantics", i.name)));
         };
+        let Some(rep) = &i.repeat else {
+            return Err(GenError::new(format!("`{}`: `bulk` with no repeat", i.name)));
+        };
         let mem = self.isa.istream.as_ref().map(|s| s.space).ok_or_else(|| GenError::new("`bulk` needs an istream"))?;
-        let written = self.bulk_written(sem);
+        let mut side: Vec<&Expr> = vec![&rep.next];
+        side.extend(rep.cond.iter());
+        let (written, fns) = self.bulk_written(sem, &side);
         let mut todo: Vec<HashMap<String, u32>> = vec![HashMap::new()];
         let mut reasons: Vec<String> = Vec::new();
+        let mut shape = None;
+        let mut stops: HashSet<usize> = HashSet::new();
+        // What the kernel's paths share, and why there is none.
+        let mut kern: Option<Kernel> = None;
+        let mut why: Option<String> = None;
+        let mut regs_written: Vec<DefId> = Vec::new();
         let mut runs = 0;
+        let trace = std::env::var_os("MACHINE_BULK").is_some();
         while let Some(choices) = todo.pop() {
             runs += 1;
             if runs > MAX_PATHS {
+                why.get_or_insert_with(|| "too many paths to follow".into());
                 break;
             }
-            let mut e = Eval { g: self, written: written.clone(), mem, p: Path { choices: choices.clone(), ..Default::default() }, depth: 0, at: vec![i.name.clone()] };
+            let mut e = Eval { g: self, written: written.clone(), mem, p: Path { choices: choices.clone(), ..Default::default() }, depth: 0, at: vec![i.name.clone()], phase: Phase::Side { steady: true }, site: 0, stops: std::mem::take(&mut stops) };
+            // The timing entry as the element starts, the element, and what
+            // the repeat makes of it.
+            let t0 = i.timing.as_ref().map(|t| e.expr(&i.timing_locals, &mut HashMap::new(), t));
+            e.phase = Phase::Element;
             let mut env: HashMap<LocalId, Sv> = HashMap::new();
             let flow = e.block(&i.locals, &mut env, sem);
+            if matches!(flow, Flow::Raise) && e.p.fail.is_none() {
+                e.p.fail = Some("it raises".into());
+                e.p.raised = true;
+            }
+            let class = e.classify();
+            let elem_writes = e.p.writes.clone();
+            let accesses = (e.p.mem_reads.len(), e.p.mem_writes.len());
+            e.phase = Phase::Side { steady: false };
+            let nx = e.expr(&rep.locals, &mut HashMap::new(), &rep.next);
+            e.phase = Phase::Side { steady: true };
+            let t1 = i.timing.as_ref().map(|t| e.expr(&i.timing_locals, &mut HashMap::new(), t));
+            // Each condition met for the first time, answered otherwise: with
+            // the answers given before it (those after it may not be met).
+            let mut before = choices.clone();
             for (key, arity) in std::mem::take(&mut e.p.fresh) {
                 for alt in 1..arity {
-                    let mut c = choices.clone();
-                    for (k, v) in &e.p.choices {
-                        c.entry(k.clone()).or_insert(*v);
-                    }
+                    let mut c = before.clone();
                     c.insert(key.clone(), alt);
                     todo.push(c);
                 }
+                before.insert(key, 0);
             }
-            if matches!(flow, Flow::Raise) && e.p.fail.is_none() {
-                e.p.fail = Some("it raises".into());
+            if trace {
+                eprintln!("bulk path {}: writes {:?} reads {:?} stores {:?} fail {:?} raised {} stopped {}", i.name, e.p.writes, e.p.mem_reads, e.p.mem_writes, e.p.fail, e.p.raised, e.p.stopped);
             }
-            if std::env::var_os("MACHINE_BULK").is_some() {
-                eprintln!("bulk path {}: writes {:?} reads {:?} stores {:?} fail {:?}", i.name, e.p.writes, e.p.mem_reads, e.p.mem_writes, e.p.fail);
+            for (l, _) in &elem_writes {
+                if !regs_written.contains(&l.0) {
+                    regs_written.push(l.0);
+                }
             }
-            match e.classify() {
-                Ok(s) => return Ok(s),
-                Err(why) => {
-                    if !reasons.contains(&why) {
-                        reasons.push(why);
+            match &class {
+                Ok(s) => {
+                    shape.get_or_insert(*s);
+                }
+                Err(w) => {
+                    if !reasons.contains(w) {
+                        reasons.push(w.clone());
                     }
                 }
             }
+            // The dry code stops on this path, or raises: the kernel need
+            // not take it.
+            if !(e.p.stopped || e.p.raised) {
+                let k = match class {
+                    Ok(s @ (Shape::Fill | Shape::Copy)) => {
+                        let timing_ok = [&t0, &t1].iter().all(|t| t.as_ref().is_none_or(Sv::invariant));
+                        if !timing_ok {
+                            Err("its time depends on the element".to_string())
+                        } else if rep.cond.is_some() {
+                            Err("a `while` condition".to_string())
+                        } else if (e.p.mem_reads.len(), e.p.mem_writes.len()) != accesses {
+                            Err("`next` or the timing entry reach memory".to_string())
+                        } else {
+                            e.kernel(s, &elem_writes, &nx)
+                        }
+                    }
+                    Ok(s) => Err(format!("a {s:?} path")),
+                    Err(w) => Err(format!("a path the dry code finishes that is not a stream ({w})")),
+                };
+                match (k, &mut kern) {
+                    (Ok(k), None) => kern = Some(k),
+                    (Ok(k), Some(have)) => {
+                        if k.shape != have.shape || k.bits != have.bits {
+                            why.get_or_insert_with(|| "paths of different kinds or sizes".into());
+                        }
+                        let (mut a, b) = (std::mem::take(&mut have.moving), k.moving);
+                        // The count stays last.
+                        let (ac, bc) = (a.pop().unwrap(), b.last().copied().unwrap());
+                        if ac.0 != bc.0 {
+                            why.get_or_insert_with(|| "counts in different registers".into());
+                        }
+                        for (d, w) in &b[..b.len() - 1] {
+                            match a.iter_mut().find(|x| x.0 == *d) {
+                                Some(x) => x.1 = x.1.min(*w),
+                                None => a.push((*d, *w)),
+                            }
+                        }
+                        a.push((ac.0, ac.1.min(bc.1)));
+                        have.moving = a;
+                    }
+                    (Err(w), _) => {
+                        why.get_or_insert(w);
+                    }
+                }
+            }
+            stops = std::mem::take(&mut e.stops);
         }
-        Err(GenError::new(format!(
-            "`{}`: `repeat ... bulk`, but its element is not a fill, copy, scan, compare, load or port stream on any path ({})",
-            i.name,
-            reasons.join("; ")
-        )))
+        let Some(s) = shape else {
+            return Err(GenError::new(format!(
+                "`{}`: `repeat ... bulk`, but its element is not a fill, copy, scan, compare, load or port stream on any path ({})",
+                i.name,
+                reasons.join("; ")
+            )));
+        };
+        let k = match (why, kern) {
+            (Some(w), _) => Err(w),
+            (None, None) => Err("no path the dry code finishes".into()),
+            (None, Some(mut k)) => {
+                // A register the element moves on one path and not another
+                // (or the count): it is saved round the dry code all the same.
+                if k.moving.iter().map(|m| m.0).collect::<HashSet<_>>().len() != k.moving.len() {
+                    Err("a register both moved and counted".into())
+                } else {
+                    for (d, _) in &k.moving {
+                        if !regs_written.contains(d) {
+                            regs_written.push(*d);
+                        }
+                    }
+                    k.written = regs_written;
+                    k.fns = fns;
+                    k.stops = stops.into_iter().collect();
+                    Ok(k)
+                }
+            }
+        };
+        Ok((s, k))
     }
 
-    /// The register locations the element may write (its semantics and the
-    /// fns they call; an operand kind's selected registers all of them).
-    fn bulk_written(&self, b: &Block) -> Vec<Loc> {
+    /// The register locations the element may write (its semantics, the
+    /// exprs in `also`, and the fns they call; an operand kind's selected
+    /// registers all of them), and the fns it may call.
+    fn bulk_written(&self, b: &Block, also: &[&Expr]) -> (Vec<Loc>, Vec<DefId>) {
         let out = std::cell::RefCell::new(Vec::new());
         let mut seen: HashSet<DefId> = HashSet::new();
+        let mut fns: Vec<DefId> = Vec::new();
         let stack = std::cell::RefCell::new(Vec::<DefId>::new());
         let mut blocks: Vec<&Block> = vec![b];
         let place_locs = |p: &Expr, out: &mut Vec<Loc>| {
@@ -198,33 +412,54 @@ impl Gen<'_> {
                 }
             }
         };
-        loop {
-            let Some(blk) = blocks.pop() else {
-                let Some(f) = stack.borrow_mut().pop() else { break };
-                if seen.insert(f) {
-                    if let Some(fb) = self.fns.get(&f) {
-                        if !fb.external {
-                            blocks.push(&fb.body);
-                        }
-                    }
-                }
-                continue;
-            };
-            hir::visit_block(
-                blk,
-                &mut |st| {
-                    if let S::Assign(p, _) = &st.kind {
-                        place_locs(p, &mut out.borrow_mut());
-                    }
-                },
+        let mut side_fns: Vec<DefId> = Vec::new();
+        for x in also {
+            hir::visit_expr(
+                x,
+                &mut |_| {},
                 &mut |x| {
                     if let H::FnCall(g, _) = &x.kind {
-                        stack.borrow_mut().push(*g);
+                        side_fns.push(*g);
                     }
                 },
             );
         }
-        out.into_inner()
+        // The element's fns first (the dry code calls them), then `next`'s.
+        for phase in 0..2 {
+            if phase == 1 {
+                stack.borrow_mut().extend(side_fns.iter().copied());
+            }
+            loop {
+                let Some(blk) = blocks.pop() else {
+                    let Some(f) = stack.borrow_mut().pop() else { break };
+                    if seen.insert(f) {
+                        if let Some(fb) = self.fns.get(&f) {
+                            if !fb.external {
+                                if phase == 0 {
+                                    fns.push(f);
+                                }
+                                blocks.push(&fb.body);
+                            }
+                        }
+                    }
+                    continue;
+                };
+                hir::visit_block(
+                    blk,
+                    &mut |st| {
+                        if let S::Assign(p, _) = &st.kind {
+                            place_locs(p, &mut out.borrow_mut());
+                        }
+                    },
+                    &mut |x| {
+                        if let H::FnCall(g, _) = &x.kind {
+                            stack.borrow_mut().push(*g);
+                        }
+                    },
+                );
+            }
+        }
+        (out.into_inner(), fns)
     }
 
     /// The locations a register place covers (a view: each field it maps).
@@ -255,6 +490,182 @@ impl Gen<'_> {
             _ => Vec::new(),
         }
     }
+
+    /// Instruction `i`'s kernel (`bulk_<name>`) and its dry code
+    /// (`probe_<name>`), for the JIT core: the elements after the current
+    /// one, run as a block.
+    pub(crate) fn emit_bulk_kernel(&self, i: &hir::Instruction, k: &Kernel, out: &mut String) -> R<()> {
+        let n = ident(&i.name);
+        let Some(sem) = &i.semantics else { return Ok(()) };
+        // The dry element.
+        let cx = super::Cx { locals: &i.locals, fallible: true, recv: "self", ops: Some(i), comp: None, opt: false };
+        self.probing.set(true);
+        let body = self.block_stmts(&cx, sem);
+        self.probing.set(false);
+        let body = body?;
+        let ops = Self::ops_struct_name(i);
+        let _ = write!(out, "    /// `{name}`'s element, dry: its accesses noted (`probe_access`), not made.\n    #[allow(unused_variables, unused_parens, unreachable_code, clippy::all)]\n    fn probe_{n}(&mut self, ops: {ops}) -> Result<(), Fault> {{\n{body}Ok(())\n}}\n", name = i.name);
+        let reg = |d: &DefId| -> String { format!("self.r.{}", ident(&self.regs[d].1.name)) };
+        let nm = k.moving.len();
+        let q = nm - 1;
+        let r0: Vec<String> = k.moving.iter().map(|(d, _)| format!("{} as u64", reg(d))).collect();
+        let widths: Vec<String> = k.moving.iter().map(|(_, w)| w.to_string()).collect();
+        let full: Vec<String> = k.moving.iter().map(|(d, _)| ty_bits(&self.regs[d].1.ty).to_string()).collect();
+        let mut save = String::new();
+        let mut restore = String::new();
+        for (x, d) in k.written.iter().enumerate() {
+            let _ = writeln!(save, "        let s{x} = {}.clone();", reg(d));
+            let _ = writeln!(restore, "        {} = s{x};", reg(d));
+        }
+        let mut moved = Vec::new();
+        let mut set = String::new();
+        let mut done = String::new();
+        for (x, (d, _)) in k.moving.iter().enumerate() {
+            let rty = self.rty(&self.regs[d].1.ty)?;
+            moved.push(format!("{} as u64", reg(d)));
+            let _ = writeln!(set, "        {} = ((r0[{x}] as i128 + j * s[{x}]) as u64) as {rty};", reg(d));
+            let place = Expr { kind: H::Register(*d), ty: self.regs[d].1.ty.clone(), span: sem.span };
+            let rhs = format!("((r0[{x}] as i128 + made as i128 * s[{x}]) as u64) as {rty}");
+            let cx0 = super::Cx { locals: &[], fallible: true, recv: "self", ops: None, comp: None, opt: false };
+            let _ = writeln!(done, "        {}", self.assign(&cx0, &place, &rhs)?);
+        }
+        let mi = self.isa.spaces.iter().position(|s| Some(s.def) == self.isa.istream.as_ref().map(|i| i.space)).unwrap_or(0) as u8;
+        let (accs, expect) = match k.shape {
+            Shape::Fill => (1, format!("[({}u8, {})]", (mi << 1) | 1, k.bits)),
+            _ => (2, format!("[({}u8, {}), ({}u8, {})]", mi << 1, k.bits, (mi << 1) | 1, k.bits)),
+        };
+        // (The write first: index 0 the write's address, 1 the read's.)
+        let addrs = match k.shape {
+            Shape::Fill => "[self.probe_acc[0].2, 0]",
+            _ => "[self.probe_acc[1].2, self.probe_acc[0].2]",
+        };
+        let value = match k.shape {
+            Shape::Fill => "self.probe_acc[0].3",
+            _ => "0",
+        };
+        let mv = match k.shape {
+            Shape::Fill => "self.bus.direct_poke(at(0), n, v);",
+            _ => "let x = self.bus.direct_peek(at(1), n).unwrap_or(0); self.bus.direct_poke(at(0), n, x);",
+        };
+        let bytes = k.bits / 8;
+        let mask = |w: &str| format!("(if {w} >= 64 {{ u64::MAX }} else {{ (1u64 << {w}) - 1 }})");
+        let _ = write!(
+            out,
+            "    /// `{name}`'s element, dry, as the machine is: the addresses it writes
+    /// and reads, the value it writes, and the moving registers after it.
+    /// None when it faults or is not a {shape:?} the kernel takes.
+    #[allow(clippy::all)]
+    fn bulk_{n}_dry(&mut self) -> Option<([u64; 2], u128, [u64; {nm}])> {{
+{save}        self.probe_bad = false;
+        self.probe_n = 0;
+        let r = self.probe_{n}({ops} {{}});
+        let moved: [u64; {nm}] = [{moved}];
+{restore}        let expect: [(u8, u32); {accs}] = {expect};
+        if r.is_err() || self.probe_bad || self.probe_n as usize != {accs} {{ return None; }}
+        for x in 0..{accs} {{
+            if (self.probe_acc[x].0, self.probe_acc[x].1) != expect[x] {{ return None; }}
+        }}
+        Some(({addrs}, {value}, moved))
+    }}
+    /// The dry element `j` elements from now (the moving registers `r0`,
+    /// moving `s` each).
+    #[allow(clippy::all)]
+    fn bulk_{n}_at(&mut self, r0: &[u64; {nm}], s: &[i128; {nm}], j: i128) -> Option<([u64; 2], u128, [u64; {nm}])> {{
+{set}        let x = self.bulk_{n}_dry();
+        let j = 0i128;
+{set}        x
+    }}
+    /// `{name}`'s elements after this one as a block (`repeat ... bulk`):
+    /// up to `max` of them, in whole periods of `per` elements, each period's
+    /// accesses costing what the `per` before them cost; the last element
+    /// left for the step. The elements made (0: none here).
+    #[allow(unused_mut, clippy::all)]
+    pub fn bulk_{n}(&mut self, max: u64, per: u64) -> u64 {{
+        if per == 0 || per > 64 {{ return 0; }}
+        let r0: [u64; {nm}] = [{r0}];
+        // The width each moves in on some path, from bit 0, and its own.
+        let w: [u32; {nm}] = [{widths}];
+        let fw: [u32; {nm}] = [{full}];
+        let c = r0[{q}] & {cmask};
+        let mut m = max.min(c.saturating_sub(1));
+        m -= m % per;
+        if m == 0 {{ return 0; }}
+        // How the element moves them; and whether it reaches direct memory
+        // at all.
+        let Some((a0, v, after)) = self.bulk_{n}_dry() else {{ return 0 }};
+        let n: u64 = {bytes};
+        for q in 0..{accs} {{
+            if self.bulk_key(a0[q], n, q == 0).is_none() {{ return 0; }}
+        }}
+        let mut s = [0i128; {nm}];
+        for q in 0..{nm} {{
+            let mw = {wmask};
+            let d = if q == {q} {{ mw }} else {{ after[q].wrapping_sub(r0[q]) & mw }};
+            s[q] = if (d >> (w[q] - 1)) & 1 == 1 {{ d as i128 - (mw as i128 + 1) }} else {{ d as i128 }};
+            // From the period measured to the elements made, none carries
+            // out of the width it moves in.
+            let lo = (r0[q] & mw) as i128 - per as i128 * s[q];
+            let hi = (r0[q] & mw) as i128 + m as i128 * s[q];
+            if lo < 0 || hi < 0 || lo > mw as i128 || hi > mw as i128 || fw[q] > 64 {{ return 0; }}
+        }}
+        let Some((am, _, _)) = self.bulk_{n}_at(&r0, &s, -(per as i128)) else {{ return 0 }};
+        let Some((a1, _, _)) = self.bulk_{n}_at(&r0, &s, 1) else {{ return 0 }};
+        let Some((al, _, _)) = self.bulk_{n}_at(&r0, &s, m as i128 - 1) else {{ return 0 }};
+        // The addresses move by the same each element.
+        let mut d = [0i128; 2];
+        for q in 0..{accs} {{
+            d[q] = a1[q] as i128 - a0[q] as i128;
+            if am[q] as i128 != a0[q] as i128 - per as i128 * d[q] || al[q] as i128 != a0[q] as i128 + (m as i128 - 1) * d[q] {{ return 0; }}
+        }}
+        let at = |q: usize, j: i128| (a0[q] as i128 + j * d[q]) as u64;
+        // What each access of the period measured cost.
+        let mut refk = [(0u32, 0u128); 128];
+        for jj in 0..per as usize {{
+            let j = jj as i128 - per as i128;
+            for q in 0..{accs} {{
+                match self.bulk_key(at(q, j), n, q == 0) {{ Some(x) => refk[jj * 2 + q] = x, None => return 0 }}
+            }}
+        }}
+        let mut made: u64 = 0;
+        'run: while made < m {{
+            for jj in 0..per as usize {{
+                let j = (made as usize + jj) as i128;
+                for q in 0..{accs} {{
+                    if self.bulk_key(at(q, j), n, q == 0) != Some(refk[jj * 2 + q]) {{ break 'run; }}
+                }}
+            }}
+            for jj in 0..per {{
+                let j = (made + jj) as i128;
+                let at = |q: usize| (a0[q] as i128 + j * d[q]) as u64;
+                {mv}
+            }}
+            made += per;
+        }}
+        if made == 0 {{ return 0; }}
+{done}        made
+    }}
+",
+            name = i.name,
+            shape = k.shape,
+            moved = moved.join(", "),
+            r0 = r0.join(", "),
+            widths = widths.join(", "),
+            full = full.join(", "),
+            cmask = mask(&format!("w[{q}]")),
+            wmask = mask("w[q]"),
+        );
+        Ok(())
+    }
+
+    /// What the kernels share: `bulk_key` (what an access costs an element)
+    /// and the dry code's `probe_access`.
+    pub(crate) fn emit_bulk_common(&self, out: &mut String) {
+        let split = if self.isa.split_cycles.is_some() { "self.split_cycles(a as u32, n as u32)" } else { "0" };
+        let _ = write!(
+            out,
+            "    /// What an access of `n` bytes at `a` costs a kernel's element (the\n    /// split cycles, the direct memory's time): None where it is not direct.\n    #[allow(dead_code)]\n    fn bulk_key(&mut self, a: u64, n: u64, write: bool) -> Option<(u32, u128)> {{\n        let t = self.bus.direct_cost(a, n, write)?;\n        Some(({split}, t))\n    }}\n    /// The dry code's access (`kind`: the space's index, doubled, plus 1 for\n    /// a write): noted; a read reads 0.\n    #[allow(dead_code)]\n    fn probe_access(&mut self, kind: u8, a: u64, bits: u32, v: u128) -> u128 {{\n        if (self.probe_n as usize) < 4 {{ self.probe_acc[self.probe_n as usize] = (kind, bits, a, v); }}\n        self.probe_n = self.probe_n.saturating_add(1);\n        0\n    }}\n"
+        );
+    }
 }
 
 fn ty_bits(t: &Ty) -> u32 {
@@ -269,10 +680,93 @@ fn overlaps(a: &Loc, b: &Loc) -> bool {
     a.0 == b.0 && a.1 < b.1 + b.2 && b.1 < a.1 + a.2
 }
 
+/// Whether a register's value plus `off`, as a `ty`, cannot wrap.
+fn fits(l: &Loc, off: &Sv, ty: &Ty) -> bool {
+    let Sv::K(c) = off else { return false };
+    let (w, signed) = match ty {
+        Ty::UInt(n) => (*n, false),
+        Ty::SInt(n) => (*n, true),
+        _ => return false,
+    };
+    if l.2 >= 120 || w >= 120 {
+        return false;
+    }
+    let limit: i128 = if signed { 1 << (w - 1) } else { 1 << w };
+    *c >= 0 && (1i128 << l.2) - 1 + c < limit
+}
+
+/// Where the first of these values that came from something untracked was
+/// made (0: none).
+fn dep_at(vs: &[&Sv]) -> usize {
+    vs.iter().find_map(|v| match v {
+        Sv::Dep(s) | Sv::Cond(_, _, s) if *s != 0 => Some(*s),
+        _ => None,
+    })
+    .unwrap_or(0)
+}
+
+/// A constant cast to `ty`.
+fn cast_k(c: i128, ty: &Ty) -> i128 {
+    match ty {
+        Ty::Bool => (c != 0) as i128,
+        Ty::UInt(n) if *n < 127 => c & ((1i128 << n) - 1),
+        Ty::SInt(n) if *n < 127 => (c << (128 - n)) >> (128 - n),
+        _ => c,
+    }
+}
+
 impl Eval<'_, '_> {
     fn fail(&mut self, why: impl Into<String>) {
-        if self.p.fail.is_none() {
-            self.p.fail = Some(format!("{} in `{}`", why.into(), self.at.last().map(String::as_str).unwrap_or("")));
+        let why = format!("{} in `{}`", why.into(), self.at.last().map(String::as_str).unwrap_or(""));
+        if self.phase == Phase::Element {
+            if self.p.fail.is_none() {
+                self.p.fail = Some(why);
+            }
+            self.stop();
+        } else if self.p.kfail.is_none() {
+            self.p.kfail = Some(why);
+        }
+    }
+
+    /// Where a value that depends on the element was first made: the dry
+    /// code stops there when a branch on it is not one a kernel takes (an
+    /// expression the paths that are not stopped do not evaluate).
+    fn prov(&self, v: &Sv) -> usize {
+        match v {
+            Sv::Dep(s) | Sv::Cond(_, _, s) => *s,
+            Sv::Load(n) | Sv::Elem(n) => self.p.load_sites.get(*n as usize - 1).copied().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    /// The dry code stops where `v` was made (else at this statement).
+    fn stop_on(&mut self, v: &Sv) {
+        let at = self.prov(v);
+        if self.phase == Phase::Element && at != 0 {
+            self.stops.insert(at);
+            self.p.stopped = true;
+        } else {
+            self.stop();
+        }
+    }
+
+    /// A path that ends on a branch on `v`.
+    fn fail_on(&mut self, why: &str, v: &Sv) {
+        self.stop_on(v);
+        if self.phase == Phase::Element {
+            if self.p.fail.is_none() {
+                self.p.fail = Some(format!("{why} in `{}`", self.at.last().map(String::as_str).unwrap_or("")));
+            }
+        } else if self.p.kfail.is_none() {
+            self.p.kfail = Some(why.to_string());
+        }
+    }
+
+    /// The dry code does not run past this statement.
+    fn stop(&mut self) {
+        if self.phase == Phase::Element && self.site != 0 {
+            self.stops.insert(self.site);
+            self.p.stopped = true;
         }
     }
 
@@ -303,11 +797,11 @@ impl Eval<'_, '_> {
                 return v.clone();
             }
             if overlaps(l, &loc) {
-                return Sv::Dep;
+                return Sv::Dep(0);
             }
         }
         if self.written.iter().any(|w| overlaps(w, &loc)) {
-            Sv::Aff(loc, Box::new(Sv::K(0)))
+            Sv::Aff(loc, Box::new(Sv::K(0)), false)
         } else {
             Sv::Inv(format!("reg{}:{}:{}", loc.0 .0, loc.1, loc.2))
         }
@@ -349,7 +843,30 @@ impl Eval<'_, '_> {
         }
     }
 
+    /// Where a fault check on `cv` holds, the element going on when `cv`
+    /// is `!neg`.
+    fn held(cv: &Sv, neg: bool) -> Conv {
+        match cv {
+            Sv::Cond(c, _, _) => {
+                if neg {
+                    c.not()
+                } else {
+                    *c
+                }
+            }
+            _ => Conv::Other,
+        }
+    }
+
     fn stmt(&mut self, locals: &[hir::Local], env: &mut HashMap<LocalId, Sv>, st: &hir::Stmt) -> Flow {
+        let outer = self.site;
+        self.site = site(st);
+        let f = self.stmt_in(locals, env, st);
+        self.site = outer;
+        f
+    }
+
+    fn stmt_in(&mut self, locals: &[hir::Local], env: &mut HashMap<LocalId, Sv>, st: &hir::Stmt) -> Flow {
         match &st.kind {
             S::Let(t, Some(e)) => {
                 let v = self.expr(locals, env, e);
@@ -372,15 +889,23 @@ impl Eval<'_, '_> {
                     None => {
                         let t_raises = Self::diverges(t);
                         let e_raises = e.as_deref().is_some_and(Self::stmt_diverges);
+                        // A fault check; the dry code stops at one that need
+                        // not hold between the first and the last element.
                         if t_raises && !e_raises {
+                            if !Self::held(&cv, true).interval() {
+                                self.stop_on(&cv);
+                            }
                             match e {
                                 Some(s) => self.stmt(locals, env, s),
                                 None => Flow::Next,
                             }
                         } else if e_raises && !t_raises {
+                            if !Self::held(&cv, false).interval() {
+                                self.stop_on(&cv);
+                            }
                             self.block(locals, env, t)
                         } else {
-                            self.fail("a branch on what an element loaded or where it is");
+                            self.fail_on("a branch on what an element loaded or where it is", &cv);
                             Flow::Next
                         }
                     }
@@ -428,10 +953,10 @@ impl Eval<'_, '_> {
                 self.assign(locals, env, p, vv);
                 Flow::Next
             }
-            S::SpaceWrite(sp, _, a, v) => {
+            S::SpaceWrite(sp, bits, a, v) => {
                 let av = self.expr(locals, env, a);
                 let vv = self.expr(locals, env, v);
-                self.p.mem_writes.push((*sp, av, vv));
+                self.p.mem_writes.push((*sp, av, vv, *bits));
                 Flow::Next
             }
             S::Break => Flow::Break,
@@ -476,12 +1001,13 @@ impl Eval<'_, '_> {
         };
         match sv {
             Sv::K(c) => arms.iter().position(|a| a.patterns.iter().any(|p| hit(*c, p))),
-            Sv::Inv(k) | Sv::InvB(k, _) => {
-                let a = self.choose(&format!("match {k}"), arms.len() as u32);
+            Sv::Inv(_) | Sv::InvB(..) => {
+                let a = self.choose(&format!("match {}", sv.key()), arms.len() as u32);
                 Some(a as usize)
             }
-            _ => {
-                self.fail("a match on what an element loaded");
+            other => {
+                let other = other.clone();
+                self.fail_on("a match on what an element loaded", &other);
                 None
             }
         }
@@ -524,12 +1050,12 @@ impl Eval<'_, '_> {
                     match &e.kind {
                         H::Register(_) | H::RegField(..) | H::RegView(..) => {
                             for loc in self.g.bulk_locs(e) {
-                                self.write_loc(loc, Sv::Dep);
+                                self.write_loc(loc, Sv::Dep(0));
                             }
                             return;
                         }
                         H::Local(l) => {
-                            env.insert(*l, Sv::Dep);
+                            env.insert(*l, Sv::Dep(0));
                             return;
                         }
                         H::Field(x, _) | H::Index(x, _) | H::Slice(x, ..) | H::TupleField(x, _) => e = x,
@@ -574,14 +1100,23 @@ impl Eval<'_, '_> {
     }
 
     fn expr(&mut self, locals: &[hir::Local], env: &mut HashMap<LocalId, Sv>, e: &Expr) -> Sv {
+        let at = e as *const Expr as usize;
+        match self.expr_in(locals, env, e) {
+            Sv::Dep(0) => Sv::Dep(at),
+            Sv::Cond(c, a, 0) => Sv::Cond(c, a, at),
+            v => v,
+        }
+    }
+
+    fn expr_in(&mut self, locals: &[hir::Local], env: &mut HashMap<LocalId, Sv>, e: &Expr) -> Sv {
         if self.p.fail.is_some() {
-            return Sv::Dep;
+            return Sv::Dep(0);
         }
         match &e.kind {
             H::Int(c) => Sv::K(*c),
             H::Bool(b) => Sv::K(*b as i128),
             H::Str(_) => Sv::Inv("str".into()),
-            H::Local(l) => env.get(l).cloned().unwrap_or(Sv::Dep),
+            H::Local(l) => env.get(l).cloned().unwrap_or(Sv::Dep(0)),
             H::Const(d) => Sv::Inv(format!("const{}", d.0)),
             H::Variant(_, v) => Sv::K(*v as i128),
             H::Unary(op, a) => {
@@ -590,16 +1125,22 @@ impl Eval<'_, '_> {
                     (UnaryOp::Not, Sv::K(c)) => Sv::K((c == 0) as i128),
                     (UnaryOp::Not, Sv::InvB(k, n)) => Sv::InvB(k, !n),
                     (UnaryOp::Not, Sv::Inv(k)) => Sv::InvB(k, true),
-                    (_, Sv::K(c)) => Sv::Inv(format!("({op:?} {c})")),
+                    (UnaryOp::Not, Sv::Cond(c, _, at)) => Sv::Cond(c.not(), None, at),
+                    (_, Sv::K(c)) => Sv::Inv(format!("({op:?} {c} {:?})", e.ty)),
                     (_, v) if v.invariant() => Sv::Inv(format!("({op:?} {})", v.key())),
                     (_, Sv::Elem(n) | Sv::Load(n)) => Sv::Elem(n),
-                    _ => Sv::Dep,
+                    _ => Sv::Dep(0),
                 }
             }
             H::Binary(op, a, b) => {
                 let av = self.expr(locals, env, a);
                 let bv = self.expr(locals, env, b);
-                self.binary(*op, av, bv)
+                let inner = av.wraps() || bv.wraps();
+                let mut v = self.binary(*op, av, bv);
+                if let Sv::Aff(l, off, w) = &mut v {
+                    *w = inner || *w || !fits(l, off, &e.ty);
+                }
+                v
             }
             H::Ternary(c, a, b) => {
                 let cv = self.expr(locals, env, c);
@@ -609,24 +1150,39 @@ impl Eval<'_, '_> {
                     None => {
                         let av = self.expr(locals, env, a);
                         let bv = self.expr(locals, env, b);
-                        if av == bv { av } else { Sv::Dep }
+                        if av == bv {
+                            av
+                        } else {
+                            // Which arm depends on the element: the dry code
+                            // stops where that was made.
+                            self.stop_on(&cv);
+                            Sv::Dep(0)
+                        }
                     }
                 }
             }
-            // A cast keeps a pointer a pointer (it wraps where the register
-            // does).
-            H::Cast(a) => self.expr(locals, env, a),
+            // A cast keeps a pointer a pointer (where it may wrap, noted).
+            H::Cast(a) => match self.expr(locals, env, a) {
+                Sv::K(c) => Sv::K(cast_k(c, &e.ty)),
+                Sv::Inv(k) => Sv::Inv(format!("({k} as {:?})", e.ty)),
+                v @ Sv::InvB(..) => Sv::Inv(format!("({} as {:?})", v.key(), e.ty)),
+                Sv::Aff(l, off, w) => {
+                    let w = w || !fits(&l, &off, &e.ty);
+                    Sv::Aff(l, off, w)
+                }
+                other => other,
+            },
             H::Field(b, i) => match self.expr(locals, env, b) {
-                Sv::Agg(vs) => vs.get(*i as usize).cloned().unwrap_or(Sv::Dep),
+                Sv::Agg(vs) => vs.get(*i as usize).cloned().unwrap_or(Sv::Dep(0)),
                 v if v.invariant() => Sv::Inv(format!("{}.{i}", v.key())),
                 Sv::Elem(n) | Sv::Load(n) => Sv::Elem(n),
-                _ => Sv::Dep,
+                _ => Sv::Dep(0),
             },
             H::TupleField(b, i) => match self.expr(locals, env, b) {
-                Sv::Agg(vs) => vs.get(*i as usize).cloned().unwrap_or(Sv::Dep),
+                Sv::Agg(vs) => vs.get(*i as usize).cloned().unwrap_or(Sv::Dep(0)),
                 v if v.invariant() => Sv::Inv(format!("{}.{i}", v.key())),
                 Sv::Elem(n) | Sv::Load(n) => Sv::Elem(n),
-                _ => Sv::Dep,
+                _ => Sv::Dep(0),
             },
             H::Index(b, i) => {
                 let bv = self.expr(locals, env, b);
@@ -635,18 +1191,23 @@ impl Eval<'_, '_> {
                     (Sv::K(x), Sv::K(n)) => Sv::K(if (0..128).contains(&n) { (x >> n) & 1 } else { 0 }),
                     (a, n) if a.invariant() && n.invariant() => Sv::Inv(format!("{}[{}]", a.key(), n.key())),
                     (Sv::Elem(n) | Sv::Load(n), _) => Sv::Elem(n),
-                    _ => Sv::Dep,
+                    _ => Sv::Dep(0),
                 }
             }
             H::Slice(b, hi, lo) => match self.expr(locals, env, b) {
                 Sv::K(x) => Sv::K((x >> lo) & ((1i128 << (hi - lo + 1)) - 1)),
                 v if v.invariant() => Sv::Inv(format!("{}[{hi}:{lo}]", v.key())),
                 Sv::Elem(n) | Sv::Load(n) => Sv::Elem(n),
-                _ => Sv::Dep,
+                _ => Sv::Dep(0),
             },
-            H::Call(_, args) | H::Builtin(_, args) => {
+            H::Builtin(Builtin::Restarted, _) if self.phase == (Phase::Side { steady: true }) => Sv::K(1),
+            H::Call(u, args) => {
                 let vs: Vec<Sv> = args.iter().map(|a| self.expr(locals, env, a)).collect();
-                Self::pure_of(&format!("{:?}", e.kind).chars().take(24).collect::<String>(), vs)
+                Self::pure_of(&format!("unit{u:?}:{:?}", e.ty), vs)
+            }
+            H::Builtin(bi, args) => {
+                let vs: Vec<Sv> = args.iter().map(|a| self.expr(locals, env, a)).collect();
+                Self::pure_of(&format!("{bi:?}:{:?}", e.ty), vs)
             }
             H::BundleLit(_, args) | H::Tuple(args) | H::Array(args) => Sv::Agg(args.iter().map(|a| self.expr(locals, env, a)).collect()),
             H::ArrayRepeat(a, n) => {
@@ -660,7 +1221,7 @@ impl Eval<'_, '_> {
                         ArmBody::Expr(x) => self.expr(locals, env, x),
                         ArmBody::Block(b) => self.block_value(locals, env, b),
                     },
-                    None => Sv::Dep,
+                    None => Sv::Dep(0),
                 }
             }
             H::If(c, t, f) => {
@@ -672,8 +1233,8 @@ impl Eval<'_, '_> {
                         None => Sv::Unit,
                     },
                     None => {
-                        self.fail("a branch on what an element loaded");
-                        Sv::Dep
+                        self.fail_on("a branch on what an element loaded", &cv);
+                        Sv::Dep(0)
                     }
                 }
             }
@@ -682,7 +1243,7 @@ impl Eval<'_, '_> {
                 let locs = self.g.bulk_locs(e);
                 match locs.as_slice() {
                     [l] => self.read_loc(*l),
-                    _ => Sv::Dep,
+                    _ => Sv::Dep(0),
                 }
             }
             H::RegView(..) => Sv::Agg(self.g.bulk_locs(e).into_iter().map(|l| self.read_loc(l)).collect()),
@@ -702,17 +1263,18 @@ impl Eval<'_, '_> {
                 self.p.loads += 1;
                 let n = self.p.loads;
                 self.p.mem_reads.push((*sp, av, *bits));
+                self.p.load_sites.push(e as *const Expr as usize);
                 Sv::Load(n)
             }
-            H::SpaceWrite(sp, _, a, v) => {
+            H::SpaceWrite(sp, bits, a, v) => {
                 let av = self.expr(locals, env, a);
                 let vv = self.expr(locals, env, v);
-                self.p.mem_writes.push((*sp, av, vv));
+                self.p.mem_writes.push((*sp, av, vv, *bits));
                 Sv::Unit
             }
             H::KindSelect(k, args) => match self.select_place(locals, env, *k, args) {
                 Some(place) => self.expr(locals, env, &place),
-                None => Sv::Dep,
+                None => Sv::Dep(0),
             },
             H::FnCall(d, args) => {
                 let vs: Vec<Sv> = args.iter().map(|a| self.expr(locals, env, a)).collect();
@@ -720,7 +1282,7 @@ impl Eval<'_, '_> {
             }
             _ => {
                 self.fail("an expression a stream does not make");
-                Sv::Dep
+                Sv::Dep(0)
             }
         }
     }
@@ -732,7 +1294,7 @@ impl Eval<'_, '_> {
         } else if let Some(n) = vs.iter().find_map(|v| if let Sv::Elem(n) | Sv::Load(n) = v { Some(*n) } else { None }) {
             Sv::Elem(n)
         } else {
-            Sv::Dep
+            Sv::Dep(0)
         }
     }
 
@@ -740,6 +1302,9 @@ impl Eval<'_, '_> {
         let n = b.stmts.len();
         for (k, st) in b.stmts.iter().enumerate() {
             if k + 1 == n {
+                // (A trailing expression is lowered as part of the statement
+                // holding the block: that statement is where the dry code
+                // stops.)
                 if let S::Expr(x) = &st.kind {
                     return self.expr(locals, env, x);
                 }
@@ -747,20 +1312,22 @@ impl Eval<'_, '_> {
             match self.stmt(locals, env, st) {
                 Flow::Next => {}
                 Flow::Ret(v) => return v,
-                _ => return Sv::Dep,
+                _ => return Sv::Dep(0),
             }
         }
         Sv::Unit
     }
 
     fn call(&mut self, d: DefId, args: Vec<Sv>) -> Sv {
-        let Some(f) = self.g.fns.get(&d) else { return Sv::Dep };
+        let Some(f) = self.g.fns.get(&d) else { return Sv::Dep(0) };
         if f.external {
-            return Sv::Dep;
+            // (Supplied outside: the dry code would call it.)
+            self.stop();
+            return Sv::Dep(0);
         }
         if self.depth > 24 {
             self.fail("calls too deep");
-            return Sv::Dep;
+            return Sv::Dep(0);
         }
         self.depth += 1;
         self.at.push(f.name.clone());
@@ -773,8 +1340,15 @@ impl Eval<'_, '_> {
             Flow::Raise => {
                 // A fn that raises here (a check whose condition held): the
                 // path raises.
-                self.fail("it raises");
-                Sv::Dep
+                if self.phase == Phase::Element {
+                    if self.p.fail.is_none() {
+                        self.p.fail = Some(format!("it raises in `{}`", f.name));
+                    }
+                    self.p.raised = true;
+                } else {
+                    self.fail("it raises");
+                }
+                Sv::Dep(0)
             }
             _ => Sv::Unit,
         };
@@ -812,13 +1386,35 @@ impl Eval<'_, '_> {
                     _ => Sv::Inv(format!("({} {op:?} {})", a.key(), b.key())),
                 }
             }
-            (Sv::Aff(l, off), x) | (x, Sv::Aff(l, off)) if x.invariant() && matches!(op, B::Add) => Sv::Aff(*l, Box::new(self.binary(B::Add, (**off).clone(), x.clone()))),
-            (Sv::Aff(l, off), x) if x.invariant() && matches!(op, B::Sub) => Sv::Aff(*l, Box::new(self.binary(B::Sub, (**off).clone(), x.clone()))),
+            (Sv::Aff(l, off, _), x) | (x, Sv::Aff(l, off, _)) if x.invariant() && matches!(op, B::Add) => Sv::Aff(*l, Box::new(self.binary(B::Add, (**off).clone(), x.clone())), false),
+            (Sv::Aff(l, off, _), x) if x.invariant() && matches!(op, B::Sub) => Sv::Aff(*l, Box::new(self.binary(B::Sub, (**off).clone(), x.clone())), false),
             // Masking to the register's width: it wraps there.
-            (Sv::Aff(..), Sv::K(_)) if matches!(op, B::BitAnd) => a.clone(),
+            (Sv::Aff(l, off, _), Sv::K(_)) if matches!(op, B::BitAnd) => Sv::Aff(*l, off.clone(), true),
+            // Where the element is, compared with an invariant.
+            (Sv::Aff(..), y) | (y, Sv::Aff(..)) if cmp && y.invariant() => {
+                let conv = if a.wraps() || b.wraps() {
+                    Conv::Other
+                } else {
+                    match op {
+                        B::Eq => Conv::Convex,
+                        B::Ne => Conv::Concave,
+                        _ => Conv::Half,
+                    }
+                };
+                Sv::Cond(conv, Some(Box::new((op, a.clone(), b.clone()))), 0)
+            }
+            (Sv::Cond(ca, ..), Sv::Cond(cb, ..)) if matches!(op, B::And | B::Or) => {
+                let conv = match op {
+                    B::And if ca.interval() && cb.interval() => Conv::Convex,
+                    B::Or if matches!(ca, Conv::Half | Conv::Concave) && matches!(cb, Conv::Half | Conv::Concave) => Conv::Concave,
+                    _ => Conv::Other,
+                };
+                Sv::Cond(conv, None, 0)
+            }
             _ => match (&a, &b) {
                 (Sv::Elem(n) | Sv::Load(n), _) | (_, Sv::Elem(n) | Sv::Load(n)) => Sv::Elem(*n),
-                _ => Sv::Dep,
+                (Sv::Aff(..) | Sv::Cond(..), _) | (_, Sv::Aff(..) | Sv::Cond(..)) if cmp || matches!(op, B::And | B::Or) => Sv::Cond(Conv::Other, None, dep_at(&[&a, &b])),
+                _ => Sv::Dep(dep_at(&[&a, &b])),
             },
         }
     }
@@ -832,17 +1428,17 @@ impl Eval<'_, '_> {
         let mut moved: Vec<Loc> = Vec::new();
         for (l, v) in &self.p.writes {
             match v {
-                Sv::Aff(l0, off) if l0 == l && off.invariant() => moved.push(*l),
+                Sv::Aff(l0, off, _) if l0 == l && off.invariant() => moved.push(*l),
                 Sv::Aff(..) => return Err("a register moves by something not the same each element".into()),
                 // Results: from what it loaded, or invariant.
                 _ => {}
             }
         }
-        let streams = |a: &Sv| matches!(a, Sv::Aff(l, off) if moved.contains(l) && off.invariant());
+        let streams = |a: &Sv| matches!(a, Sv::Aff(l, off, _) if moved.contains(l) && off.invariant());
         let mem_r: Vec<&(DefId, Sv, u32)> = self.p.mem_reads.iter().filter(|r| r.0 == self.mem).collect();
-        let mem_w: Vec<&(DefId, Sv, Sv)> = self.p.mem_writes.iter().filter(|w| w.0 == self.mem).collect();
+        let mem_w: Vec<&(DefId, Sv, Sv, u32)> = self.p.mem_writes.iter().filter(|w| w.0 == self.mem).collect();
         let port_r: Vec<&(DefId, Sv, u32)> = self.p.mem_reads.iter().filter(|r| r.0 != self.mem).collect();
-        let port_w: Vec<&(DefId, Sv, Sv)> = self.p.mem_writes.iter().filter(|w| w.0 != self.mem).collect();
+        let port_w: Vec<&(DefId, Sv, Sv, u32)> = self.p.mem_writes.iter().filter(|w| w.0 != self.mem).collect();
         if mem_r.iter().any(|r| !streams(&r.1)) || mem_w.iter().any(|w| !streams(&w.1)) {
             return Err("a memory access at an address that does not move with the element".into());
         }
@@ -862,6 +1458,56 @@ impl Eval<'_, '_> {
             (1, 0, 0, 1) if load_of(&port_w[0].2, &mem_r) => Ok(Shape::PortOut),
             (r, w, pr, pw) => Err(format!("{r} memory reads, {w} writes, {pr} port reads, {pw} port writes")),
         }
+    }
+
+    /// What a fill or copy path tells the kernel (the element's writes
+    /// `elem`, and `next`'s value `nx`), or why it cannot take the path.
+    fn kernel(&self, shape: Shape, elem: &[(Loc, Sv)], nx: &Sv) -> Result<Kernel, String> {
+        if let Some(why) = &self.p.kfail {
+            return Err(why.clone());
+        }
+        // The count: `next` takes one from a register, and the instruction
+        // repeats while it is not zero.
+        let Sv::Cond(_, Some(atom), _) = nx else { return Err("`next` is not a test of a count".into()) };
+        let count = match &**atom {
+            (BinaryOp::Ne, Sv::Aff(l, off, _), Sv::K(0)) | (BinaryOp::Ne, Sv::K(0), Sv::Aff(l, off, _)) if **off == Sv::K(-1) => *l,
+            _ => return Err("`next` is not a count down to zero".into()),
+        };
+        let counted = self.p.writes.iter().any(|(l, v)| *l == count && matches!(v, Sv::Aff(l0, off, _) if *l0 == count && **off == Sv::K(-1)));
+        if !counted || elem.iter().any(|(l, _)| l.0 == count.0) {
+            return Err("the count is not counted down once by `next` alone".into());
+        }
+        if self.p.writes.len() != elem.len() + 1 {
+            return Err("`next` writes more than the count".into());
+        }
+        let mut moving: Vec<(DefId, u32)> = Vec::new();
+        for (l, v) in elem {
+            match v {
+                Sv::Aff(l0, off, _) if l0 == l && off.invariant() && l.1 == 0 => match moving.iter_mut().find(|m| m.0 == l.0) {
+                    Some(m) => m.1 = m.1.min(l.2),
+                    None => moving.push((l.0, l.2)),
+                },
+                Sv::Aff(..) => return Err("a pointer not at bit 0 of its register".into()),
+                _ => return Err("it writes more than its pointers".into()),
+            }
+        }
+        if count.1 != 0 {
+            return Err("a count not at bit 0 of its register".into());
+        }
+        moving.push((count.0, count.2));
+        let bits = self.p.mem_writes.iter().find(|w| w.0 == self.mem).map(|w| w.3).ok_or("no write")?;
+        if shape == Shape::Copy && self.p.mem_reads.iter().find(|r| r.0 == self.mem).map(|r| r.2) != Some(bits) {
+            return Err("the read and the write differ in size".into());
+        }
+        if bits % 8 != 0 || bits > 64 {
+            return Err("an access of whole bytes, at most 8".into());
+        }
+        for (d, _) in &moving {
+            if ty_bits(&self.g.regs[d].1.ty) > 64 {
+                return Err("a register wider than 64 bits moves".into());
+            }
+        }
+        Ok(Kernel { shape, bits, moving, written: Vec::new(), fns: Vec::new(), stops: Vec::new() })
     }
 }
 

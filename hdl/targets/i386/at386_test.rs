@@ -305,12 +305,16 @@ fn bench_compare() {
     let n1 = sys.run_until(40_000_000_000, |s| mark(s) == 0xBEEF).unwrap();
     let w1 = wall.elapsed().as_secs_f64();
     assert_eq!(mark(&mut sys), 0xBEEF, "the program finished");
+    // The time and the memory exactly: a profile's cores agree to the tick
+    // where their concessions allow (`repeat: bulk` kernels change neither).
+    let ram = sys.board().ram.cells.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3));
     println!(
-        "BENCH {} {} boot_instructions {n0} boot_seconds {w0:.3} run_instructions {n1} run_seconds {:.3} mips {:.1} emulated_seconds {:.3}",
+        "BENCH {} {} boot_instructions {n0} boot_seconds {w0:.3} run_instructions {n1} run_seconds {:.3} mips {:.1} emulated_seconds {:.3} emulated_now {} ram {ram:016x}",
         machine_at386_vga::system::PROFILE,
         machine_at386_vga::system::CORE,
         w1 - w0,
         n1 as f64 / (w1 - w0) / 1e6,
-        sys.seconds()
+        sys.seconds(),
+        sys.now()
     );
 }

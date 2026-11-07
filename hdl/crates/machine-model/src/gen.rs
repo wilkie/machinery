@@ -162,6 +162,12 @@ pub struct Gen<'a> {
     events_block: bool,
     /// `repeat: bulk(n)`: n, or 0.
     repeat_bulk: u32,
+    /// The instructions with kernels (`bulk_<name>`, by index), for the JIT
+    /// core; the statements their dry code stops at; and whether the dry
+    /// code is being lowered.
+    bulk_kernels: Vec<(usize, bulk::Kernel)>,
+    bulk_stops: std::cell::RefCell<std::collections::HashSet<usize>>,
+    probing: std::cell::Cell<bool>,
     /// The isa fns the JIT lowering inlines (`gen/lower.rs`).
     jit_fns: std::cell::RefCell<std::collections::HashSet<DefId>>,
     /// The kind rules it lowers: (kind, rule index).
@@ -299,6 +305,9 @@ impl<'a> Gen<'a> {
             sync_block: false,
             events_block: false,
             repeat_bulk: 0,
+            bulk_kernels: Vec::new(),
+            bulk_stops: Default::default(),
+            probing: std::cell::Cell::new(false),
             jit_fns: Default::default(),
             jit_rules: Default::default(),
             jit_units: Default::default(),
@@ -433,6 +442,11 @@ impl<'a> Gen<'a> {
     // -- expressions ----------------------------------------------------------------
 
     fn expr(&self, cx: &Cx, e: &Expr) -> R<String> {
+        // The dry code (`probe_<name>`) stops where a path stops being one
+        // a kernel takes.
+        if self.probing.get() && self.bulk_stops.borrow().contains(&(e as *const Expr as usize)) {
+            return Ok(format!("{}.probe_stop::<{}>()?", cx.recv, self.rty(&e.ty)?));
+        }
         let q = if cx.fallible { "?" } else { "" };
         Ok(match &e.kind {
             H::Int(v) => self.int_literal(*v, &e.ty)?,
@@ -637,6 +651,17 @@ impl<'a> Gen<'a> {
             H::TailOperand(base, d) => {
                 format!("{}.as_{}()", self.expr(cx, base)?, self.prog.item_name(*d))
             }
+            H::SpaceRead(d, bits, addr) if self.probing.get() => {
+                let (_, _, out_ty) = self.int_shape(&e.ty).unwrap();
+                format!("{{ let a = ({}) as u64; {}.probe_access({}, a, {bits}, 0) as {out_ty} }}", self.expr(cx, addr)?, cx.recv, self.space_index(*d) << 1)
+            }
+            H::SpaceCell(d, addr) if self.probing.get() => {
+                let (_, _, out_ty) = self.int_shape(&e.ty).unwrap();
+                format!("{{ let a = ({}) as u64; {}.probe_access({}, a, {}, 0) as {out_ty} }}", self.expr(cx, addr)?, cx.recv, self.space_index(*d) << 1, self.spaces[d].cell_bits)
+            }
+            H::SpaceWrite(d, bits, addr, v) if self.probing.get() => {
+                format!("{{ let a = ({}) as u64; let v = ({}) as u128; {}.probe_access({}, a, {bits}, v); }}", self.expr(cx, addr)?, self.expr(cx, v)?, cx.recv, (self.space_index(*d) << 1) | 1)
+            }
             H::SpaceRead(d, bits, addr) => {
                 let sp = self.spaces[d];
                 let (_, _, out_ty) = self.int_shape(&e.ty).unwrap();
@@ -746,8 +771,9 @@ impl<'a> Gen<'a> {
                 let names: Vec<String> = (0..a.len()).map(|i| format!("a{i}")).collect();
                 let _ = write!(
                     s,
-                    "{}.fn_{}({})? }}",
+                    "{}.{}fn_{}({})? }}",
                     cx.recv,
+                    if self.probing.get() { "probe_" } else { "" },
                     ident(&f.name),
                     names.join(", ")
                 );
@@ -1080,7 +1106,15 @@ impl<'a> Gen<'a> {
     }
 
     fn stmt(&self, cx: &Cx, s: &Stmt) -> R<String> {
+        // The dry code (`probe_<name>`) stops where a path stops being one
+        // a kernel takes.
+        if self.probing.get() && self.bulk_stops.borrow().contains(&(s as *const Stmt as usize)) {
+            return Ok(format!("{}.probe_stop::<()>()?;\n", cx.recv));
+        }
         Ok(match &s.kind {
+            S::SpaceWrite(d, bits, addr, v) if self.probing.get() => {
+                format!("{{ let a = ({}) as u64; let v = ({}) as u128; {}.probe_access({}, a, {bits}, v); }}\n", self.expr(cx, addr)?, self.expr(cx, v)?, cx.recv, (self.space_index(*d) << 1) | 1)
+            }
             S::Let(t, Some(e)) => {
                 format!("let {} = {};\n", self.let_target(cx, t), self.expr(cx, e)?)
             }
@@ -1849,7 +1883,7 @@ impl<'a> Gen<'a> {
             let _ = writeln!(s, "    fn {n}_read(&mut self, addr: u64, bits: u32) -> u128;\n    fn {n}_write(&mut self, addr: u64, bits: u32, value: u128);");
         }
         if self.jit {
-            s.push_str("    /// How the board keeps time, when compiled code can keep it (the JIT\n    /// core).\n    fn jit_board() -> Option<JitBoard> {\n        None\n    }\n    /// The time fetching `n` code bytes from `addr` (in code page `page`)\n    /// takes, when it is known before the step (serial fetches from direct\n    /// memory).\n    #[allow(unused_variables)]\n    fn jit_fetch_time(&self, page: u32, addr: u64, n: u32) -> Option<u128> {\n        None\n    }\n    /// The code units fetching `n` bytes from `addr` spans, and a unit's\n    /// time, when it is direct memory (an overlapped fetch).\n    #[allow(unused_variables)]\n    fn jit_fetch_units(&self, page: u32, addr: u64, n: u32) -> Option<(u64, u64, u128)> {\n        None\n    }\n    /// An `extern fn` the processor model answers with a wire level: where\n    /// the board keeps it (`Ok`, the JIT core loads it), or its value when\n    /// the wire is not driven (`Err`): by name.\n    #[allow(unused_variables)]\n    fn jit_ext(name: &str) -> Option<Result<usize, u128>> {\n        None\n    }\n    /// The istream space's direct memory, by byte (the JIT core).\n    fn jit_mems() -> &'static [JitMem] {\n        &[]\n    }\n    /// The pointers `jit_mems` names: cells and code bitmaps.\n    #[allow(unused_variables)]\n    fn jit_mem_ptrs(&self, out: &mut [usize; 8]) {}\n    /// A compiled write hit recorded code at byte `k` of memory `mem`.\n    #[allow(unused_variables)]\n    fn jit_code_hit(&mut self, mem: u32, k: usize) {}\n    /// The least deadline of the devices `sync: quantum` may not defer\n    /// (those that raise signals or master a bus); 0: every one.\n    fn jit_urgent_due(&self) -> u128 {\n        0\n    }\n");
+            s.push_str("    /// How the board keeps time, when compiled code can keep it (the JIT\n    /// core).\n    fn jit_board() -> Option<JitBoard> {\n        None\n    }\n    /// The time fetching `n` code bytes from `addr` (in code page `page`)\n    /// takes, when it is known before the step (serial fetches from direct\n    /// memory).\n    #[allow(unused_variables)]\n    fn jit_fetch_time(&self, page: u32, addr: u64, n: u32) -> Option<u128> {\n        None\n    }\n    /// The code units fetching `n` bytes from `addr` spans, and a unit's\n    /// time, when it is direct memory (an overlapped fetch).\n    #[allow(unused_variables)]\n    fn jit_fetch_units(&self, page: u32, addr: u64, n: u32) -> Option<(u64, u64, u128)> {\n        None\n    }\n    /// An `extern fn` the processor model answers with a wire level: where\n    /// the board keeps it (`Ok`, the JIT core loads it), or its value when\n    /// the wire is not driven (`Err`): by name.\n    #[allow(unused_variables)]\n    fn jit_ext(name: &str) -> Option<Result<usize, u128>> {\n        None\n    }\n    /// The istream space's direct memory, by byte (the JIT core).\n    fn jit_mems() -> &'static [JitMem] {\n        &[]\n    }\n    /// The pointers `jit_mems` names: cells and code bitmaps.\n    #[allow(unused_variables)]\n    fn jit_mem_ptrs(&self, out: &mut [usize; 8]) {}\n    /// A compiled write hit recorded code at byte `k` of memory `mem`.\n    #[allow(unused_variables)]\n    fn jit_code_hit(&mut self, mem: u32, k: usize) {}\n    /// The least deadline of the devices `sync: quantum` may not defer\n    /// (those that raise signals or master a bus); 0: every one.\n    fn jit_urgent_due(&self) -> u128 {\n        0\n    }\n    /// The istream space's direct memory, its time not charged (a\n    /// kernel's elements, run as a block): `n` bytes at `addr`, None (false)\n    /// where it is not direct.\n    #[allow(unused_variables)]\n    fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {\n        None\n    }\n    #[allow(unused_variables)]\n    fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {\n        false\n    }\n    /// What a read (a write, when `write`) of `n` bytes at `addr` costs in\n    /// direct memory, None where it is not direct.\n    #[allow(unused_variables)]\n    fn direct_cost(&self, addr: u64, n: u64, write: bool) -> Option<u128> {\n        None\n    }\n");
         }
         s.push_str("    /// An instruction (or an interrupt taken at a boundary) finished, having spent\n    /// `cycles` of execution beyond its bus transfers, to `schedule`.\n    #[allow(unused_variables)]\n    fn retire(&mut self, cycles: u32, schedule: Schedule) {}\n    /// The processor shut down (a fault while delivering a double fault);\n    /// it stays halted until reset.\n    fn shutdown(&mut self) {}\n    /// The processor was reset alone (`istream { reset }`): the\n    /// processor model's state with it.\n    fn processor_reset(&mut self) {}\n    /// After each step, as `System::step` makes it: the devices caught up\n    /// (the JIT core's compiled steps make it themselves).\n    fn after_step(&mut self) {}\n    /// A halted processor's step: one cycle of its clock.\n    fn halted_cycle(&mut self) {}\n");
         if let Some(ist) = &self.isa.istream {
@@ -2164,6 +2198,15 @@ impl<'a> Gen<'a> {
     }
 
     fn emit_fn_body(&mut self, f: &hir::FnBody) -> R<()> {
+        let s = self.fn_body_text(f)?;
+        self.out.push_str(&s);
+        Ok(())
+    }
+
+    /// A fn's Rust text (`fn_<name>`; while the dry code is lowered,
+    /// `probe_fn_<name>`).
+    pub(crate) fn fn_body_text(&self, f: &hir::FnBody) -> R<String> {
+        let pre = if self.probing.get() { "probe_fn_" } else { "fn_" };
         let cx = Cx {
             locals: &f.locals,
             fallible: true,
@@ -2230,18 +2273,16 @@ impl<'a> Gen<'a> {
             });
             let outer: Vec<String> = std::iter::once(Ok("&mut self".to_string())).chain(outer).collect::<R<_>>()?;
             let s = format!(
-                "    #[inline]\n    pub fn fn_{name}({}) -> Result<{ret}, Fault> {{\n{head}self.fn_{name}_rest({})\n}}\n    #[inline(never)]\n    #[allow(clippy::too_many_arguments)]\n    fn fn_{name}_rest({params}) -> Result<{ret}, Fault> {{\n{body}{tail}}}\n",
+                "    #[inline]\n    #[allow(dead_code)]\n    pub fn {pre}{name}({}) -> Result<{ret}, Fault> {{\n{head}self.{pre}{name}_rest({})\n}}\n    #[inline(never)]\n    #[allow(clippy::too_many_arguments, dead_code)]\n    fn {pre}{name}_rest({params}) -> Result<{ret}, Fault> {{\n{body}{tail}}}\n",
                 outer.join(", "),
                 args.join(", ")
             );
-            self.out.push_str(&s);
-            return Ok(());
+            return Ok(s);
         }
         let body = self.block_stmts(&cx, &f.body)?;
         let inline = if Self::weight(&f.body.stmts) <= 3 { "    #[inline]\n" } else { "" };
-        let s = format!("{inline}    pub fn fn_{name}({params}) -> Result<{ret}, Fault> {{\n{body}{tail}}}\n");
-        self.out.push_str(&s);
-        Ok(())
+        let dead = if self.probing.get() { "    #[allow(dead_code)]\n" } else { "" };
+        Ok(format!("{inline}{dead}    pub fn {pre}{name}({params}) -> Result<{ret}, Fault> {{\n{body}{tail}}}\n"))
     }
 
     /// `if c { ...; return/raise }` with no else: a way out of the function.
@@ -2517,9 +2558,24 @@ impl<'a> Gen<'a> {
         // `bulk` is a claim the description makes: checked here, an error
         // when the element is not a stream.
         if rep.bulk {
-            let shape = self.bulk_shape(i)?;
+            let (shape, kernel) = self.bulk_plan(i)?;
             if std::env::var_os("MACHINE_BULK").is_some() {
-                eprintln!("bulk: {} is a {shape:?}", i.name);
+                match &kernel {
+                    Ok(k) => eprintln!("bulk: {} is a {shape:?}, with a kernel ({k:?})", i.name),
+                    Err(why) => eprintln!("bulk: {} is a {shape:?}, with no kernel: {why}", i.name),
+                }
+            }
+            // The JIT core's `repeat: bulk(n)` runs the fills and copies
+            // through their kernels (emitted once every instruction is
+            // checked: their dry code is shared).
+            if let Ok(k) = kernel {
+                // (`MACHINE_NO_KERNELS`: without them, to compare.)
+                if self.jit && self.repeat_bulk != 0 && i.operands.is_empty() && std::env::var_os("MACHINE_NO_KERNELS").is_none() {
+                    let at = self.isa.instructions.iter().position(|x| std::ptr::eq(x, i)).unwrap_or(0);
+                    // (The dry fns are shared: every kernel's stops in them.)
+                    self.bulk_stops.borrow_mut().extend(k.stops().iter().copied());
+                    self.bulk_kernels.push((at, k));
+                }
             }
         }
         let cx = Cx { locals: &rep.locals, fallible: true, recv: "self", ops: Some(i), comp: None, opt: false };
@@ -3587,6 +3643,11 @@ impl<'a> Gen<'a> {
         }
         self.line("}");
         Ok(())
+    }
+
+    /// Space `d`'s index among the isa's spaces.
+    fn space_index(&self, d: DefId) -> u8 {
+        self.isa.spaces.iter().position(|s| s.def == d).unwrap_or(0) as u8
     }
 
     /// The cycles a data access of `bits` in space `d` adds (`split =>`):

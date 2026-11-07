@@ -1197,6 +1197,8 @@ impl<'a> Gen<'a> {
         let mut jit_mems = String::new();
         let mut jit_ptrs = String::new();
         let mut jit_hits = String::new();
+        // The JIT core's kernels reach direct memory through the bus.
+        let mut direct_fwd = String::new();
         if prof.is_some_and(|p| p.direct_memory) {
             if cpu_retire {
                 return Err(GenError::new(format!(
@@ -1208,6 +1210,9 @@ impl<'a> Gen<'a> {
             let msp = self.isa.istream.as_ref().map(|i| self.spaces[&i.space]);
             let mut reads = String::new();
             let mut writes = String::new();
+            let mut peeks = String::new();
+            let mut pokes = String::new();
+            let mut costs = String::new();
             let mut fetches = String::new();
             // The trace core: code pages of direct memories, their write
             // counts, and fetches charged without reading.
@@ -1251,6 +1256,8 @@ impl<'a> Gen<'a> {
                             let cond = format!("addr >= {:#x} && last <= {:#x}", r.lo, r.hi);
                             let units = format!("(last / {unit_bytes} - addr / {unit_bytes} + 1) as clock::Time");
                             let _ = writeln!(reads, "        if {cond} {{ let mut v: u128 = 0; for i in 0..n {{ v |= ({cells}[{}] as u128) << (8 * i); }} self.sig.now += {units} * {} * {period}; return Some(v); }}", index("addr + i"), rbase as u128 + d.wait);
+                            let _ = writeln!(peeks, "        if {cond} {{ let mut v: u128 = 0; for i in 0..n {{ v |= ({cells}[{}] as u128) << (8 * i); }} return Some(v); }}", index("addr + i"));
+                            let _ = writeln!(costs, "        if !write && {cond} {{ return Some({units} * {} * {period}); }}", rbase as u128 + d.wait);
                             let stamp = if self.trace.is_some() {
                                 format!(" let k = {}; if {cells}_code[k >> 12] & (1u32 << ((k >> 7) & 31)) != 0 {{ {cells}_stamps[k >> 12] = {cells}_stamps[k >> 12].wrapping_add(1); {cells}_code[k >> 12] = 0; {cells}_writes = {cells}_writes.wrapping_add(1); }}", index("addr + i"))
                             } else {
@@ -1258,6 +1265,8 @@ impl<'a> Gen<'a> {
                             };
                             if !d.read_only {
                                 let _ = writeln!(writes, "        if {cond} {{ for i in 0..n {{ {cells}[{}] = (value >> (8 * i)) as u8;{stamp} }} self.sig.now += {units} * {} * {period}; return true; }}", index("addr + i"), wbase as u128 + d.wait);
+                                let _ = writeln!(pokes, "        if {cond} {{ for i in 0..n {{ {cells}[{}] = (value >> (8 * i)) as u8;{stamp} }} return true; }}", index("addr + i"));
+                                let _ = writeln!(costs, "        if write && {cond} {{ return Some({units} * {} * {period}); }}", wbase as u128 + d.wait);
                             }
                             if self.trace.is_some() {
                                 let k = match numbered.iter().position(|(_, c)| *c == cells) {
@@ -1297,6 +1306,9 @@ impl<'a> Gen<'a> {
                     format!("        if self.direct_write(addr & {amask}, (bits / 8) as u64, value) {{ return; }}\n"),
                     format!("        if bits == 8 {{ if let Some(b) = self.direct_fetch(addr & {amask}) {{ return b as u128; }} }}\n"),
                 );
+                if self.jit {
+                    direct_fwd = format!("    fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        Board::direct_peek(self, addr & {amask}, n)\n    }}\n    fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        Board::direct_poke(self, addr & {amask}, n, value)\n    }}\n    fn direct_cost(&self, addr: u64, n: u64, write: bool) -> Option<u128> {{\n        Board::direct_cost(self, addr & {amask}, n, write)\n    }}\n");
+                }
             }
             let wsum: String = numbered.iter().map(|(_, c)| format!(" + {c}_writes")).collect();
             jit_writes = numbered.iter().map(|(_, c)| format!("std::mem::offset_of!(Board, {}_writes), ", c.trim_start_matches("self."))).collect();
@@ -1323,10 +1335,10 @@ impl<'a> Gen<'a> {
             };
             let _ = write!(
                 direct,
-                "        /// `memory: direct`: `n` bytes at `addr` from a memory that\n        /// declares `direct`, else None.\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_read(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{reads}        None\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_write(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{writes}        false\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_fetch(&mut self, addr: u64) -> Option<u8> {{\n{fetches}        self.direct_code = u64::MAX;\n        None\n        }}\n{trace_direct}"
+                "        /// `memory: direct`: `n` bytes at `addr` from a memory that\n        /// declares `direct`, else None.\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_read(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{reads}        None\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_write(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{writes}        false\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_fetch(&mut self, addr: u64) -> Option<u8> {{\n{fetches}        self.direct_code = u64::MAX;\n        None\n        }}\n        /// As `direct_read` and `direct_write`, the time not charged (a\n        /// repeated instruction's elements run as a block: their time is\n        /// the caller's).\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{peeks}        None\n        }}\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{pokes}        false\n        }}\n        /// What `direct_read` (`direct_write`, when `write`) would charge.\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_cost(&self, addr: u64, n: u64, write: bool) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{costs}        None\n        }}\n{trace_direct}"
             );
         }
-        let mut bus_impl = String::new();
+        let mut bus_impl = std::mem::take(&mut direct_fwd);
         for sp in &self.isa.spaces {
             let n = ident(&sp.name);
             let (abits, aty) = match &sp.addr {

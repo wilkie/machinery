@@ -1092,6 +1092,31 @@ of its value). Otherwise building fails, saying why each path is not
 string instruction is one: MOVS a copy, CMPS a compare, STOS a fill, LODS
 a load, SCAS a scan, INS and OUTS port streams.
 
+A fill or a copy also gets a *kernel* for the JIT core's `repeat: bulk`
+(section 13): the elements after the current one, run as a block. The
+kernel runs the element's own code dry (its accesses noted, not made) at a
+few elements (how the registers move, where it reads and writes, whether it
+faults), then moves the data through the board's direct memory, element by
+element in order (an overlapping copy copies as the elements would). The
+paths are told apart as the element's code tells them apart, by running
+it, so one kernel serves them all (the 386's MOVS has 1536 stream paths).
+Its soundness is the generator's to show, when it builds: every path must
+be a fill or copy the kernel can take, or raise (the dry code raises too),
+or reach a place where the dry code stops, giving up. That place is the
+expression that first made a value the branch that ends the path depends
+on (on the 386, the page offset tested on the right of `CR0.PG == 0 ||`),
+or a statement a stream does not make. A path the kernel takes moves only
+its pointers (by bit 0 of their registers) and, in `next`, the count (by
+one, repeating while it is not zero); its time does not depend on the
+element (its timing entry with `restarted()` holding is an invariant); and
+each fault check on where it is holds over an interval of elements (a
+comparison of a pointer with an invariant, or a conjunction of those,
+where nothing wraps), so holding at the first and the last element it holds
+between. A period of elements is timed as the step runs them; the kernel
+then runs whole periods while each element's accesses cost what the
+measured period's did (their split cycles and direct memory time), so the
+time is the elements' to the tick.
+
 ### 11.2a Prefixes and latches
 
 ```
@@ -1796,7 +1821,9 @@ system PcAt386 {
     `repeat` clause (section 11.2) up to n times within its compiled
     step, each time decoded, fetched, timed and its run's code
     checked as a step; interrupts and devices are seen between batches
-    (QEMU's `REP_MAX`).
+    (QEMU's `REP_MAX`). A fill or copy with a kernel (section 11.2) runs
+    its elements past the third as a block, in whole periods of the
+    direct memories' unit, each costing the period the step measured.
   - `events: block` recognises the reset line and interrupts (the
     istream's `boundary` fn) where a compiled run is entered or goes
     round, not past each compiled step: an interrupt is taken up to a run

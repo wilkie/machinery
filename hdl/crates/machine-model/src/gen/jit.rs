@@ -17,7 +17,7 @@
 
 use std::fmt::Write as _;
 
-use super::{ident, Gen, R};
+use super::{ident, Gen, GenError, R};
 use machine_sema::ty::Ty;
 
 /// Entries into a run before it is compiled.
@@ -35,14 +35,14 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n    /// The steps compiled code may make before it returns (a run whose\n    /// end leads to its start goes round while they last).\n    pub jit_left: u64,\n    /// A fault an outlined fn raised, for `jit_deliver_c` to deliver.\n    pub jit_fault: Option<Fault>,\n    /// `sync: quantum(...)`: when the devices are next caught up.\n    pub jit_sync_at: u128,\n"
+        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n    /// The steps compiled code may make before it returns (a run whose\n    /// end leads to its start goes round while they last).\n    pub jit_left: u64,\n    /// A fault an outlined fn raised, for `jit_deliver_c` to deliver.\n    pub jit_fault: Option<Fault>,\n    /// `sync: quantum(...)`: when the devices are next caught up.\n    pub jit_sync_at: u128,\n    /// `repeat: bulk(n)`: the time as an element ended, a period of elements\n    /// before a kernel runs (its low half); the time the kernel's elements\n    /// took.\n    pub jit_bulk_mark: u64,\n    pub jit_bulk_dt: u128,\n    /// A kernel's dry code: it stopped (a path no kernel takes), and its\n    /// accesses (the kind, the bits, the address, a write's value).\n    pub probe_bad: bool,\n    pub probe_n: u8,\n    pub probe_acc: [(u8, u32, u64, u128); 4],\n"
     }
 
     pub(crate) fn jit_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n            jit_left: 0,\n            jit_fault: None,\n            jit_sync_at: 0,\n"
+        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n            jit_left: 0,\n            jit_fault: None,\n            jit_sync_at: 0,\n            jit_bulk_mark: 0,\n            jit_bulk_dt: 0,\n            probe_bad: false,\n            probe_n: 0,\n            probe_acc: [(0, 0, 0, 0); 4],\n"
     }
 
     /// The trace's fields for compiled code (inside `Trace`).
@@ -347,6 +347,34 @@ impl Gen<'_> {
         // Instructions that repeat (`repeat ... interruptible`): they may run
         // again from where they started (`repeat: bulk`).
         let mut repeaters = Vec::new();
+        // `repeat: bulk(n)`'s kernels: their dry code (and the fns it calls,
+        // dry), and the kernels.
+        let kernel_names: Vec<String> = self.bulk_kernels.iter().map(|(at, _)| ident(&self.isa.instructions[*at].name)).collect();
+        if !self.bulk_kernels.is_empty() {
+            let mut ks = String::new();
+            self.emit_bulk_common(&mut ks);
+            let mut fns: Vec<machine_sema::program::DefId> = Vec::new();
+            for (_, k) in &self.bulk_kernels {
+                for f in k.fns() {
+                    if !fns.contains(f) {
+                        fns.push(*f);
+                    }
+                }
+            }
+            self.probing.set(true);
+            let dry: R<Vec<String>> = fns.iter().map(|f| self.fn_body_text(self.fns[f])).collect();
+            self.probing.set(false);
+            for t in dry? {
+                ks.push_str(&t);
+            }
+            for (at, k) in &self.bulk_kernels {
+                self.emit_bulk_kernel(&self.isa.instructions[*at], k, &mut ks)?;
+            }
+            let f = self.isa.faults.first().ok_or_else(|| GenError::new("`bulk` kernels need a fault"))?;
+            let args = if f.params.is_empty() { String::new() } else { format!("({})", vec!["Default::default()"; f.params.len()].join(", ")) };
+            let _ = write!(ks, "    /// Where the dry code stops: `probe_bad`, and a fault to leave by.\n    #[allow(dead_code)]\n    fn probe_stop<T>(&mut self) -> Result<T, Fault> {{\n        self.probe_bad = true;\n        Err(Fault::{}{args})\n    }}\n", ident(&f.name));
+            self.out.push_str(&ks);
+        }
         for i in self.isa.instructions.iter().filter(|i| !i.prefix) {
             match self.jinstr(i) {
                 Ok(t) => {
@@ -1025,6 +1053,39 @@ impl Gen<'_> {
             code_check(e);
         }}
         if let Some(times) = times {{
+            // A fill or a copy with a kernel: past the second element (the
+            // first may be timed apart), the time is noted; a period of
+            // elements later, the kernel makes what it can of the rest, in
+            // whole periods, each taking the time the one measured took.
+            let kern = Self::jit_bulk_kernel(&instr);
+            let per = B::jit_mems().iter().map(|m| m.unit).max().unwrap_or(1).max(1);
+            if kern != 0 && ({repeat_bulk} as u64) > per + 3 {{
+                let t = e.get(times);
+                let t = e.op(machine_jit::Op::Add, t, machine_jit::V::K(1), machine_jit::N::U32);
+                let now_lo = e.cast(now, machine_jit::N::U128, machine_jit::N::U64);
+                let is_mark = e.op(machine_jit::Op::Eq, t, machine_jit::V::K(2), machine_jit::N::U32);
+                e.cold(is_mark, |e| e.store(std::mem::offset_of!(Self, jit_bulk_mark), machine_jit::N::U64, now_lo));
+                let pc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, r.{pc0n}), n: {pc_n}, bump: 0 }});
+                let again = e.op(machine_jit::Op::Eq, pc, machine_jit::V::K((j.pc & {pc_mask:#x}) as u128), {pc_n});
+                let at = e.op(machine_jit::Op::Eq, t, machine_jit::V::K(2 + per as u128), machine_jit::N::U32);
+                let go = e.op(machine_jit::Op::And, at, again, machine_jit::N::Bool);
+                e.cold(go, |e| {{
+                    let left = e.op(machine_jit::Op::Sub, machine_jit::V::K({repeat_bulk} as u128), t, machine_jit::N::U32);
+                    let left = e.cast(left, machine_jit::N::U32, machine_jit::N::U64);
+                    let r = e.call(kern, &[(left, machine_jit::N::U64), (now_lo, machine_jit::N::U64), (machine_jit::V::K(per as u128), machine_jit::N::U64)], machine_jit::N::U64, false);
+                    let dt = e.load(std::mem::offset_of!(Self, jit_bulk_dt), machine_jit::N::U128);
+                    let n0 = e.read(&now_p);
+                    let n1 = e.op(machine_jit::Op::Add, n0, dt, machine_jit::N::U128);
+                    e.store(bus + b.now, machine_jit::N::U128, n1);
+                    let r = e.cast(r, machine_jit::N::U64, machine_jit::N::U32);
+                    let tt = e.get(times);
+                    let tt = e.op(machine_jit::Op::Add, tt, r, machine_jit::N::U32);
+                    e.set(times, tt);
+                    e.add_made(r);
+                    // (Its writes may have hit the run's code.)
+                    code_check(e);
+                }});
+            }}
             let pc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, r.{pc0n}), n: {pc_n}, bump: 0 }});
             let again = e.op(machine_jit::Op::Eq, pc, machine_jit::V::K((j.pc & {pc_mask:#x}) as u128), {pc_n});
             let ep = e.load(std::mem::offset_of!(Self, tr_epoch), machine_jit::N::U64);
@@ -1129,6 +1190,14 @@ impl Gen<'_> {
 {repeat_arms}            _ => false,
         }}
     }}
+    /// The shim of `i`'s kernel (`bulk_<name>`: its elements as a block),
+    /// 0 when it has none.
+    #[allow(dead_code)]
+    fn jit_bulk_kernel(i: &Instr) -> usize {{
+        match i {{
+{kernel_arms}            _ => 0,
+        }}
+    }}
     /// Whether `i`'s instruction lowers.
     fn jit_lowers(i: &Instr) -> bool {{
         match i {{
@@ -1150,8 +1219,14 @@ impl Gen<'_> {
             }),
             quiet_arms = quiet.iter().map(|n| format!("            Instr::{n}(_) => true,\n")).collect::<String>(),
             repeat_arms = repeaters.iter().map(|n| format!("            Instr::{n}(_) => true,\n")).collect::<String>(),
+            kernel_arms = kernel_names.iter().map(|n| format!("            Instr::{n}(_) => Self::jit_bulk_{n}_c as *const () as usize,\n")).collect::<String>(),
             lowers_arms = lowered.iter().map(|n| format!("            Instr::{n}(_) => true,\n")).collect::<String>(),
         );
+        // The kernels' shims: the elements made (and their time, in
+        // `jit_bulk_dt`: whole periods, each the time of the one measured).
+        for n in &kernel_names {
+            let _ = write!(self.out, "    #[allow(clippy::all)]\n    extern \"C\" fn jit_bulk_{n}_c(m: *mut Self, max: u64, now: u64, per: u64) -> u64 {{\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe {{ &mut *m }};\n        let made = m.bulk_{n}(max, per);\n        m.jit_bulk_dt = (made / per.max(1)) as u128 * now.wrapping_sub(m.jit_bulk_mark) as u128;\n        made\n    }}\n");
+        }
         // The split charge of a data access (`split =>`), lowered.
         let split = match &self.isa.split_cycles {
             Some(t) => {

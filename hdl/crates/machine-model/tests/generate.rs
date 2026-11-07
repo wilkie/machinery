@@ -589,12 +589,14 @@ fn i386_at_boots_dos() {
     // boots and installs on both.
     for (profile, dir) in [("fast", "at386vga"), ("trace", "at386vga-trace"), ("jit", "at386vga-jit"), ("approx", "at386vga-approx"), ("blocks", "at386vga-blocks"), ("quantum", "at386vga-quantum")] {
         let src = generate_system(&checked, "At386Vga", Some(profile)).unwrap_or_else(|e| panic!("{e}"));
-        // `repeat: bulk(n)`: the fills and copies run through kernels.
-        let kernels = ["Movsb", "Movs_16", "Movs_32", "Stosb", "Stos_16", "Stos_32"];
-        for k in kernels {
-            assert_eq!(src.contains(&format!("pub fn bulk_{k}(")), profile == "blocks", "{profile}: bulk_{k}");
+        // `repeat: bulk(n)`: the memory streams run through kernels; the
+        // port streams do not.
+        for k in ["Movs", "Stos", "Lods", "Scas", "Cmps"] {
+            for w in ["b", "_16", "_32"] {
+                assert_eq!(src.contains(&format!("pub fn bulk_{k}{w}(")), profile == "blocks", "{profile}: bulk_{k}{w}");
+            }
         }
-        assert!(!src.contains("pub fn bulk_Cmpsb("), "a compare has no kernel");
+        assert!(!src.contains("pub fn bulk_Insb(") && !src.contains("pub fn bulk_Outsb("), "a port stream has no kernel");
         let root = hdl_root();
         let crate_ = package(&crate_name("At386Vga"), src, &root.join("crates").join("machine-runtime"));
         let dir = root.join("target").join("gen-tests").join(dir);

@@ -1092,8 +1092,9 @@ of its value). Otherwise building fails, saying why each path is not
 string instruction is one: MOVS a copy, CMPS a compare, STOS a fill, LODS
 a load, SCAS a scan, INS and OUTS port streams.
 
-A fill or a copy also gets a *kernel* for the JIT core's `repeat: bulk`
-(section 13): the elements after the current one, run as a block. The
+A fill, copy, scan, compare or load also gets a *kernel* for the JIT
+core's `repeat: bulk` (section 13): the elements after the current one, run
+as a block. The
 kernel runs the element's own code dry (its accesses noted, not made) at a
 few elements (how the registers move, where it reads and writes, whether it
 faults), then moves the data through the board's direct memory, element by
@@ -1112,7 +1113,16 @@ element (its timing entry with `restarted()` holding is an invariant); and
 each fault check on where it is holds over an interval of elements (a
 comparison of a pointer with an invariant, or a conjunction of those,
 where nothing wraps), so holding at the first and the last element it holds
-between. A period of elements is timed as the step runs them; the kernel
+between. Its results (the flags a compare sets, the register a load
+fills) are each element's own, computed from what the element loaded and
+invariants alone, so the last element's are the instruction's. A `while`
+condition (REPE, REPNE) must depend on nothing else either: the
+generator follows units' bodies to show it (the 386's ZF after a CMP does
+not depend on the CF it is given), and the kernel tests it on each
+element's loaded values as its closed form (the condition with the
+element's results in place, a branch on an invariant such as REPE or
+REPNE kept a branch). The kernel stops before the element that ends the
+repeat; the step runs that element. A period of elements is timed as the step runs them; the kernel
 then runs whole periods while each element's accesses cost what the
 measured period's did (their split cycles and direct memory time), so the
 time is the elements' to the tick.
@@ -1821,7 +1831,7 @@ system PcAt386 {
     `repeat` clause (section 11.2) up to n times within its compiled
     step, each time decoded, fetched, timed and its run's code
     checked as a step; interrupts and devices are seen between batches
-    (QEMU's `REP_MAX`). A fill or copy with a kernel (section 11.2) runs
+    (QEMU's `REP_MAX`). An instruction with a kernel (section 11.2) runs
     its elements past the third as a block, in whole periods of the
     direct memories' unit, each costing the period the step measured.
   - `events: block` recognises the reset line and interrupts (the

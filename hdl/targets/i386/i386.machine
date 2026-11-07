@@ -2781,20 +2781,20 @@ isa I386 {
         advance_source((W / 8) as u8);
     }
 
-    instruction Movsb { mnemonic "movsb"; encoding { opcode 0xA4; } repeat when repeating() skip count_zero() next count_down() interruptible; semantics { movs<8>(); } }
-    instruction Movs<const W: width> in [16, 32] { mnemonic "movs"; encoding { when operand_size() == W; opcode 0xA5; } repeat when repeating() skip count_zero() next count_down() interruptible; semantics { movs<W>(); } }
-    instruction Cmpsb { mnemonic "cmpsb"; encoding { opcode 0xA6; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } repeat when repeating() skip count_zero() next count_down() while rep_continues() interruptible; semantics { cmps<8>(); } }
-    instruction Cmps<const W: width> in [16, 32] { mnemonic "cmps"; encoding { when operand_size() == W; opcode 0xA7; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } repeat when repeating() skip count_zero() next count_down() while rep_continues() interruptible; semantics { cmps<W>(); } }
-    instruction Stosb { mnemonic "stosb"; encoding { opcode 0xAA; } repeat when repeating() skip count_zero() next count_down() interruptible; semantics { stos<8>(); } }
-    instruction Stos<const W: width> in [16, 32] { mnemonic "stos"; encoding { when operand_size() == W; opcode 0xAB; } repeat when repeating() skip count_zero() next count_down() interruptible; semantics { stos<W>(); } }
-    instruction Lodsb { mnemonic "lodsb"; encoding { opcode 0xAC; } repeat when repeating() skip count_zero() next count_down() interruptible; semantics { lods<8>(); } }
-    instruction Lods<const W: width> in [16, 32] { mnemonic "lods"; encoding { when operand_size() == W; opcode 0xAD; } repeat when repeating() skip count_zero() next count_down() interruptible; semantics { lods<W>(); } }
-    instruction Scasb { mnemonic "scasb"; encoding { opcode 0xAE; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } repeat when repeating() skip count_zero() next count_down() while rep_continues() interruptible; semantics { scas<8>(); } }
-    instruction Scas<const W: width> in [16, 32] { mnemonic "scas"; encoding { when operand_size() == W; opcode 0xAF; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } repeat when repeating() skip count_zero() next count_down() while rep_continues() interruptible; semantics { scas<W>(); } }
-    instruction Insb { mnemonic "insb"; encoding { opcode 0x6C; } repeat when repeating() skip count_zero() next count_down() interruptible; semantics { ins<8>(); } }
-    instruction Ins<const W: width> in [16, 32] { mnemonic "ins"; encoding { when operand_size() == W; opcode 0x6D; } repeat when repeating() skip count_zero() next count_down() interruptible; semantics { ins<W>(); } }
-    instruction Outsb { mnemonic "outsb"; encoding { opcode 0x6E; } repeat when repeating() skip count_zero() next count_down() interruptible; semantics { outs<8>(); } }
-    instruction Outs<const W: width> in [16, 32] { mnemonic "outs"; encoding { when operand_size() == W; opcode 0x6F; } repeat when repeating() skip count_zero() next count_down() interruptible; semantics { outs<W>(); } }
+    instruction Movsb { mnemonic "movsb"; encoding { opcode 0xA4; } repeat when repeating() skip count_zero() next count_down() interruptible bulk; semantics { movs<8>(); } }
+    instruction Movs<const W: width> in [16, 32] { mnemonic "movs"; encoding { when operand_size() == W; opcode 0xA5; } repeat when repeating() skip count_zero() next count_down() interruptible bulk; semantics { movs<W>(); } }
+    instruction Cmpsb { mnemonic "cmpsb"; encoding { opcode 0xA6; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } repeat when repeating() skip count_zero() next count_down() while rep_continues() interruptible bulk; semantics { cmps<8>(); } }
+    instruction Cmps<const W: width> in [16, 32] { mnemonic "cmps"; encoding { when operand_size() == W; opcode 0xA7; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } repeat when repeating() skip count_zero() next count_down() while rep_continues() interruptible bulk; semantics { cmps<W>(); } }
+    instruction Stosb { mnemonic "stosb"; encoding { opcode 0xAA; } repeat when repeating() skip count_zero() next count_down() interruptible bulk; semantics { stos<8>(); } }
+    instruction Stos<const W: width> in [16, 32] { mnemonic "stos"; encoding { when operand_size() == W; opcode 0xAB; } repeat when repeating() skip count_zero() next count_down() interruptible bulk; semantics { stos<W>(); } }
+    instruction Lodsb { mnemonic "lodsb"; encoding { opcode 0xAC; } repeat when repeating() skip count_zero() next count_down() interruptible bulk; semantics { lods<8>(); } }
+    instruction Lods<const W: width> in [16, 32] { mnemonic "lods"; encoding { when operand_size() == W; opcode 0xAD; } repeat when repeating() skip count_zero() next count_down() interruptible bulk; semantics { lods<W>(); } }
+    instruction Scasb { mnemonic "scasb"; encoding { opcode 0xAE; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } repeat when repeating() skip count_zero() next count_down() while rep_continues() interruptible bulk; semantics { scas<8>(); } }
+    instruction Scas<const W: width> in [16, 32] { mnemonic "scas"; encoding { when operand_size() == W; opcode 0xAF; } flags { modifies: [OF, SF, ZF, AF, PF, CF]; } repeat when repeating() skip count_zero() next count_down() while rep_continues() interruptible bulk; semantics { scas<W>(); } }
+    instruction Insb { mnemonic "insb"; encoding { opcode 0x6C; } repeat when repeating() skip count_zero() next count_down() interruptible bulk; semantics { ins<8>(); } }
+    instruction Ins<const W: width> in [16, 32] { mnemonic "ins"; encoding { when operand_size() == W; opcode 0x6D; } repeat when repeating() skip count_zero() next count_down() interruptible bulk; semantics { ins<W>(); } }
+    instruction Outsb { mnemonic "outsb"; encoding { opcode 0x6E; } repeat when repeating() skip count_zero() next count_down() interruptible bulk; semantics { outs<8>(); } }
+    instruction Outs<const W: width> in [16, 32] { mnemonic "outs"; encoding { when operand_size() == W; opcode 0x6F; } repeat when repeating() skip count_zero() next count_down() interruptible bulk; semantics { outs<W>(); } }
 
     // -- protected mode: the system instructions -------------------------------------------------
     //

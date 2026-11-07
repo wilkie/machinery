@@ -535,6 +535,8 @@ pub struct Repeat {
     pub next: Expr,
     pub cond: Option<Expr>,
     pub interruptible: bool,
+    /// `bulk`: the element is claimed a stream (the generator checks it).
+    pub bulk: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

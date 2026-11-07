@@ -201,8 +201,10 @@ fn a_repeat_clause_says_how_a_prefix_repeats() {
     assert_codes(&ok("repeat when true skip false next more() while AH != 9;"), &[]);
     // The parts are conditions.
     assert_codes(&ok("repeat when AL skip false next more();"), &["E1005"]);
-    // Unknown words (`bulk` is not a part of it yet) and a missing part.
-    assert_codes(&ok("repeat when true skip false next more() bulk;"), &["E0106"]);
+    // `bulk` (the generator checks it), and unknown words and a missing
+    // part.
+    assert_codes(&ok("repeat when true skip false next more() interruptible bulk;"), &[]);
+    assert_codes(&ok("repeat when true skip false next more() block;"), &["E0106"]);
     assert_codes(&ok("repeat when true next more();"), &["E0106"]);
     // Twice.
     assert_codes(&ok("repeat when true skip false next more(); repeat when true skip false next more();"), &["E1001"]);

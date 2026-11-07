@@ -298,7 +298,7 @@ impl Gen<'_> {
         // latches' reset values, decode conditions, prefixes, operand tails.
         let mut dec = Reads { g: self, cells: Vec::new(), seen: Vec::new(), skip: Some(ist.address) };
         dec.fn_body(ist.next);
-        for l in &self.isa.latches {
+        for l in &self.latches {
             dec.expr(&l.init);
         }
         for i in &self.isa.instructions {
@@ -484,7 +484,7 @@ impl Gen<'_> {
             let _ = writeln!(key, "    pub mode: {mode_ty},");
         }
         let mut step = String::new();
-        for l in &self.isa.latches {
+        for l in &self.latches {
             let _ = writeln!(step, "    pub l_{}: {},", ident(&l.name), self.rty(&l.ty)?);
         }
         for d in &p.pc {
@@ -537,7 +537,7 @@ impl Gen<'_> {
         let pc0 = ident(&self.regs[&p.pc[0]].1.name);
         let mut save = String::new();
         let mut restore = String::new();
-        for l in &self.isa.latches {
+        for l in &self.latches {
             let n = ident(&l.name);
             let _ = write!(save, "l_{n}: self.latch_{n}, ");
             let _ = writeln!(restore, "        self.latch_{n} = s.l_{n};");

@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+mod bulk;
 mod forms;
 mod jit;
 mod lower;
@@ -2513,6 +2514,14 @@ impl<'a> Gen<'a> {
     /// its semantics one element.
     fn emit_repeat(&mut self, i: &hir::Instruction) -> R<()> {
         let Some(rep) = &i.repeat else { return Ok(()) };
+        // `bulk` is a claim the description makes: checked here, an error
+        // when the element is not a stream.
+        if rep.bulk {
+            let shape = self.bulk_shape(i)?;
+            if std::env::var_os("MACHINE_BULK").is_some() {
+                eprintln!("bulk: {} is a {shape:?}", i.name);
+            }
+        }
         let cx = Cx { locals: &rep.locals, fallible: true, recv: "self", ops: Some(i), comp: None, opt: false };
         let when = self.expr(&cx, &rep.when)?;
         let skip = self.expr(&cx, &rep.skip)?;

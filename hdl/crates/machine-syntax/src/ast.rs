@@ -1018,6 +1018,10 @@ pub struct RepeatClause {
     pub next: Expr,
     pub cond: Option<Expr>,
     pub interruptible: bool,
+    /// `bulk`: the element is a stream (a fill, copy, scan, compare, load
+    /// or port stream), so a core may run many elements as a block; the
+    /// generator checks it.
+    pub bulk: bool,
     pub span: Span,
 }
 

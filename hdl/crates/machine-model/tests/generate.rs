@@ -56,6 +56,33 @@ fn cpu_slice_generates_expected_items() {
     }
 }
 
+/// The sample isa with these items added.
+fn cpu_slice_with(items: &str) -> String {
+    let text = std::fs::read_to_string(hdl_root().join("samples").join("cpu_slice.machine")).unwrap();
+    // The isa's own closing brace: the first at the start of a line.
+    let at = text.find("\n}\n").unwrap();
+    format!("{}\n{items}\n{}", &text[..at], &text[at..])
+}
+
+#[test]
+fn a_bulk_repeat_is_checked() {
+    let fill = r#"
+    fn more() -> bool { CX = CX - 1; return CX != 0; }
+    fn fill_one() { mem.write_u8(DI as u24, AL); DI = DI + 1; }
+    fn chase() { let p = mem.read_u8(SI as u24); SI = SI + (p as u16); }
+    instruction BulkFill { mnemonic "bf"; encoding { opcode 0xD6; } repeat when true skip CX == 0 next more() interruptible bulk; semantics { fill_one(); } }
+"#;
+    let checked = check_files(vec![sample("alu.machine"), SourceFile::new("cpu_slice.machine", cpu_slice_with(fill))]);
+    assert!(!checked.has_errors(), "{:?}", checked.diagnostics);
+    generate_isa(&checked, "I286Isa").unwrap_or_else(|e| panic!("a fill is a stream: {e}"));
+    // A pointer that moves by what the element loaded is not a stream.
+    let chase = fill.replace("semantics { fill_one(); }", "semantics { chase(); }");
+    let checked = check_files(vec![sample("alu.machine"), SourceFile::new("cpu_slice.machine", cpu_slice_with(&chase))]);
+    assert!(!checked.has_errors(), "{:?}", checked.diagnostics);
+    let err = generate_isa(&checked, "I286Isa").err().expect("chasing a pointer is not a stream").to_string();
+    assert!(err.contains("BulkFill") && err.contains("does not move with the element"), "{err}");
+}
+
 #[test]
 fn cpu_slice_interpreter_compiles_and_passes_its_tests() {
     let checked = check_files(vec![sample("alu.machine"), sample("cpu_slice.machine")]);

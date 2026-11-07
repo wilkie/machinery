@@ -1073,6 +1073,25 @@ within the one step. The generator keeps where each instruction started
 (the pc as decoding found it) for the interruptible form. A prefix has no
 `repeat` (E1032); any other word in it is an error (E0106).
 
+`bulk` at the end of the clause claims the element is a *stream*, which a
+core may run many elements of as one block (a fill, a copy, a scan), and
+the generator checks the claim when it builds: it evaluates the element
+with every fn inlined, values being constants, invariants (the same every
+element: latches, operands, state the element does not write), a register
+as the element found it plus an invariant (a pointer), or what the element
+loaded. A branch on an invariant splits the evaluation (each path a case
+the runtime tells apart: the mode, paging, the address size); a branch on
+what the element loaded or where it is ends the path, unless one arm
+always raises (a fault check, as a segment limit's). Some path must be a
+stream: its pointers move by invariants and its accesses are a fill (one
+write of an invariant), a copy (a read and the write of it), a scan (one
+read, results from it), a compare (two reads), a load (one read into a
+register), a port-in or a port-out (a port access and the memory access
+of its value). Otherwise building fails, saying why each path is not
+(`MACHINE_BULK` prints each path and the shape found). On the 386 every
+string instruction is one: MOVS a copy, CMPS a compare, STOS a fill, LODS
+a load, SCAS a scan, INS and OUTS port streams.
+
 ### 11.2a Prefixes and latches
 
 ```

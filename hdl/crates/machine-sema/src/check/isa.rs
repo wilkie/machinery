@@ -2150,7 +2150,7 @@ impl Checker<'_> {
                     let skip = self.check_expr(&mut cx, &r.skip, Some(&Ty::Bool));
                     let next = self.check_expr(&mut cx, &r.next, Some(&Ty::Bool));
                     let cond = r.cond.as_ref().map(|c| self.check_expr(&mut cx, c, Some(&Ty::Bool)));
-                    repeat = Some(hir::Repeat { locals: cx.locals, when, skip, next, cond, interruptible: r.interruptible });
+                    repeat = Some(hir::Repeat { locals: cx.locals, when, skip, next, cond, interruptible: r.interruptible, bulk: r.bulk });
                 }
                 InstructionItem::Other(name, _) => {
                     self.error(

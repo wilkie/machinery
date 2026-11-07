@@ -145,10 +145,12 @@ impl Engine {
         // A run that goes round (`Em::loop_back`) is built twice: the first
         // time says what it knows going round, and the second passes that
         // to its first step instead of storing it.
-        let seen = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, &mut emit, None);
-        if let Some(plan) = seen.filter(|p| !p.is_empty()) {
+        // So are loops within steps (`Em::repeat_head`).
+        let (seen, repeats) = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, &mut emit, None, Vec::new());
+        let plan = seen.filter(|p| !p.is_empty());
+        if plan.is_some() || repeats.iter().flatten().any(|p| !p.is_empty()) {
             ctx.func = cranelift_codegen::ir::Function::with_name_signature(Default::default(), sig);
-            let _ = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, &mut emit, Some(plan));
+            let _ = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, &mut emit, plan, repeats);
         }
         let name = format!("run{}", self.next);
         self.next += 1;
@@ -201,7 +203,8 @@ fn build(
     entries: usize,
     emit: &mut impl FnMut(&mut Em, usize),
     plan: Option<emit::LoopPlan>,
-) -> Option<emit::LoopPlan> {
+    repeats: Vec<Option<emit::RepeatPlan>>,
+) -> (Option<emit::LoopPlan>, Vec<Option<emit::RepeatPlan>>) {
     let mut b = FunctionBuilder::new(func, fbc);
     let entry = b.create_block();
     b.append_block_params_for_function_params(entry);
@@ -242,6 +245,7 @@ fn build(
         e.first = blocks.first().copied();
         e.steps = steps;
         e.entry_pads = pads.into_iter().collect();
+        e.repeat_plans = repeats;
         if let (Some(plan), Some(pad), Some(first)) = (plan, pad, blocks.first().copied()) {
             e.entry_pad(pad, first, plan);
         }
@@ -252,7 +256,7 @@ fn build(
             e.release(mark);
         }
         e.finish(steps);
-        seen = e.take_seen();
+        seen = (e.take_seen(), e.take_repeat_seen());
     }
     for blk in &blocks {
         b.seal_block(*blk);
@@ -616,6 +620,35 @@ mod tests {
                 e.write(&OUT, c);
             });
             assert_eq!((n, t.out), (steps, out), "a = {a0}");
+        }
+    }
+
+    #[test]
+    fn a_loop_within_a_step_carries_what_it_knows() {
+        // b written before the loop (owed, unchanged inside); a counted in
+        // a register round the loop; w a constant written each time round;
+        // out counts the times round. All stored right at the end.
+        for (a0, out) in [(0u8, 10u64), (9, 1)] {
+            let mut t = T { a: a0, b: 1, ..T::default() };
+            let bp = Place::Mem { off: std::mem::offset_of!(T, b), n: N::U8, bump: 0 };
+            let n = run_t(&mut t, |e, _| {
+                e.write(&bp, V::K(7));
+                e.write(&W, V::K(3));
+                let times = e.local(N::U64, V::K(0));
+                let head = e.repeat_head();
+                e.write(&W, V::K(3));
+                let a = e.read(&A);
+                let a = e.op(Op::Add, a, V::K(1), N::U8);
+                e.write(&A, a);
+                let c = e.get(times);
+                let c = e.op(Op::Add, c, V::K(1), N::U64);
+                e.set(times, c);
+                let more = e.op(Op::Lt, a, V::K(10), N::U8);
+                e.repeat_tail(head, more);
+                let c = e.get(times);
+                e.write(&OUT, c);
+            });
+            assert_eq!((n as u64, t.out, t.a, t.b, t.w), (out, out, 10.max(a0 + 1), 7, 3), "a = {a0}");
         }
     }
 

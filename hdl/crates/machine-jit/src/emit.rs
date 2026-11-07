@@ -224,6 +224,34 @@ enum Fx<'s> {
     Touch(&'s [(usize, usize)]),
 }
 
+/// What a loop within a step (`Em::repeat_head`) knows going round: the
+/// fields held as host values, passed to its head (`LoopPlan`), and those
+/// the same known constant at its head and where it goes round (the
+/// decoding each time writes again), known at its head; the owed ones of
+/// those.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RepeatPlan {
+    vals: LoopPlan,
+    konst: Vec<((usize, N), u128)>,
+    konst_owed: Vec<(usize, N)>,
+}
+
+impl RepeatPlan {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.vals.is_empty() && self.konst.is_empty()
+    }
+}
+
+/// An open loop within a step: its number (in the build's order), its
+/// head, and what was known on entering it (a first build: constants) or
+/// what its head takes (a second).
+struct RepeatCtx {
+    idx: usize,
+    head: Block,
+    entry_k: HashMap<(usize, N), u128>,
+    plan: Option<RepeatPlan>,
+}
+
 /// A bit field written into a cached field and not yet put in it: the
 /// field is its cached value with these bits replaced (`settle`). A read
 /// of the bits gets the value as written; bits written again before the
@@ -313,6 +341,13 @@ pub struct Em<'a, 'f> {
     loop_params: Vec<(Value, Vec<Value>)>,
     /// The pads the switch enters later entries through.
     pub(crate) entry_pads: HashMap<usize, Block>,
+    /// Loops within steps: what each takes at its head (a second build),
+    /// what each was seen to know (a first), how many so far, the open
+    /// ones.
+    pub(crate) repeat_plans: Vec<Option<RepeatPlan>>,
+    repeat_seen: Vec<Option<RepeatPlan>>,
+    repeat_n: usize,
+    repeat_stack: Vec<RepeatCtx>,
     /// Values that are one of two known constants: the condition, the
     /// value when it holds, and when not (`select`). Arithmetic with a
     /// constant goes into both (a time charged one of two ways stays one
@@ -332,7 +367,7 @@ pub struct Em<'a, 'f> {
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, out: Block, made_base: Variable) -> Self {
-        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), consts: 0, ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new(), combos: HashMap::new() }
+        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), consts: 0, ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), repeat_plans: Vec::new(), repeat_seen: Vec::new(), repeat_n: 0, repeat_stack: Vec::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new(), combos: HashMap::new() }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -1587,16 +1622,99 @@ impl<'a, 'f> Em<'a, 'f> {
         self.seen.take()
     }
 
-    /// The head of a loop within a step (`repeat_tail` goes back to it):
-    /// the machine holds what the code owes, and nothing is known past it
-    /// but what its locals carry.
+    /// The head of a loop within a step (`repeat_tail` goes back to it). A
+    /// first build stores what is owed and knows nothing past it but the
+    /// locals; a second (`repeat_plans`) passes the fields the loop holds as
+    /// host values to the head and keeps the constants it keeps.
     pub fn repeat_head(&mut self) -> Option<Block> {
         if !self.live {
             return None;
         }
-        self.flush();
+        let idx = self.repeat_n;
+        self.repeat_n += 1;
+        let plan = self.repeat_plans.get(idx).cloned().flatten();
+        let limit = self.trial_limit.take();
+        let h = self.b.create_block();
+        let entry_k: HashMap<(usize, N), u128> = self
+            .regs
+            .iter()
+            .filter_map(|(k, v)| match v {
+                Known::K(c) if !self.pieces.contains_key(k) => Some((*k, *c)),
+                _ => None,
+            })
+            .collect();
+        let plan = plan.map(|mut p| {
+            // The constants this entry has as the first build saw them.
+            p.konst.retain(|(k, c)| entry_k.get(k) == Some(c));
+            p
+        });
+        let mut owed_k = Vec::new();
+        let mut params: Vec<(Value, Vec<Value>)> = Vec::new();
+        match &plan {
+            None => {
+                self.flush();
+                self.regs.clear();
+                self.pieces.clear();
+            }
+            Some(p) => {
+                params = p
+                    .vals
+                    .carried
+                    .iter()
+                    .zip(&p.vals.shapes)
+                    .map(|((_, n), sh)| {
+                        let b = self.b.append_block_param(h, n.ir());
+                        let ps = sh.iter().map(|_| self.b.append_block_param(h, n.ir())).collect();
+                        (b, ps)
+                    })
+                    .collect();
+                // (A field owed on entering stays owed past the head.)
+                let entry_owed: Vec<(usize, N)> = p.vals.carried.iter().copied().filter(|k| self.dirty.contains(k)).collect();
+                let args = self.carry_args(&p.vals.carried, &p.vals.shapes);
+                owed_k = p.konst.iter().map(|(k, _)| *k).filter(|k| self.dirty.contains(k) || p.konst_owed.contains(k)).collect();
+                owed_k.extend(entry_owed);
+                self.dirty.retain(|d| !p.vals.carried.contains(d) && !p.konst.iter().any(|(k, _)| k == d));
+                self.flush();
+                self.slot_vars();
+                self.b.ins().jump(h, &args);
+            }
+        }
+        if plan.is_none() {
+            self.slot_vars();
+            self.b.ins().jump(h, &[]);
+        }
+        self.b.switch_to_block(h);
         self.regs.clear();
         self.pieces.clear();
+        self.dirty.clear();
+        if let Some(p) = &plan {
+            for ((key, (v, bits)), sh) in p.vals.carried.iter().zip(params).zip(&p.vals.shapes) {
+                self.regs.insert(*key, Known::D(v));
+                if !sh.is_empty() {
+                    let ps = sh.iter().zip(bits).map(|(&(shift, width), b)| Piece { shift, width, v: V::D(b) }).collect();
+                    self.pieces.insert(*key, ps);
+                }
+                if p.vals.owed.contains(key) {
+                    self.dirty.push(*key);
+                }
+            }
+            for (k, c) in &p.konst {
+                self.regs.insert(*k, Known::K(*c));
+            }
+            for k in owed_k {
+                if !self.dirty.contains(&k) {
+                    self.dirty.push(k);
+                }
+            }
+        }
+        self.trial_limit = limit;
+        self.repeat_stack.push(RepeatCtx { idx, head: h, entry_k, plan });
+        Some(h)
+    }
+
+    /// The locals' known values put in their variables (a loop's head:
+    /// they may change going round), and forgotten.
+    fn slot_vars(&mut self) {
         for i in 0..self.slots.len() {
             let s = self.slots[i];
             if let Some(c) = s.k {
@@ -1605,18 +1723,37 @@ impl<'a, 'f> Em<'a, 'f> {
                 self.slots[i].k = None;
             }
         }
-        let h = self.b.create_block();
-        self.b.ins().jump(h, &[]);
-        self.b.switch_to_block(h);
-        Some(h)
     }
 
     /// Back to `head` (`repeat_head`) while `c` holds, each time round one
     /// more step made (the instruction ran again); else on.
     pub fn repeat_tail(&mut self, head: Option<Block>, c: V) {
         let Some(head) = head else { return };
+        let Some(ctx) = self.repeat_stack.pop() else { return };
+        debug_assert_eq!(ctx.head, head);
         if self.live {
+            // A first build: what is known going round.
+            if ctx.plan.is_none() {
+                let vals = self.loop_seen();
+                let konst: Vec<((usize, N), u128)> = ctx
+                    .entry_k
+                    .iter()
+                    .filter(|(k, c)| self.regs.get(k) == Some(&Known::K(**c)) && !self.pieces.contains_key(k) && !vals.carried.contains(k))
+                    .map(|(k, c)| (*k, *c))
+                    .collect();
+                let konst_owed = konst.iter().map(|(k, _)| *k).filter(|k| self.dirty.contains(k)).collect();
+                if self.repeat_seen.len() <= ctx.idx {
+                    self.repeat_seen.resize(ctx.idx + 1, None);
+                }
+                self.repeat_seen[ctx.idx] = Some(RepeatPlan { vals, konst, konst_owed });
+            }
+            // A second: it goes round only when the constants it keeps hold.
+            let holds = match &ctx.plan {
+                Some(p) => p.konst.iter().all(|(k, c)| self.regs.get(k) == Some(&Known::K(*c)) && !self.pieces.contains_key(k)),
+                None => true,
+            };
             let cv = match c {
+                _ if !holds => None,
                 V::K(0) => None,
                 V::K(_) => Some(self.konst(N::Bool, 1)),
                 V::D(v) => Some(v),
@@ -1630,6 +1767,14 @@ impl<'a, 'f> Em<'a, 'f> {
                 let before = self.state();
                 self.b.switch_to_block(lb);
                 let limit = self.trial_limit.take();
+                let args = match &ctx.plan {
+                    Some(p) => {
+                        let args = self.carry_args(&p.vals.carried, &p.vals.shapes);
+                        self.dirty.retain(|d| !p.vals.carried.contains(d) && !p.konst.iter().any(|(k, _)| k == d));
+                        args
+                    }
+                    None => Vec::new(),
+                };
                 self.flush();
                 self.trial_limit = limit;
                 for i in 0..self.slots.len() {
@@ -1642,13 +1787,18 @@ impl<'a, 'f> Em<'a, 'f> {
                 let bv = self.b.use_var(self.made_base);
                 let nb = self.b.ins().iadd_imm(bv, 1);
                 self.b.def_var(self.made_base, nb);
-                self.b.ins().jump(head, &[]);
+                self.b.ins().jump(head, &args);
                 self.restore(&before);
                 self.b.switch_to_block(cont);
                 self.live = true;
             }
         }
         self.b.seal_block(head);
+    }
+
+    /// What the loops within steps knew going round (a first build).
+    pub(crate) fn take_repeat_seen(&mut self) -> Vec<Option<RepeatPlan>> {
+        std::mem::take(&mut self.repeat_seen)
     }
 
     /// The run's length.

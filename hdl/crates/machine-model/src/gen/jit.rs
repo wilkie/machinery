@@ -699,7 +699,9 @@ impl Gen<'_> {
         self.bus.after_step();
         let now = self.jit_bus_time(|b| Some(b.now));
         let due = self.jit_bus_time(|b| b.due);
-        self.jit_sync_at = due.max(now.saturating_add({quantum}u128));
+        // The others wait for the quantum; a device that raises signals
+        // or masters a bus keeps its deadline.
+        self.jit_sync_at = due.max(now.saturating_add({quantum}u128)).min(self.bus.jit_urgent_due());
     }}
     /// A time the board keeps (`JitBoard`'s offsets): `now`, or `due`
     /// (0 when the board has none: always due).
@@ -1015,8 +1017,23 @@ impl Gen<'_> {
         if {quantum}u128 != 0 && j.last {{
             let at = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, jit_sync_at), n: machine_jit::N::U128, bump: 0 }});
             let late = e.op(machine_jit::Op::Ge, now, at, machine_jit::N::U128);
+            // An edge waiting is delivered at once, and a device the step
+            // touched (made due: its deadline to be worked out again) is
+            // caught up.
+            let p = pending(e);
+            let late = e.op(machine_jit::Op::Or, late, p, machine_jit::N::Bool);
+            let late = match b.due {{
+                Some(due) => {{
+                    let d = e.load(bus + due, machine_jit::N::U128);
+                    let z = e.op(machine_jit::Op::Eq, d, machine_jit::V::K(0), machine_jit::N::U128);
+                    e.op(machine_jit::Op::Or, late, z, machine_jit::N::Bool)
+                }}
+                None => late,
+            }};
             e.cold(late, |e| {{
-                let _ = e.call(Self::jit_quantum_c as *const () as usize, &[], machine_jit::N::U64, true);
+                // (It sets when the devices are next due: the code forgets the
+                // time it knew.)
+                let _ = e.call_reading(Self::jit_quantum_c as *const () as usize, &[], machine_jit::N::U64, &[(std::mem::offset_of!(Self, jit_sync_at), 16)]);
                 code_check(e);
             }});
         }}

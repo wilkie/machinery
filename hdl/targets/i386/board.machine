@@ -554,4 +554,7 @@ system At386Vga {
     /// which end at the next event), interrupts recognised where a run is
     /// entered or goes round (QEMU's block starts). Time exact.
     profile blocks { default: model; memory: direct; core: jit; sync: block; events: block; }
+    /// As `blocks`, with the devices caught up once a millisecond
+    /// (MAME's quantum).
+    profile quantum { default: model; memory: direct; core: jit; sync: quantum(1 ms); events: block; }
 }

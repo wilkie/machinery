@@ -560,7 +560,7 @@ fn i386_at_boots_dos() {
     assert!(!checked.has_errors());
     // The exact build, and the emulator with the trace core: the same DOS
     // boots and installs on both.
-    for (profile, dir) in [("fast", "at386vga"), ("trace", "at386vga-trace"), ("jit", "at386vga-jit"), ("approx", "at386vga-approx"), ("blocks", "at386vga-blocks")] {
+    for (profile, dir) in [("fast", "at386vga"), ("trace", "at386vga-trace"), ("jit", "at386vga-jit"), ("approx", "at386vga-approx"), ("blocks", "at386vga-blocks"), ("quantum", "at386vga-quantum")] {
         let src = generate_system(&checked, "At386Vga", Some(profile)).unwrap_or_else(|e| panic!("{e}"));
         let root = hdl_root();
         let crate_ = package(&crate_name("At386Vga"), src, &root.join("crates").join("machine-runtime"));

@@ -1455,6 +1455,39 @@ impl<'a> Gen<'a> {
                         }
                     }
                 }
+                // The devices whose deadlines `sync: quantum` keeps: those
+                // that raise signals (an interrupt, a reset) or master a bus
+                // (DMA writes memory the processor reads without catching
+                // anything up). The others are seen only through their
+                // ports, which catch them up, so they may wait.
+                let emits = |ii: usize| -> bool {
+                    let m = insts[ii].model;
+                    let hit = std::cell::Cell::new(false);
+                    for b in m.handlers.iter().map(|h| &h.body).chain(m.fns.iter().map(|f| &f.body)) {
+                        hir::visit_block(b, &mut |st| hit.set(hit.get() | matches!(st.kind, hir::StmtKind::Emit { .. })), &mut |_| {});
+                    }
+                    hit.get()
+                };
+                let mut urgent = String::new();
+                let mut always = false;
+                for (ii, i) in insts.iter().enumerate() {
+                    if ii == proc_idx || !(emits(ii) || dev_masters.contains(&ii)) {
+                        continue;
+                    }
+                    let n = ident(&i.name);
+                    for (ti, clock, _) in ticks.iter().filter(|t| t.0 == ii) {
+                        if scheduled.contains(&(*ti, *clock)) {
+                            let _ = writeln!(urgent, "        if self.marks.due_{n}_{} < d {{ d = self.marks.due_{n}_{}; }}", method_tick(i.comp, *clock), method_tick(i.comp, *clock));
+                        } else {
+                            always = true;
+                        }
+                    }
+                }
+                if always {
+                    bus_impl.push_str("    fn jit_urgent_due(&self) -> u128 {\n        0\n    }\n");
+                } else {
+                    let _ = write!(bus_impl, "    fn jit_urgent_due(&self) -> u128 {{\n        let mut d = u128::MAX;\n{urgent}        d\n    }}\n");
+                }
                 let _ = write!(bus_impl, "    fn jit_ext(name: &str) -> Option<Result<usize, u128>> {{\n        match name {{\n{exts}            _ => None,\n        }}\n    }}\n");
                 let _ = write!(bus_impl, "    fn jit_mems() -> &'static [JitMem] {{\n        Board::JIT_MEMS\n    }}\n    fn jit_mem_ptrs(&self, out: &mut [usize; 8]) {{\n        let _ = &out;\n{}    }}\n    #[allow(unused_variables)]\n    fn jit_code_hit(&mut self, mem: u32, k: usize) {{\n        match mem {{\n{}            _ => {{}}\n        }}\n    }}\n", jit_ptrs, jit_hits);
                 bus_impl.push_str("    fn jit_board() -> Option<JitBoard> {\n        Board::JIT_BOARD\n    }\n    fn jit_fetch_time(&self, page: u32, addr: u64, n: u32) -> Option<u128> {\n        if Board::JIT_BOARD.is_some_and(|b| b.serial) { self.direct_jit_time(page, addr, n) } else { None }\n    }\n    fn jit_fetch_units(&self, page: u32, addr: u64, n: u32) -> Option<(u64, u64, u128)> {\n        self.direct_jit_units(page, addr, n)\n    }\n");

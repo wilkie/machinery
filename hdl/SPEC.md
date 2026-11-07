@@ -1749,12 +1749,17 @@ system PcAt386 {
     (where it goes round or returns) when one is due or an edge waits:
     device events keep their times, and the processor sees them up to a
     run late (DOSBox's slices, which end at the next event).
-  - `sync: quantum(<time>)` catches them up there only once the quantum
-    since they last were has passed (MAME's scheduler quantum): devices
-    run late by up to the quantum. Reading a device still catches it up
-    first, but a device that moves on by itself can be read too late: at
-    1 ms the AT's keyboard controller sends its next byte before the BIOS
-    reads the last.
+  - `sync: quantum(<time>)` lets the devices that raise no signal and
+    master no bus (seen only through their ports, which catch them up)
+    wait there until the quantum since the last catch-up has passed; the
+    others keep their deadlines, as with `sync: block` (MAME's quantum
+    interleaves processors; its device timers fire on time). Deferring
+    every device breaks handshakes the processor waits for by interrupt
+    rather than by reading the device: the AT BIOS asks the keyboard for
+    its ID and waits on a flag its keyboard interrupt sets, so a reply
+    deferred past its timeout reaches the interrupt as a keystroke (DOS
+    saw F7 at its date prompt). On the 386 AT, whose devices are due
+    milliseconds apart, it runs as `sync: block` does.
   - `events: block` recognises the reset line and interrupts (the
     istream's `boundary` fn) where a compiled run is entered or goes
     round, not past each compiled step: an interrupt is taken up to a run

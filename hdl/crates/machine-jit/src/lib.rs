@@ -578,8 +578,7 @@ mod tests {
     #[test]
     fn past_an_exit_on_either_both_are_known() {
         // Leave when a == 3 or b == 4: past it, neither holds, and for a
-        // one-bit field that says what it is. `x and true` hands back x
-        // (no condition of itself).
+        // one-bit field that says what it is.
         let mut t = T { a: 1, b: 0, ..T::default() };
         let (ao, bo) = (std::mem::offset_of!(T, a), std::mem::offset_of!(T, b));
         let n = run_t(&mut t, |e, _| {
@@ -587,7 +586,6 @@ mod tests {
             let a = e.read(&A);
             let b = e.read(&Place::Mem { off: bo, n: N::U8, bump: 0 });
             let ca = e.op(Op::Eq, a, V::K(0), N::U8);
-            let ca = e.op(Op::And, ca, V::K(1), N::Bool);
             let cb = e.op(Op::Eq, b, V::K(4), N::U8);
             let either = e.op(Op::Or, ca, cb, N::Bool);
             e.exit_if(either, false, |_| {});

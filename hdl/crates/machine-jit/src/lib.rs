@@ -596,6 +596,30 @@ mod tests {
     }
 
     #[test]
+    fn a_step_repeats_within_itself() {
+        // One step: a += 1 while a < 10, each time round a step made; the
+        // local counts the times round, from a known start.
+        for (a0, steps, out) in [(0u8, 10u32, 10u64), (9, 1, 1), (20, 1, 1)] {
+            let mut t = T { a: a0, ..T::default() };
+            let n = run_t(&mut t, |e, _| {
+                let times = e.local(N::U64, V::K(0));
+                let head = e.repeat_head();
+                let a = e.read(&A);
+                let a = e.op(Op::Add, a, V::K(1), N::U8);
+                e.write(&A, a);
+                let c = e.get(times);
+                let c = e.op(Op::Add, c, V::K(1), N::U64);
+                e.set(times, c);
+                let more = e.op(Op::Lt, a, V::K(10), N::U8);
+                e.repeat_tail(head, more);
+                let c = e.get(times);
+                e.write(&OUT, c);
+            });
+            assert_eq!((n, t.out), (steps, out), "a = {a0}");
+        }
+    }
+
+    #[test]
     fn shifts_past_the_width_and_signed_values() {
         for (x, y) in [(3u32, -64i32), (40, 7), (31, i32::MIN)] {
             let mut t = T { x, y, ..T::default() };

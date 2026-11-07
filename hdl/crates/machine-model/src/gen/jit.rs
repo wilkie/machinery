@@ -344,11 +344,18 @@ impl Gen<'_> {
         // The instructions that lower.
         let mut lowered = Vec::new();
         let mut quiet = Vec::new();
+        // Instructions that may set the pc back to themselves, and so run
+        // again (`repeat: bulk`: a repeated string instruction).
+        let pcs: Vec<machine_sema::program::DefId> = self.trace.as_ref().map(|t| t.pc.clone()).unwrap_or_default();
+        let mut repeaters = Vec::new();
         for i in self.isa.instructions.iter().filter(|i| !i.prefix) {
             match self.jinstr(i) {
                 Ok(t) => {
                     out.push_str(&t);
                     lowered.push(ident(&i.name));
+                    if self.jit_instr_restarts(i, &pcs) {
+                        repeaters.push(ident(&i.name));
+                    }
                     if !self.jtouches_bus(i) {
                         quiet.push(ident(&i.name));
                     }
@@ -835,6 +842,21 @@ impl Gen<'_> {
         e.store(std::mem::offset_of!(Self, fetched), machine_jit::N::U8, machine_jit::V::K(s.len as u128));
         e.store(std::mem::offset_of!(Self, known_opcode), machine_jit::N::Bool, machine_jit::V::K(s.known as u128));
         e.store(std::mem::offset_of!(Self, prefix_cycles), machine_jit::N::U32, machine_jit::V::K(s.prefix_cycles as u128));
+        // `repeat: bulk(n)`: an instruction that runs again (its pc set back
+        // to it: a repeated string instruction) runs again within the step,
+        // up to n times, each time as a step after its gate: decoded (the
+        // latches and the pc as decoding left them), fetched, timed, and the
+        // run's code checked; interrupts and devices are seen past the
+        // batch.
+        let bulk = {repeat_bulk}u32 != 0 && Self::jit_may_repeat(&instr);
+        let times = if bulk {{ Some(e.local(machine_jit::N::U32, machine_jit::V::K(0))) }} else {{ None }};
+        let head = if bulk {{ e.repeat_head() }} else {{ None }};
+        if bulk {{
+            // (What the run's checks found holds round the loop: the epoch
+            // is checked as it goes round.)
+            assume(e);
+            e.assume(std::mem::offset_of!(Self, halted), machine_jit::N::Bool, 0);
+        }}
 {restore}        e.store(std::mem::offset_of!(Self, tr_idx), machine_jit::N::U32, machine_jit::V::K(k as u128 + 1));
 {opcodes_store}{opcode}        if j.last {{
             e.store(std::mem::offset_of!(Self, tr_on), machine_jit::N::Bool, machine_jit::V::K(0));
@@ -1003,6 +1025,23 @@ impl Gen<'_> {
         if e.code_writes() != code0 {{
             code_check(e);
         }}
+        if let Some(times) = times {{
+            let pc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, r.{pc0n}), n: {pc_n}, bump: 0 }});
+            let again = e.op(machine_jit::Op::Eq, pc, machine_jit::V::K((j.pc & {pc_mask:#x}) as u128), {pc_n});
+            let ep = e.load(std::mem::offset_of!(Self, tr_epoch), machine_jit::N::U64);
+            let ep0 = e.load(std::mem::offset_of!(Self, tr_ep0), machine_jit::N::U64);
+            let same = e.op(machine_jit::Op::Eq, ep, ep0, machine_jit::N::U64);
+            let h = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, halted), n: machine_jit::N::Bool, bump: 0 }});
+            let running = e.not(h, machine_jit::N::Bool);
+            let t = e.get(times);
+            let t = e.op(machine_jit::Op::Add, t, machine_jit::V::K(1), machine_jit::N::U32);
+            e.set(times, t);
+            let more = e.op(machine_jit::Op::Lt, t, machine_jit::V::K({repeat_bulk} as u128), machine_jit::N::U32);
+            let c = e.op(machine_jit::Op::And, again, same, machine_jit::N::Bool);
+            let c = e.op(machine_jit::Op::And, c, running, machine_jit::N::Bool);
+            let c = e.op(machine_jit::Op::And, c, more, machine_jit::N::Bool);
+            e.repeat_tail(head, c);
+        }}
         if !{sync_run} && {quantum}u128 == 0 && (!{sync_block} || j.last) {{
             // (`sync: block`: at the run's last step only, where it goes
             // round or returns.)
@@ -1083,6 +1122,14 @@ impl Gen<'_> {
 {quiet_arms}            _ => false,
         }}
     }}
+    /// Whether `i`'s instruction may set the pc back to itself (and so run
+    /// again).
+    #[allow(dead_code)]
+    fn jit_may_repeat(i: &Instr) -> bool {{
+        match i {{
+{repeat_arms}            _ => false,
+        }}
+    }}
     /// Whether `i`'s instruction lowers.
     fn jit_lowers(i: &Instr) -> bool {{
         match i {{
@@ -1096,12 +1143,14 @@ impl Gen<'_> {
             events_block = self.events_block,
             quantum = self.sync_quantum.unwrap_or(0),
             sync_block = self.sync_block,
+            repeat_bulk = self.repeat_bulk,
             boundary_wakes = ist.boundary.is_some_and(|b| {
                 let mut halts = false;
                 machine_sema::hir::visit_block(&self.fns[&b].body, &mut |st| halts |= matches!(st.kind, machine_sema::hir::StmtKind::Halt), &mut |_| {});
                 halts
             }),
             quiet_arms = quiet.iter().map(|n| format!("            Instr::{n}(_) => true,\n")).collect::<String>(),
+            repeat_arms = repeaters.iter().map(|n| format!("            Instr::{n}(_) => true,\n")).collect::<String>(),
             lowers_arms = lowered.iter().map(|n| format!("            Instr::{n}(_) => true,\n")).collect::<String>(),
         );
         // The split charge of a data access (`split =>`), lowered.

@@ -581,7 +581,7 @@ impl<'a> Gen<'a> {
             profile.unwrap_or("default"),
             if self.jit { "jit" } else if self.trace.is_some() { "trace" } else { "decode" },
             prof.is_some_and(|p| p.direct_memory),
-            !(self.sync_run || self.timing_approx || self.sync_quantum.is_some() || self.sync_block || self.events_block)
+            !(self.sync_run || self.timing_approx || self.sync_quantum.is_some() || self.sync_block || self.events_block || self.repeat_bulk != 0)
         );
         for (i, c) in sys.clocks.iter().enumerate() {
             let _ = writeln!(

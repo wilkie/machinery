@@ -1760,6 +1760,12 @@ system PcAt386 {
     deferred past its timeout reaches the interrupt as a keystroke (DOS
     saw F7 at its date prompt). On the 386 AT, whose devices are due
     milliseconds apart, it runs as `sync: block` does.
+  - `repeat: bulk(<n>)` runs an instruction that sets the pc back to
+    itself (assigns it from a latch whose reset value is the pc: a
+    repeated string instruction's `start_ip`) up to n times within its
+    compiled step, each time decoded, fetched, timed and its run's code
+    checked as a step; interrupts and devices are seen between batches
+    (QEMU's `REP_MAX`).
   - `events: block` recognises the reset line and interrupts (the
     istream's `boundary` fn) where a compiled run is entered or goes
     round, not past each compiled step: an interrupt is taken up to a run

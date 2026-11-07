@@ -290,6 +290,8 @@ pub struct Em<'a, 'f> {
     wasted: usize,
     /// Fields written but not yet stored.
     dirty: Vec<(usize, N)>,
+    /// Constants made (`konst`): not counted as work (`emitted`).
+    consts: usize,
     /// A region's return that leaves the run: by region, the slot that
     /// holds the return, the call made first and whether the step was
     /// made (`exit_on_true_return`).
@@ -330,7 +332,7 @@ pub struct Em<'a, 'f> {
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, out: Block, made_base: Variable) -> Self {
-        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new(), combos: HashMap::new() }
+        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), consts: 0, ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new(), combos: HashMap::new() }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -451,10 +453,12 @@ impl<'a, 'f> Em<'a, 'f> {
     fn konst(&mut self, n: N, c: u128) -> Value {
         let c = c & n.mask();
         if n.width() == 128 {
+            self.consts += 3;
             let lo = self.b.ins().iconst(types::I64, c as u64 as i64);
             let hi = self.b.ins().iconst(types::I64, (c >> 64) as u64 as i64);
             self.b.ins().iconcat(lo, hi)
         } else {
+            self.consts += 1;
             self.b.ins().iconst(n.ir(), c as u64 as i64)
         }
     }
@@ -823,7 +827,9 @@ impl<'a, 'f> Em<'a, 'f> {
 
     /// Instructions emitted that may run (failed trials' are not).
     fn emitted(&self) -> usize {
-        self.b.func.dfg.num_insts() - self.wasted
+        // (Constants are not work: an exit's stores of known values make
+        // many, on paths that seldom run.)
+        self.b.func.dfg.num_insts() - self.wasted - self.consts
     }
 
     /// The machine's field at `off` holds `v` (a check the code made says
@@ -1579,6 +1585,70 @@ impl<'a, 'f> Em<'a, 'f> {
     /// What the run knew going round (a first build).
     pub(crate) fn take_seen(&mut self) -> Option<LoopPlan> {
         self.seen.take()
+    }
+
+    /// The head of a loop within a step (`repeat_tail` goes back to it):
+    /// the machine holds what the code owes, and nothing is known past it
+    /// but what its locals carry.
+    pub fn repeat_head(&mut self) -> Option<Block> {
+        if !self.live {
+            return None;
+        }
+        self.flush();
+        self.regs.clear();
+        self.pieces.clear();
+        for i in 0..self.slots.len() {
+            let s = self.slots[i];
+            if let Some(c) = s.k {
+                let x = self.konst(s.n, c);
+                self.b.def_var(s.var, x);
+                self.slots[i].k = None;
+            }
+        }
+        let h = self.b.create_block();
+        self.b.ins().jump(h, &[]);
+        self.b.switch_to_block(h);
+        Some(h)
+    }
+
+    /// Back to `head` (`repeat_head`) while `c` holds, each time round one
+    /// more step made (the instruction ran again); else on.
+    pub fn repeat_tail(&mut self, head: Option<Block>, c: V) {
+        let Some(head) = head else { return };
+        if self.live {
+            let cv = match c {
+                V::K(0) => None,
+                V::K(_) => Some(self.konst(N::Bool, 1)),
+                V::D(v) => Some(v),
+            };
+            if let Some(cv) = cv {
+                let lb = self.b.create_block();
+                let cont = self.b.create_block();
+                self.b.ins().brif(cv, lb, &[], cont, &[]);
+                self.b.seal_block(lb);
+                self.b.seal_block(cont);
+                let before = self.state();
+                self.b.switch_to_block(lb);
+                let limit = self.trial_limit.take();
+                self.flush();
+                self.trial_limit = limit;
+                for i in 0..self.slots.len() {
+                    let s = self.slots[i];
+                    if let Some(k) = s.k {
+                        let x = self.konst(s.n, k);
+                        self.b.def_var(s.var, x);
+                    }
+                }
+                let bv = self.b.use_var(self.made_base);
+                let nb = self.b.ins().iadd_imm(bv, 1);
+                self.b.def_var(self.made_base, nb);
+                self.b.ins().jump(head, &[]);
+                self.restore(&before);
+                self.b.switch_to_block(cont);
+                self.live = true;
+            }
+        }
+        self.b.seal_block(head);
     }
 
     /// The run's length.

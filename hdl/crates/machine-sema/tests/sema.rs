@@ -1566,6 +1566,12 @@ fn systems_check() {
     let c = check_src(&system("profile p { default: model; memory: direct; core: jit; sync: block; }"));
     assert_clean(&c);
     assert!(c.hir.systems[0].profiles[0].sync_block);
+    let c = check_src(&system("profile p { default: model; memory: direct; core: jit; repeat: bulk(64); }"));
+    assert_clean(&c);
+    assert_eq!(c.hir.systems[0].profiles[0].repeat_bulk, Some(64));
+    assert_codes(&system("profile p { default: model; memory: direct; core: jit; repeat: bulk(0); }"), &["E1049"]);
+    assert_codes(&system("profile p { default: model; memory: direct; core: jit; repeat: bulk; }"), &["E1049"]);
+    assert_codes(&system("profile p { default: model; memory: direct; core: trace; repeat: bulk(8); }"), &["E1049"]);
     assert_codes(&system("profile p { default: model; memory: direct; core: jit; sync: quantum(4 MHz); }"), &["E1049"]);
     assert_codes(&system("profile p { default: model; memory: direct; core: jit; sync: quantum; }"), &["E1049"]);
     assert_codes(&system("profile p { default: model; memory: direct; core: jit; events: run; }"), &["E1049"]);

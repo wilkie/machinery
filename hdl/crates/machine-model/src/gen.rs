@@ -155,6 +155,8 @@ pub struct Gen<'a> {
     sync_quantum: Option<u128>,
     sync_block: bool,
     events_block: bool,
+    /// `repeat: bulk(n)`: n, or 0.
+    repeat_bulk: u32,
     /// The isa fns the JIT lowering inlines (`gen/lower.rs`).
     jit_fns: std::cell::RefCell<std::collections::HashSet<DefId>>,
     /// The kind rules it lowers: (kind, rule index).
@@ -205,6 +207,7 @@ pub fn generate_system(
         g.timing_approx = prof.is_some_and(|p| p.timing_approx);
         g.events_block = prof.is_some_and(|p| p.events_block);
         g.sync_block = prof.is_some_and(|p| p.sync_block);
+        g.repeat_bulk = prof.and_then(|p| p.repeat_bulk).unwrap_or(0);
         // The quantum in time units (base_num / base_den seconds each).
         g.sync_quantum = prof.and_then(|p| p.sync_quantum).map(|(n, d)| {
             let units = n.saturating_mul(sys.base_den) / d.saturating_mul(sys.base_num).max(1);
@@ -251,6 +254,7 @@ impl<'a> Gen<'a> {
             sync_quantum: None,
             sync_block: false,
             events_block: false,
+            repeat_bulk: 0,
             jit_fns: Default::default(),
             jit_rules: Default::default(),
             jit_units: Default::default(),

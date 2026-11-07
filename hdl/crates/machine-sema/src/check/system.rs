@@ -300,8 +300,20 @@ impl Checker<'_> {
                     let mut sync_quantum = None;
                     let mut sync_block = false;
                     let mut events_block = false;
+                    let mut repeat_bulk = None;
                     for e in &p.entries {
                         let one = |n: &str| e.target.segments.len() == 1 && e.target.segments[0].name == n;
+                        if one("repeat") {
+                            match (e.level.name.as_str(), e.arg.as_ref().map(|a| &a.kind)) {
+                                ("iteration", None) => repeat_bulk = None,
+                                ("bulk", Some(A::Int { value, .. })) if *value >= 1 && *value <= u32::MAX as u128 => repeat_bulk = Some(*value as u32),
+                                _ => {
+                                    self.error(module, "E1049", e.span, "`repeat:` is `iteration` or `bulk(<n>)`, n a count of at least 1");
+                                    ok = false;
+                                }
+                            }
+                            continue;
+                        }
                         if one("sync") || one("timing") || one("events") {
                             let what = e.target.segments[0].name.as_str();
                             // Only `quantum` takes an argument: a time.
@@ -417,8 +429,8 @@ impl Checker<'_> {
                             ok = false;
                         }
                     }
-                    if (sync_run || timing_approx || sync_quantum.is_some() || sync_block || events_block) && core != hir::Core::Jit {
-                        self.error(module, "E1049", p.name.span, "`sync: run`, `sync: block`, `sync: quantum(...)`, `events: block` and `timing: approximate` are concessions of the JIT core (`core: jit`)");
+                    if (sync_run || timing_approx || sync_quantum.is_some() || sync_block || events_block || repeat_bulk.is_some()) && core != hir::Core::Jit {
+                        self.error(module, "E1049", p.name.span, "`sync: run`, `sync: block`, `sync: quantum(...)`, `events: block`, `repeat: bulk(...)` and `timing: approximate` are concessions of the JIT core (`core: jit`)");
                         ok = false;
                     }
                     profiles.push(hir::Profile {
@@ -430,6 +442,7 @@ impl Checker<'_> {
                         sync_quantum,
                         sync_block,
                         events_block,
+                        repeat_bulk,
                         default,
                         overrides,
                     });

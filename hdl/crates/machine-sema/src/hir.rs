@@ -1048,6 +1048,10 @@ pub struct Profile {
     /// reset line, halting) where it is entered and where it goes round,
     /// not at each instruction.
     pub events_block: bool,
+    /// `repeat: bulk(n)`: a compiled step whose instruction runs again (a
+    /// repeated string instruction) runs it up to `n` times within the step,
+    /// interrupts and devices seen only between such batches.
+    pub repeat_bulk: Option<u32>,
     pub default: Level,
     /// Instance paths (`vga`, `vga.crtc`) and their level.
     pub overrides: Vec<(String, Level)>,

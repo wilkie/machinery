@@ -1376,6 +1376,75 @@ impl Gen<'_> {
     /// The registers fn `d` (and the fns it calls) reads and writes; None
     /// when it may touch any (an operand kind's, an external fn).
     pub(crate) fn jit_reg_fx(&self, d: DefId) -> Option<(HashSet<DefId>, HashSet<DefId>)> {
+        let (r, w, all) = self.jit_fx_walk(&[], vec![d]);
+        (!all).then_some((r, w))
+    }
+
+    /// Whether instruction `i` may set the pc back to where it started
+    /// (and so run again: a repeated string instruction): it, or a fn it
+    /// calls, assigns a pc register from a latch whose reset value reads
+    /// the pc (the instruction's own address, `start_ip`).
+    pub(crate) fn jit_instr_restarts(&self, i: &machine_sema::hir::Instruction, pcs: &[DefId]) -> bool {
+        let Some(b) = &i.semantics else { return false };
+        let starts: HashSet<DefId> = self
+            .isa
+            .latches
+            .iter()
+            .filter(|l| {
+                let hit = std::cell::Cell::new(false);
+                hir::visit_expr(&l.init, &mut |_| {}, &mut |x| {
+                    if let H::Register(r) = &x.kind {
+                        hit.set(hit.get() | pcs.contains(r));
+                    }
+                });
+                hit.get()
+            })
+            .map(|l| l.def)
+            .collect();
+        let found = std::cell::Cell::new(false);
+        let stack = std::cell::RefCell::new(Vec::new());
+        let mut seen: HashSet<DefId> = HashSet::new();
+        // The fault hook puts the pc back to restart a faulting instruction:
+        // a fault ends the step, it does not run it again.
+        if let Some(f) = self.isa.istream.as_ref().and_then(|i| i.fault) {
+            seen.insert(f);
+        }
+        let mut blocks: Vec<&Block> = vec![b];
+        loop {
+            let Some(blk) = blocks.pop() else {
+                let Some(f) = stack.borrow_mut().pop() else { break };
+                if seen.insert(f) {
+                    if let Some(fb) = self.fns.get(&f) {
+                        if !fb.external {
+                            blocks.push(&fb.body);
+                        }
+                    }
+                }
+                continue;
+            };
+            hir::visit_block(
+                blk,
+                &mut |st| {
+                    if let S::Assign(p, v) = &st.kind {
+                        if let (H::Register(r), H::Latch(l)) = (&p.kind, &v.kind) {
+                            found.set(found.get() | (pcs.contains(r) && starts.contains(l)));
+                        }
+                    }
+                },
+                &mut |x| {
+                    if let H::FnCall(g, _) = &x.kind {
+                        stack.borrow_mut().push(*g);
+                    }
+                },
+            );
+        }
+        found.get()
+    }
+
+    /// The registers read and written by `blocks` and the fns `fns` (and
+    /// what they call), and whether any may be (an operand kind's, an
+    /// external fn).
+    fn jit_fx_walk(&self, blocks: &[&Block], fns: Vec<DefId>) -> (HashSet<DefId>, HashSet<DefId>, bool) {
         fn root(e: &Expr) -> Option<DefId> {
             match &e.kind {
                 H::Register(d) | H::RegField(d, _) | H::RegView(d, _) | H::Latch(d) => Some(*d),
@@ -1387,8 +1456,32 @@ impl Gen<'_> {
         let writes = std::cell::RefCell::new(HashSet::new());
         let all = std::cell::Cell::new(false);
         let mut seen: HashSet<DefId> = HashSet::new();
-        let stack = std::cell::RefCell::new(vec![d]);
+        let stack = std::cell::RefCell::new(fns);
+        let mut pending: Vec<&Block> = blocks.to_vec();
         loop {
+            if let Some(b) = pending.pop() {
+                hir::visit_block(
+                    b,
+                    &mut |st| match &st.kind {
+                        S::Assign(p, _) => {
+                            if let Some(r) = root(p) {
+                                writes.borrow_mut().insert(r);
+                            }
+                        }
+                        S::OperandWrite(..) => all.set(true),
+                        _ => {}
+                    },
+                    &mut |x| match &x.kind {
+                        H::Register(r) | H::RegField(r, _) | H::RegView(r, _) | H::Latch(r) => {
+                            reads.borrow_mut().insert(*r);
+                        }
+                        H::FnCall(g, _) => stack.borrow_mut().push(*g),
+                        H::KindSelect(..) | H::OperandField(..) | H::OperandTail(..) | H::TailOperand(..) => all.set(true),
+                        _ => {}
+                    },
+                );
+                continue;
+            }
             let Some(f) = stack.borrow_mut().pop() else { break };
             if !seen.insert(f) {
                 continue;
@@ -1422,7 +1515,7 @@ impl Gen<'_> {
                 },
             );
         }
-        (!all.get()).then(|| (reads.into_inner(), writes.into_inner()))
+        (reads.into_inner(), writes.into_inner(), all.get())
     }
 
     /// For a call of fn `d`: the native registers and latches it leaves

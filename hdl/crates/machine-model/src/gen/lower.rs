@@ -1380,67 +1380,6 @@ impl Gen<'_> {
         (!all).then_some((r, w))
     }
 
-    /// Whether instruction `i` may set the pc back to where it started
-    /// (and so run again: a repeated string instruction): it, or a fn it
-    /// calls, assigns a pc register from a latch whose reset value reads
-    /// the pc (the instruction's own address, `start_ip`).
-    pub(crate) fn jit_instr_restarts(&self, i: &machine_sema::hir::Instruction, pcs: &[DefId]) -> bool {
-        let Some(b) = &i.semantics else { return false };
-        let starts: HashSet<DefId> = self
-            .isa
-            .latches
-            .iter()
-            .filter(|l| {
-                let hit = std::cell::Cell::new(false);
-                hir::visit_expr(&l.init, &mut |_| {}, &mut |x| {
-                    if let H::Register(r) = &x.kind {
-                        hit.set(hit.get() | pcs.contains(r));
-                    }
-                });
-                hit.get()
-            })
-            .map(|l| l.def)
-            .collect();
-        let found = std::cell::Cell::new(false);
-        let stack = std::cell::RefCell::new(Vec::new());
-        let mut seen: HashSet<DefId> = HashSet::new();
-        // The fault hook puts the pc back to restart a faulting instruction:
-        // a fault ends the step, it does not run it again.
-        if let Some(f) = self.isa.istream.as_ref().and_then(|i| i.fault) {
-            seen.insert(f);
-        }
-        let mut blocks: Vec<&Block> = vec![b];
-        loop {
-            let Some(blk) = blocks.pop() else {
-                let Some(f) = stack.borrow_mut().pop() else { break };
-                if seen.insert(f) {
-                    if let Some(fb) = self.fns.get(&f) {
-                        if !fb.external {
-                            blocks.push(&fb.body);
-                        }
-                    }
-                }
-                continue;
-            };
-            hir::visit_block(
-                blk,
-                &mut |st| {
-                    if let S::Assign(p, v) = &st.kind {
-                        if let (H::Register(r), H::Latch(l)) = (&p.kind, &v.kind) {
-                            found.set(found.get() | (pcs.contains(r) && starts.contains(l)));
-                        }
-                    }
-                },
-                &mut |x| {
-                    if let H::FnCall(g, _) = &x.kind {
-                        stack.borrow_mut().push(*g);
-                    }
-                },
-            );
-        }
-        found.get()
-    }
-
     /// The registers read and written by `blocks` and the fns `fns` (and
     /// what they call), and whether any may be (an operand kind's, an
     /// external fn).
@@ -1529,7 +1468,7 @@ impl Gen<'_> {
         for f in ["tr_on", "tr_prev", "tr_idx", "tr_ep0", "tr_w", "tr_rec_now", "tr_phys", "jit_left", "jit_last", "jit_guard_failed", "last_start"] {
             let _ = write!(kept, "(std::mem::offset_of!(Self, {f}), Self::jit_fsize(|m: &Self| &m.{f})), ");
         }
-        for l in &self.isa.latches {
+        for l in &self.latches {
             let Ok(n) = self.jn(&l.ty) else { continue };
             let range = format!("(std::mem::offset_of!(Self, latch_{}), {n}.width() as usize / 8), ", ident(&l.name));
             if writes.contains(&l.def) {
@@ -1763,8 +1702,36 @@ impl Gen<'_> {
             None => String::new(),
         };
         let attrs = "    #[allow(unused_variables, unused_mut, clippy::all)]\n";
+        // `repeat ...`: the semantics one element, under the prefix's
+        // condition; interruptible, it runs again from where it started (the
+        // pc set back to the start latch). One that is not runs its elements
+        // within the step: the interpreter's.
+        let exec = match &i.repeat {
+            None => format!("        let ret = e.local(machine_jit::N::U8, machine_jit::V::K(0));\n        e.region_begin();\n        {body}        e.region_end();\n"),
+            Some(rep) if rep.interruptible => {
+                let rx = Lx { locals: &rep.locals, ops: Some(i), src: None, timing: false };
+                let when = self.jexpr(&rx, &rep.when)?;
+                let skip = self.jexpr(&rx, &rep.skip)?;
+                let next = self.jexpr(&rx, &rep.next)?;
+                let cond = match &rep.cond {
+                    Some(c) => self.jexpr(&rx, c)?,
+                    None => "machine_jit::V::K(1)".into(),
+                };
+                let mut back = String::new();
+                for l in self.latches.iter().filter(|l| l.name.starts_with("repeat_start_")) {
+                    let reg = &l.name["repeat_start_".len()..];
+                    let n = self.jn(&l.ty)?;
+                    let _ = write!(back, "let v = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, latch_{}), n: {n}, bump: 0 }}); e.write(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, r.{}), n: {n}, bump: 0 }}, v); ", ident(&l.name), ident(reg));
+                }
+                let element = format!("{{ let ret = e.local(machine_jit::N::U8, machine_jit::V::K(0)); e.region_begin(); {body} e.region_end(); }}");
+                format!(
+                    "        let w = {when};\n        e.if_(w, |e| {{\n            let s = {skip};\n            e.if_(s, |_| {{}}, |e| {{\n                {element}\n                let more = {next};\n                let c = {cond};\n                let again = e.op(machine_jit::Op::And, more, c, machine_jit::N::Bool);\n                e.if_(again, |e| {{ {back}}}, |_| {{}});\n            }});\n        }}, |e| {element});\n"
+                )
+            }
+            Some(_) => return Err(GenError::new("lowering: a repeat that is not interruptible")),
+        };
         Ok(format!(
-            "{attrs}    fn jt_{n}(e: &mut machine_jit::Em, ops: &{ops_ty}, phys: u64) -> machine_jit::V {{\n        {timing}\n    }}\n{attrs}    fn jx_{n}(e: &mut machine_jit::Em, ops: &{ops_ty}) {{\n        let ret = e.local(machine_jit::N::U8, machine_jit::V::K(0));\n        e.region_begin();\n        {body}        e.region_end();\n    }}\n"
+            "{attrs}    fn jt_{n}(e: &mut machine_jit::Em, ops: &{ops_ty}, phys: u64) -> machine_jit::V {{\n        {timing}\n    }}\n{attrs}    fn jx_{n}(e: &mut machine_jit::Em, ops: &{ops_ty}) {{\n{exec}    }}\n"
         ))
     }
 }

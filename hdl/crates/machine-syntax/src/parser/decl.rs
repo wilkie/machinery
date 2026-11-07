@@ -1149,6 +1149,27 @@ impl Parser {
                 self.expect_semi()?;
                 InstructionItem::Requires(e)
             }
+            "repeat" => {
+                let start = key.span;
+                let part = |p: &mut Self, word: &str| -> PResult<Expr> {
+                    if !p.eat_word(word) {
+                        let at = p.peek().span;
+                        return Err(p.error("E0106", at, format!("`repeat` needs `{word}` here: `repeat when <cond> skip <cond> next <cond> [while <cond>] [interruptible];`")));
+                    }
+                    p.parse_expr()
+                };
+                let when = part(self, "when")?;
+                let skip = part(self, "skip")?;
+                let next = part(self, "next")?;
+                let cond = if self.eat_kw(Keyword::While) { Some(self.parse_expr()?) } else { None };
+                let interruptible = self.eat_word("interruptible");
+                if !self.at_punct(Punct::Semi) {
+                    let at = self.peek().span;
+                    return Err(self.error("E0106", at, "unexpected word in `repeat`: it ends with `[while <cond>] [interruptible];`"));
+                }
+                self.expect_semi()?;
+                InstructionItem::Repeat(RepeatClause { when, skip, next, cond, interruptible, span: start.to(self.prev_span()) })
+            }
             "lock" => {
                 let cond = if self.eat_kw(Keyword::If) {
                     Some(self.parse_expr()?)

@@ -128,6 +128,10 @@ pub struct Gen<'a> {
     prog: &'a Program,
     hir: &'a hir::Hir,
     isa: &'a hir::IsaInfo,
+    /// The isa's latches, and the generator's own: the pc where the
+    /// instruction started, one a pc register, when an instruction repeats
+    /// interruptibly (`repeat ... interruptible`: it runs again from there).
+    latches: Vec<hir::Latch>,
     enums: HashMap<DefId, &'a hir::EnumDef>,
     bundles: HashMap<DefId, &'a hir::BundleDef>,
     regs: HashMap<DefId, (usize, &'a hir::Register)>,
@@ -220,6 +224,44 @@ pub fn generate_system(
 }
 
 impl<'a> Gen<'a> {
+    /// The isa's latches and the repeat start latches (`latches`).
+    fn latches_of(isa: &hir::IsaInfo) -> Vec<hir::Latch> {
+        let mut out = isa.latches.clone();
+        let repeats = isa.instructions.iter().any(|i| i.repeat.as_ref().is_some_and(|r| r.interruptible));
+        let Some(ist) = isa.istream.as_ref().filter(|_| repeats) else { return out };
+        // The pc: what the istream's `next` assigns.
+        let Some(next) = isa.fns.iter().find(|f| f.def == ist.next) else { return out };
+        let mut pcs: Vec<DefId> = Vec::new();
+        hir::visit_block(&next.body, &mut |st| {
+            if let hir::StmtKind::Assign(p, _) = &st.kind {
+                let mut e = p;
+                loop {
+                    match &e.kind {
+                        hir::ExprKind::Register(d) | hir::ExprKind::RegField(d, _) | hir::ExprKind::RegView(d, _) => {
+                            if !pcs.contains(d) {
+                                pcs.push(*d);
+                            }
+                            break;
+                        }
+                        hir::ExprKind::Field(b, _) | hir::ExprKind::Index(b, _) | hir::ExprKind::Slice(b, ..) => e = b,
+                        _ => break,
+                    }
+                }
+            }
+        }, &mut |_| {});
+        for (k, d) in pcs.iter().enumerate() {
+            let Some(r) = isa.registers.iter().find(|r| r.def == *d) else { continue };
+            out.push(hir::Latch {
+                // Not the program's: never named through `prog`.
+                def: DefId(u32::MAX - k as u32),
+                name: format!("repeat_start_{}", r.name),
+                ty: r.ty.clone(),
+                init: hir::Expr { kind: hir::ExprKind::Register(*d), ty: r.ty.clone(), span: Default::default() },
+            });
+        }
+        out
+    }
+
     fn new(prog: &'a Program, hir: &'a hir::Hir, isa_def: DefId) -> R<Gen<'a>> {
         let isa = hir
             .isas
@@ -238,6 +280,7 @@ impl<'a> Gen<'a> {
                 .enumerate()
                 .map(|(i, r)| (r.def, (i, r)))
                 .collect(),
+            latches: Self::latches_of(isa),
             spaces: isa.spaces.iter().map(|s| (s.def, s)).collect(),
             operands: isa.operands.iter().map(|o| (o.def, o)).collect(),
             kinds: isa.kinds.iter().map(|k| (k.def, k)).collect(),
@@ -1864,7 +1907,7 @@ impl<'a> Gen<'a> {
         self.out.push_str(&s);
 
         let mut latch_fields = String::new();
-        for l in &self.isa.latches {
+        for l in &self.latches {
             let _ = writeln!(latch_fields, "    pub latch_{}: {},", ident(&l.name), self.rty(&l.ty)?);
         }
         let (tr_hot, tr_cold) = self.trace_fields();
@@ -1886,7 +1929,7 @@ impl<'a> Gen<'a> {
         let mut s = format!(
             "impl {isa_name}<Flat> {{\n    /// A machine whose spaces are plain memory.\n    pub fn new() -> Self {{ Self::with_bus(Flat::new()) }}\n}}\nimpl<B: Bus> {isa_name}<B> {{\n    pub fn with_bus(bus: B) -> Self {{\n        let mut m = Self {{\n            r: Regs::default(),\n            mode: 0,\n            halted: false,\n            last: None,\n            known_opcode: false,\n            last_fault: None,\n            cycles: 0,\n            prefix_cycles: 0,\n            entry_cycles: 0,\n            last_start: u64::MAX,\n            restarted: false,\n            fetched: 0,\n            decode_at: [0; 16],\n            decoded: false,\n            in_reset: false,\n            run_sched: Schedule::default(),\n            win_from: 0,\n            win_len: 0,\n            win_base: 0,\n            accesses: 0,\n            shutdown: false,\n            bus,\n"
         );
-        for l in &self.isa.latches {
+        for l in &self.latches {
             let _ = writeln!(
                 s,
                 "            latch_{}: Default::default(),",
@@ -1917,7 +1960,7 @@ impl<'a> Gen<'a> {
             if self.jit { "self.jit.count()" } else { "0" }
         );
         s.push_str("    /// Per-instruction state back to its reset values.\n    pub fn reset_latches(&mut self) {\n");
-        for l in &self.isa.latches {
+        for l in &self.latches {
             let cx = Cx {
                 locals: &[],
                 fallible: false,
@@ -2462,7 +2505,43 @@ impl<'a> Gen<'a> {
             ident(&i.name),
             Self::ops_struct_name(i)
         );
-        self.emit_exec_forms(i)
+        self.emit_exec_forms(i)?;
+        self.emit_repeat(i)
+    }
+
+    /// `repeat ...`: the instruction under its repeat prefix (`hir::Repeat`),
+    /// its semantics one element.
+    fn emit_repeat(&mut self, i: &hir::Instruction) -> R<()> {
+        let Some(rep) = &i.repeat else { return Ok(()) };
+        let cx = Cx { locals: &rep.locals, fallible: true, recv: "self", ops: Some(i), comp: None, opt: false };
+        let when = self.expr(&cx, &rep.when)?;
+        let skip = self.expr(&cx, &rep.skip)?;
+        let next = self.expr(&cx, &rep.next)?;
+        let cond = match &rep.cond {
+            Some(c) => self.expr(&cx, c)?,
+            None => "true".into(),
+        };
+        let elem = self.exec_element_call(i);
+        let body = if rep.interruptible {
+            // Again from where the instruction started: a boundary between
+            // elements, where an interrupt may be taken.
+            let mut back = String::new();
+            for l in self.latches.iter().filter(|l| l.name.starts_with("repeat_start_")) {
+                let reg = &l.name["repeat_start_".len()..];
+                let _ = write!(back, " self.r.{} = self.latch_{};", ident(reg), ident(&l.name));
+            }
+            format!("        {elem}?;\n        if ({next}) && ({cond}) {{{back} }}\n        Ok(())\n")
+        } else {
+            format!("        loop {{\n            {elem}?;\n            if !(({next}) && ({cond})) {{ break; }}\n        }}\n        Ok(())\n")
+        };
+        let _ = write!(
+            self.out,
+            "    /// `{}` under its repeat prefix: nothing when there is nothing to do,\n    /// else an element and whether it runs again.\n    #[allow(unused_variables, clippy::all)]\n    pub fn repeat_{}(&mut self, ops: {}) -> Result<(), Fault> {{\n        if !({when}) {{ return {elem}; }}\n        if {skip} {{ return Ok(()); }}\n{body}    }}\n",
+            i.name,
+            ident(&i.name),
+            Self::ops_struct_name(i)
+        );
+        Ok(())
     }
 
     fn emit_decoder(&mut self) -> R<()> {

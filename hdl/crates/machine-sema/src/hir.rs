@@ -521,6 +521,22 @@ pub enum Mnemonic {
     },
 }
 
+/// `repeat when C skip S next N [while W] [interruptible];` (the syntax's
+/// `RepeatClause`): while `when` holds, nothing is done when `skip` holds,
+/// else the semantics run (one element), then `next` (counting it: whether
+/// more remain) and `cond` decide whether it runs again. Interruptible: the
+/// instruction runs again from its own address, an instruction boundary
+/// between elements; otherwise the elements run within the one step.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Repeat {
+    pub locals: Vec<Local>,
+    pub when: Expr,
+    pub skip: Expr,
+    pub next: Expr,
+    pub cond: Option<Expr>,
+    pub interruptible: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Instruction {
     pub def: DefId,
@@ -548,6 +564,8 @@ pub struct Instruction {
     /// prefix (`None`: never).
     pub lock_locals: Vec<Local>,
     pub lock: Option<Expr>,
+    /// `repeat ...`: what a repeat prefix does to it (`Repeat`).
+    pub repeat: Option<Repeat>,
     /// `fault <Name> =>` in a `schedules` table: delivering a fault this
     /// instruction raises, with `vector` (its first param) in scope.
     pub fault_schedule: Option<TimingExpr>,

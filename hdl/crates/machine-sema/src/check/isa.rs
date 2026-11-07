@@ -1784,6 +1784,7 @@ impl Checker<'_> {
         let mut when_locals = Vec::new();
         let mut lock = None;
         let mut lock_locals = Vec::new();
+        let mut repeat = None;
         let mut implements = None;
         let mut references = Vec::new();
         let mut allowed_in = Vec::new();
@@ -1814,6 +1815,7 @@ impl Checker<'_> {
                 InstructionItem::AllowedIn(_) => "allowed_in",
                 InstructionItem::Requires(_) => "requires",
                 InstructionItem::Lock(_) => "lock",
+                InstructionItem::Repeat(_) => "repeat",
                 InstructionItem::Other(..) => "other",
             };
             if key != "other" {
@@ -2138,6 +2140,18 @@ impl Checker<'_> {
                     });
                     lock_locals = cx.locals;
                 }
+                InstructionItem::Repeat(r) => {
+                    if decl.prefix {
+                        self.error(module, "E1032", r.span, "a prefix has no `repeat`: the instructions it repeats say how");
+                        ok = false;
+                    }
+                    let mut cx = ops_cx(&sig);
+                    let when = self.check_expr(&mut cx, &r.when, Some(&Ty::Bool));
+                    let skip = self.check_expr(&mut cx, &r.skip, Some(&Ty::Bool));
+                    let next = self.check_expr(&mut cx, &r.next, Some(&Ty::Bool));
+                    let cond = r.cond.as_ref().map(|c| self.check_expr(&mut cx, c, Some(&Ty::Bool)));
+                    repeat = Some(hir::Repeat { locals: cx.locals, when, skip, next, cond, interruptible: r.interruptible });
+                }
                 InstructionItem::Other(name, _) => {
                     self.error(
                         module,
@@ -2292,6 +2306,7 @@ impl Checker<'_> {
             when,
             lock_locals,
             lock,
+            repeat,
             implements,
             references,
             allowed_in,

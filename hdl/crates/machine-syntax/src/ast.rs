@@ -998,7 +998,27 @@ pub enum InstructionItem {
     /// `lock;` or `lock if cond;`: the instruction may follow a lock prefix
     /// (when `cond` holds); otherwise that is the istream's `undefined`.
     Lock(Option<Expr>),
+    /// `repeat when C skip S next N [while W] [interruptible];`: what a
+    /// repeat prefix does to the instruction (see `RepeatClause`).
+    Repeat(RepeatClause),
     Other(Ident, Option<Expr>),
+}
+
+/// How a repeat prefix repeats an instruction, its semantics one element:
+/// while `when` holds (the prefix is in force), nothing is done when `skip`
+/// holds; else an element, then `next` (it counts the element and says
+/// whether more remain) and `cond` (REPE/REPNE's) decide whether it runs
+/// again. `interruptible`: between elements the instruction stays at its
+/// own address (an interrupt is taken there and the instruction resumes);
+/// otherwise the elements run within one step.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RepeatClause {
+    pub when: Expr,
+    pub skip: Expr,
+    pub next: Expr,
+    pub cond: Option<Expr>,
+    pub interruptible: bool,
+    pub span: Span,
 }
 
 /// One entry of a flag set: a register field, optionally conditional.

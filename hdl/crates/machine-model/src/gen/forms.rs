@@ -198,6 +198,14 @@ impl Gen<'_> {
     /// How `run_<name>` runs `i`'s semantics: the copy for its operands'
     /// forms, else the semantics.
     pub(crate) fn exec_call(&self, i: &hir::Instruction) -> String {
+        if i.repeat.is_some() {
+            return format!("self.repeat_{}(ops)", ident(&i.name));
+        }
+        self.exec_element_call(i)
+    }
+
+    /// The call of `i`'s semantics alone (one element, when it repeats).
+    pub(crate) fn exec_element_call(&self, i: &hir::Instruction) -> String {
         let n = ident(&i.name);
         let fo = self.form_operands(i);
         if fo.is_empty() {

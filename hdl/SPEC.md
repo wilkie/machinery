@@ -1060,6 +1060,19 @@ instruction Add_rm8_r8 {
   fault (the 386 accepts LOCK only on read-modify-write forms with a
   memory destination: `lock if dst.is_mem && op != AluOp::Cmp;`).
 
+**Repeat prefixes.** `repeat when <cond> skip <cond> next <cond> [while
+<cond>] [interruptible];` says what a repeat prefix does to an
+instruction whose semantics are one element (an x86 string instruction):
+while `when` holds (the prefix is in force: a latch it set), nothing is done
+when `skip` holds (the count is 0); else an element runs, then `next`
+(which counts it, and says whether more remain) and `while` (REPE/REPNE's
+condition) decide whether it runs again. `interruptible`: it runs again from
+where it started, an instruction boundary between elements (an interrupt
+is taken there and the instruction resumes); otherwise the elements run
+within the one step. The generator keeps where each instruction started
+(the pc as decoding found it) for the interruptible form. A prefix has no
+`repeat` (E1032); any other word in it is an error (E0106).
+
 ### 11.2a Prefixes and latches
 
 ```
@@ -1760,10 +1773,9 @@ system PcAt386 {
     deferred past its timeout reaches the interrupt as a keystroke (DOS
     saw F7 at its date prompt). On the 386 AT, whose devices are due
     milliseconds apart, it runs as `sync: block` does.
-  - `repeat: bulk(<n>)` runs an instruction that sets the pc back to
-    itself (assigns it from a latch whose reset value is the pc: a
-    repeated string instruction's `start_ip`) up to n times within its
-    compiled step, each time decoded, fetched, timed and its run's code
+  - `repeat: bulk(<n>)` runs an instruction with an interruptible
+    `repeat` clause (section 11.2) up to n times within its compiled
+    step, each time decoded, fetched, timed and its run's code
     checked as a step; interrupts and devices are seen between batches
     (QEMU's `REP_MAX`).
   - `events: block` recognises the reset line and interrupts (the

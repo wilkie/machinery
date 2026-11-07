@@ -191,6 +191,26 @@ fn isa(body: &str) -> String {
 }
 
 #[test]
+fn a_repeat_clause_says_how_a_prefix_repeats() {
+    let ok = |clause: &str| {
+        isa(&format!(
+            "fn more() -> bool {{ AL = AL - 1; return AL != 0; }}\ninstruction I {{ mnemonic \"i\"; encoding {{ opcode 0x00; }} {clause} semantics {{ AH = AH + 1; }} }}"
+        ))
+    };
+    assert_codes(&ok("repeat when AL != 0 skip AL == 0 next more() interruptible;"), &[]);
+    assert_codes(&ok("repeat when true skip false next more() while AH != 9;"), &[]);
+    // The parts are conditions.
+    assert_codes(&ok("repeat when AL skip false next more();"), &["E1005"]);
+    // Unknown words (`bulk` is not a part of it yet) and a missing part.
+    assert_codes(&ok("repeat when true skip false next more() bulk;"), &["E0106"]);
+    assert_codes(&ok("repeat when true next more();"), &["E0106"]);
+    // Twice.
+    assert_codes(&ok("repeat when true skip false next more(); repeat when true skip false next more();"), &["E1001"]);
+    // A prefix says nothing of it: the instructions it repeats do.
+    assert_codes(&isa("prefix P { encoding { opcode 0xF3; } repeat when true skip false next true; }"), &["E1032"]);
+}
+
+#[test]
 fn isa_prelude_is_clean() {
     assert_codes(&isa(""), &[]);
 }

@@ -344,16 +344,15 @@ impl Gen<'_> {
         // The instructions that lower.
         let mut lowered = Vec::new();
         let mut quiet = Vec::new();
-        // Instructions that may set the pc back to themselves, and so run
-        // again (`repeat: bulk`: a repeated string instruction).
-        let pcs: Vec<machine_sema::program::DefId> = self.trace.as_ref().map(|t| t.pc.clone()).unwrap_or_default();
+        // Instructions that repeat (`repeat ... interruptible`): they may run
+        // again from where they started (`repeat: bulk`).
         let mut repeaters = Vec::new();
         for i in self.isa.instructions.iter().filter(|i| !i.prefix) {
             match self.jinstr(i) {
                 Ok(t) => {
                     out.push_str(&t);
                     lowered.push(ident(&i.name));
-                    if self.jit_instr_restarts(i, &pcs) {
+                    if i.repeat.as_ref().is_some_and(|r| r.interruptible) {
                         repeaters.push(ident(&i.name));
                     }
                     if !self.jtouches_bus(i) {
@@ -403,7 +402,7 @@ impl Gen<'_> {
         out.push_str(&reset_shim);
         let mut latch_resets = String::new();
         let mut latches_ok = true;
-        for l in &self.isa.latches {
+        for l in &self.latches {
             let lx = super::lower::Lx { locals: &[], ops: None, src: None, timing: false };
             match self.jexpr(&lx, &l.init) {
                 Ok(v) => {
@@ -443,7 +442,7 @@ impl Gen<'_> {
         };
         let opcodes_store = if ist.opcode.is_some() { "        e.store(std::mem::offset_of!(Self, opcodes), machine_jit::N::U8, machine_jit::V::K(s.opcodes as u128));\n" } else { "" };
         let mut restore = String::new();
-        for l in &self.isa.latches {
+        for l in &self.latches {
             let n = ident(&l.name);
             let _ = writeln!(restore, "        e.write(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, latch_{n}), n: {}, bump: 0 }}, machine_jit::k(s.l_{n}));", self.jn(&l.ty)?);
         }
@@ -1224,7 +1223,7 @@ impl Gen<'_> {
                 }
             }
         }
-        for l in &self.isa.latches {
+        for l in &self.latches {
             if let (Ty::UInt(b), Ok(n)) = (&l.ty, self.jn(&l.ty)) {
                 if *b < super::native(*b, false).0 {
                     let _ = writeln!(narrow, "        e.declare_bits(std::mem::offset_of!(Self, latch_{}), {n}, {b});", ident(&l.name));

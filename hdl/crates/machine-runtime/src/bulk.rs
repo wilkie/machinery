@@ -168,17 +168,21 @@ pub fn run<E: Element>(e: &mut E, max: u64, per: u64) -> u64 {
             return 0;
         }
     }
-    // The period measured, the next element and the last: where they are
-    // (the fault checks holding at the first and the last, they hold
-    // between). The addresses move by the same each element.
+    // The period measured and the last element: where they are (the fault
+    // checks holding at the first and the last, they hold between). The
+    // addresses move by the same each element: the period's move, a whole
+    // multiple of `per`, and the last element on the same line.
     let Some(dm) = dry_at(e, &r0, &s, -(per as i128)) else { return 0 };
-    let Some(d1) = dry_at(e, &r0, &s, 1) else { return 0 };
     let Some(dl) = dry_at(e, &r0, &s, m as i128 - 1) else { return 0 };
     let mut step = [0i128; 2];
     for (q, st) in step.iter_mut().enumerate().take(sh.accesses) {
         let a0 = d0.addrs[q] as i128;
-        *st = d1.addrs[q] as i128 - a0;
-        if dm.addrs[q] as i128 != a0 - per as i128 * *st || dl.addrs[q] as i128 != a0 + (m as i128 - 1) * *st {
+        let back = a0 - dm.addrs[q] as i128;
+        if back % per as i128 != 0 {
+            return 0;
+        }
+        *st = back / per as i128;
+        if dl.addrs[q] as i128 != a0 + (m as i128 - 1) * *st {
             return 0;
         }
     }

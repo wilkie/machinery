@@ -1130,7 +1130,8 @@ impl Gen<'_> {
         // delivered the ones before).
         let edges = b.events && !Self::jit_quiet(&instr);
         let pending = |e: &mut machine_jit::Em| if edges {{ e.load(bus + b.pending, machine_jit::N::Bool) }} else {{ machine_jit::V::K(0) }};
-        let need = match (b.due, b.idle) {{
+        // (Made only where it is checked: it may read the time.)
+        let need = |e: &mut machine_jit::Em| match (b.due, b.idle) {{
             // (Counted in cycles: the clock's deadline is `due`.)
             (Some(_), _) if now.is_none() && {quantum}u128 == 0 => {{
                 let late = e.late();
@@ -1229,6 +1230,7 @@ impl Gen<'_> {
         if !{sync_run} && {quantum}u128 == 0 && (!{sync_block} || j.last) {{
             // (`sync: block`: at the run's last step only, where it goes
             // round or returns.)
+            let need = need(e);
             e.cold(need, |e| {{
                 let _ = e.call(Self::jit_idle_c as *const () as usize, &[], machine_jit::N::U64, true);
                 code_check(e);
@@ -1238,11 +1240,13 @@ impl Gen<'_> {
         // goes round or returns), once the quantum since the last catch-up
         // has passed or one is due.
         if {quantum}u128 != 0 && j.last {{
-            let at = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, jit_sync_at), n: machine_jit::N::U128, bump: 0 }});
             // (Counted in cycles: the clock's deadline is the catch-up.)
             let late = match now {{
                 None => e.late(),
-                Some(now) => e.op(machine_jit::Op::Ge, now, at, machine_jit::N::U128),
+                Some(now) => {{
+                    let at = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, jit_sync_at), n: machine_jit::N::U128, bump: 0 }});
+                    e.op(machine_jit::Op::Ge, now, at, machine_jit::N::U128)
+                }}
             }};
             // An edge waiting is delivered at once, and a device the step
             // touched (made due: its deadline to be worked out again) is

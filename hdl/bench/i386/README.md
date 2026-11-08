@@ -68,6 +68,29 @@ on the way out (a compare's flags, overwritten before anything reads them)
 computed there instead (`machine-jit`'s `sink`): mix's run 96G, chk's 55G;
 compiling costs a little more (mix's boot 37G, from 35G).
 
+Then (2026-11-07, `blocks`): the time counted in the processor's cycles
+in a host register, the board's 128-bit time holding it only before a
+call, on the way out or where the code reads it (`machine_jit::Clock`):
+mix's run 87G, chk's 39G (from 96G and 55G); calls cost a little more
+(mix's boot 39G, from 37G). The `jit` profile still ends exactly where
+`emulate` does.
+
+Run 2026-11-07, late (the same machine, load about 8 of 32 threads; three
+runs interleaved, median; ours `jit`, `blocks` and `quantum` with the
+fix to `quantum`'s check, timed apart, the rest by `run.py`):
+
+| tool | chk MIPS | mix MIPS | keeps |
+|---|---|---|---|
+| ours, trace core | 31 | 30 | exact |
+| ours, JIT | 192 | 102 | exact |
+| ours, JIT, `approx` | 133 | 73 | `sync: run`, approximate time |
+| ours, JIT, `blocks` | 389 | 161 | devices on time, seen at back-edges; exact time |
+| ours, JIT, `quantum` | 407 | 130 | as `blocks`, the VGA each ms (no string kernels) |
+| Bochs 2.7 | 90 | 74 | |
+| DOSBox 0.74 normal | 112 | 117 | |
+| DOSBox 0.74 dynamic | 254 | 301 | |
+| QEMU 8.2 TCG | 1860 | 910 | |
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

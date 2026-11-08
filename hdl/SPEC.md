@@ -1126,7 +1126,14 @@ REPNE kept a branch). The kernel stops before the element that ends the
 repeat; the step runs that element. A period of elements is timed as the step runs them; the kernel
 then runs whole periods while each element's accesses cost what the
 measured period's did (their split cycles and direct memory time), so the
-time is the elements' to the tick.
+time is the elements' to the tick. Where every access of the elements and of
+the measured period lies in one direct memory, none of what they write
+recorded code, and the isa's `split` reads the address only through
+`address & (2^b - 1)` (so a period, moving each access by whole such
+spans and whole bus units, costs what the measured one did), the
+elements are made on the memory's cells as a block: a fill, a copy (in
+element order where source and destination overlap), a scan testing the
+closed form; a load makes nothing but the registers.
 
 ### 11.2a Prefixes and latches
 

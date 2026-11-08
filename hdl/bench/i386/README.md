@@ -99,6 +99,14 @@ mix's run 71G host instructions (from 87G), its boot 34G (from 39G); chk
 the same (39G). 222 MIPS on mix, 400 on chk (best of three, load about
 8). The `jit` and `trace` profiles still end where `emulate` does.
 
+Then (2026-11-08, `blocks`): a kernel whose elements all lie in one
+direct memory (no recorded code where it writes) and whose costs repeat
+with the period (the 386's `split` reads `address & 3`) makes them on the
+memory's cells as a block (a fill, a copy, a scan), not element by
+element through the bus: mix's run 57G host instructions (from 71G), the
+kernels 5% of it (from 24%); the time and memory the same to the tick.
+About 270 MIPS on mix (under load).
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

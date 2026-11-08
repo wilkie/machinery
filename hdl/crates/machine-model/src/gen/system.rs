@@ -1214,6 +1214,10 @@ impl<'a> Gen<'a> {
             let mut pokes = String::new();
             let mut costs = String::new();
             let mut fetches = String::new();
+            // Kernels' blocks: the memory holding a span of addresses (its
+            // number, by cells), and each memory's cells.
+            let mut spans = String::new();
+            let mut span_cells: Vec<String> = Vec::new();
             // The trace core: code pages of direct memories, their write
             // counts, and fetches charged without reading.
             let mut pages = String::new();
@@ -1263,6 +1267,24 @@ impl<'a> Gen<'a> {
                             } else {
                                 String::new()
                             };
+                            {
+                                let k = match span_cells.iter().position(|c| *c == cells) {
+                                    Some(k) => k,
+                                    None => {
+                                        span_cells.push(cells.clone());
+                                        span_cells.len() - 1
+                                    }
+                                };
+                                // A write's span holds no recorded code (a
+                                // write there is more than a store).
+                                let code = if self.trace.is_some() && !d.read_only {
+                                    format!(" if write {{ for b in (o >> 7)..=(ol >> 7) {{ if {cells}_code[b >> 5] & (1u32 << (b & 31)) != 0 {{ return None; }} }} }}")
+                                } else {
+                                    String::new()
+                                };
+                                let writable = if d.read_only { "!write && " } else { "" };
+                                let _ = writeln!(spans, "        if {writable}{cond} {{ let o = {}; let ol = {}; if ol != o + (len - 1) as usize {{ return None; }}{code} return Some(({k}, o)); }}", index("addr"), index("last"));
+                            }
                             if !d.read_only {
                                 let _ = writeln!(writes, "        if {cond} {{ for i in 0..n {{ {cells}[{}] = (value >> (8 * i)) as u8;{stamp} }} self.sig.now += {units} * {} * {period}; return true; }}", index("addr + i"), wbase as u128 + d.wait);
                                 let _ = writeln!(pokes, "        if {cond} {{ for i in 0..n {{ {cells}[{}] = (value >> (8 * i)) as u8;{stamp} }} return true; }}", index("addr + i"));
@@ -1307,11 +1329,15 @@ impl<'a> Gen<'a> {
                     format!("        if bits == 8 {{ if let Some(b) = self.direct_fetch(addr & {amask}) {{ return b as u128; }} }}\n"),
                 );
                 if self.jit {
-                    direct_fwd = format!("    fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        Board::direct_peek(self, addr & {amask}, n)\n    }}\n    fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        Board::direct_poke(self, addr & {amask}, n, value)\n    }}\n    fn direct_cost(&self, addr: u64, n: u64, write: bool) -> Option<u128> {{\n        Board::direct_cost(self, addr & {amask}, n, write)\n    }}\n");
+                    direct_fwd = format!("    fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        Board::direct_peek(self, addr & {amask}, n)\n    }}\n    fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        Board::direct_poke(self, addr & {amask}, n, value)\n    }}\n    fn direct_cost(&self, addr: u64, n: u64, write: bool) -> Option<u128> {{\n        Board::direct_cost(self, addr & {amask}, n, write)\n    }}\n    fn direct_span(&self, addr: u64, len: u64, write: bool) -> Option<(u32, usize)> {{\n        if len == 0 {{ return None; }}\n        let last = addr.checked_add(len - 1)?;\n        if addr & {amask} != addr || last & {amask} != last {{ return None; }}\n        Board::direct_span(self, addr, len, write)\n    }}\n    fn direct_cells(&mut self, mem: u32) -> &mut [u8] {{\n        Board::direct_cells(self, mem)\n    }}\n");
                 }
             }
             let wsum: String = numbered.iter().map(|(_, c)| format!(" + {c}_writes")).collect();
             jit_writes = numbered.iter().map(|(_, c)| format!("std::mem::offset_of!(Board, {}_writes), ", c.trim_start_matches("self."))).collect();
+            let span_fns = {
+                let arms: String = span_cells.iter().enumerate().map(|(k, c)| format!("            {k} => &mut {c}[..],\n")).collect();
+                format!("        /// A kernel's block (`rt::bulk`): the direct memory holding all\n        /// `len` bytes from `addr` (a read's; a write's, when `write`,\n        /// none of them recorded code), and where `addr` is in its cells.\n        /// One memory at one cost a unit, as `direct_cost` charges.\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_span(&self, addr: u64, len: u64, write: bool) -> Option<(u32, usize)> {{\n        if len == 0 {{ return None; }}\n        let last = addr.checked_add(len - 1)?;\n{spans}        None\n        }}\n        /// A memory `direct_span` named: its cells.\n        #[allow(dead_code)]\n        pub fn direct_cells(&mut self, mem: u32) -> &mut [u8] {{\n            match mem {{\n{arms}            _ => &mut [],\n            }}\n        }}\n")
+            };
             let trace_direct = if self.trace.is_some() {
                 format!("        /// The trace core: the code page `addr` is in (memory, page), its\n        /// write count, and `n` code bytes' fetches charged as `direct_fetch`\n        /// charges them (false: not all in one direct memory).\n        #[inline]\n        fn direct_code_page(&self, addr: u64) -> Option<u32> {{\n{pages}        None\n        }}\n        #[inline]\n        fn direct_code_stamp(&self, page: u32) -> u32 {{\n            match page >> 24 {{\n{stamps}            _ => 0,\n            }}\n        }}\n        #[inline]\n        fn direct_code_writes(&self) -> u64 {{ 0{wsum} }}\n        /// Code bytes' fetches charged, in the memory their page is in.\n        #[inline]\n        fn direct_charge(&mut self, page: u32, addr: u64, n: u32) -> bool {{\n            match page >> 24 {{\n{charges}            _ => false,\n            }}\n        }}\n        /// The JIT core: what charging `n` code bytes from `addr` costs when
         /// the code unit last fetched is not among them (a serial fetch).
@@ -1335,7 +1361,7 @@ impl<'a> Gen<'a> {
             };
             let _ = write!(
                 direct,
-                "        /// `memory: direct`: `n` bytes at `addr` from a memory that\n        /// declares `direct`, else None.\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_read(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{reads}        None\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_write(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{writes}        false\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_fetch(&mut self, addr: u64) -> Option<u8> {{\n{fetches}        self.direct_code = u64::MAX;\n        None\n        }}\n        /// As `direct_read` and `direct_write`, the time not charged (a\n        /// repeated instruction's elements run as a block: their time is\n        /// the caller's).\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{peeks}        None\n        }}\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{pokes}        false\n        }}\n        /// What `direct_read` (`direct_write`, when `write`) would charge.\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_cost(&self, addr: u64, n: u64, write: bool) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{costs}        None\n        }}\n{trace_direct}"
+                "        /// `memory: direct`: `n` bytes at `addr` from a memory that\n        /// declares `direct`, else None.\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_read(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{reads}        None\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_write(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{writes}        false\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_fetch(&mut self, addr: u64) -> Option<u8> {{\n{fetches}        self.direct_code = u64::MAX;\n        None\n        }}\n        /// As `direct_read` and `direct_write`, the time not charged (a\n        /// repeated instruction's elements run as a block: their time is\n        /// the caller's).\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{peeks}        None\n        }}\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{pokes}        false\n        }}\n        /// What `direct_read` (`direct_write`, when `write`) would charge.\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_cost(&self, addr: u64, n: u64, write: bool) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{costs}        None\n        }}\n{span_fns}{trace_direct}"
             );
         }
         let mut bus_impl = std::mem::take(&mut direct_fwd);

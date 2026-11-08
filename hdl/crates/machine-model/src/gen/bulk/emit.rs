@@ -11,6 +11,41 @@ use super::{Kernel, Shape};
 use crate::gen::{ident, Gen, R};
 
 impl Gen<'_> {
+    /// The bytes past which the isa's split charge (`split => ...`) repeats:
+    /// the address read only through `address & (2^b - 1)` (2^b, the
+    /// largest such), not read (1), no split charge (1); 0 otherwise (a
+    /// kernel's elements are then checked one by one).
+    pub(crate) fn split_period(&self) -> u64 {
+        let Some(t) = &self.isa.split_cycles else { return 1 };
+        let Some(&addr) = t.params.first() else { return 0 };
+        let is_addr = |x: &Expr| matches!(x.kind, H::Local(l) if l == addr);
+        let mut uses = 0usize;
+        let mut masked = 0usize;
+        let mut period = 1u64;
+        let mut bad = false;
+        hir::visit_expr(&t.expr, &mut |_| {}, &mut |x| {
+            if is_addr(x) {
+                uses += 1;
+            }
+            if let H::Binary(machine_syntax::ast::BinaryOp::BitAnd, a, b) = &x.kind {
+                let (v, k) = if is_addr(a) { (a, b) } else { (b, a) };
+                if is_addr(v) {
+                    match k.kind {
+                        H::Int(m) if m >= 0 && m < 1 << 32 && (m as u64 + 1).is_power_of_two() => {
+                            masked += 1;
+                            period = period.max(m as u64 + 1);
+                        }
+                        _ => bad = true,
+                    }
+                }
+            }
+        });
+        if bad || uses != masked {
+            return 0;
+        }
+        period
+    }
+
     /// Instruction `i`'s kernel: its dry code (`probe_<name>`), the element
     /// as the runtime's kernel loop sees it (`Bulk_<name>`, an
     /// `rt::bulk::Element`, in `items`), and `bulk_<name>`, which runs it.
@@ -114,6 +149,7 @@ impl<B: Bus> rt::bulk::Element for Bulk_{n}<'_, B> {{
         writes: [{w0}, {w1}],
         bytes: {bytes},
         cond: {has_cond},
+        cost_period: {cost_period},
     }};
     fn moving(&mut self) -> [u64; rt::bulk::MOVING] {{
         let mut v = [0u64; rt::bulk::MOVING];
@@ -141,6 +177,12 @@ impl<B: Bus> rt::bulk::Element for Bulk_{n}<'_, B> {{
     fn poke(&mut self, a: u64, n: u64, v: u128) -> bool {{
         self.0.bus.direct_poke(a, n, v)
     }}
+    fn span(&mut self, a: u64, len: u64, write: bool) -> Option<(u32, usize)> {{
+        self.0.bus.direct_span(a, len, write)
+    }}
+    fn cells(&mut self, mem: u32) -> &mut [u8] {{
+        self.0.bus.direct_cells(mem)
+    }}
 }}
 ",
             name = i.name,
@@ -152,6 +194,7 @@ impl<B: Bus> rt::bulk::Element for Bulk_{n}<'_, B> {{
             w1 = writes.get(1).copied().unwrap_or(false),
             bytes = k.bits / 8,
             has_cond = k.cond.is_some(),
+            cost_period = self.split_period(),
         );
         Ok(())
     }

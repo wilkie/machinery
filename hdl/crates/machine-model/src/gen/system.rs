@@ -285,8 +285,8 @@ impl<'a> Gen<'a> {
             for &f in &mi.fns {
                 let f = &model.fns[f as usize];
                 let key: R<Vec<String>> = f.params.iter().map(|p| self.rty(&f.locals[*p as usize].ty)).collect();
-                let _ = writeln!(st, "    pub memo_{}: std::collections::HashMap<({},), rt::memo::Entry>,", ident(&f.name), key?.join(", "));
-                let _ = writeln!(memo_init, "            memo_{}: std::collections::HashMap::new(),", ident(&f.name));
+                let _ = writeln!(st, "    pub memo_{}: rt::memo::Map<({},)>,", ident(&f.name), key?.join(", "));
+                let _ = writeln!(memo_init, "            memo_{}: rt::memo::Map::default(),", ident(&f.name));
             }
         }
         st.push_str("}\n");
@@ -396,7 +396,7 @@ impl<'a> Gen<'a> {
                 let pass: String = args.iter().map(|a| format!(", {a}")).collect();
                 let _ = write!(
                     st,
-                    "    /// `memo fn {0}` of the model: skipped while what its last call with\n    /// these arguments read is unchanged.\n    pub fn fn_{fname}<P: {name}Ports>(&mut self, ctx: &mut P{ps}) {{\n        let key = {key};\n        if let Some(e) = self.memo_{fname}.get(&key) {{\n            let (ver, blocks, all) = (&self.memo_ver, &self.memo_blocks, &self.memo_all);\n            if e.valid(|k| ver[k as usize], |m| (&blocks[m as usize][..], all[m as usize])) {{\n                return;\n            }}\n        }}\n        let outer = std::mem::take(&mut self.memo_rec);\n        self.fn_{fname}_rec(ctx{pass});\n        let rec = std::mem::replace(&mut self.memo_rec, outer);\n        self.memo_{fname}.insert(key, rt::memo::Entry {{ at: self.memo_epoch, vars: rec.vars, ranges: rec.ranges }});\n    }}\n",
+                    "    /// `memo fn {0}` of the model: skipped while what its last call with\n    /// these arguments read is unchanged.\n    pub fn fn_{fname}<P: {name}Ports>(&mut self, ctx: &mut P{ps}) {{\n        let key = {key};\n        if let Some(e) = self.memo_{fname}.get_mut(&key) {{\n            let (ver, blocks, all) = (&self.memo_ver, &self.memo_blocks, &self.memo_all);\n            if e.check(self.memo_epoch, |k| ver[k as usize], |m| (&blocks[m as usize][..], all[m as usize])) {{\n                return;\n            }}\n        }}\n        let outer = std::mem::take(&mut self.memo_rec);\n        self.fn_{fname}_rec(ctx{pass});\n        let rec = std::mem::replace(&mut self.memo_rec, outer);\n        self.memo_{fname}.insert(key, rt::memo::Entry {{ at: self.memo_epoch, vars: rec.vars, ranges: rec.ranges }});\n    }}\n",
                     f.name
                 );
             }

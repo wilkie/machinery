@@ -7,6 +7,48 @@
 //! the same arguments may be skipped while nothing it read has a version
 //! newer than the call.
 
+/// A memo fn's calls, by their arguments. (A multiply-rotate hash: the
+/// arguments are the model's own, small and few; SipHash's resistance buys
+/// nothing here, at a cost a scanline.)
+pub type Map<K> = std::collections::HashMap<K, Entry, std::hash::BuildHasherDefault<FxHasher>>;
+
+/// The hasher `Map` uses.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FxHasher(u64);
+
+impl std::hash::Hasher for FxHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.write_u64(*b as u64);
+        }
+    }
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.write_u64(i as u64);
+    }
+    #[inline]
+    fn write_u16(&mut self, i: u16) {
+        self.write_u64(i as u64);
+    }
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.write_u64(i as u64);
+    }
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0 = (self.0.rotate_left(5) ^ i).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.write_u64(i as u64);
+    }
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
 /// Cells in a block of a memory: a write stamps its block.
 pub const BLOCK_SHIFT: u32 = 6;
 
@@ -71,6 +113,23 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// `valid`, the component at epoch `now`: nothing has a version newer
+    /// than `now`, so with no write since the call (`at == now`) nothing it
+    /// read changed, and none of its range versions need looking at. Found
+    /// valid, the call is as good as made now: later checks start from
+    /// here.
+    #[inline]
+    pub fn check<'a>(&mut self, now: u64, var: impl Fn(u32) -> u64, mem: impl Fn(u8) -> (&'a [u64], u64)) -> bool {
+        if self.at == now {
+            return true;
+        }
+        if self.valid(var, mem) {
+            self.at = now;
+            return true;
+        }
+        false
+    }
+
     /// Whether everything the call read is unchanged: no version newer
     /// than the call. `var(k)` is state variable `k`'s version, `mem(m)` a
     /// memory's block versions and its whole-memory version.
@@ -129,5 +188,22 @@ mod tests {
         b2[3] = 11;
         assert!(e.valid(|_| 0, |_| (&b2, 0)), "another block");
         assert!(!e.valid(|_| 0, |_| (&blocks, 11)), "the whole memory");
+    }
+
+    #[test]
+    fn a_check_found_valid_starts_later_checks_from_now() {
+        let mut r = Rec::default();
+        r.cell(0, 70);
+        let mut e = Entry { at: 10, vars: r.vars, ranges: r.ranges };
+        let mut blocks = vec![0u64; 4];
+        // Another block written at 12: still valid, and as of 12.
+        blocks[3] = 12;
+        assert!(e.check(12, |_| 0, |_| (&blocks, 0)));
+        assert_eq!(e.at, 12);
+        // Nothing written since: valid without looking.
+        assert!(e.check(12, |_| 0, |_| (&[][..], 99)));
+        // Its block written at 13.
+        blocks[1] = 13;
+        assert!(!e.check(13, |_| 0, |_| (&blocks, 0)));
     }
 }

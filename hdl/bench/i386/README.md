@@ -107,6 +107,12 @@ element through the bus: mix's run 57G host instructions (from 71G), the
 kernels 5% of it (from 24%); the time and memory the same to the tick.
 About 270 MIPS on mix (under load).
 
+Then (2026-11-08, `blocks`): a `memo fn` call (the VGA's scanline
+render) with no versioned write since it is skipped without looking at
+the blocks it read, and one found unchanged counts as made now; its calls
+kept in a map with a cheap hash. The VGA's share of mix's run 3% (from
+7%): mix's run 54G host instructions, chk's 37G.
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

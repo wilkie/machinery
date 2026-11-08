@@ -586,7 +586,10 @@ while none of those has a newer version. Reads are recorded where they
 happen, so a read whose address depends on data (a text mode's glyph,
 found by its character code) is recorded as precisely as any other.
 Blocks may be recorded a little wider than read, which can only cost a
-redraw.
+redraw. With no write to versioned state since a call (the component's
+version unchanged), it is skipped without looking at what it read; a call
+found unchanged counts as made at the current version, so after a write
+elsewhere each call is looked at once.
 
 The embedding program writes `mem`s directly, outside the versioning,
 so after writing state a memo fn reads it calls `memo_clear()` on the

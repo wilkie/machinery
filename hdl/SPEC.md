@@ -1094,9 +1094,10 @@ a load, SCAS a scan, INS and OUTS port streams.
 
 A fill, copy, scan, compare or load also gets a *kernel* for the JIT
 core's `repeat: bulk` (section 13): the elements after the current one, run
-as a block. The
-kernel runs the element's own code dry (its accesses noted, not made) at a
-few elements (how the registers move, where it reads and writes, whether it
+as a block. Its loop is the runtime's (`machine_runtime::bulk::run`); the
+generator gives it the element (an `rt::bulk::Element`). The kernel runs
+the element's own code dry (its accesses noted, not made) at a few
+elements (how the registers move, where it reads and writes, whether it
 faults), then moves the data through the board's direct memory, element by
 element in order (an overlapping copy copies as the elements would). The
 paths are told apart as the element's code tells them apart, by running

@@ -24,12 +24,22 @@ use machine_sema::program::{DefId, ItemKind, Program};
 use machine_sema::Checked;
 
 pub use gen::GenError;
+pub use gen::BulkReport;
 
 /// Generate the interpreter crate source for the isa named `isa_name`.
 pub fn generate_isa(checked: &Checked, isa_name: &str) -> Result<String, GenError> {
     let prog = &checked.program;
     let isa = find_isa(prog, isa_name)?;
     gen::generate(prog, &checked.hir, isa)
+}
+
+/// What the generator makes of each `repeat ... bulk` instruction of the
+/// isa named `isa_name`: its stream's kind, its kernel or why it has none,
+/// and where the kernel's dry code stops.
+pub fn bulk_report(checked: &Checked, isa_name: &str) -> Result<Vec<BulkReport>, GenError> {
+    let prog = &checked.program;
+    let isa = find_isa(prog, isa_name)?;
+    gen::bulk_report(prog, &checked.hir, isa)
 }
 
 /// Generate the crate source for the system named `system_name`: its

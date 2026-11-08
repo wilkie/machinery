@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 mod bulk;
+pub use bulk::BulkReport;
 mod forms;
 mod jit;
 mod lower;
@@ -166,8 +167,12 @@ pub struct Gen<'a> {
     /// core; the statements their dry code stops at; and whether the dry
     /// code is being lowered.
     bulk_kernels: Vec<(usize, bulk::Kernel)>,
-    bulk_stops: std::cell::RefCell<std::collections::HashSet<usize>>,
+    bulk_stops: std::cell::RefCell<std::collections::HashSet<bulk::Site>>,
+    /// Lowering the dry code (`lowering_dry`): fn calls go to the dry fns,
+    /// accesses are noted, not made, and the stops stop.
     probing: std::cell::Cell<bool>,
+    /// Items after the isa's impl: the kernels' elements.
+    bulk_items: String,
     /// The isa fns the JIT lowering inlines (`gen/lower.rs`).
     jit_fns: std::cell::RefCell<std::collections::HashSet<DefId>>,
     /// The kind rules it lowers: (kind, rule index).
@@ -187,6 +192,11 @@ pub fn generate(prog: &Program, hir: &hir::Hir, isa_def: DefId) -> R<String> {
     let mut g = Gen::new(prog, hir, isa_def)?;
     g.emit_all()?;
     Ok(g.out)
+}
+
+/// What the generator makes of each `bulk` instruction of an isa.
+pub fn bulk_report(prog: &Program, hir: &hir::Hir, isa_def: DefId) -> R<Vec<bulk::BulkReport>> {
+    Gen::new(prog, hir, isa_def)?.bulk_report()
 }
 
 /// The interpreter of the system's processor, then the system: component
@@ -308,6 +318,7 @@ impl<'a> Gen<'a> {
             bulk_kernels: Vec::new(),
             bulk_stops: Default::default(),
             probing: std::cell::Cell::new(false),
+            bulk_items: String::new(),
             jit_fns: Default::default(),
             jit_rules: Default::default(),
             jit_units: Default::default(),
@@ -444,7 +455,7 @@ impl<'a> Gen<'a> {
     fn expr(&self, cx: &Cx, e: &Expr) -> R<String> {
         // The dry code (`probe_<name>`) stops where a path stops being one
         // a kernel takes.
-        if self.probing.get() && self.bulk_stops.borrow().contains(&(e as *const Expr as usize)) {
+        if self.probing.get() && self.bulk_stops.borrow().contains(&bulk::Site::expr(e)) {
             return Ok(format!("{}.probe_stop::<{}>()?", cx.recv, self.rty(&e.ty)?));
         }
         let q = if cx.fallible { "?" } else { "" };
@@ -1108,7 +1119,7 @@ impl<'a> Gen<'a> {
     fn stmt(&self, cx: &Cx, s: &Stmt) -> R<String> {
         // The dry code (`probe_<name>`) stops where a path stops being one
         // a kernel takes.
-        if self.probing.get() && self.bulk_stops.borrow().contains(&(s as *const Stmt as usize)) {
+        if self.probing.get() && self.bulk_stops.borrow().contains(&bulk::Site::stmt(s)) {
             return Ok(format!("{}.probe_stop::<()>()?;\n", cx.recv));
         }
         Ok(match &s.kind {
@@ -2029,6 +2040,8 @@ impl<'a> Gen<'a> {
         self.line(&format!(
             "impl Default for {isa_name}<Flat> {{ fn default() -> Self {{ Self::new() }} }}"
         ));
+        let items = std::mem::take(&mut self.bulk_items);
+        self.out.push_str(&items);
 
         self.emit_tests()?;
         self.emit_vectors()?;
@@ -3643,6 +3656,18 @@ impl<'a> Gen<'a> {
         }
         self.line("}");
         Ok(())
+    }
+
+    /// `f`, lowering the dry code: its fn calls go to the dry fns
+    /// (`probe_fn_<name>`), its accesses are noted (`probe_access`), not
+    /// made, and it stops where `bulk_stops` says. (A flag on the generator,
+    /// not on `Cx`: lowering builds contexts of its own, and the dry code
+    /// must stay dry through them.)
+    pub(crate) fn lowering_dry<T>(&self, f: impl FnOnce(&Self) -> T) -> T {
+        let outer = self.probing.replace(true);
+        let r = f(self);
+        self.probing.set(outer);
+        r
     }
 
     /// Space `d`'s index among the isa's spaces.

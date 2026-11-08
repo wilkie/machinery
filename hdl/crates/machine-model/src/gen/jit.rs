@@ -361,15 +361,15 @@ impl Gen<'_> {
                     }
                 }
             }
-            self.probing.set(true);
-            let dry: R<Vec<String>> = fns.iter().map(|f| self.fn_body_text(self.fns[f])).collect();
-            self.probing.set(false);
+            let dry: R<Vec<String>> = self.lowering_dry(|g| fns.iter().map(|f| g.fn_body_text(g.fns[f])).collect());
             for t in dry? {
                 ks.push_str(&t);
             }
+            let mut items = String::new();
             for (at, k) in &self.bulk_kernels {
-                self.emit_bulk_kernel(&self.isa.instructions[*at], k, &mut ks)?;
+                self.emit_bulk_kernel(&self.isa.instructions[*at], k, &mut ks, &mut items)?;
             }
+            self.bulk_items.push_str(&items);
             let f = self.isa.faults.first().ok_or_else(|| GenError::new("`bulk` kernels need a fault"))?;
             let args = if f.params.is_empty() { String::new() } else { format!("({})", vec!["Default::default()"; f.params.len()].join(", ")) };
             let _ = write!(ks, "    /// Where the dry code stops: `probe_bad`, and a fault to leave by.\n    #[allow(dead_code)]\n    fn probe_stop<T>(&mut self) -> Result<T, Fault> {{\n        self.probe_bad = true;\n        Err(Fault::{}{args})\n    }}\n", ident(&f.name));

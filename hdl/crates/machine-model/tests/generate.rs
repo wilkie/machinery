@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use machine_model::{crate_name, generate_isa, generate_system, package, write_crate};
+use machine_model::{bulk_report, crate_name, generate_isa, generate_system, package, write_crate, BulkReport};
 use machine_sema::check_files;
 use machine_syntax::SourceFile;
 
@@ -81,6 +81,60 @@ fn a_bulk_repeat_is_checked() {
     assert!(!checked.has_errors(), "{:?}", checked.diagnostics);
     let err = generate_isa(&checked, "I286Isa").err().expect("chasing a pointer is not a stream").to_string();
     assert!(err.contains("BulkFill") && err.contains("does not move with the element"), "{err}");
+}
+
+/// The `bulk` plan of the sample isa with `items` added (one `bulk`
+/// instruction, `B`, opcode D6), and the added source.
+fn bulk_plan(items: &str) -> (BulkReport, String) {
+    let text = cpu_slice_with(&format!("{items}\n    instruction B {{ mnemonic \"b\"; encoding {{ opcode 0xD6; }} repeat when true skip CX == 0 next more() interruptible bulk; semantics {{ element(); }} }}\n    fn more() -> bool {{ CX = CX - 1; return CX != 0; }}"));
+    let checked = check_files(vec![sample("alu.machine"), SourceFile::new("cpu_slice.machine", text.clone())]);
+    assert!(!checked.has_errors(), "{:?}", checked.diagnostics);
+    let mut r = bulk_report(&checked, "I286Isa").unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(r.len(), 1);
+    (r.remove(0), text)
+}
+
+#[test]
+fn bulk_kernels_are_planned() {
+    // A fill: a kernel, its dry code stopping nowhere.
+    let (r, _) = bulk_plan("    fn element() { mem.write_u8(DI as u24, AL); DI = DI + 1; }");
+    assert_eq!(r.shape, "Fill");
+    assert!(r.kernel.as_ref().is_ok_and(|k| k.starts_with("Fill of 8 bits, moving 1")), "{r:?}");
+    assert!(r.stops.is_empty(), "{r:?}");
+    // Where one case (BX's top bit) branches on where the element is, the
+    // dry code stops at what the branch tests, which the other case does
+    // not evaluate: a kernel still.
+    let (r, text) = bulk_plan(
+        "    fn ok(a: u16) -> bool { return BX[15] == 0 || (a & 0xFF) != 0xFF; }\n    fn element() { if ok(DI) { mem.write_u8(DI as u24, AL); } else { mem.write_u8(0, AL); } DI = DI + 1; }",
+    );
+    assert!(r.kernel.is_ok(), "{r:?}");
+    let stops: Vec<&str> = r.stops.iter().map(|s| &text[s.start as usize..s.end as usize]).collect();
+    assert_eq!(stops, ["(a & 0xFF) != 0xFF"]);
+    // A fault check that need not hold between the first and the last
+    // element (DI odd), met on every path: no kernel.
+    let (r, _) = bulk_plan("    fn element() { if (DI & 1) == 1 { raise GP(0); } mem.write_u8(DI as u24, AL); DI = DI + 1; }");
+    assert_eq!(r.shape, "Fill");
+    assert!(r.kernel.is_err(), "{r:?}");
+    // A count the element writes too: no kernel.
+    let (r, _) = bulk_plan("    fn element() { mem.write_u8(DI as u24, AL); DI = DI + 1; CX = CX + 0; }");
+    assert!(r.kernel.as_ref().is_err_and(|w| w.contains("count")), "{r:?}");
+    // A scan whose `while` depends on what it loaded (REPNE): a kernel
+    // testing it on the loaded value.
+    let scan = "    fn element() { let b = mem.read_u8(DI as u24); let (_, raw) = Alu<8>(AluOp::Cmp, AL, b, FLAGS.CF); FLAGS.arith = AluFlags<8>(AluOp::Cmp, AL, b, raw); DI = DI + 1; }";
+    let text = cpu_slice_with(&format!("{scan}\n    instruction B {{ mnemonic \"b\"; encoding {{ opcode 0xD6; }} repeat when true skip CX == 0 next more() while FLAGS.ZF == 0 interruptible bulk; semantics {{ element(); }} }}\n    fn more() -> bool {{ CX = CX - 1; return CX != 0; }}"));
+    let checked = check_files(vec![sample("alu.machine"), SourceFile::new("cpu_slice.machine", text)]);
+    assert!(!checked.has_errors(), "{:?}", checked.diagnostics);
+    let r = bulk_report(&checked, "I286Isa").unwrap_or_else(|e| panic!("{e}")).remove(0);
+    assert_eq!(r.shape, "Scan");
+    let k = r.kernel.unwrap_or_else(|w| panic!("a scan has a kernel: {w}"));
+    assert!(k.contains("unit_AluFlags_8(AluOp::Cmp,") && k.contains("l0_ld1") && k.ends_with("== (0u8))"), "{k}");
+    // Its flags from a carry it is given, not just what it loaded (an ADC):
+    // its `while` depends on the element before it. No kernel.
+    let adc = scan.replace("AluOp::Cmp", "AluOp::Adc");
+    let text = cpu_slice_with(&format!("{adc}\n    instruction B {{ mnemonic \"b\"; encoding {{ opcode 0xD6; }} repeat when true skip CX == 0 next more() while FLAGS.ZF == 0 interruptible bulk; semantics {{ element(); }} }}\n    fn more() -> bool {{ CX = CX - 1; return CX != 0; }}"));
+    let checked = check_files(vec![sample("alu.machine"), SourceFile::new("cpu_slice.machine", text)]);
+    let r = bulk_report(&checked, "I286Isa").unwrap_or_else(|e| panic!("{e}")).remove(0);
+    assert!(r.kernel.is_err(), "{r:?}");
 }
 
 #[test]

@@ -575,6 +575,10 @@ impl<'a, 'f> Em<'a, 'f> {
             return;
         }
         for (off, n) in std::mem::take(&mut self.dirty) {
+            // A field written in bits keeps them, stored (what it is known
+            // to be is still so): a branch that stored it and one that owes
+            // it meet with the same bits, nothing passed.
+            let kept = self.pieces.get(&(off, n)).cloned().zip(self.regs.get(&(off, n)).copied());
             self.settle_why("flush", off, n);
             let x = match self.regs.get(&(off, n)) {
                 Some(Known::K(c)) => {
@@ -585,6 +589,10 @@ impl<'a, 'f> Em<'a, 'f> {
                 None => continue,
             };
             { let m = self.base(); self.b.ins().store(MemFlags::trusted(), x, m, off as i32); }
+            if let Some((ps, base)) = kept {
+                self.pieces.insert((off, n), ps);
+                self.regs.insert((off, n), base);
+            }
         }
     }
 
@@ -1035,6 +1043,9 @@ impl<'a, 'f> Em<'a, 'f> {
             V::K(1) => self.exit(true),
             V::K(_) => self.exit(false),
             V::D(rv) => {
+                if let Some(b) = self.b.current_block() {
+                    self.b.set_cold_block(b);
+                }
                 self.flush();
                 let made = self.b.ins().icmp_imm(IntCC::Equal, rv, 1);
                 let made = self.b.ins().uextend(types::I32, made);
@@ -1948,7 +1959,7 @@ impl<'a, 'f> Em<'a, 'f> {
                     return;
                 }
                 let args = self.carry_args(&plan.carried, &plan.shapes);
-                self.dirty.retain(|d| !plan.carried.contains(d) && !(plan.peel && plan.konst_owed.contains(d)));
+                self.dirty.retain(|d| !(plan.carried.contains(d) || (plan.peel && plan.konst_owed.contains(d))));
                 args
             }
             None => {
@@ -1973,6 +1984,10 @@ impl<'a, 'f> Em<'a, 'f> {
     pub fn exit(&mut self, made: bool) {
         if !self.live {
             return;
+        }
+        // A way out of the run: rare (`sink`).
+        if let Some(b) = self.b.current_block() {
+            self.b.set_cold_block(b);
         }
         self.flush();
         let c = self.b.ins().iconst(types::I32, self.k as i64 + made as i64);

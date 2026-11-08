@@ -63,6 +63,11 @@ twice): mix's run 107G host instructions, chk's 56G (from 134G and 76G).
 The `jit` profile still ends at the tick and with the memory `emulate`
 does, on both.
 
+Then (2026-11-07, `blocks`): values made on the common path but used only
+on the way out (a compare's flags, overwritten before anything reads them)
+computed there instead (`machine-jit`'s `sink`): mix's run 96G, chk's 55G;
+compiling costs a little more (mix's boot 37G, from 35G).
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

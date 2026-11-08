@@ -15,6 +15,7 @@
 //! instruction of the run and what decoding it left behind).
 
 mod emit;
+mod sink;
 
 pub use emit::{k, n_of, Count, Em, Native, Op, Pat, Place, Slot, N, V};
 
@@ -161,6 +162,14 @@ impl Engine {
         let dump = std::env::var_os("MACHINE_JIT_DUMP").is_some();
         if dump {
             ctx.set_disasm(true);
+        }
+        // (Cranelift does not move code at `opt_level=none`: this does.)
+        if std::env::var_os("MACHINE_JIT_NO_SINK").is_none() {
+            sink::factor_params(&mut ctx.func);
+            sink::sink_cold(&mut ctx.func);
+        }
+        if std::env::var("MACHINE_JIT_CLIF_AFTER").ok().as_deref() == Some(name.as_str()) {
+            eprintln!("machine-jit: {name} ({steps} steps), IR as compiled:\n{}", ctx.func.display());
         }
         if let Err(err) = m.define_function(id, &mut ctx) {
             if std::env::var_os("MACHINE_JIT_DEBUG").is_some() {

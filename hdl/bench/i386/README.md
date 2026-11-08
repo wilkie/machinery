@@ -121,6 +121,22 @@ host instructions (from 54G), about 400 MIPS (best of three: 399, 384,
 403; chk 417-439). Its emulated time moves with where batches end; its
 result (EDI, now printed by `bench_compare`) is the exact profiles'.
 
+Run 2026-11-08 (the same machine, `run.py`, three runs interleaved,
+median; load 6 at the start and 26 by the end, the last run of each of
+the others slowed by it):
+
+| tool | chk MIPS | mix MIPS | keeps |
+|---|---|---|---|
+| ours, trace core | 31 | 31 | exact |
+| ours, JIT | 212 | 134 | exact |
+| ours, JIT, `approx` | 122 | 83 | `sync: run`, approximate time |
+| ours, JIT, `blocks` | 414 | 345 | devices on time, seen at back-edges and in REPs; exact time but for REPs' batches |
+| ours, JIT, `quantum` | 399 | 173 | as `blocks`, the VGA each ms (no string kernels) |
+| Bochs 2.7 | 94 | 74 | |
+| DOSBox 0.74 normal | 104 | 113 | |
+| DOSBox 0.74 dynamic | 249 | 300 | |
+| QEMU 8.2 TCG | 1872 | 925 | |
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

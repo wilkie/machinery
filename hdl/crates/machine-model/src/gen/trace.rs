@@ -4,7 +4,8 @@
 //! As the processor runs, each instruction it decodes is recorded with what
 //! decoding left behind (its `Instr`, its length, the latches its prefixes
 //! set, the pc after it, the decoder's clocks), appended to the run under
-//! way while instructions follow one another in a page of code memory. When
+//! way while the instructions it reaches stay in its page of code memory
+//! (past taken jumps, calls and returns), up to one it already holds. When
 //! a run's start is reached again, its instructions are replayed: the pc,
 //! latches and decoder state are set as decoding left them, the fetches are
 //! charged as they cost (`<space>_fetch_skip`), and the instruction runs.
@@ -22,7 +23,8 @@
 //!   key holds, the pc still leads where it did, and a run that followed
 //!   another is entered from it directly (a link), without finding where
 //!   the pc is.
-//! - The pc must be where the run goes next: a taken jump leaves it.
+//! - The pc must be where the run goes next (each step's own pc): a jump
+//!   taken otherwise than it was recorded leaves it.
 //! - Code memory: each `direct` memory marks the 128-byte blocks of each
 //!   4 KB page that hold recorded code; a write to a marked block counts
 //!   against the page (the processor's, DMA's, any device's). A run is
@@ -690,14 +692,18 @@ impl Gen<'_> {
         self.trace_go()
     }}
     /// The instruction at `start` is about to be decoded: record it, in the
-    /// run being recorded if it follows on, else in a new one.
+    /// run being recorded if it follows on, else in a new one. It follows
+    /// on wherever the step before led in the run's page (a jump, a call
+    /// or a return taken too: replay checks each step's pc), but not back
+    /// before the run's start or to a step already in it (the run ends,
+    /// and one starts there).
     #[inline(never)]
     fn trace_note(&mut self, start: u64) {{
         self.tr_prev = u32::MAX;
         let follows = match self.tr_rec.as_ref() {{
             Some(t) => {{
-                let off = t.steps.last().map(|s| s.off as u64 + s.len as u64).unwrap_or(0);
-                t.steps.len() < {STEPS} && start == t.phys + off && self.r.{pc0} as u64 == t.pc.wrapping_add(off) && self.tr_epoch == self.tr_rec_ep && start >> 12 == t.phys >> 12 && self.bus.{sp}_code_stamp(t.page) == t.stamp
+                let off = start.wrapping_sub(t.phys);
+                t.steps.len() < {STEPS} && start >= t.phys && start >> 12 == t.phys >> 12 && self.r.{pc0} as u64 == t.pc.wrapping_add(off) && self.tr_epoch == self.tr_rec_ep && !t.steps.iter().any(|s| s.off as u64 == off) && self.bus.{sp}_code_stamp(t.page) == t.stamp
             }}
             None => false,
         }};

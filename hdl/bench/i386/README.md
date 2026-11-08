@@ -91,6 +91,14 @@ fix to `quantum`'s check, timed apart, the rest by `run.py`):
 | DOSBox 0.74 dynamic | 254 | 301 | |
 | QEMU 8.2 TCG | 1860 | 910 | |
 
+Then (2026-11-08, `blocks`): a run follows the instructions it reaches
+in its page past taken jumps, calls and returns (each step's pc checked
+as before), up to one it already holds: mix's `call step32` loop is one
+run going round, where it was three each pass through the dispatcher.
+mix's run 71G host instructions (from 87G), its boot 34G (from 39G); chk
+the same (39G). 222 MIPS on mix, 400 on chk (best of three, load about
+8). The `jit` and `trace` profiles still end where `emulate` does.
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

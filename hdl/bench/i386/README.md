@@ -137,6 +137,11 @@ the others slowed by it):
 | DOSBox 0.74 dynamic | 249 | 300 | |
 | QEMU 8.2 TCG | 1872 | 925 | |
 
+Then (2026-11-08, `quantum`): `repeat: bulk` there too, a batch ending at
+the next catch-up: mix's run 48G host instructions (from 96G), 360 MIPS
+(from 189, one run); chk the same (37G, and the same emulated time). mix's
+result (EDI) is the exact profiles'.
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

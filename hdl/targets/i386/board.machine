@@ -557,6 +557,7 @@ system At386Vga {
     /// waits (then seen at the first element boundary after). Time exact.
     profile blocks { default: model; memory: direct; core: jit; sync: block; events: block; repeat: bulk; }
     /// As `blocks`, with the devices caught up once a millisecond
-    /// (MAME's quantum).
-    profile quantum { default: model; memory: direct; core: jit; sync: quantum(1 ms); events: block; }
+    /// (MAME's quantum): a repeated string instruction's batch ends at the
+    /// catch-up.
+    profile quantum { default: model; memory: direct; core: jit; sync: quantum(1 ms); events: block; repeat: bulk; }
 }

@@ -1864,7 +1864,7 @@ system PcAt386 {
     (QEMU's `REP_MAX`). `repeat: bulk` (no count) runs it until a device
     is due or an edge waits: the batch ends at the first element boundary
     at or past the devices' deadline (the cycles left before it, as the
-    run counts them), where they are caught up and an interrupt taken, as
+    run counts them; with `sync: quantum`, the next catch-up), where they are caught up and an interrupt taken, as
     between instructions; with nothing due, a whole REP is one batch. An
     instruction with a kernel (section 11.2) runs its elements past the
     third as a block, in whole periods of the direct memories' unit, each

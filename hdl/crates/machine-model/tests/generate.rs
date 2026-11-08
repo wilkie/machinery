@@ -647,7 +647,7 @@ fn i386_at_boots_dos() {
         // port streams do not.
         for k in ["Movs", "Stos", "Lods", "Scas", "Cmps"] {
             for w in ["b", "_16", "_32"] {
-                assert_eq!(src.contains(&format!("pub fn bulk_{k}{w}(")), profile == "blocks", "{profile}: bulk_{k}{w}");
+                assert_eq!(src.contains(&format!("pub fn bulk_{k}{w}(")), matches!(profile, "blocks" | "quantum"), "{profile}: bulk_{k}{w}");
             }
         }
         assert!(!src.contains("pub fn bulk_Insb(") && !src.contains("pub fn bulk_Outsb("), "a port stream has no kernel");

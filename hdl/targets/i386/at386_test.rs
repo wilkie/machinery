@@ -308,8 +308,12 @@ fn bench_compare() {
     // The time and the memory exactly: a profile's cores agree to the tick
     // where their concessions allow (`repeat: bulk` kernels change neither).
     let ram = sys.board().ram.cells.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3));
+    // The program's own result where it leaves it (mix: EDI; the memory's
+    // hash also holds the BIOS's tick count, which moves with interrupt
+    // timing).
+    let edi = sys.cpu.r.EDI;
     println!(
-        "BENCH {} {} boot_instructions {n0} boot_seconds {w0:.3} run_instructions {n1} run_seconds {:.3} mips {:.1} emulated_seconds {:.3} emulated_now {} ram {ram:016x}",
+        "BENCH {} {} boot_instructions {n0} boot_seconds {w0:.3} run_instructions {n1} run_seconds {:.3} mips {:.1} emulated_seconds {:.3} emulated_now {} ram {ram:016x} edi {edi:08x}",
         machine_at386_vga::system::PROFILE,
         machine_at386_vga::system::CORE,
         w1 - w0,

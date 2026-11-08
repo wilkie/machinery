@@ -1861,9 +1861,15 @@ system PcAt386 {
     `repeat` clause (section 11.2) up to n times within its compiled
     step, each time decoded, fetched, timed and its run's code
     checked as a step; interrupts and devices are seen between batches
-    (QEMU's `REP_MAX`). An instruction with a kernel (section 11.2) runs
-    its elements past the third as a block, in whole periods of the
-    direct memories' unit, each costing the period the step measured.
+    (QEMU's `REP_MAX`). `repeat: bulk` (no count) runs it until a device
+    is due or an edge waits: the batch ends at the first element boundary
+    at or past the devices' deadline (the cycles left before it, as the
+    run counts them), where they are caught up and an interrupt taken, as
+    between instructions; with nothing due, a whole REP is one batch. An
+    instruction with a kernel (section 11.2) runs its elements past the
+    third as a block, in whole periods of the direct memories' unit, each
+    costing the period the step measured (with `repeat: bulk`, only the
+    periods that end before the deadline).
   - `events: block` recognises the reset line and interrupts (the
     istream's `boundary` fn) where a compiled run is entered or goes
     round, not past each compiled step: an interrupt is taken up to a run

@@ -161,8 +161,11 @@ pub struct Gen<'a> {
     sync_quantum: Option<u128>,
     sync_block: bool,
     events_block: bool,
-    /// `repeat: bulk(n)`: n, or 0.
+    /// `repeat: bulk(n)`: n, or 0 (`repeat: bulk`: unbounded).
     repeat_bulk: u32,
+    /// `repeat: bulk` (no count): a batch ends where a device is due or an
+    /// edge waits (`repeat_bulk` is then unbounded).
+    repeat_due: bool,
     /// The instructions with kernels (`bulk_<name>`, by index), for the JIT
     /// core; the statements their dry code stops at; and whether the dry
     /// code is being lowered.
@@ -228,7 +231,12 @@ pub fn generate_system(
         g.timing_approx = prof.is_some_and(|p| p.timing_approx);
         g.events_block = prof.is_some_and(|p| p.events_block);
         g.sync_block = prof.is_some_and(|p| p.sync_block);
-        g.repeat_bulk = prof.and_then(|p| p.repeat_bulk).unwrap_or(0);
+        g.repeat_bulk = match prof.and_then(|p| p.repeat_bulk) {
+            Some(0) => u32::MAX,
+            Some(n) => n,
+            None => 0,
+        };
+        g.repeat_due = prof.and_then(|p| p.repeat_bulk) == Some(0);
         // The quantum in time units (base_num / base_den seconds each).
         g.sync_quantum = prof.and_then(|p| p.sync_quantum).map(|(n, d)| {
             let units = n.saturating_mul(sys.base_den) / d.saturating_mul(sys.base_num).max(1);
@@ -315,6 +323,7 @@ impl<'a> Gen<'a> {
             sync_block: false,
             events_block: false,
             repeat_bulk: 0,
+            repeat_due: false,
             bulk_kernels: Vec::new(),
             bulk_stops: Default::default(),
             probing: std::cell::Cell::new(false),

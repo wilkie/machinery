@@ -1592,7 +1592,10 @@ fn systems_check() {
     assert_clean(&c);
     assert_eq!(c.hir.systems[0].profiles[0].repeat_bulk, Some(64));
     assert_codes(&system("profile p { default: model; memory: direct; core: jit; repeat: bulk(0); }"), &["E1049"]);
-    assert_codes(&system("profile p { default: model; memory: direct; core: jit; repeat: bulk; }"), &["E1049"]);
+    // No count: until a device is due (0).
+    let c = check_src(&system("profile p { default: model; memory: direct; core: jit; repeat: bulk; }"));
+    assert_clean(&c);
+    assert_eq!(c.hir.systems[0].profiles[0].repeat_bulk, Some(0));
     assert_codes(&system("profile p { default: model; memory: direct; core: trace; repeat: bulk(8); }"), &["E1049"]);
     assert_codes(&system("profile p { default: model; memory: direct; core: jit; sync: quantum(4 MHz); }"), &["E1049"]);
     assert_codes(&system("profile p { default: model; memory: direct; core: jit; sync: quantum; }"), &["E1049"]);

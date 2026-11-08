@@ -553,8 +553,9 @@ system At386Vga {
     /// where a run goes round or returns, when one is due (DOSBox's slices,
     /// which end at the next event), interrupts recognised where a run is
     /// entered or goes round (QEMU's block starts), a repeated string
-    /// instruction run up to 64 times a step (QEMU's REP_MAX). Time exact.
-    profile blocks { default: model; memory: direct; core: jit; sync: block; events: block; repeat: bulk(64); }
+    /// instruction run within its step until a device is due or an edge
+    /// waits (then seen at the first element boundary after). Time exact.
+    profile blocks { default: model; memory: direct; core: jit; sync: block; events: block; repeat: bulk; }
     /// As `blocks`, with the devices caught up once a millisecond
     /// (MAME's quantum).
     profile quantum { default: model; memory: direct; core: jit; sync: quantum(1 ms); events: block; }

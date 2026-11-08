@@ -790,6 +790,33 @@ impl Gen<'_> {
         m.jit_sync_quantum();
         1
     }}
+    /// `repeat: bulk`: of `max` elements, the whole periods (of `per`
+    /// elements, each taking the time since `jit_bulk_mark`, the period's
+    /// end at `now`, the time's low half) that end before the devices'
+    /// deadline: the elements after them run one by one, the batch ending
+    /// at the first that reaches it.
+    #[allow(dead_code)]
+    fn jit_due_cap(&self, max: u64, now_lo: u64, per: u64) -> u64 {{
+        let Some(b) = B::jit_board() else {{ return max }};
+        let dl = if {quantum}u128 != 0 {{
+            self.jit_sync_at
+        }} else if b.due.is_some() {{
+            self.jit_bus_time(|b| b.due)
+        }} else {{
+            return max;
+        }};
+        let now = self.jit_bus_time(|b| Some(b.now));
+        let p = now_lo.wrapping_sub(self.jit_bulk_mark) as u128;
+        if p == 0 {{
+            return max;
+        }}
+        if dl <= now {{
+            return 0;
+        }}
+        let periods = (dl - now - 1) / p;
+        let els = periods.saturating_mul(per as u128);
+        max.min(u64::try_from(els).unwrap_or(u64::MAX))
+    }}
     fn jit_sync_quantum(&mut self) {{
         self.bus.after_step();
         let now = self.jit_bus_time(|b| Some(b.now));
@@ -1221,7 +1248,28 @@ impl Gen<'_> {
             let t = e.get(times);
             let t = e.op(machine_jit::Op::Add, t, machine_jit::V::K(1), machine_jit::N::U32);
             e.set(times, t);
-            let more = e.op(machine_jit::Op::Lt, t, machine_jit::V::K({repeat_bulk} as u128), machine_jit::N::U32);
+            // `repeat: bulk`: until a device is due or an edge waits (the
+            // run then ends here, and they are seen); `bulk(n)`: n times.
+            let more = if {repeat_due} {{
+                let late = if e.clocked() {{
+                    e.late()
+                }} else if {quantum}u128 != 0 {{
+                    let now = e.read(&now_p);
+                    let at = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, jit_sync_at), n: machine_jit::N::U128, bump: 0 }});
+                    e.op(machine_jit::Op::Ge, now, at, machine_jit::N::U128)
+                }} else if let Some(due) = b.due {{
+                    let now = e.read(&now_p);
+                    let d = e.load(bus + due, machine_jit::N::U128);
+                    e.op(machine_jit::Op::Ge, now, d, machine_jit::N::U128)
+                }} else {{
+                    machine_jit::V::K(0)
+                }};
+                let p = pending(e);
+                let stop = e.op(machine_jit::Op::Or, late, p, machine_jit::N::Bool);
+                e.not(stop, machine_jit::N::Bool)
+            }} else {{
+                e.op(machine_jit::Op::Lt, t, machine_jit::V::K({repeat_bulk} as u128), machine_jit::N::U32)
+            }};
             let c = e.op(machine_jit::Op::And, again, same, machine_jit::N::Bool);
             let c = e.op(machine_jit::Op::And, c, running, machine_jit::N::Bool);
             let c = e.op(machine_jit::Op::And, c, more, machine_jit::N::Bool);
@@ -1344,6 +1392,7 @@ impl Gen<'_> {
             quantum = self.sync_quantum.unwrap_or(0),
             sync_block = self.sync_block,
             repeat_bulk = self.repeat_bulk,
+            repeat_due = self.repeat_due,
             boundary_wakes = ist.boundary.is_some_and(|b| {
                 let mut halts = false;
                 machine_sema::hir::visit_block(&self.fns[&b].body, &mut |st| halts |= matches!(st.kind, machine_sema::hir::StmtKind::Halt), &mut |_| {});
@@ -1356,8 +1405,10 @@ impl Gen<'_> {
         );
         // The kernels' shims: the elements made (and their time, in
         // `jit_bulk_dt`: whole periods, each the time of the one measured).
+        // (`repeat: bulk`: no further than the devices' deadline.)
+        let cap = if self.repeat_due { "m.jit_due_cap(max, now, per)" } else { "max" };
         for n in &kernel_names {
-            let _ = write!(self.out, "    #[allow(clippy::all)]\n    extern \"C\" fn jit_bulk_{n}_c(m: *mut Self, max: u64, now: u64, per: u64) -> u64 {{\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe {{ &mut *m }};\n        let made = m.bulk_{n}(max, per);\n        m.jit_bulk_dt = (made / per.max(1)) as u128 * now.wrapping_sub(m.jit_bulk_mark) as u128;\n        made\n    }}\n");
+            let _ = write!(self.out, "    #[allow(clippy::all)]\n    extern \"C\" fn jit_bulk_{n}_c(m: *mut Self, max: u64, now: u64, per: u64) -> u64 {{\n        // SAFETY: called by compiled code with its machine.\n        let m = unsafe {{ &mut *m }};\n        let made = m.bulk_{n}({cap}, per);\n        m.jit_bulk_dt = (made / per.max(1)) as u128 * now.wrapping_sub(m.jit_bulk_mark) as u128;\n        made\n    }}\n");
         }
         // The split charge of a data access (`split =>`), lowered.
         let split = match &self.isa.split_cycles {

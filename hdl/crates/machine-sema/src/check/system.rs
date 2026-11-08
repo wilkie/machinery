@@ -307,8 +307,9 @@ impl Checker<'_> {
                             match (e.level.name.as_str(), e.arg.as_ref().map(|a| &a.kind)) {
                                 ("iteration", None) => repeat_bulk = None,
                                 ("bulk", Some(A::Int { value, .. })) if *value >= 1 && *value <= u32::MAX as u128 => repeat_bulk = Some(*value as u32),
+                                ("bulk", None) => repeat_bulk = Some(0),
                                 _ => {
-                                    self.error(module, "E1049", e.span, "`repeat:` is `iteration` or `bulk(<n>)`, n a count of at least 1");
+                                    self.error(module, "E1049", e.span, "`repeat:` is `iteration`, `bulk` or `bulk(<n>)`, n a count of at least 1");
                                     ok = false;
                                 }
                             }

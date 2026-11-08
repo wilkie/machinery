@@ -113,6 +113,14 @@ the blocks it read, and one found unchanged counts as made now; its calls
 kept in a map with a cheap hash. The VGA's share of mix's run 3% (from
 7%): mix's run 54G host instructions, chk's 37G.
 
+Then (2026-11-08, `blocks`): `repeat: bulk` with no count: a repeated
+string instruction runs within its step until a device is due or an edge
+waits (its kernel only the periods that end before the deadline), where
+`bulk(64)` returned to the dispatcher every 64 elements. mix's run 45G
+host instructions (from 54G), about 400 MIPS (best of three: 399, 384,
+403; chk 417-439). Its emulated time moves with where batches end; its
+result (EDI, now printed by `bench_compare`) is the exact profiles'.
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

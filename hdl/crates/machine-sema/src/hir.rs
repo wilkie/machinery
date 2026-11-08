@@ -1070,7 +1070,9 @@ pub struct Profile {
     pub events_block: bool,
     /// `repeat: bulk(n)`: a compiled step whose instruction runs again (a
     /// repeated string instruction) runs it up to `n` times within the step,
-    /// interrupts and devices seen only between such batches.
+    /// interrupts and devices seen only between such batches. `repeat:
+    /// bulk` (0 here): as many times as come before a device is due or an
+    /// edge waits.
     pub repeat_bulk: Option<u32>,
     pub default: Level,
     /// Instance paths (`vga`, `vga.crtc`) and their level.

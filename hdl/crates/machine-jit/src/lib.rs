@@ -222,19 +222,26 @@ fn build(
     // A block a step, entered by `from` (past the end: none made); with a
     // plan, the first through a pad that loads what it takes.
     let blocks: Vec<_> = (0..steps).map(|_| b.create_block()).collect();
-    let pad = plan.as_ref().map(|_| b.create_block());
+    // Going round, the first step built twice (`Em::peel_first`): entered
+    // at its own copy; the first block is the back-edge's alone.
+    let peel = steps >= 2 && plan.as_ref().is_some_and(|p| p.peel);
+    let entry0 = if peel { Some(b.create_block()) } else { None };
+    let pad = if peel { None } else { plan.as_ref().map(|_| b.create_block()) };
     // Later entries through pads too (`Em::begin_step`).
     let pads: Vec<(usize, cranelift_codegen::ir::Block)> = (1..entries.min(steps)).map(|k| (k, b.create_block())).collect();
     let mut switch = Switch::new();
     for (k, blk) in blocks.iter().enumerate().take(entries) {
         let to = match k {
-            0 => pad.unwrap_or(*blk),
+            0 => entry0.or(pad).unwrap_or(*blk),
             _ => pads.iter().find(|(j, _)| *j == k).map(|(_, p)| *p).unwrap_or(*blk),
         };
         switch.set_entry(k as u128, to);
     }
     let none = b.create_block();
     switch.emit(&mut b, from, none);
+    if let Some(e0) = entry0 {
+        b.seal_block(e0);
+    }
     b.switch_to_block(none);
     b.seal_block(none);
     let zero = b.ins().iconst(types::I32, 0);
@@ -246,10 +253,26 @@ fn build(
         e.steps = steps;
         e.entry_pads = pads.into_iter().collect();
         e.repeat_plans = repeats;
-        if let (Some(plan), Some(pad), Some(first)) = (plan, pad, blocks.first().copied()) {
-            e.entry_pad(pad, first, plan);
+        let mut peeled = None;
+        // (Whether the plan's constants go round is decided here: built
+        // once, the first step takes none, and the back-edge stores them.)
+        let plan = plan.map(|mut p| {
+            p.peel = peel;
+            p
+        });
+        match (plan, pad, blocks.first().copied()) {
+            (Some(plan), Some(pad), Some(first)) => e.entry_pad(pad, first, plan),
+            (Some(plan), None, Some(_)) if peel => peeled = Some(plan),
+            _ => {}
         }
         for (k, blk) in blocks.iter().enumerate() {
+            if let (0, Some(plan), Some(e0)) = (k, peeled.take(), entry0) {
+                let join = e.b.create_block();
+                let mark = e.mark();
+                e.peel_first(e0, *blk, join, plan, &mut |e| emit(e, 0));
+                e.release(mark);
+                continue;
+            }
             e.begin_step(k, *blk, k < entries);
             let mark = e.mark();
             emit(&mut e, k);
@@ -469,6 +492,61 @@ mod tests {
             assert_eq!((t.a, t.out), (5, out), "from {from}");
             assert_eq!(t.x, 0xF0F0_0001, "from {from}");
         }
+    }
+
+    #[test]
+    fn going_round_the_first_step_knows_the_constants_owed() {
+        // Step 0: a += b. Step 1: b = 7 (owed, a constant), out += 1, round
+        // again while a < 40. Entered with b = 1: the first pass adds 1 (b
+        // as the machine holds it), the rest 7 (b as the back-edge knows
+        // it); b is stored when the run returns.
+        let mut t = T { a: 0, b: 1, ..T::default() };
+        let mut e = Engine::default();
+        let bp = Place::Mem { off: std::mem::offset_of!(T, b), n: N::U8, bump: 0 };
+        let f = e
+            .compile_with(2, 1, |e, k| {
+                if k == 0 {
+                    let a = e.read(&A);
+                    let b = e.read(&bp);
+                    let a = e.op(Op::Add, a, b, N::U8);
+                    e.write(&A, a);
+                } else {
+                    e.write(&bp, V::K(7));
+                    let o = e.read(&OUT);
+                    let o = e.op(Op::Add, o, V::K(1), N::U64);
+                    e.write(&OUT, o);
+                    let a = e.read(&A);
+                    let more = e.op(Op::Lt, a, V::K(40), N::U8);
+                    e.loop_back(more, |_| {});
+                }
+            })
+            .expect("compiled");
+        let f: extern "C" fn(*mut T, u32) -> u32 = unsafe { std::mem::transmute(f) };
+        // 1, 8, 15, 22, 29, 36, 43: seven passes.
+        assert_eq!(f(&mut t, 0), 14);
+        assert_eq!((t.a, t.b, t.out), (43, 7, 7));
+    }
+
+    #[test]
+    fn a_run_of_one_step_going_round_stores_what_it_owes() {
+        // One step (not built twice): a += 1, b = 7 (an owed constant), round
+        // while a < 5. b must reach the machine.
+        let mut t = T { a: 0, b: 1, ..T::default() };
+        let mut e = Engine::default();
+        let bp = Place::Mem { off: std::mem::offset_of!(T, b), n: N::U8, bump: 0 };
+        let f = e
+            .compile_with(1, 1, |e, _| {
+                let a = e.read(&A);
+                let a = e.op(Op::Add, a, V::K(1), N::U8);
+                e.write(&A, a);
+                e.write(&bp, V::K(7));
+                let more = e.op(Op::Lt, a, V::K(5), N::U8);
+                e.loop_back(more, |_| {});
+            })
+            .expect("compiled");
+        let f: extern "C" fn(*mut T, u32) -> u32 = unsafe { std::mem::transmute(f) };
+        assert_eq!(f(&mut t, 0), 5);
+        assert_eq!((t.a, t.b), (5, 7));
     }
 
     extern "C" fn sees(t: *mut T) -> u64 {

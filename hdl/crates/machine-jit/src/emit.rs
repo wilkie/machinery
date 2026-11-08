@@ -209,6 +209,14 @@ pub(crate) struct LoopPlan {
     carried: Vec<(usize, N)>,
     shapes: Vec<Vec<(u32, u32)>>,
     owed: Vec<(usize, N)>,
+    /// The constants known going round (and those still owed): the run's
+    /// first step is built twice (`Em::peel_first`), and its copy reached
+    /// only from the back-edge starts knowing them. Not when the first
+    /// step has a loop of its own (its plans go by the order loops are
+    /// built in).
+    konst: Vec<((usize, N), u128)>,
+    konst_owed: Vec<(usize, N)>,
+    pub(crate) peel: bool,
 }
 
 impl LoopPlan {
@@ -347,6 +355,8 @@ pub struct Em<'a, 'f> {
     pub(crate) repeat_plans: Vec<Option<RepeatPlan>>,
     repeat_seen: Vec<Option<RepeatPlan>>,
     repeat_n: usize,
+    /// The run's first step has a loop of its own (it is not built twice).
+    repeat_in_first: bool,
     repeat_stack: Vec<RepeatCtx>,
     /// Values that are one of two known constants: the condition, the
     /// value when it holds, and when not (`select`). Arithmetic with a
@@ -367,7 +377,7 @@ pub struct Em<'a, 'f> {
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, out: Block, made_base: Variable) -> Self {
-        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), consts: 0, ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), repeat_plans: Vec::new(), repeat_seen: Vec::new(), repeat_n: 0, repeat_stack: Vec::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new(), combos: HashMap::new() }
+        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), consts: 0, ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), repeat_plans: Vec::new(), repeat_seen: Vec::new(), repeat_n: 0, repeat_in_first: false, repeat_stack: Vec::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new(), combos: HashMap::new() }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -875,6 +885,18 @@ impl<'a, 'f> Em<'a, 'f> {
             return;
         }
         let w = n.width() as usize / 8;
+        // Owed already as `v`: as it is. Owed otherwise (a constant the
+        // step before left, going round): stored first, as the machine
+        // would hold it had the step before stored it.
+        // Owed as anything else (a host value, bits, another shape): left
+        // owed, not assumed.
+        let owed_k = self.dirty.contains(&(off, n)) && matches!(self.regs.get(&(off, n)), Some(Known::K(_))) && !self.pieces.contains_key(&(off, n));
+        if owed_k && self.regs.get(&(off, n)) == Some(&Known::K(v & n.mask())) {
+            return;
+        }
+        if owed_k {
+            self.flush_overlapping(off, n, None);
+        }
         if self.dirty.iter().any(|(o, m)| off < o + m.width() as usize / 8 && *o < off + w) {
             return;
         }
@@ -1574,6 +1596,57 @@ impl<'a, 'f> Em<'a, 'f> {
 
     /// The way in to the first step of a run built with `plan`: the
     /// fields it takes, loaded.
+    /// The run's first step built twice (a second build of a run that goes
+    /// round, its plan peeling): at `entry`, from the dispatcher, knowing
+    /// nothing; and at `head`, the back-edge's target alone, knowing what
+    /// the run knows going round (its host values passed in, its
+    /// constants). They meet at `join`: what both leave known (the step's
+    /// own constants, owed or not) stays so; the other owed fields are
+    /// passed.
+    pub(crate) fn peel_first(&mut self, entry: Block, head: Block, join: Block, plan: LoopPlan, emit: &mut dyn FnMut(&mut Self)) {
+        self.begin_step(0, entry, true);
+        let before = self.state();
+        emit(self);
+        let a = self.leave(&before, join);
+        let params: Vec<(Value, Vec<Value>)> = plan
+            .carried
+            .iter()
+            .zip(&plan.shapes)
+            .map(|((_, n), sh)| {
+                let b = self.b.append_block_param(head, n.ir());
+                let ps = sh.iter().map(|_| self.b.append_block_param(head, n.ir())).collect();
+                (b, ps)
+            })
+            .collect();
+        self.b.switch_to_block(head);
+        self.k = 0;
+        self.b.set_srcloc(cranelift_codegen::ir::SourceLoc::new(0));
+        self.live = true;
+        self.regs.clear();
+        self.pieces.clear();
+        self.dirty.clear();
+        for ((key, (v, bits)), sh) in plan.carried.iter().zip(params).zip(&plan.shapes) {
+            self.regs.insert(*key, Known::D(v));
+            if !sh.is_empty() {
+                let ps = sh.iter().zip(bits).map(|(&(shift, width), b)| Piece { shift, width, v: V::D(b) }).collect();
+                self.pieces.insert(*key, ps);
+            }
+            if plan.owed.contains(key) {
+                self.dirty.push(*key);
+            }
+        }
+        for (key, c) in &plan.konst {
+            self.regs.insert(*key, Known::K(*c));
+            if plan.konst_owed.contains(key) {
+                self.dirty.push(*key);
+            }
+        }
+        self.plan = Some(plan);
+        emit(self);
+        let b = self.leave(&before, join);
+        self.enter(&before, join, &[a, b]);
+    }
+
     pub(crate) fn entry_pad(&mut self, pad: Block, first: Block, plan: LoopPlan) {
         self.loop_params = plan
             .carried
@@ -1614,7 +1687,17 @@ impl<'a, 'f> Em<'a, 'f> {
             })
             .collect();
         let owed = carried.iter().copied().filter(|k| self.dirty.contains(k)).collect();
-        LoopPlan { carried, shapes, owed }
+        let mut konst: Vec<((usize, N), u128)> = self
+            .regs
+            .iter()
+            .filter_map(|(k, v)| match v {
+                Known::K(c) if !self.pieces.contains_key(k) && !self.regs.keys().any(|o| o != k && overlap(o, k)) => Some((*k, *c)),
+                _ => None,
+            })
+            .collect();
+        konst.sort_by_key(|((o, n), _)| (*o, n.width(), n.signed()));
+        let konst_owed = konst.iter().map(|(k, _)| *k).filter(|k| self.dirty.contains(k)).collect();
+        LoopPlan { carried, shapes, owed, konst, konst_owed, peel: !self.repeat_in_first }
     }
 
     /// What the run knew going round (a first build).
@@ -1632,6 +1715,9 @@ impl<'a, 'f> Em<'a, 'f> {
         }
         let idx = self.repeat_n;
         self.repeat_n += 1;
+        if self.k == 0 {
+            self.repeat_in_first = true;
+        }
         let plan = self.repeat_plans.get(idx).cloned().flatten();
         let limit = self.trial_limit.take();
         let h = self.b.create_block();
@@ -1850,10 +1936,19 @@ impl<'a, 'f> Em<'a, 'f> {
         then(self);
         let limit = self.trial_limit.take();
         let args = match self.plan.clone() {
-            // Built to go round: the first step takes what is known.
+            // Built to go round: the first step takes what is known (and,
+            // built twice, the constants: here as there, else it stops).
             Some(plan) => {
+                if plan.peel && !plan.konst.iter().all(|(k, c)| self.regs.get(k) == Some(&Known::K(*c)) && !self.pieces.contains_key(k)) {
+                    self.trial_limit = limit;
+                    self.exit(true);
+                    self.restore(&before);
+                    self.b.switch_to_block(cont);
+                    self.live = true;
+                    return;
+                }
                 let args = self.carry_args(&plan.carried, &plan.shapes);
-                self.dirty.retain(|d| !plan.carried.contains(d));
+                self.dirty.retain(|d| !plan.carried.contains(d) && !(plan.peel && plan.konst_owed.contains(d)));
                 args
             }
             None => {

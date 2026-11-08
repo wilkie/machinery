@@ -89,6 +89,9 @@ impl Gen<'_> {
         let sync_run = self.sync_run;
         let quantum = self.sync_quantum.unwrap_or(0);
         let sync_block = self.sync_block;
+        let address = ident(&self.fns[&ist.address].name);
+        let Some(plan) = self.trace.as_ref() else { return Ok(()) };
+        let pc0n = ident(&self.regs[&plan.pc[0]].1.name);
         let _ = write!(
             self.out,
             r#"{shims}    /// The compiled step for `i`.
@@ -166,10 +169,12 @@ impl Gen<'_> {
                 // for them), and the run's key.
                 let spec = self.jit_spec_values();
                 let key = t.key;
-                self.jit.compile_with(steps.len(), 2, |e, k| {{
+                // Entered at its first step only (`jit_burst`): past it, a
+                // step is reached only from the one before.
+                self.jit.compile_with(steps.len(), 1, |e, k| {{
                     let checked = k == 0 || lowered[k - 1];
                     // Only reached from a lowered step before it.
-                    let follows = k >= 2 && lowered[k - 1];
+                    let follows = k >= 1 && lowered[k - 1];
                     lowered[k] = Self::jit_emit_step(e, &steps[k], k, checked, follows, fetch[k], units[k], &spec, &key);
                 }})
             }}
@@ -232,14 +237,52 @@ impl Gen<'_> {
         }}
         n
     }}
-    /// A run, as far as it goes (at most `budget` steps): when the last one
-    /// ended where a compiled run follows, that run from its start; else one
-    /// step as `System::step` makes it, and when that entered a run, the
-    /// rest of it compiled (once it has been entered `HOT` times). How many
-    /// steps were made.
+    /// The pc starts a compiled run (its key holding): it made the current
+    /// run, as `trace_enter` makes it, without its first step; its code and
+    /// length.
+    fn jit_lookup(&mut self) -> Option<(usize, u64)> {{
+        let start = self.fn_{address}().ok()? as u64;
+        let slot = Self::tr_slot(start);
+        let pc = self.r.{pc0n} as u64;
+        let ep = self.tr_epoch;
+        let key = self.tkey();
+        let (code, len) = match self.traces[slot].as_ref() {{
+            Some(t) if t.phys == start && t.pc == pc && (t.ok_ep == ep || t.key == key) => (t.code.addr()?, t.steps.len() as u64),
+            _ => return None,
+        }};
+        self.trace_close();
+        if let Some(t) = self.traces[slot].as_mut() {{
+            t.ok_ep = ep;
+            t.hits = t.hits.saturating_add(1);
+        }}
+        let aep = self.tr_aepoch;
+        let prev = self.tr_prev as usize;
+        if let Some(p) = self.traces.get_mut(prev).and_then(|t| t.as_mut()) {{
+            let l = TLink {{ pc, phys: start, ep: aep, kep: self.tr_kepoch, slot: slot as u32 }};
+            if p.links[0].pc == pc || p.links[0].ep != aep {{ p.links[0] = l; }} else {{ p.links[1] = l; }}
+        }}
+        self.tr_on = true;
+        self.tr_cur = slot as u32;
+        self.tr_idx = 0;
+        self.tr_ep0 = ep;
+        self.tr_w = u64::MAX;
+        Some((code, len))
+    }}
+    /// A run, as far as it goes (at most `budget` steps): when the pc starts
+    /// a compiled run (the last run's link leads there, or it is found by
+    /// address), that run from its start; else one step as `System::step`
+    /// makes it, a run it entered compiled once it has been entered `HOT`
+    /// times (and entered at its start, next time). How many steps were
+    /// made.
     pub fn jit_burst(&mut self, budget: u64) -> Result<u64, Fault> {{
-        if !self.tr_on && self.tr_prev != u32::MAX && !self.halted && !self.in_reset {{
-            if let Some((c, len)) = self.jit_follow() {{
+        if !self.tr_on && !self.halted && !self.in_reset {{
+            let found = if self.tr_prev != u32::MAX {{ self.jit_follow() }} else {{ None }};
+            let found = match found {{
+                Some(f) => Some(f),
+                None if !self.tr_on => self.jit_lookup(),
+                None => None,
+            }};
+            if let Some((c, len)) = found {{
                 if budget >= len {{
                     self.jit_left = budget;
                     let n = self.jit_enter(c, 0) as u64;
@@ -270,22 +313,9 @@ impl Gen<'_> {
                 }}
                 _ => (None, 0),
             }};
-            let code = match code {{
-                Some(c) => Some(c),
-                None if len > 0 && self.traces[slot].as_ref().is_some_and(|t| t.hits == Self::jit_hot()) => {{
-                    self.jit_compile(slot);
-                    self.traces[slot].as_ref().and_then(|t| t.code.addr())
-                }}
-                None => None,
-            }};
-            if let Some(c) = code {{
-                if self.tr_on && len > 1 && budget >= len {{
-                    self.jit_left = budget - 1;
-                    n += self.jit_enter(c, 1) as u64;
-                    if let Some(e) = self.jit_err.take() {{
-                        return Err(e);
-                    }}
-                }}
+            // (Entered at its start the next time the pc is there.)
+            if code.is_none() && len > 0 && self.traces[slot].as_ref().is_some_and(|t| t.hits == Self::jit_hot()) {{
+                self.jit_compile(slot);
             }}
         }}
         Ok(n)
@@ -812,9 +842,11 @@ impl Gen<'_> {
         // a write to one would have ended the run) they, and the key's
         // registers, are known values.
         let places = Self::jit_spec_places();
-        if k < 2 {{
+        if k == 0 {{
             for (i, (off, n)) in places.iter().enumerate() {{
-                let v = e.load(*off, *n);
+                // (Known going round: the run's copy of this step reached
+                // from its end checks nothing.)
+                let v = e.read(&machine_jit::Place::Mem {{ off: *off, n: *n, bump: 0 }});
                 let bad = e.op(machine_jit::Op::Ne, v, machine_jit::V::K(spec[i]), *n);
                 e.exit_if(bad, false, |e| e.store(std::mem::offset_of!(Self, jit_guard_failed), machine_jit::N::Bool, machine_jit::V::K(1)));
             }}
@@ -826,6 +858,12 @@ impl Gen<'_> {
             Self::jit_key_assume(e, key);
             // Past the run's check: the run goes on.
             e.assume(std::mem::offset_of!(Self, tr_on), machine_jit::N::Bool, 1);
+            // Between instructions no code time is owed (each retires it).
+            if let Some(b) = B::jit_board() {{
+                if !b.serial {{
+                    e.assume(std::mem::offset_of!(Self, bus) + b.code_time, machine_jit::N::U128, 0);
+                }}
+            }}
         }};
         assume(e);
         // `step`'s prologue.

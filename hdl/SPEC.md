@@ -1675,8 +1675,15 @@ system PcAt386 {
 - `core: jit;` (with `memory: direct`) is the trace core with runs entered
   often (64 times) compiled to host code (Cranelift, through the
   `machine-jit` crate, the one that may use `unsafe`). Runs are compiled
-  whole and entered at their first step when the link from the run before
-  leads to them (chained), else after an ordinary step entered them.
+  whole and entered only at their first step: when the link from the run
+  before leads to them (chained), or the pc is where one starts (found by
+  address); elsewhere the trace core steps until it reaches one. One entry
+  keeps what the code knows of the machine from step to step. A run whose
+  end leads back to its start goes round inside the compiled code, its
+  first step built twice: the copy the caller enters knows nothing, the
+  copy the back-edge reaches knows what the run knew going round (the
+  fields it holds as host values, and the constants it owes, not yet
+  stored), and they meet at the second step.
   `System::run_until` checks its stop condition between bursts (a run, as
   far as it goes), so at most a run apart: the machine's behaviour is the
   same, but a host acting on a condition acts up to a run later than with

@@ -57,6 +57,12 @@ alone; chk has no REPs). The emulated time to the tick, the guest's memory
 (a hash of it) and the instruction count are the same with the kernels and
 without.
 
+Then (2026-11-07, `blocks`): runs entered only at their first step, and a
+run going round knowing what it knew at its end (its first step built
+twice): mix's run 107G host instructions, chk's 56G (from 134G and 76G).
+The `jit` profile still ends at the tick and with the memory `emulate`
+does, on both.
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

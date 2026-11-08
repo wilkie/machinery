@@ -20,6 +20,92 @@ use cranelift_codegen::ir::{types, AbiParam, Block, InstBuilder, MemFlags, SigRe
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, Variable};
 
+/// A clock the code keeps in coarse units: the machine's time is the u128
+/// field at `now` (in fine units), and the code counts ticks of `scale`
+/// fine units in a host register (`Em::tick`), put in the field only when
+/// the machine must hold it (a call, a way out, a read of the field). A
+/// field at `deadline` (a u128 time) is turned into the ticks left before
+/// it (`Em::late`), worked out again after each call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Clock {
+    pub now: usize,
+    /// Fine units a tick (below 2^64).
+    pub scale: u128,
+    pub deadline: Option<usize>,
+}
+
+/// A run's clock: its ticks not yet in the field, and the ticks left
+/// before the deadline (counted from the field's time; never more than
+/// there are).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ClockVars {
+    pub(crate) c: Clock,
+    pub(crate) acc: Variable,
+    pub(crate) bud: Variable,
+}
+
+impl ClockVars {
+    /// Declared and started where the run is entered: no ticks owed, and
+    /// the ticks left worked out.
+    pub(crate) fn start(b: &mut FunctionBuilder, m: Value, c: Clock) -> ClockVars {
+        let acc = b.declare_var(types::I64);
+        let bud = b.declare_var(types::I64);
+        let z = b.ins().iconst(types::I64, 0);
+        b.def_var(acc, z);
+        let v = ClockVars { c, acc, bud };
+        v.budget(b, m);
+        v
+    }
+
+    /// The ticks owed, put in the field.
+    fn settle(&self, b: &mut FunctionBuilder, m: Value) {
+        let a = b.use_var(self.acc);
+        let k = b.ins().iconst(types::I64, self.c.scale as u64 as i64);
+        let lo = b.ins().imul(a, k);
+        let hi = b.ins().umulhi(a, k);
+        let t = b.ins().iconcat(lo, hi);
+        let now = b.ins().load(types::I128, MemFlags::trusted(), m, self.c.now as i32);
+        let now = b.ins().iadd(now, t);
+        b.ins().store(MemFlags::trusted(), now, m, self.c.now as i32);
+        let z = b.ins().iconst(types::I64, 0);
+        b.def_var(self.acc, z);
+    }
+
+    /// The ticks left before the deadline, from the field's time: at most
+    /// what there are (a lower bound: the code checks no later than it
+    /// must, and the devices see the exact time).
+    fn budget(&self, b: &mut FunctionBuilder, m: Value) {
+        let Some(dl) = self.c.deadline else {
+            let x = b.ins().iconst(types::I64, -1);
+            b.def_var(self.bud, x);
+            return;
+        };
+        let now = b.ins().load(types::I128, MemFlags::trusted(), m, self.c.now as i32);
+        let d = b.ins().load(types::I128, MemFlags::trusted(), m, dl as i32);
+        let ahead = b.ins().icmp(IntCC::UnsignedGreaterThan, d, now);
+        // ceil(diff / scale) = (diff - 1) / scale + 1, the division from
+        // below: (diff - 1) >> s times 2^(64+s) / scale, its high half (s
+        // twelve below the scale's log: off by a tick at most, for a diff
+        // below 2^(64+s) units; past it, 2^(64+s) / scale).
+        let diff = b.ins().isub(d, now);
+        let one = b.ins().iconst(types::I64, 1);
+        let one = b.ins().uextend(types::I128, one);
+        let diff = b.ins().isub(diff, one);
+        let s = (127 - self.c.scale.leading_zeros() as i64 - 12).max(0);
+        let r = ((1u128 << (64 + s)) / self.c.scale).min(u64::MAX as u128) as u64;
+        let dh = b.ins().ushr_imm(diff, s);
+        let (lo, hi) = b.ins().isplit(dh);
+        let rk = b.ins().iconst(types::I64, r as i64);
+        let q = b.ins().umulhi(lo, rk);
+        let big = b.ins().icmp_imm(IntCC::NotEqual, hi, 0);
+        let q = b.ins().select(big, rk, q);
+        let q = b.ins().iadd_imm(q, 1);
+        let z = b.ins().iconst(types::I64, 0);
+        let q = b.ins().select(ahead, q, z);
+        b.def_var(self.bud, q);
+    }
+}
+
 /// A native integer type: what the generated machine stores a value as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum N {
@@ -373,11 +459,13 @@ pub struct Em<'a, 'f> {
     /// Conditions made of two (`and`, `or` of bools): a branch on one
     /// learns of both where it can.
     combos: HashMap<Value, (Op, V, V)>,
+    /// The run's clock (`Clock`), when the machine keeps one.
+    pub(crate) clock: Option<ClockVars>,
 }
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, out: Block, made_base: Variable) -> Self {
-        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), consts: 0, ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), repeat_plans: Vec::new(), repeat_seen: Vec::new(), repeat_n: 0, repeat_in_first: false, repeat_stack: Vec::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new(), combos: HashMap::new() }
+        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), consts: 0, ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), repeat_plans: Vec::new(), repeat_seen: Vec::new(), repeat_n: 0, repeat_in_first: false, repeat_stack: Vec::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new(), combos: HashMap::new(), clock: None }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -478,7 +566,8 @@ impl<'a, 'f> Em<'a, 'f> {
             let c = self.b.ins().iconst(types::I32, n as i64);
             let bv = self.b.use_var(self.made_base);
                 let c = self.b.ins().iadd(c, bv);
-            self.b.ins().jump(self.out, &[c.into()]);
+            self.clock_settle();
+        self.b.ins().jump(self.out, &[c.into()]);
             self.live = false;
         }
     }
@@ -508,6 +597,90 @@ impl<'a, 'f> Em<'a, 'f> {
         }
     }
 
+    // -- the clock ------------------------------------------------------------------
+
+    /// The machine keeps a clock (`Clock`): `tick` counts on it.
+    pub fn clocked(&self) -> bool {
+        self.clock.is_some()
+    }
+
+    /// `t` ticks (a u64) pass.
+    pub fn tick(&mut self, t: V) {
+        let Some(cv) = self.clock else { return };
+        if !self.live || t == V::K(0) {
+            return;
+        }
+        let a = self.b.use_var(cv.acc);
+        let x = self.val(t, N::U64);
+        let s = self.b.ins().iadd(a, x);
+        self.b.def_var(cv.acc, s);
+    }
+
+    /// The ticks counted since the field last held the time (a u64).
+    pub fn ticks(&mut self) -> V {
+        match self.clock {
+            Some(cv) if self.live => V::D(self.b.use_var(cv.acc)),
+            _ => V::K(0),
+        }
+    }
+
+    /// Whether the deadline may have come (a bool): never later than it
+    /// has, perhaps a tick before (the devices check the time).
+    pub fn late(&mut self) -> V {
+        match self.clock {
+            Some(cv) if self.live => {
+                let a = self.b.use_var(cv.acc);
+                let d = self.b.use_var(cv.bud);
+                V::D(self.b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, a, d))
+            }
+            _ => V::K(1),
+        }
+    }
+
+    /// The ticks owed put in the field (on a way out, or before a call).
+    fn clock_settle(&mut self) {
+        let Some(cv) = self.clock else { return };
+        if !self.live {
+            return;
+        }
+        // What the code wrote to the field goes in first, and is forgotten.
+        let n = cv.c.now;
+        self.flush_overlapping(n, N::U128, None);
+        self.pieces.retain(|(o, m), _| *o + m.width() as usize / 8 <= n || n + 16 <= *o);
+        self.regs.retain(|(o, m), _| *o + m.width() as usize / 8 <= n || n + 16 <= *o);
+        let m = self.m;
+        cv.settle(self.b, m);
+    }
+
+    /// The ticks left worked out again (after a call: the time and the
+    /// deadline may have moved).
+    fn clock_budget(&mut self) {
+        let Some(cv) = self.clock else { return };
+        if !self.live || cv.c.deadline.is_none() {
+            return;
+        }
+        let m = self.m;
+        cv.budget(self.b, m);
+    }
+
+    /// The code reads or writes the bytes at `off` (`len` wide): the field
+    /// holds the time first when they meet it (the ticks left counted
+    /// from it).
+    fn clock_touch(&mut self, off: usize, len: usize) {
+        let Some(cv) = self.clock else { return };
+        if !self.live || off >= cv.c.now + 16 || cv.c.now >= off + len {
+            return;
+        }
+        let a = self.b.use_var(cv.acc);
+        let d = self.b.use_var(cv.bud);
+        let more = self.b.ins().icmp(IntCC::UnsignedGreaterThan, d, a);
+        let left = self.b.ins().isub(d, a);
+        let z = self.b.ins().iconst(types::I64, 0);
+        let left = self.b.ins().select(more, left, z);
+        self.b.def_var(cv.bud, left);
+        self.clock_settle();
+    }
+
     // -- the machine ----------------------------------------------------------------
 
     /// The field at `off` (no caching: for fields the step's own code does
@@ -516,6 +689,7 @@ impl<'a, 'f> Em<'a, 'f> {
         if !self.live {
             return V::K(0);
         }
+        self.clock_touch(off, n.width() as usize / 8);
         self.flush_overlapping(off, n, None);
         let m = self.base();
         V::D(self.b.ins().load(n.ir(), MemFlags::trusted(), m, off as i32))
@@ -546,6 +720,7 @@ impl<'a, 'f> Em<'a, 'f> {
         if !self.live {
             return;
         }
+        self.clock_touch(off, n.width() as usize / 8);
         // The field holds it already.
         if let V::K(c) = v {
             if self.regs.get(&(off, n)) == Some(&Known::K(c & n.mask())) && !self.pieces.contains_key(&(off, n)) {
@@ -680,6 +855,10 @@ impl<'a, 'f> Em<'a, 'f> {
         self.trial_check();
         if !self.live {
             return V::K(0);
+        }
+        match p {
+            Place::Mem { off, n, .. } | Place::Bits { off, reg: n, .. } => self.clock_touch(*off, n.width() as usize / 8),
+            _ => {}
         }
         if let Place::Mem { off, n, .. } = p {
             if !self.pieces.is_empty() {
@@ -1053,7 +1232,8 @@ impl<'a, 'f> Em<'a, 'f> {
                 let c = self.b.ins().iadd(c, made);
                 let bv = self.b.use_var(self.made_base);
                 let c = self.b.ins().iadd(c, bv);
-                self.b.ins().jump(self.out, &[c.into()]);
+                self.clock_settle();
+        self.b.ins().jump(self.out, &[c.into()]);
                 self.live = false;
             }
         }
@@ -1993,6 +2173,7 @@ impl<'a, 'f> Em<'a, 'f> {
         let c = self.b.ins().iconst(types::I32, self.k as i64 + made as i64);
         let bv = self.b.use_var(self.made_base);
                 let c = self.b.ins().iadd(c, bv);
+        self.clock_settle();
         self.b.ins().jump(self.out, &[c.into()]);
         self.live = false;
     }
@@ -2026,7 +2207,8 @@ impl<'a, 'f> Em<'a, 'f> {
                 let c = self.b.ins().iadd(c, made);
                 let bv = self.b.use_var(self.made_base);
                 let c = self.b.ins().iadd(c, bv);
-                self.b.ins().jump(self.out, &[c.into()]);
+                self.clock_settle();
+        self.b.ins().jump(self.out, &[c.into()]);
                 self.b.switch_to_block(cb);
             }
         }
@@ -2092,6 +2274,8 @@ impl<'a, 'f> Em<'a, 'f> {
             };
             a.push(x);
         }
+        // The machine holds the time (the call may read it or move it).
+        self.clock_settle();
         // The machine holds what the code wrote before the call sees it
         // (all of it, but what the call leaves alone).
         let within = |set: &[(usize, usize)], (o, n): (usize, N)| set.iter().any(|(so, sl)| o >= *so && o + n.width() as usize / 8 <= so + sl);
@@ -2139,6 +2323,7 @@ impl<'a, 'f> Em<'a, 'f> {
                 self.forget_volatile();
             }
         }
+        self.clock_budget();
         let r = match ret.width() {
             64 => r,
             128 => self.b.ins().uextend(types::I128, r),

@@ -17,7 +17,7 @@
 mod emit;
 mod sink;
 
-pub use emit::{k, n_of, Count, Em, Native, Op, Pat, Place, Slot, N, V};
+pub use emit::{k, n_of, Clock, Count, Em, Native, Op, Pat, Place, Slot, N, V};
 
 use cranelift_codegen::ir::{types, AbiParam, InstBuilder};
 use cranelift_codegen::settings::{self, Configurable};
@@ -58,6 +58,8 @@ impl Code {
 /// Compiles runs. Code lives until the engine is reset (`clear`).
 pub struct Engine {
     module: Option<JITModule>,
+    /// The machine's clock, for the runs compiled from now on (`Clock`).
+    pub clock: Option<Clock>,
     fbc: FunctionBuilderContext,
     count: usize,
     next: u32,
@@ -65,7 +67,7 @@ pub struct Engine {
 
 impl Default for Engine {
     fn default() -> Self {
-        Engine { module: None, fbc: FunctionBuilderContext::new(), count: 0, next: 0 }
+        Engine { module: None, clock: None, fbc: FunctionBuilderContext::new(), count: 0, next: 0 }
     }
 }
 
@@ -147,11 +149,11 @@ impl Engine {
         // time says what it knows going round, and the second passes that
         // to its first step instead of storing it.
         // So are loops within steps (`Em::repeat_head`).
-        let (seen, repeats) = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, &mut emit, None, Vec::new());
+        let (seen, repeats) = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, self.clock, &mut emit, None, Vec::new());
         let plan = seen.filter(|p| !p.is_empty());
         if plan.is_some() || repeats.iter().flatten().any(|p| !p.is_empty()) {
             ctx.func = cranelift_codegen::ir::Function::with_name_signature(Default::default(), sig);
-            let _ = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, &mut emit, plan, repeats);
+            let _ = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, self.clock, &mut emit, plan, repeats);
         }
         let name = format!("run{}", self.next);
         self.next += 1;
@@ -210,6 +212,7 @@ fn build(
     cc: cranelift_codegen::isa::CallConv,
     steps: usize,
     entries: usize,
+    clock: Option<Clock>,
     emit: &mut impl FnMut(&mut Em, usize),
     plan: Option<emit::LoopPlan>,
     repeats: Vec<Option<emit::RepeatPlan>>,
@@ -224,6 +227,8 @@ fn build(
     let made_base = b.declare_var(types::I32);
     let neg = b.ins().ineg(from);
     b.def_var(made_base, neg);
+    // The clock, started where the run is entered.
+    let clock = clock.map(|c| emit::ClockVars::start(&mut b, machine, c));
 
     // The way out: the steps made so far.
     let out = b.create_block();
@@ -259,6 +264,7 @@ fn build(
     {
         let mut e = Em::new(&mut b, ptr, cc, machine, out, made_base);
         e.first = blocks.first().copied();
+        e.clock = clock;
         e.steps = steps;
         e.entry_pads = pads.into_iter().collect();
         e.repeat_plans = repeats;
@@ -556,6 +562,63 @@ mod tests {
         let f: extern "C" fn(*mut T, u32) -> u32 = unsafe { std::mem::transmute(f) };
         assert_eq!(f(&mut t, 0), 5);
         assert_eq!((t.a, t.b), (5, 7));
+    }
+
+    /// A machine with a clock: the time, a deadline, what a call saw.
+    #[repr(C)]
+    #[derive(Default)]
+    struct Ck {
+        now: u128,
+        due: u128,
+        n: u64,
+        seen: Vec<(u64, u128)>,
+    }
+
+    extern "C" fn ck_due(t: *mut Ck) -> u64 {
+        // SAFETY: the test's machine.
+        let t = unsafe { &mut *t };
+        // Called no later than the deadline, at most a tick before it.
+        t.seen.push((t.n, t.now));
+        if t.now >= t.due {
+            t.due += 100;
+        }
+        0
+    }
+
+    #[test]
+    fn a_clock_in_ticks_holds_the_time_where_it_must() {
+        // Ticks of 7 units, 3 a pass; the deadline (40, then 100 later each
+        // time it passes) checked each pass, round while n < 20.
+        let c = Clock { now: std::mem::offset_of!(Ck, now), scale: 7, deadline: Some(std::mem::offset_of!(Ck, due)) };
+        let mut t = Ck { now: 5, due: 40, ..Ck::default() };
+        let mut e = Engine::default();
+        e.clock = Some(c);
+        let np = Place::Mem { off: std::mem::offset_of!(Ck, n), n: N::U64, bump: 0 };
+        let f = e
+            .compile_with(1, 1, |e, _| {
+                e.tick(V::K(3));
+                let n = e.read(&np);
+                let n = e.op(Op::Add, n, V::K(1), N::U64);
+                e.write(&np, n);
+                let late = e.late();
+                e.cold(late, |e| {
+                    let _ = e.call(ck_due as *const () as usize, &[], N::U64, false);
+                });
+                let more = e.op(Op::Lt, n, V::K(20), N::U64);
+                e.loop_back(more, |_| {});
+            })
+            .expect("compiled");
+        let f: extern "C" fn(*mut Ck, u32) -> u32 = unsafe { std::mem::transmute(f) };
+        assert_eq!(f(&mut t, 0), 20);
+        // 20 passes of 21 units: the time held on the way out.
+        assert_eq!(t.now, 5 + 20 * 21);
+        // Each deadline (40, 140, 240, 340) seen when it came, or a pass
+        // before; never a pass late.
+        for due in [40u128, 140, 240, 340] {
+            let at = t.seen.iter().find(|(_, now)| *now >= due).expect("seen");
+            assert!(at.1 < due + 21, "{due} seen late: {:?}", t.seen);
+        }
+        assert!(t.seen.len() <= 8, "{:?}", t.seen);
     }
 
     extern "C" fn sees(t: *mut T) -> u64 {

@@ -1731,11 +1731,20 @@ system PcAt386 {
   it keeps the time, the code time and unit, its code-write counters and
   its next device deadline; a clock's time; whether edges can wait and
   whether devices are caught up at all), and answers the time of a direct
-  code fetch (`Bus::jit_fetch_time`). With fetches serial, a lowered step
-  then retires in host code too: a 128-bit add of its fetch and cycles
-  (one constant when both are known), a compare with the next deadline (or
-  nothing, on a board without devices), the code-write counters against
-  the last count seen, and `last` recorded for when the code returns.
+  code fetch (`Bus::jit_fetch_time`). A lowered step then retires in host
+  code too: an add of its fetch and cycles, a compare with the next
+  deadline (or nothing, on a board without devices), the code-write
+  counters against the last count seen, and `last` recorded for when the
+  code returns. A run counts the time in the processor's clock periods (a
+  64-bit count in a host register: `machine_jit::Clock`) while every
+  charge is whole periods, as fetches and direct accesses at the
+  processor's clock are; the board's 128-bit time holds it only where it
+  must (before a call, on the way out, where the code reads it), scaled
+  then. The deadline is turned into the periods left before it (a
+  division from below: the check comes no later than the deadline, at
+  most a period before, and the devices check the exact time), worked out
+  again after each call. Exact: the time the board holds is the same.
+  `MACHINE_JIT_FINE` at run time keeps the time in the board's units.
   Board fields that calls change (the time) are never remembered by the
   emitter. Facts a lowered step guarantees are not checked again by the
   step after it: the processor runs and is not shut down, the epoch is

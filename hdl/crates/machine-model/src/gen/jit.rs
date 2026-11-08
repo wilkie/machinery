@@ -171,6 +171,17 @@ impl Gen<'_> {
                 let key = t.key;
                 // Entered at its first step only (`jit_burst`): past it, a
                 // step is reached only from the one before.
+                // The run keeps the time in the processor's cycles
+                // (`MACHINE_JIT_FINE`: in the bus's units, as the bus does),
+                // the devices' deadline as the cycles left before it.
+                let bus = std::mem::offset_of!(Self, bus);
+                self.jit.clock = B::jit_board()
+                    .filter(|b| b.clock != 0 && b.clock < 1u128 << 64 && std::env::var_os("MACHINE_JIT_FINE").is_none())
+                    .map(|b| machine_jit::Clock {{
+                        now: bus + b.now,
+                        scale: b.clock,
+                        deadline: if {quantum}u128 != 0 {{ Some(std::mem::offset_of!(Self, jit_sync_at)) }} else {{ b.due.map(|d| bus + d) }},
+                    }});
                 self.jit.compile_with(steps.len(), 1, |e, k| {{
                     let checked = k == 0 || lowered[k - 1];
                     // Only reached from a lowered step before it.
@@ -611,6 +622,12 @@ impl Gen<'_> {
         }}
     }}
     #[allow(clippy::all)]
+    /// A time `t` (fine units) in the processor's cycles, when the run
+    /// keeps its clock in them (`machine_jit::Clock`) and `t` is whole
+    /// cycles.
+    fn jit_cyc(e: &machine_jit::Em, b: &JitBoard, t: u128) -> Option<u128> {{
+        (e.clocked() && b.clock != 0 && t % b.clock == 0).then(|| t / b.clock)
+    }}
     fn jm_access(e: &mut machine_jit::Em, a: machine_jit::V, n: u32, v: Option<machine_jit::V>, mems: &'static [JitMem], b: JitBoard, shim: usize, pure: bool) -> machine_jit::V {{
         let nn = Self::jm_n(n);
         let Some((m, rest)) = mems.split_first() else {{
@@ -709,8 +726,9 @@ impl Gen<'_> {
             // The bus units it spans, each at its cost.
             // (`n` bytes span ceil(n / unit) units, or one more: a choice of
             // two.)
-            let t = if m.unit == 1 {{
-                machine_jit::V::K(n as u128 * cost)
+            // (In cycles when the run counts them: `jit_cyc`.)
+            let (two, n_of) = if m.unit == 1 {{
+                (None, n as u128)
             }} else {{
                 let sh = m.unit.trailing_zeros() as u128;
                 let u1 = e.op(machine_jit::Op::Shr, last, machine_jit::V::K(sh), machine_jit::N::U64);
@@ -718,12 +736,25 @@ impl Gen<'_> {
                 let d = e.op(machine_jit::Op::Sub, u1, u0, machine_jit::N::U64);
                 let lo = (n as u64).div_ceil(m.unit) as u128;
                 let fewer = e.op(machine_jit::Op::Eq, d, machine_jit::V::K(lo - 1), machine_jit::N::U64);
-                e.select(fewer, machine_jit::V::K(lo * cost), machine_jit::V::K((lo + 1) * cost), machine_jit::N::U128)
+                (Some(fewer), lo)
             }};
-            let bus = std::mem::offset_of!(Self, bus);
-            let now = e.read(&machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }});
-            let now = e.op(machine_jit::Op::Add, now, t, machine_jit::N::U128);
-            e.store(bus + b.now, machine_jit::N::U128, now);
+            match (two, Self::jit_cyc(e, &b, n_of * cost), Self::jit_cyc(e, &b, (n_of + 1) * cost)) {{
+                (None, Some(c), _) => e.tick(machine_jit::V::K(c)),
+                (Some(fewer), Some(c0), Some(c1)) => {{
+                    let t = e.select(fewer, machine_jit::V::K(c0), machine_jit::V::K(c1), machine_jit::N::U64);
+                    e.tick(t);
+                }}
+                _ => {{
+                    let t = match two {{
+                        None => machine_jit::V::K(n_of * cost),
+                        Some(fewer) => e.select(fewer, machine_jit::V::K(n_of * cost), machine_jit::V::K((n_of + 1) * cost), machine_jit::N::U128),
+                    }};
+                    let bus = std::mem::offset_of!(Self, bus);
+                    let now = e.read(&machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }});
+                    let now = e.op(machine_jit::Op::Add, now, t, machine_jit::N::U128);
+                    e.store(bus + b.now, machine_jit::N::U128, now);
+                }}
+            }}
             r
         }}, |e| Self::jm_access(e, a, n, v, &[], b, shim, pure))
     }}
@@ -949,6 +980,9 @@ impl Gen<'_> {
         // `timing: approximate`: the fetch as if serial, whatever the bus
         // does, charged with the cycles in one add.
         let approx_fetch: Option<u128> = if {timing_approx} {{ units.map(|(u0, u1, cost)| (u1 - u0 + 1) as u128 * cost).or(fetch) }} else {{ None }};
+        // The fetch's charge in cycles, overlapped (`jit_cyc`): what the
+        // retire's execution overlaps.
+        let mut ct_cyc: Option<machine_jit::V> = None;
         let quiet = match (board, fetch, units) {{
             (Some(_), _, _) if approx_fetch.is_some() => true,
             // Serial, and nothing sees the time before the step retires: the
@@ -956,9 +990,13 @@ impl Gen<'_> {
             (Some(b), Some(_), _) if b.serial && Self::jit_quiet(&instr) => true,
             (Some(b), Some(f), _) if b.serial => {{
                 let bus = std::mem::offset_of!(Self, bus);
-                let now = e.read(&machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }});
-                let now = e.op(machine_jit::Op::Add, now, machine_jit::V::K(f), machine_jit::N::U128);
-                e.store(bus + b.now, machine_jit::N::U128, now);
+                if let Some(c) = Self::jit_cyc(e, &b, f) {{
+                    e.tick(machine_jit::V::K(c));
+                }} else {{
+                    let now = e.read(&machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }});
+                    let now = e.op(machine_jit::Op::Add, now, machine_jit::V::K(f), machine_jit::N::U128);
+                    e.store(bus + b.now, machine_jit::N::U128, now);
+                }}
                 e.store(bus + b.code_time, machine_jit::N::U128, machine_jit::V::K(f));
                 false
             }}
@@ -969,10 +1007,23 @@ impl Gen<'_> {
                 // The units not in the buffer, each `cost`: a choice of two.
                 let n = (u1 - u0 + 1) as u128;
                 let t = e.select(same, machine_jit::V::K((n - 1) * cost), machine_jit::V::K(n * cost), machine_jit::N::U128);
-                let now = e.read(&machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }});
-                let now = e.op(machine_jit::Op::Add, now, t, machine_jit::N::U128);
-                e.store(bus + b.now, machine_jit::N::U128, now);
+                let tc = match (Self::jit_cyc(e, &b, (n - 1) * cost), Self::jit_cyc(e, &b, n * cost)) {{
+                    (Some(c0), Some(c1)) => Some(e.select(same, machine_jit::V::K(c0), machine_jit::V::K(c1), machine_jit::N::U64)),
+                    _ => None,
+                }};
+                if let Some(tc) = tc {{
+                    e.tick(tc);
+                }} else {{
+                    let now = e.read(&machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }});
+                    let now = e.op(machine_jit::Op::Add, now, t, machine_jit::N::U128);
+                    e.store(bus + b.now, machine_jit::N::U128, now);
+                }}
                 let ct = e.read(&machine_jit::Place::Mem {{ off: bus + b.code_time, n: machine_jit::N::U128, bump: 0 }});
+                // (The step's code time starts at none: then its cycles are
+                // the fetch's.)
+                if ct == machine_jit::V::K(0) {{
+                    ct_cyc = tc;
+                }}
                 let ct = e.op(machine_jit::Op::Add, ct, t, machine_jit::N::U128);
                 e.store(bus + b.code_time, machine_jit::N::U128, ct);
                 e.store(bus + b.direct_code, machine_jit::N::U64, machine_jit::V::K(u1 as u128));
@@ -1030,9 +1081,30 @@ impl Gen<'_> {
         // due or an edge waits, the run's code, and whether the run goes on.
         let bus = std::mem::offset_of!(Self, bus);
         let cyc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, cycles), n: machine_jit::N::U32, bump: 0 }});
+        let now_p = machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }};
+        // In cycles, when the run counts them (`jit_cyc`) and the fetch is
+        // whole cycles: no time in the machine (it holds it when it must).
+        let cyc64 = e.cast(cyc, machine_jit::N::U32, machine_jit::N::U64);
+        let ticks = if let Some(f) = approx_fetch {{
+            Self::jit_cyc(e, &b, f).map(|fc| e.op(machine_jit::Op::Add, cyc64, machine_jit::V::K(fc), machine_jit::N::U64))
+        }} else if b.serial {{
+            Self::jit_cyc(e, &b, if quiet {{ fetch.unwrap_or(0) }} else {{ 0 }}).map(|fc| e.op(machine_jit::Op::Add, cyc64, machine_jit::V::K(fc), machine_jit::N::U64))
+        }} else {{
+            ct_cyc.map(|cc| {{
+                let over = e.op(machine_jit::Op::Gt, cyc64, cc, machine_jit::N::U64);
+                let d = e.op(machine_jit::Op::Sub, cyc64, cc, machine_jit::N::U64);
+                e.select(over, d, machine_jit::V::K(0), machine_jit::N::U64)
+            }})
+        }};
+        let now = if let Some(t) = ticks {{
+            if approx_fetch.is_some() || b.serial {{
+                e.store(bus + b.direct_code, machine_jit::N::U64, machine_jit::V::K(u64::MAX as u128));
+            }}
+            e.tick(t);
+            None
+        }} else {{
         let cyc = e.cast(cyc, machine_jit::N::U32, machine_jit::N::U128);
         let x = e.op(machine_jit::Op::Mul, cyc, machine_jit::V::K(b.clock), machine_jit::N::U128);
-        let now_p = machine_jit::Place::Mem {{ off: bus + b.now, n: machine_jit::N::U128, bump: 0 }};
         let now = e.read(&now_p);
         let now = if let Some(f) = approx_fetch {{
             let t = e.op(machine_jit::Op::Add, x, machine_jit::V::K(f), machine_jit::N::U128);
@@ -1050,6 +1122,8 @@ impl Gen<'_> {
             e.op(machine_jit::Op::Add, now, add, machine_jit::N::U128)
         }};
         e.store(bus + b.now, machine_jit::N::U128, now);
+        Some(now)
+        }};
         e.store(bus + b.code_time, machine_jit::N::U128, machine_jit::V::K(0));
         e.store(std::mem::offset_of!(Self, decoded), machine_jit::N::Bool, machine_jit::V::K(1));
         // An edge can wait only after a bus access (the last `after_step`
@@ -1057,7 +1131,14 @@ impl Gen<'_> {
         let edges = b.events && !Self::jit_quiet(&instr);
         let pending = |e: &mut machine_jit::Em| if edges {{ e.load(bus + b.pending, machine_jit::N::Bool) }} else {{ machine_jit::V::K(0) }};
         let need = match (b.due, b.idle) {{
+            // (Counted in cycles: the clock's deadline is `due`.)
+            (Some(_), _) if now.is_none() && {quantum}u128 == 0 => {{
+                let late = e.late();
+                let p = pending(e);
+                e.op(machine_jit::Op::Or, late, p, machine_jit::N::Bool)
+            }}
             (Some(due), _) => {{
+                let now = match now {{ Some(n) => n, None => e.read(&now_p) }};
                 let d = e.load(bus + due, machine_jit::N::U128);
                 let late = e.op(machine_jit::Op::Ge, now, d, machine_jit::N::U128);
                 let p = pending(e);
@@ -1100,14 +1181,19 @@ impl Gen<'_> {
             if kern != 0 && ({repeat_bulk} as u64) > per + 3 {{
                 let t = e.get(times);
                 let t = e.op(machine_jit::Op::Add, t, machine_jit::V::K(1), machine_jit::N::U32);
-                let now_lo = e.cast(now, machine_jit::N::U128, machine_jit::N::U64);
                 let is_mark = e.op(machine_jit::Op::Eq, t, machine_jit::V::K(2), machine_jit::N::U32);
-                e.cold(is_mark, |e| e.store(std::mem::offset_of!(Self, jit_bulk_mark), machine_jit::N::U64, now_lo));
+                e.cold(is_mark, |e| {{
+                    let now = e.read(&now_p);
+                    let now_lo = e.cast(now, machine_jit::N::U128, machine_jit::N::U64);
+                    e.store(std::mem::offset_of!(Self, jit_bulk_mark), machine_jit::N::U64, now_lo);
+                }});
                 let pc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, r.{pc0n}), n: {pc_n}, bump: 0 }});
                 let again = e.op(machine_jit::Op::Eq, pc, machine_jit::V::K((j.pc & {pc_mask:#x}) as u128), {pc_n});
                 let at = e.op(machine_jit::Op::Eq, t, machine_jit::V::K(2 + per as u128), machine_jit::N::U32);
                 let go = e.op(machine_jit::Op::And, at, again, machine_jit::N::Bool);
                 e.cold(go, |e| {{
+                    let now = e.read(&now_p);
+                    let now_lo = e.cast(now, machine_jit::N::U128, machine_jit::N::U64);
                     let left = e.op(machine_jit::Op::Sub, machine_jit::V::K({repeat_bulk} as u128), t, machine_jit::N::U32);
                     let left = e.cast(left, machine_jit::N::U32, machine_jit::N::U64);
                     let r = e.call(kern, &[(left, machine_jit::N::U64), (now_lo, machine_jit::N::U64), (machine_jit::V::K(per as u128), machine_jit::N::U64)], machine_jit::N::U64, false);
@@ -1153,7 +1239,11 @@ impl Gen<'_> {
         // has passed or one is due.
         if {quantum}u128 != 0 && j.last {{
             let at = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, jit_sync_at), n: machine_jit::N::U128, bump: 0 }});
-            let late = e.op(machine_jit::Op::Ge, now, at, machine_jit::N::U128);
+            // (Counted in cycles: the clock's deadline is the catch-up.)
+            let late = match now {{
+                None => e.late(),
+                Some(now) => e.op(machine_jit::Op::Ge, now, at, machine_jit::N::U128),
+            }};
             // An edge waiting is delivered at once, and a device the step
             // touched (made due: its deadline to be worked out again) is
             // caught up.

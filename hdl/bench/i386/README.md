@@ -295,3 +295,13 @@ VGA's beam and scanline renderer (`Vga::fn_advance`, the scanline memo's
 180 a dot, 70 frames a second; the screen changes every frame, so the memo
 seldom spares a line.
 
+Then (2026-11-09, `blocks`, the script above; the same screen, memory and
+tick throughout; host instructions):
+
+| change | host instructions | speed |
+|---|---|---|
+| before | 382.7G | 4.2x |
+| a line's 16 colours worked out once (palette, pel mask, DAC), each dot a lookup | 253.6G | 5.9x |
+| 16 colours at 8 dots a character clock, shown once or twice, in a loop of fixed bit order | 228.0G | 5.9x |
+| the memo's recorder: a last range for each 64 KB of a memory (the four planes), not one a memory | 201.8G | 7.0x |
+

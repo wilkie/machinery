@@ -59,9 +59,16 @@ pub struct Rec {
     pub vars: u64,
     /// `(memory, first block, last block)`, merged as they come.
     pub ranges: Vec<(u8, u32, u32)>,
-    /// Per memory (by number, mod 4): the range its last read fell in (most
-    /// reads fall in it again).
-    last: [usize; 4],
+    /// Per stream (a memory and its 64 KB region: the VGA's four planes
+    /// are four streams of one memory), mod 8: the range its last read fell
+    /// in (most reads fall in it again).
+    last: [usize; 8],
+}
+
+/// The stream slot of block `b` of memory `m` (`Rec::last`).
+#[inline]
+fn stream(m: u8, b: u32) -> usize {
+    (m as usize).wrapping_mul(3).wrapping_add((b >> (16 - BLOCK_SHIFT)) as usize) & 7
 }
 
 impl Rec {
@@ -74,7 +81,7 @@ impl Rec {
     #[inline]
     pub fn cell(&mut self, m: u8, i: usize) {
         let b = (i >> BLOCK_SHIFT) as u32;
-        if let Some(&(lm, lo, hi)) = self.ranges.get(self.last[m as usize & 3]) {
+        if let Some(&(lm, lo, hi)) = self.ranges.get(self.last[stream(m, b)]) {
             if lm == m && b >= lo && b <= hi {
                 return;
             }
@@ -95,12 +102,12 @@ impl Rec {
             if r.0 == m && b + MERGE >= r.1 && b <= r.2 + MERGE {
                 r.1 = r.1.min(b);
                 r.2 = r.2.max(b);
-                self.last[m as usize & 3] = k;
+                self.last[stream(m, b)] = k;
                 return;
             }
         }
         self.ranges.push((m, b, b));
-        self.last[m as usize & 3] = n;
+        self.last[stream(m, b)] = n;
     }
 }
 

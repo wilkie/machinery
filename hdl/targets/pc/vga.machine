@@ -221,6 +221,23 @@ component Vga {
                 return;
             }
             let graphics = attr[16][0] == 1;
+            // The line's 16 colours, once: each through the attribute
+            // palette and the pel mask to a DAC index, and that index's
+            // colour (every mode but 256 colours draws only these).
+            let mut idx: [u8; 16] = [0_u8; 16];
+            let mut rgb: [u8; 48] = [0_u8; 48];
+            if gc[5][6] == 0 || !graphics {
+                for v in 0..16 {
+                    let vv = v as u32;
+                    let i = colour(vv as u8) & pel_mask;
+                    idx[vv] = i;
+                    let c = (i as u32) * 3;
+                    rgb[vv * 3] = dac[c];
+                    rgb[vv * 3 + 1] = dac[c + 1];
+                    rgb[vv * 3 + 2] = dac[c + 2];
+                }
+            }
+            let dbase = line * 720;
             let map_a = ((seq[3] >> 5) & 1) << 2 | ((seq[3] >> 2) & 3);
             let map_b = ((seq[3] >> 4) & 1) << 2 | (seq[3] & 3);
             for col in 0..90 {
@@ -245,8 +262,6 @@ component Vga {
                             glyph = 0xFF;
                             fg = at & 15;
                         }
-                        let fgi = colour(fg);
-                        let bgi = colour(bg);
                         for d in 0..18 {
                             let dd = d as u32;
                             if dd < cd {
@@ -256,7 +271,12 @@ component Vga {
                                 } else {
                                     attr[16][2] == 1 && ch >= 0xC0 && ch <= 0xDF && glyph[0] == 1
                                 };
-                                put(base, x0 + dd, if on { fgi } else { bgi });
+                                let v = (if on { fg } else { bg }) as u32;
+                                let x = x0 + dd;
+                                dots[dbase + x] = idx[v];
+                                frame[base + x * 3] = rgb[v * 3];
+                                frame[base + x * 3 + 1] = rgb[v * 3 + 1];
+                                frame[base + x * 3 + 2] = rgb[v * 3 + 2];
                             }
                         }
                     } else if gc[5][6] == 1 {
@@ -275,8 +295,12 @@ component Vga {
                             let dd = d as u32;
                             if dd < cd {
                                 let px = if half { dd / 2 } else { dd };
-                                let v = (bytes >> (14 - (px & 7) * 2)) & 3;
-                                put(base, x0 + dd, colour(v as u8));
+                                let v = ((bytes >> (14 - (px & 7) * 2)) & 3) as u32;
+                                let x = x0 + dd;
+                                dots[dbase + x] = idx[v];
+                                frame[base + x * 3] = rgb[v * 3];
+                                frame[base + x * 3 + 1] = rgb[v * 3 + 1];
+                                frame[base + x * 3 + 2] = rgb[v * 3 + 2];
                             }
                         }
                     } else if gc[6][1] == 1 {
@@ -285,7 +309,35 @@ component Vga {
                             let dd = d as u32;
                             if dd < cd {
                                 let px = if half { dd / 2 } else { dd };
-                                put(base, x0 + dd, colour(bytes[15 - (px & 15) as u4] as u8));
+                                let v = bytes[15 - (px & 15) as u4] as u32;
+                                let x = x0 + dd;
+                                dots[dbase + x] = idx[v];
+                                frame[base + x * 3] = rgb[v * 3];
+                                frame[base + x * 3 + 1] = rgb[v * 3 + 1];
+                                frame[base + x * 3 + 2] = rgb[v * 3 + 2];
+                            }
+                        }
+                    } else if cd == 8 || (half && cd == 16) {
+                        // 16 colours, eight dots a character clock, each
+                        // shown once or (320-dot modes) twice: the common
+                        // cases, the bits in a fixed order.
+                        let p0 = plane(0, a);
+                        let p1 = plane(1, a);
+                        let p2 = plane(2, a);
+                        let p3 = plane(3, a);
+                        let w: u32 = if half { 2 } else { 1 };
+                        for d in 0..8 {
+                            let b = 7 - (d as u3);
+                            let v = ((p0[b] as u8) | ((p1[b] as u8) << 1) | ((p2[b] as u8) << 2) | ((p3[b] as u8) << 3)) as u32;
+                            for r in 0..2 {
+                                let rr = r as u32;
+                                if rr < w {
+                                    let x = x0 + (d as u32) * w + rr;
+                                    dots[dbase + x] = idx[v];
+                                    frame[base + x * 3] = rgb[v * 3];
+                                    frame[base + x * 3 + 1] = rgb[v * 3 + 1];
+                                    frame[base + x * 3 + 2] = rgb[v * 3 + 2];
+                                }
                             }
                         }
                     } else {
@@ -298,8 +350,12 @@ component Vga {
                             if dd < cd {
                                 let px = (if half { dd / 2 } else { dd }) & 7;
                                 let b = 7 - (px as u3);
-                                let v = (p0[b] as u8) | ((p1[b] as u8) << 1) | ((p2[b] as u8) << 2) | ((p3[b] as u8) << 3);
-                                put(base, x0 + dd, colour(v));
+                                let v = ((p0[b] as u8) | ((p1[b] as u8) << 1) | ((p2[b] as u8) << 2) | ((p3[b] as u8) << 3)) as u32;
+                                let x = x0 + dd;
+                                dots[dbase + x] = idx[v];
+                                frame[base + x * 3] = rgb[v * 3];
+                                frame[base + x * 3 + 1] = rgb[v * 3 + 1];
+                                frame[base + x * 3 + 2] = rgb[v * 3 + 2];
                             }
                         }
                     }

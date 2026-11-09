@@ -369,3 +369,20 @@ doubled). The game sets both depths to their deepest. 104.6G host
 instructions with its music, undrawn, under `blocks`: the same as without
 them.
 
+## A game with digitised sound: Jetpack
+
+Adept Software's Jetpack 1.5 (freeware since 1998; `build_jetpack.sh`
+makes a 1.2 MB boot floppy of it from `~/roms`, DOS 3.30's boot sector
+with its geometry made a 1.2 MB disk's) runs with its Sound Blaster
+samples (`/S3`, `BLASTER=A220 I5 D1`): it finds the card, plays its music
+on the FM chip, its effects through the DSP, and its demo (D at the main
+menu) unattended:
+
+    PLAY_DISK=.../jetpack.img PLAY_STEPS=299000000 PLAY_KEYS=115489897:20 \
+    cargo test --release --test at386 -- --ignored --nocapture play_disk
+
+2026-11-09, undrawn: `emulate` 6.3x real time, `jit` 7.8x, ending alike
+(the memory, the tick, 5692 digitised samples, 3325 FM writes). Its
+effects are short single-cycle transfers: half a second of samples in
+the run, little load on the DSP.
+

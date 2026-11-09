@@ -1691,8 +1691,9 @@ system PcAt386 {
   once per run), real-mode code about 27%; a DOS boot, mostly short loops
   polling devices, about the same (-3% to +7%).
 - `core: jit;` (with `memory: direct`) is the trace core with runs entered
-  often (4096 times: a compile costs what thousands of entries do)
-  compiled to host code (Cranelift, through the
+  often (16384 times: a compile costs what thousands of entries do)
+  compiled to host code, quickly (Cranelift's optimiser off), and again
+  optimised once their steps have run a million times a step (Cranelift, through the
   `machine-jit` crate, the one that may use `unsafe`). Runs are compiled
   whole and entered only at their first step: when the link from the run
   before leads to them (chained), or the pc is where one starts (found by

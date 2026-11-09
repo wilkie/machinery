@@ -663,9 +663,11 @@ fn i386_at_boots_dos() {
             .args(["test", "--release", "--quiet", "--test", "at386", "--manifest-path"])
             .arg(dir.join("Cargo.toml"))
             .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
-            // The JIT compiles a run entered 64 times here (its default waits
-            // longer): the tests' short loops run compiled.
+            // The JIT compiles a run entered 64 times here, and again
+            // optimised past 1000 steps a step (its defaults wait longer):
+            // the tests' short loops run compiled, at both tiers.
             .env("MACHINE_JIT_HOT", "64")
+            .env("MACHINE_JIT_HOT2", "1000")
             .output()
             .expect("run cargo");
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -771,9 +773,11 @@ fn i386_vga_board_system_boots() {
             .args(["test", "--quiet", "--test", "vga", "--test", "sb", "--manifest-path"])
             .arg(dir.join("Cargo.toml"))
             .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
-            // The JIT compiles a run entered 64 times here (its default waits
-            // longer): the tests' short loops run compiled.
+            // The JIT compiles a run entered 64 times here, and again
+            // optimised past 1000 steps a step (its defaults wait longer):
+            // the tests' short loops run compiled, at both tiers.
             .env("MACHINE_JIT_HOT", "64")
+            .env("MACHINE_JIT_HOT2", "1000")
             .output()
             .expect("run cargo");
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -933,9 +937,11 @@ fn z80_board_runs_on_every_core() {
             .args(["test", "--release", "--quiet", "--test", "board", "--manifest-path"])
             .arg(dir.join("Cargo.toml"))
             .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
-            // The JIT compiles a run entered 64 times here (its default waits
-            // longer): the tests' short loops run compiled.
+            // The JIT compiles a run entered 64 times here, and again
+            // optimised past 1000 steps a step (its defaults wait longer):
+            // the tests' short loops run compiled, at both tiers.
             .env("MACHINE_JIT_HOT", "64")
+            .env("MACHINE_JIT_HOT2", "1000")
             .output()
             .expect("run cargo");
         let stdout = String::from_utf8_lossy(&output.stdout);

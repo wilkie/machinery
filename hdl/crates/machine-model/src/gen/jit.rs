@@ -20,13 +20,19 @@ use std::fmt::Write as _;
 use super::{ident, Gen, GenError, R};
 use machine_sema::ty::Ty;
 
-/// Entries into a run before it is compiled. A compile costs about 27 M
+/// Entries into a run before it is compiled. A compile costs some 10-30 M
 /// host instructions a step (the 386's), and a step compiled saves under
 /// a hundred each time it runs: a run entered a few hundred times does
 /// not pay for itself. At 4096, a DOS boot takes 44% fewer host
-/// instructions than at 64 (the `jit` profile), and loops that run long
-/// lose nothing.
-const HOT: u32 = 4096;
+/// instructions than at 64 (the `jit` profile); at 16384 a game whose
+/// frame loop runs 70 times a second (Xmas Lemmings) 11% fewer than at
+/// 4096, and loops that run long lose nothing.
+const HOT: u32 = 16384;
+
+/// Steps a step of a run makes, compiled quickly (Cranelift's optimiser
+/// off), before the run is compiled again optimised: the optimiser costs a
+/// third more and saves a few host instructions a step.
+const HOT2: u64 = 1_000_000;
 
 /// The host instructions an outlined fn may take, inlined at a call where
 /// what is known folds it (`Em::try_inline`). On the 386 benchmarks, 400
@@ -55,14 +61,14 @@ impl Gen<'_> {
         if !self.jit {
             return "";
         }
-        "    /// Compiled code for the run after its first instruction, what each\n    /// of its steps was compiled with, and how often the run has been\n    /// entered.\n    pub code: machine_jit::Code,\n    pub jit_steps: Vec<JitStep>,\n    pub hits: u32,\n    /// Entries its guard turned away: past a few, it is compiled again\n    /// for the values then.\n    pub guard_fails: u32,\n"
+        "    /// Compiled code for the run after its first instruction, what each\n    /// of its steps was compiled with, and how often the run has been\n    /// entered.\n    pub code: machine_jit::Code,\n    pub jit_steps: Vec<JitStep>,\n    pub hits: u32,\n    /// Entries its guard turned away: past a few, it is compiled again\n    /// for the values then.\n    pub guard_fails: u32,\n    /// The steps its compiled code has made, and the tier it is compiled\n    /// at (0 quick; past `HOT2` steps a step, compiled again optimised).\n    pub exec: u64,\n    pub tier: u8,\n"
     }
 
     pub(crate) fn jit_trace_init(&self) -> &'static str {
         if !self.jit {
             return "";
         }
-        "code: machine_jit::Code::default(), jit_steps: Vec::new(), hits: 0, guard_fails: 0, "
+        "code: machine_jit::Code::default(), jit_steps: Vec::new(), hits: 0, guard_fails: 0, exec: 0, tier: 0, "
     }
 
     /// What a compiled step is compiled with (beside the trace types).
@@ -187,6 +193,7 @@ impl Gen<'_> {
                         scale: b.clock,
                         deadline: if {quantum}u128 != 0 {{ Some(std::mem::offset_of!(Self, jit_sync_at)) }} else {{ b.due.map(|d| bus + d) }},
                     }});
+                self.jit.tier = t.tier;
                 self.jit.compile_with(steps.len(), 1, |e, k| {{
                     let checked = k == 0 || lowered[k - 1];
                     // Only reached from a lowered step before it.
@@ -202,6 +209,12 @@ impl Gen<'_> {
     }}
     /// Entries into a run before it is compiled (`HOT` in the generator;
     /// `MACHINE_JIT_HOT` overrides it, for tuning).
+    /// Steps a step of a run makes compiled at the quick tier before the
+    /// run is compiled again optimised (`HOT2`; `MACHINE_JIT_HOT2`).
+    fn jit_hot2() -> u64 {{
+        static H: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        *H.get_or_init(|| std::env::var("MACHINE_JIT_HOT2").ok().and_then(|v| v.parse().ok()).unwrap_or({HOT2}))
+    }}
     fn jit_hot() -> u32 {{
         static H: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
         *H.get_or_init(|| std::env::var("MACHINE_JIT_HOT").ok().and_then(|v| v.parse().ok()).unwrap_or({HOT}))
@@ -313,9 +326,27 @@ impl Gen<'_> {
             if let Some((c, len)) = found {{
                 if budget >= len {{
                     self.jit_left = budget;
+                    let slot = self.tr_cur as usize;
                     let n = self.jit_enter(c, 0) as u64;
                     if let Some(e) = self.jit_err.take() {{
                         return Err(e);
+                    }}
+                    // Hot enough to pay for the optimiser: compiled again,
+                    // at the optimised tier.
+                    let again = match self.traces.get_mut(slot).and_then(|t| t.as_mut()) {{
+                        Some(t) if t.tier == 0 && t.code.addr() == Some(c) => {{
+                            t.exec = t.exec.saturating_add(n);
+                            if t.exec >= Self::jit_hot2().saturating_mul(t.steps.len() as u64) {{
+                                t.tier = 1;
+                                true
+                            }} else {{
+                                false
+                            }}
+                        }}
+                        _ => false,
+                    }};
+                    if again {{
+                        self.jit_compile(slot);
                     }}
                     if n > 0 {{
                         return Ok(n);

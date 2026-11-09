@@ -318,3 +318,21 @@ one frame in `draw_every` (0: none) with the machine running the same:
 | 4 | 129.9G | 9.4x | the same |
 | 0 (none) | 106.3G | 10.1x | the same |
 
+Then (2026-11-09): with the screen undrawn, compiling was a third of the
+game's host instructions: its frame loop runs 70 times a second, so its
+code crossed 4096 entries within a minute and was compiled, to run too
+few times to pay. Runs are now compiled at 16384 entries, quickly
+(Cranelift's optimiser off), and compiled again optimised once their
+steps have run a million times a step (`HOT2`, `MACHINE_JIT_HOT2`).
+Host instructions:
+
+| | game (`blocks`, undrawn) | `blocks` boot | chk | mix | `jit` boot | chk | mix |
+|---|---|---|---|---|---|---|---|
+| 4096, optimised | 106.3G | 22.2G | 53.1G | 62.1G | 27.9G | 98.6G | 136.6G |
+| 16384, quick only | 94.5G | 18.1G | 52.9G | 63.5G | | | |
+| 16384, then optimised at 1 M | 94.6G | 18.8G | 49.6G | 59.4G | 23.9G | 94.5G | 132.7G |
+
+(chk and mix whole, boot included.) The `jit` profile ends chk and mix at
+the tick `emulate` does. The generated tests compile at 64 entries and
+optimise at 1000 steps a step, so their loops run at both tiers.
+

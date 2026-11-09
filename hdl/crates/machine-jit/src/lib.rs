@@ -57,9 +57,13 @@ impl Code {
 
 /// Compiles runs. Code lives until the engine is reset (`clear`).
 pub struct Engine {
-    module: Option<JITModule>,
+    /// The code generators, by tier: 0 quick to compile (Cranelift's
+    /// optimiser off), 1 optimised.
+    module: [Option<JITModule>; 2],
     /// The machine's clock, for the runs compiled from now on (`Clock`).
     pub clock: Option<Clock>,
+    /// The tier the runs compiled from now on are compiled at.
+    pub tier: u8,
     fbc: FunctionBuilderContext,
     count: usize,
     next: u32,
@@ -67,7 +71,7 @@ pub struct Engine {
 
 impl Default for Engine {
     fn default() -> Self {
-        Engine { module: None, clock: None, fbc: FunctionBuilderContext::new(), count: 0, next: 0 }
+        Engine { module: [None, None], clock: None, tier: 0, fbc: FunctionBuilderContext::new(), count: 0, next: 0 }
     }
 }
 
@@ -87,13 +91,13 @@ impl std::fmt::Debug for Engine {
 /// Runs compiled before the engine is reset (and its code freed).
 pub const LIMIT: usize = 16384;
 
-fn new_module() -> Option<JITModule> {
+fn new_module(tier: u8) -> Option<JITModule> {
     let mut flags = settings::builder();
-    // Cranelift's own optimisation (`MACHINE_JIT_OPT=none` without): it
-    // compiles a third slower, and the code runs 6-8% faster (the 386
-    // board's `blocks` profile); with runs compiled only once entered
-    // thousands of times, the code is what counts.
-    let opt = std::env::var("MACHINE_JIT_OPT").unwrap_or_else(|_| "speed".to_string());
+    // Cranelift's own optimisation, by tier: off for the quick tier, on for
+    // the optimised one (it compiles a third slower, and the code runs 6-8%
+    // faster on the 386 board's `blocks` profile). `MACHINE_JIT_OPT` sets
+    // both.
+    let opt = std::env::var("MACHINE_JIT_OPT").unwrap_or_else(|_| if tier == 0 { "none" } else { "speed" }.to_string());
     flags.set("opt_level", &opt).ok()?;
     // The register allocator (`MACHINE_JIT_REGALLOC=single_pass`: quicker
     // to compile, more spills).
@@ -116,7 +120,7 @@ impl Engine {
 
     /// Forget every compiled run and free its code. None may be running.
     pub fn clear(&mut self) {
-        if let Some(m) = self.module.take() {
+        for m in self.module.iter_mut().filter_map(Option::take) {
             // SAFETY: the caller has no compiled code on the stack, and drops
             // every address it was given.
             unsafe { m.free_memory() };
@@ -141,10 +145,11 @@ impl Engine {
     /// (what is known of the machine with it, past the entries). None if the
     /// code generator is unavailable or the code is not valid.
     pub fn compile_with(&mut self, steps: usize, entries: usize, mut emit: impl FnMut(&mut Em, usize)) -> Option<usize> {
-        if self.module.is_none() {
-            self.module = new_module();
+        let tier = (self.tier as usize).min(1);
+        if self.module[tier].is_none() {
+            self.module[tier] = new_module(tier as u8);
         }
-        let m = self.module.as_mut()?;
+        let m = self.module[tier].as_mut()?;
         let ptr = m.target_config().pointer_type();
         let cc = m.target_config().default_call_conv;
         let mut ctx = m.make_context();

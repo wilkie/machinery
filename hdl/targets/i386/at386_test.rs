@@ -332,7 +332,8 @@ fn bench_compare() {
 /// a program, a game say) for `PLAY_SECONDS` of emulated time (30), pressing
 /// keys at given times (`PLAY_KEYS`: `seconds:code` pairs, comma-separated,
 /// a set-1 make code in hex), and saving the screen every `PLAY_EVERY`
-/// seconds (5) as PPM files in `PLAY_SHOTS` (when set). Reports the
+/// seconds (5) as PPM files in `PLAY_SHOTS` (when set; the VGA draws one
+/// frame in `PLAY_DRAW`, 1, 0 for none). Reports the
 /// instructions and the time taken. Run with `PLAY_DISK=... cargo test
 /// --release -- --ignored --nocapture play_disk`.
 #[test]
@@ -342,6 +343,9 @@ fn play_disk() {
     let (Some(mut sys), Ok(d)) = (at(0), std::fs::read(path)) else { return skip() };
     insert(&mut sys, &d);
     let var = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    // `PLAY_DRAW`: the VGA draws one frame in so many (0: none); the machine
+    // runs the same whatever it is.
+    sys.board().vga.draw_every = var("PLAY_DRAW", 1.0) as u32;
     let (seconds, every) = (var("PLAY_SECONDS", 30.0), var("PLAY_EVERY", 5.0));
     let mut keys: Vec<(f64, u8)> = std::env::var("PLAY_KEYS")
         .unwrap_or_default()

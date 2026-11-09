@@ -365,10 +365,48 @@ fn vga_memo_matches_drawing_every_line() {
                 panic!("mode {mode:#x}: the copies' frames differ");
             }
             if a.pos < n {
-                assert!(a.frame == b.frame && a.dots == b.dots, "mode {mode:#x}, frame {}: the memo changed the picture", a.frames);
+                assert!(a.frame == b.frame, "mode {mode:#x}, frame {}: the memo changed the picture", a.frames);
             }
         }
-        assert!(a.frame == b.frame && a.dots == b.dots, "mode {mode:#x}: the memo changed the picture");
+        assert!(a.frame == b.frame, "mode {mode:#x}: the memo changed the picture");
+    }
+}
+
+/// The DAC's comparator works out the dot under the beam itself
+/// (`dot_index`), so drawing is output alone: in every mode tried, as the
+/// BIOS sets it up with text written, each dot of the drawn frame has the
+/// colour of the DAC entry `dot_index` gives.
+#[test]
+fn vga_dot_index_matches_the_drawn_frame() {
+    let modes: &[u16] = &[0x03, 0x01, 0x13, 0x12, 0x04, 0x06, 0x0D, 0x10];
+    for &mode in modes {
+        let mut calls = int10(mode, 0, 0, 0);
+        for c in b"Hi! \x01\xDB\xB1" {
+            calls.extend(int10(0x0E00 | *c as u16, 0x000E, 0, 0));
+        }
+        let Some(mut sys) = run_vga_bios(&calls) else { return skip() };
+        let mut v = sys.board().vga.clone();
+        // A frame drawn whole, as the memory now is.
+        v.memo_clear();
+        let f0 = v.frames;
+        // (Ending where the blink phase did not just move: the frame was
+        // drawn with the phase `dot_index` sees.)
+        while v.frames < f0 + 2 || v.frames % 8 == 0 {
+            let _ = v.on_tick_dot25(&mut Quiet, 1000);
+            let _ = v.on_tick_dot28(&mut Quiet, 1000);
+        }
+        let (w, h) = (v.frame_width, v.frame_height);
+        assert!(w > 0 && h > 0, "mode {mode:#x}: nothing drawn");
+        let mut lit = 0;
+        for y in 0..h {
+            for x in 0..w {
+                let i = v.fn_dot_index(&mut Quiet, y, x) as usize * 3;
+                let at = ((y * 720 + x) * 3) as usize;
+                assert_eq!(&v.frame[at..at + 3], &v.dac[i..i + 3], "mode {mode:#x}: dot ({x}, {y})");
+                lit += (v.frame[at..at + 3] != [0, 0, 0]) as u32;
+            }
+        }
+        assert!(lit > 0, "mode {mode:#x}: a blank screen proves little");
     }
 }
 

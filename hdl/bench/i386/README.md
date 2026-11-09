@@ -305,3 +305,16 @@ tick throughout; host instructions):
 | 16 colours at 8 dots a character clock, shown once or twice, in a loop of fixed bit order | 228.0G | 5.9x |
 | the memo's recorder: a last range for each 64 KB of a memory (the four planes), not one a memory | 201.8G | 7.0x |
 
+Then (2026-11-09): drawing is output alone. The DAC's comparator (Input
+Status 0 bit 4) works out the dot under the beam from the memory and
+registers when it is read (`dot_index`, `render`'s rules a dot at a
+time; real hardware compares the dot being scanned, not the last frame's),
+so no per-dot record (`dots`) is kept, and the host may have the VGA draw
+one frame in `draw_every` (0: none) with the machine running the same:
+
+| `draw_every` | host instructions | speed | memory, time |
+|---|---|---|---|
+| 1 (every frame) | 189.0G | 7.4x | as before |
+| 4 | 129.9G | 9.4x | the same |
+| 0 (none) | 106.3G | 10.1x | the same |
+

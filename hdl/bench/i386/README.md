@@ -407,3 +407,31 @@ CPL is now 0 until a far transfer loads CS. After about 80 s of loading
 (DOS 3.30, an MFM disk), the intro plays, its music right by ear; under
 `blocks` at about 10x real time (2026-11-09).
 
+Then (2026-11-09): One Must Fall measured. The same 2.4 G instructions
+(boot, DOS/4GW, loading, the intro, 572 emulated seconds) end alike on
+`emulate` and `jit`: the memory, the tick, 3476108 samples at 800 M.
+Where the host instructions go over 800 M (`jit`; `blocks`): interpreted
+steps 25%; 30% (its loading through DOS in real mode, and lukewarm
+code), compiling 17%; 18%, compiled code 15%; 11%, the DSP and the DMA
+controller directly 1.4%; 2.2%, all devices' syncs 3.2%; 4.9%: the sound
+is not what costs.
+
+At its main menu, its music playing (instructions 1.6 G to 2.4 G; QEMU
+from 60 to 120 s of wall time, its BIOS tick count read through its
+monitor, Enter sent by `sendkey`):
+
+| | speed | guest MIPS | instructions an emulated second |
+|---|---|---|---|
+| ours, `emulate` | 4.0x | 17 | 4.3 M (the 386's timing) |
+| ours, `jit` | 8.1x | 35 | 4.3 M |
+| ours, `blocks` | 11.4x | 62 | 5.4 M |
+| QEMU 8.2, `-icount shift=7,sleep=off` | 6.1x | 47 | 7.8 M (by `shift=7`) |
+
+QEMU in its usual mode keeps time by the host's clock, and so does
+DOSBox: the game, waiting on its timer, then runs at its own pace and
+spins, and neither gives a speed; under `-icount` QEMU's time follows its
+instructions, at some cost to its speed. Bochs (`sync=none`) would, but
+it offers no headless way to read the guest's time or press a key. The
+game's launcher reads the keyboard itself, so a key stuffed into the
+BIOS's buffer does not reach it.
+

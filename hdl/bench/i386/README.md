@@ -243,6 +243,22 @@ Not tried yet: moving the rare paths (18 a step, 47 IR instructions each
 on average: guards, slow memory paths and fault exits, each storing what
 the run owes) out of line, into shared code.
 
+Run 2026-11-08, late (the same machine, load about 2 of 32 threads;
+`run.py`, three runs interleaved, median; snd's card at 220h, IRQ 5,
+DMA 1 on every tool):
+
+| tool | chk MIPS | mix MIPS | snd MIPS | keeps |
+|---|---|---|---|---|
+| ours, trace core | 31 | 30 | 31 | exact |
+| ours, JIT | 261 | 178 | 198 | exact |
+| ours, JIT, `approx` | 232 | 109 | 187 | `sync: run`, approximate time |
+| ours, JIT, `blocks` | 609 | 455 | 434 | devices on time, seen at back-edges and in REPs; exact time but for REPs' batches |
+| ours, JIT, `quantum` | 623 | 548 | 452 | as `blocks`, the devices that raise no signal each ms |
+| Bochs 2.7 | 105 | 88 | 108 | |
+| DOSBox 0.74 normal | 117 | 121 | 118 | |
+| DOSBox 0.74 dynamic | 273 | 327 | 262 | |
+| QEMU 8.2 TCG | 2217 | 969 | 2397 | |
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

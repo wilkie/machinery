@@ -447,3 +447,34 @@ compiled code does most of the work, it is about 1%: `jit` 214.1 G to
 212.3 G host instructions, `blocks` 188.7 G to 186.8 G, each ending as
 before (frame, memory, tick).
 
+
+Then (2026-11-09): DOSBox measured the way we are. `build_dosbox.sh`
+builds DOSBox 0.74-3 with `patches/dosbox-0.74-3.patch` (sources fetched
+at pinned releases and checked; none kept here). In the patch, emulated time
+follows the cycles alone: fast forward is held on, so `cycles=fixed N` is N
+cycles an emulated millisecond however fast the host is. The guest's
+clock (CMOS, the BIOS tick's resync, DOS's date) is 1993-01-01 12:00 plus
+emulated time. Keys are pressed at emulated times, and a report (cycles,
+the normal core's instructions, the BIOS tick, a hash of memory,
+optionally a screenshot) comes at set times. A run repeats exactly. The
+runner, `dosbox_bench.py IMG T1 T2`, boots the disks `play_disk` boots and
+counts host instructions (`perf stat`) between T1 and T2.
+
+Lemmings at its main menu (40 s to 90 s, a banner scrolling; on the same
+screen in both by 20 s, by screenshots), host instructions an emulated
+second. DOSBox at `cycles=fixed 3000` runs 2.69 M instructions an
+emulated second there, ours 2.63 M; both draw every frame:
+
+| | every frame | drawing (almost) none | drawing | the rest, a guest instruction |
+|---|---|---|---|---|
+| ours, `jit` | 2.30 G | 0.96 G (none) | 1.34 G | 364 |
+| ours, `blocks` | 2.13 G | 0.79 G (none) | 1.34 G | 300 |
+| DOSBox normal | 0.54 G | 0.33 G (1 in 11) | 0.23 G | about 115 |
+| DOSBox dynamic | 0.39 G | 0.19 G (1 in 11) | 0.22 G | about 64 |
+
+Drawing costs us six times what it costs DOSBox, which compares each
+line with the last frame's and redraws only what changed (ours draws a
+frame dot by dot at the CRTC's timing). Our `blocks` profile costs 4.7
+times the dynamic core per guest instruction otherwise, and 2.6 times the
+normal interpreter. DOSBox's timing is not the 386's (a cycle is about an
+instruction), so its work is not exact; ours (`jit`) is.

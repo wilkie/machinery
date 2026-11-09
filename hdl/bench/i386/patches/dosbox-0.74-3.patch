@@ -1,0 +1,231 @@
+diff -ru dosbox-0.74-3/src/cpu/core_normal.cpp
+--- dosbox-0.74-3/src/cpu/core_normal.cpp
++++ dosbox-0.74-3/src/cpu/core_normal.cpp
+@@ -136,8 +136,11 @@
+ 
+ #define EALookupTable (core.ea_table)
+ 
++extern Bit64u bench_instructions;
++
+ Bits CPU_Core_Normal_Run(void) {
+ 	while (CPU_Cycles-->0) {
++		bench_instructions++;
+ 		LOADIP;
+ 		core.opcode_index=cpu.code.big*0x200;
+ 		core.prefixes=cpu.code.big;
+diff -ru dosbox-0.74-3/src/dos/dos.cpp
+--- dosbox-0.74-3/src/dos/dos.cpp
++++ dosbox-0.74-3/src/dos/dos.cpp
+@@ -32,6 +32,8 @@
+ #include "support.h"
+ #include "serialport.h"
+ 
++time_t BENCH_Time(void);
++
+ DOS_Block dos;
+ DOS_InfoBlock dos_infoblock;
+ 
+@@ -66,6 +68,7 @@
+ #ifdef DOS_OVERHEAD
+ #ifndef DOSBOX_CPU_H
+ #include "cpu.h"
++
+ #endif
+ 
+ static inline void overhead() {
+@@ -1169,7 +1172,7 @@
+ 	
+ 		/* Setup time and date */
+ 		time_t curtime;struct tm *loctime;
+-		curtime = time (NULL);loctime = localtime (&curtime);
++		curtime = BENCH_Time();loctime = localtime (&curtime);
+ 	
+ 		dos.date.day=(Bit8u)loctime->tm_mday;
+ 		dos.date.month=(Bit8u)loctime->tm_mon+1;
+diff -ru dosbox-0.74-3/src/dosbox.cpp
+--- dosbox-0.74-3/src/dosbox.cpp
++++ dosbox-0.74-3/src/dosbox.cpp
+@@ -23,6 +23,10 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <unistd.h>
++#include <sys/time.h>
++#include <time.h>
++#include <vector>
++#include <algorithm>
+ #include "dosbox.h"
+ #include "debug.h"
+ #include "cpu.h"
+@@ -42,6 +46,8 @@
+ #include "mapper.h"
+ #include "ints/int10.h"
+ #include "render.h"
++#include "mem.h"
++#include "hardware.h"
+ 
+ Config * control;
+ MachineType machine;
+@@ -338,6 +344,98 @@
+ 	}
+ }
+ 
++/* Benchmarking (DOSBOX_BENCH_MS set): emulated time follows the CPU's
++ * cycles alone. Fast forward is held on (no sleeping), so with
++ * `cycles=fixed N` each emulated millisecond is N cycles however long the
++ * host takes. Every emulated millisecond a ticker presses scheduled keys,
++ * reports when asked and stops at the time given:
++ *   DOSBOX_BENCH_MS=n      stop after n emulated milliseconds
++ *   DOSBOX_BENCH_EVERY=n   report every n emulated milliseconds
++ *   DOSBOX_BENCH_KEYS=ms:code,...  a set-1 scancode (hex; 100+xx is E0 xx)
++ *                          pressed at ms, released 150 ms later
++ *   DOSBOX_BENCH_SHOTS=1   a screenshot (to [dosbox] captures) at each
++ *                          DOSBOX_BENCH_EVERY report, at the next frame
++ * A report: emulated ms, cycles given the CPU, instructions the normal
++ * core ran (exact; the dynamic core's blocks are not counted), host wall
++ * seconds, the BIOS tick (0040:006C) and an FNV-1a hash of guest memory.
++ */
++Bit64u bench_instructions = 0;
++static Bit64u bench_ms = 0, bench_stop = 0, bench_every = 0, bench_cycles = 0;
++struct BenchKey { Bit64u at; Bit32u code; bool up; };
++static std::vector<BenchKey> bench_keys;
++static size_t bench_next = 0;
++static double bench_t0 = 0;
++void KEYBOARD_BenchScan(Bit8u data);
++
++static double bench_wall(void) {
++	struct timeval tv; gettimeofday(&tv, 0);
++	return tv.tv_sec + tv.tv_usec / 1e6;
++}
++
++static Bit64u bench_hash(void) {
++	Bit64u h = 0xcbf29ce484222325ULL;
++	HostPt m = MemBase;
++	Bitu n = MEM_TotalPages() * 4096;
++	for (Bitu i = 0; i < n; i++) { h ^= m[i]; h *= 0x100000001b3ULL; }
++	return h;
++}
++
++static void bench_report(const char * what) {
++	printf("DOSBOX_BENCH %s ms %llu cycles %llu instructions %llu wall %.3f tick %08x ram %016llx\n",
++		what, (unsigned long long)bench_ms, (unsigned long long)bench_cycles,
++		(unsigned long long)bench_instructions, bench_wall() - bench_t0,
++		(unsigned)host_readd(MemBase + 0x46c), (unsigned long long)bench_hash());
++	fflush(stdout);
++}
++
++/* The host's clock as the guest sees it (CMOS, the BIOS tick's resync, DOS's
++ * date): when benchmarking, 1993-01-01 12:00 UTC plus the emulated time, so
++ * that a run does not depend on when it is made. */
++time_t BENCH_Time(void) {
++	if (!getenv("DOSBOX_BENCH_MS")) return time(NULL);
++	return (time_t)725889600 + (time_t)(bench_ms / 1000);
++}
++
++static bool bench_key_order(const BenchKey & a, const BenchKey & b) { return a.at < b.at; }
++
++static void BENCH_Tick(void) {
++	ticksLocked = true;
++	bench_ms++;
++	bench_cycles += CPU_CycleMax;
++	while (bench_next < bench_keys.size() && bench_keys[bench_next].at <= bench_ms) {
++		const BenchKey & k = bench_keys[bench_next++];
++		if (k.code > 0xff) KEYBOARD_BenchScan(0xe0);
++		KEYBOARD_BenchScan((Bit8u)((k.code & 0xff) | (k.up ? 0x80 : 0)));
++	}
++	if (bench_every && bench_ms % bench_every == 0) {
++		bench_report("at");
++		if (getenv("DOSBOX_BENCH_SHOTS")) CaptureState |= CAPTURE_IMAGE;
++	}
++	if (bench_ms >= bench_stop) { bench_report("end"); _exit(0); }
++}
++
++static void BENCH_Init(void) {
++	const char * ms = getenv("DOSBOX_BENCH_MS");
++	if (!ms) return;
++	bench_stop = strtoull(ms, 0, 10);
++	const char * every = getenv("DOSBOX_BENCH_EVERY");
++	if (every) bench_every = strtoull(every, 0, 10);
++	const char * keys = getenv("DOSBOX_BENCH_KEYS");
++	while (keys && *keys) {
++		char * end;
++		Bit64u at = strtoull(keys, &end, 10);
++		if (*end != ':') E_Exit("DOSBOX_BENCH_KEYS: expected ms:code");
++		Bit32u code = (Bit32u)strtoul(end + 1, &end, 16);
++		BenchKey down = { at, code, false }, up = { at + 150, code, true };
++		bench_keys.push_back(down); bench_keys.push_back(up);
++		keys = *end == ',' ? end + 1 : end;
++	}
++	std::stable_sort(bench_keys.begin(), bench_keys.end(), bench_key_order);
++	bench_t0 = bench_wall();
++	ticksLocked = true;
++	TIMER_AddTickHandler(BENCH_Tick);
++}
++
+ static void DOSBOX_RealInit(Section * sec) {
+ 	Section_prop * section=static_cast<Section_prop *>(sec);
+ 	/* Initialize some dosbox internals */
+@@ -345,6 +443,7 @@
+ 	ticksRemain=0;
+ 	ticksLast=GetTicks();
+ 	ticksLocked = false;
++	BENCH_Init();
+ 	DOSBOX_SetLoop(&Normal_Loop);
+ 	MSG_Init(section);
+ 
+diff -ru dosbox-0.74-3/src/hardware/cmos.cpp
+--- dosbox-0.74-3/src/hardware/cmos.cpp
++++ dosbox-0.74-3/src/hardware/cmos.cpp
+@@ -30,6 +30,8 @@
+ #include "setup.h"
+ #include "cross.h" //fmod on certain platforms
+ 
++time_t BENCH_Time(void);
++
+ static struct {
+ 	Bit8u regs[0x40];
+ 	bool nmi;
+@@ -134,7 +136,7 @@
+ 	time_t curtime;
+ 	struct tm *loctime;
+ 	/* Get the current time. */
+-	curtime = time (NULL);
++	curtime = BENCH_Time();
+ 
+ 	/* Convert it to local time representation. */
+ 	loctime = localtime (&curtime);
+diff -ru dosbox-0.74-3/src/hardware/keyboard.cpp
+--- dosbox-0.74-3/src/hardware/keyboard.cpp
++++ dosbox-0.74-3/src/hardware/keyboard.cpp
+@@ -218,6 +218,11 @@
+ 	return status;
+ }
+ 
++/* For benchmarking: a scancode straight into the controller's buffer. */
++void KEYBOARD_BenchScan(Bit8u data) {
++	KEYBOARD_AddBuffer(data);
++}
++
+ void KEYBOARD_AddKey(KBD_KEYS keytype,bool pressed) {
+ 	Bit8u ret=0;bool extend=false;
+ 	switch (keytype) {
+diff -ru dosbox-0.74-3/src/ints/bios.cpp
+--- dosbox-0.74-3/src/ints/bios.cpp
++++ dosbox-0.74-3/src/ints/bios.cpp
+@@ -32,6 +32,8 @@
+ #include "setup.h"
+ #include "serialport.h"
+ 
++time_t BENCH_Time(void);
++
+ 
+ /* if mem_systems 0 then size_extended is reported as the real size else 
+  * zero is reported. ems and xms can increase or decrease the other_memsystems
+@@ -381,7 +383,7 @@
+ 		if(((value %100)==0) && check) {
+ 			check = false;
+ 			time_t curtime;struct tm *loctime;
+-			curtime = time (NULL);loctime = localtime (&curtime);
++			curtime = BENCH_Time();loctime = localtime (&curtime);
+ 			Bit32u ticksnu = (Bit32u)((loctime->tm_hour*3600+loctime->tm_min*60+loctime->tm_sec)*(float)PIT_TICK_RATE/65536.0);
+ 			Bit32s bios = value;Bit32s tn = ticksnu;
+ 			Bit32s diff = tn - bios;

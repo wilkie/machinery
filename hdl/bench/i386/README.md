@@ -184,6 +184,30 @@ runs DOS's writes kept invalidating now live to be compiled (210 compiles
 from 205), and a compile costs about 110 M host instructions (27 M a guest
 instruction compiled): compiling is 23G of the boot's 53G.
 
+Then (2026-11-08): the compile cost. Each step was about 2700 IR
+instructions, 220 blocks and 8.7 KB of host code (`MACHINE_JIT_STATS`
+reports each compile): 52% of the time in Cranelift, 32% building, 16%
+in `sink`. Half the IR was constants, two thirds of them dead: a branch's
+end put every known local in its variable, though the join needed only
+those the branches disagree on. And every way out of a run settled the
+clock itself, where they now meet and settle it once. 1900 IR
+instructions a step, 7.9 KB of code; and the code runs better (`jit`'s
+chk run 72.3G host instructions from 79.8G, `blocks`' 35.6G from 37.4G).
+
+A compile still costs about 27 M host instructions a step, and a step
+compiled saves under a hundred a time: a run must be entered some
+hundreds of thousands of times to pay. Runs are now compiled when entered
+4096 times, not 64 (host instructions):
+
+| profile | boot | chk run | mix run |
+|---|---|---|---|
+| `jit`, 64 | 53.6G | 72.3G | 119.6G |
+| `jit`, 4096 | 30.2G | 70.9G | 118.4G |
+| `blocks`, 64 | 31.5G | 35.6G | 45.6G |
+| `blocks`, 4096 | 21.9G | 35.2G | 45.5G |
+
+The `jit` profile still ends chk, mix and snd at the tick `emulate` does.
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

@@ -145,16 +145,21 @@ impl Engine {
         ctx.func.signature.params.push(AbiParam::new(types::I32));
         ctx.func.signature.returns.push(AbiParam::new(types::I32));
         let sig = ctx.func.signature.clone();
+        let stats = std::env::var_os("MACHINE_JIT_STATS").is_some();
+        let t0 = std::time::Instant::now();
         // A run that goes round (`Em::loop_back`) is built twice: the first
         // time says what it knows going round, and the second passes that
         // to its first step instead of storing it.
         // So are loops within steps (`Em::repeat_head`).
         let (seen, repeats) = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, self.clock, &mut emit, None, Vec::new());
         let plan = seen.filter(|p| !p.is_empty());
-        if plan.is_some() || repeats.iter().flatten().any(|p| !p.is_empty()) {
+        let plan_built = plan.is_some() || repeats.iter().flatten().any(|p| !p.is_empty());
+        if plan_built {
             ctx.func = cranelift_codegen::ir::Function::with_name_signature(Default::default(), sig);
             let _ = build(&mut ctx.func, &mut self.fbc, ptr, cc, steps, entries, self.clock, &mut emit, plan, repeats);
         }
+        let built_twice = plan_built;
+        let t1 = std::time::Instant::now();
         let name = format!("run{}", self.next);
         self.next += 1;
         let id = m.declare_function(&name, Linkage::Local, &ctx.func.signature).ok()?;
@@ -170,6 +175,8 @@ impl Engine {
             sink::factor_params(&mut ctx.func);
             sink::sink_cold(&mut ctx.func);
         }
+        let t2 = std::time::Instant::now();
+        let (insts, blocks) = (ctx.func.dfg.num_insts(), ctx.func.dfg.num_blocks());
         if std::env::var("MACHINE_JIT_CLIF_AFTER").ok().as_deref() == Some(name.as_str()) {
             eprintln!("machine-jit: {name} ({steps} steps), IR as compiled:\n{}", ctx.func.display());
         }
@@ -179,6 +186,17 @@ impl Engine {
             }
             m.clear_context(&mut ctx);
             return None;
+        }
+        if stats {
+            // Per compile: the steps, the IR (instructions, blocks), the code
+            // bytes, and the microseconds building it (twice when it goes
+            // round), moving it (`sink`) and in Cranelift.
+            let t3 = std::time::Instant::now();
+            let bytes = ctx.compiled_code().map_or(0, |c| c.code_buffer().len());
+            eprintln!(
+                "machine-jit stats: {name} steps {steps} insts {insts} blocks {blocks} bytes {bytes} build {} twice {} sink {} cranelift {}",
+                (t1 - t0).as_micros(), built_twice as u8, (t2 - t1).as_micros(), (t3 - t2).as_micros()
+            );
         }
         if dump {
             if let Some(c) = ctx.compiled_code() {
@@ -302,6 +320,11 @@ fn build(
     b.switch_to_block(out);
     b.seal_block(out);
     let n = b.block_params(out)[0];
+    // The ticks owed on every way out, put in the field here (each way out
+    // leaves them in the clock's variable).
+    if let Some(cv) = clock {
+        cv.settle(&mut b, machine);
+    }
     b.ins().return_(&[n]);
     b.finalize();
     seen

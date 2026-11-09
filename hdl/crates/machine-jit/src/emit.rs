@@ -58,7 +58,7 @@ impl ClockVars {
     }
 
     /// The ticks owed, put in the field.
-    fn settle(&self, b: &mut FunctionBuilder, m: Value) {
+    pub(crate) fn settle(&self, b: &mut FunctionBuilder, m: Value) {
         let a = b.use_var(self.acc);
         let k = b.ins().iconst(types::I64, self.c.scale as u64 as i64);
         let lo = b.ins().imul(a, k);
@@ -566,7 +566,7 @@ impl<'a, 'f> Em<'a, 'f> {
             let c = self.b.ins().iconst(types::I32, n as i64);
             let bv = self.b.use_var(self.made_base);
                 let c = self.b.ins().iadd(c, bv);
-            self.clock_settle();
+            self.clock_leave();
         self.b.ins().jump(self.out, &[c.into()]);
             self.live = false;
         }
@@ -650,6 +650,18 @@ impl<'a, 'f> Em<'a, 'f> {
         self.regs.retain(|(o, m), _| *o + m.width() as usize / 8 <= n || n + 16 <= *o);
         let m = self.m;
         cv.settle(self.b, m);
+    }
+
+    /// A way out: the ticks owed are put in the field where the ways out
+    /// meet (`settle_out`, once for them all); here, only what the code
+    /// wrote to the field goes in first.
+    fn clock_leave(&mut self) {
+        let Some(cv) = self.clock else { return };
+        if !self.live {
+            return;
+        }
+        let n = cv.c.now;
+        self.flush_overlapping(n, N::U128, None);
     }
 
     /// The ticks left worked out again (after a call: the time and the
@@ -1232,7 +1244,7 @@ impl<'a, 'f> Em<'a, 'f> {
                 let c = self.b.ins().iadd(c, made);
                 let bv = self.b.use_var(self.made_base);
                 let c = self.b.ins().iadd(c, bv);
-                self.clock_settle();
+                self.clock_leave();
         self.b.ins().jump(self.out, &[c.into()]);
                 self.live = false;
             }
@@ -1465,23 +1477,15 @@ impl<'a, 'f> Em<'a, 'f> {
         self.get(r)
     }
 
-    /// A branch's end: what it leaves known, its known locals (those from
-    /// before the branch) put in their variables (the other branch may
-    /// leave them otherwise), and a jump to a block of its own (where the
-    /// join, knowing whether another branch comes back, stores what it owes
-    /// or not). None when it left the code.
+    /// A branch's end: what it leaves known, and a jump to a block of its
+    /// own (where the join, knowing whether another branch comes back,
+    /// stores what it owes or not, and puts in their variables the known
+    /// locals the branches disagree on). None when it left the code.
     fn leave(&mut self, before: &State, _join: Block) -> Option<(State, Block)> {
         if !self.live {
             return None;
         }
-        let n = before.slots.len().min(self.slots.len());
-        for i in 0..n {
-            let s = self.slots[i];
-            if let Some(c) = s.k {
-                let x = self.konst(s.n, c);
-                self.b.def_var(s.var, x);
-            }
-        }
+        let _ = before;
         let st = self.state();
         let pad = self.b.create_block();
         self.b.ins().jump(pad, &[]);
@@ -1588,10 +1592,28 @@ impl<'a, 'f> Em<'a, 'f> {
                 (b, ps)
             })
             .collect();
+        // The locals from before the branches that they do not all know
+        // as the same value: each branch that knows its value puts it in
+        // the variable (one that does not left it there). Those all know
+        // stay known past the join, their variables unused.
+        let nslots = before.slots.len();
+        let differ: Vec<usize> = (0..nslots)
+            .filter(|&i| {
+                let first = ends[0].0.slots.get(i).copied().flatten();
+                !ends.iter().all(|(e, _)| e.slots.get(i).copied().flatten() == first)
+            })
+            .collect();
         for (st, pad) in &ends {
             self.b.switch_to_block(*pad);
             self.restore(st);
             self.live = true;
+            for &i in &differ {
+                if let Some(Some(c)) = st.slots.get(i).copied() {
+                    let sv = self.slots[i];
+                    let x = self.konst(sv.n, c);
+                    self.b.def_var(sv.var, x);
+                }
+            }
             let args = self.carry_args(&carried, &shapes);
             self.dirty.retain(|d| !common.contains(d) && !carried.contains(d));
             self.flush();
@@ -2173,7 +2195,7 @@ impl<'a, 'f> Em<'a, 'f> {
         let c = self.b.ins().iconst(types::I32, self.k as i64 + made as i64);
         let bv = self.b.use_var(self.made_base);
                 let c = self.b.ins().iadd(c, bv);
-        self.clock_settle();
+        self.clock_leave();
         self.b.ins().jump(self.out, &[c.into()]);
         self.live = false;
     }
@@ -2207,7 +2229,7 @@ impl<'a, 'f> Em<'a, 'f> {
                 let c = self.b.ins().iadd(c, made);
                 let bv = self.b.use_var(self.made_base);
                 let c = self.b.ins().iadd(c, bv);
-                self.clock_settle();
+                self.clock_leave();
         self.b.ins().jump(self.out, &[c.into()]);
                 self.b.switch_to_block(cb);
             }

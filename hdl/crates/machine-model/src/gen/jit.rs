@@ -20,8 +20,13 @@ use std::fmt::Write as _;
 use super::{ident, Gen, GenError, R};
 use machine_sema::ty::Ty;
 
-/// Entries into a run before it is compiled.
-const HOT: u32 = 64;
+/// Entries into a run before it is compiled. A compile costs about 27 M
+/// host instructions a step (the 386's), and a step compiled saves under
+/// a hundred each time it runs: a run entered a few hundred times does
+/// not pay for itself. At 4096, a DOS boot takes 44% fewer host
+/// instructions than at 64 (the `jit` profile), and loops that run long
+/// lose nothing.
+const HOT: u32 = 4096;
 
 /// The host instructions an outlined fn may take, inlined at a call where
 /// what is known folds it (`Em::try_inline`). On the 386 benchmarks, 400

@@ -333,7 +333,8 @@ fn bench_compare() {
 /// keys at given times (`PLAY_KEYS`: `seconds:code` pairs, comma-separated,
 /// a set-1 make code in hex), and saving the screen every `PLAY_EVERY`
 /// seconds (5) as PPM files in `PLAY_SHOTS` (when set; the VGA draws one
-/// frame in `PLAY_DRAW`, 1, 0 for none). Reports the
+/// frame in `PLAY_DRAW`, 1, 0 for none; with `PLAY_STEPS`, the FM chip's
+/// output in the WAV file `PLAY_WAV`). Reports the
 /// instructions and the time taken. Run with `PLAY_DISK=... cargo test
 /// --release -- --ignored --nocapture play_disk`.
 #[test]
@@ -377,20 +378,60 @@ fn play_disk() {
     // `PLAY_STEPS`: the run, the keys' times and their holds counted in
     // instructions, which every core counts alike (a time is reached at a
     // different instruction by each: a key would land elsewhere).
+    // `PLAY_WAV` (with `PLAY_STEPS`): the FM chip's output, gathered as the
+    // run goes (its ring holds 1.3 s), written as a WAV file.
+    let wav_path = std::env::var_os("PLAY_WAV");
+    let mut wav: Vec<i16> = Vec::new();
+    let mut heard = 0u32;
     if let Some(total) = std::env::var("PLAY_STEPS").ok().and_then(|v| v.parse::<u64>().ok()) {
+        let mut run = |sys: &mut System, n: u64| -> u64 {
+            let mut made = 0;
+            while made < n {
+                let chunk = (n - made).min(if wav_path.is_some() { 1_000_000 } else { u64::MAX });
+                made += sys.run_until(chunk, |_| false).unwrap();
+                if wav_path.is_some() {
+                    sys.with_opl(|o, _| {
+                        assert!(o.played - heard <= 0x10000, "the FM chip's ring overran");
+                        wav.extend((heard..o.played).map(|i| o.pcm[(i & 0xFFFF) as usize] as i16));
+                        heard = o.played;
+                    });
+                }
+            }
+            made
+        };
         for &(at, c) in &keys {
             let at = at as u64;
             if at > steps {
-                steps += sys.run_until(at - steps, |_| false).unwrap();
+                steps += run(&mut sys, at - steps);
             }
             sys.with_kbc(|kb, ctx| kb.fn_key(ctx, c));
-            steps += sys.run_until(300_000, |_| false).unwrap();
+            steps += run(&mut sys, 300_000);
             sys.with_kbc(|kb, ctx| kb.fn_key(ctx, c | 0x80));
         }
         if total > steps {
-            steps += sys.run_until(total - steps, |_| false).unwrap();
+            steps += run(&mut sys, total - steps);
         }
         next_shot = f64::MAX;
+    }
+    if let Some(path) = &wav_path {
+        let data: Vec<u8> = wav.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let rate = 49716u32;
+        let mut out = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVEfmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&rate.to_le_bytes());
+        out.extend_from_slice(&(rate * 2).to_le_bytes());
+        out.extend_from_slice(&2u16.to_le_bytes());
+        out.extend_from_slice(&16u16.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&data);
+        std::fs::write(path, out).unwrap();
+        println!("WAV {} samples, peak {}", wav.len(), wav.iter().map(|v| (*v as i32).abs()).max().unwrap_or(0));
     }
     while sys.seconds() < seconds && next_shot != f64::MAX {
         let until = next_shot.min(keys.get(k).map_or(f64::MAX, |p| p.0)).min(seconds);
@@ -414,12 +455,13 @@ fn play_disk() {
     let t = sys.seconds();
     save(&mut sys, t);
     let played = sys.board().sb.played;
+    let opl_writes = sys.board().opl.writes;
     // What the program shows and holds at the end, to compare profiles by.
     let fnv = |h: u64, b: &u8| (h ^ *b as u64).wrapping_mul(0x100000001b3);
     let frame = sys.board().vga.frame.iter().fold(0xcbf29ce484222325u64, fnv);
     let ram = sys.board().ram.cells.iter().fold(0xcbf29ce484222325u64, fnv);
     println!(
-        "PLAY {} {} instructions {steps} seconds {w:.3} mips {:.1} emulated_seconds {:.3} speed {:.2}x sb_played {} frame {frame:016x} ram {ram:016x} now {}",
+        "PLAY {} {} instructions {steps} seconds {w:.3} mips {:.1} emulated_seconds {:.3} speed {:.2}x sb_played {} opl_writes {opl_writes} frame {frame:016x} ram {ram:016x} now {}",
         machine_at386_vga::system::PROFILE,
         machine_at386_vga::system::CORE,
         steps as f64 / w / 1e6,

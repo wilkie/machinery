@@ -1,0 +1,442 @@
+// Yamaha's YM3812 (OPL2), the FM synthesiser of the AdLib card and the
+// Sound Blaster: its registers, its two timers and its status, and its
+// nine two-operator channels, after the chip as reverse-engineered (the
+// log-sin and exponent tables, the envelope's stages and rates, phase,
+// feedback and the four waveforms). Tremolo, vibrato and rhythm mode are
+// not here yet.
+
+use isabus::{Space, BusSize, IsaBus};
+
+/// The chip's log-sin table: -log2(sin) of a quarter wave, in 1/256ths
+/// (i from 0 to 255 is the phase (i + 0.5) / 1024 of a turn).
+unit OplLogSin(i: u8) -> u16 {
+    let t: [u16; 256] = [
+        2137, 1731, 1543, 1419, 1326, 1252, 1190, 1137, 1091, 1050, 1013, 979, 949, 920, 894, 869,
+        846, 825, 804, 785, 767, 749, 732, 717, 701, 687, 672, 659, 646, 633, 621, 609,
+        598, 587, 576, 566, 556, 546, 536, 527, 518, 509, 501, 492, 484, 476, 468, 461,
+        453, 446, 439, 432, 425, 418, 411, 405, 399, 392, 386, 380, 375, 369, 363, 358,
+        352, 347, 341, 336, 331, 326, 321, 316, 311, 307, 302, 297, 293, 289, 284, 280,
+        276, 271, 267, 263, 259, 255, 251, 248, 244, 240, 236, 233, 229, 226, 222, 219,
+        215, 212, 209, 205, 202, 199, 196, 193, 190, 187, 184, 181, 178, 175, 172, 169,
+        167, 164, 161, 159, 156, 153, 151, 148, 146, 143, 141, 138, 136, 134, 131, 129,
+        127, 125, 122, 120, 118, 116, 114, 112, 110, 108, 106, 104, 102, 100, 98, 96,
+        94, 92, 91, 89, 87, 85, 83, 82, 80, 78, 77, 75, 74, 72, 70, 69,
+        67, 66, 64, 63, 62, 60, 59, 57, 56, 55, 53, 52, 51, 49, 48, 47,
+        46, 45, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30,
+        29, 28, 27, 26, 25, 24, 23, 23, 22, 21, 20, 20, 19, 18, 17, 17,
+        16, 15, 15, 14, 13, 13, 12, 12, 11, 10, 10, 9, 9, 8, 8, 7,
+        7, 7, 6, 6, 5, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2,
+        2, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0
+    ];
+    return t[i];
+}
+
+/// The chip's exponent table: 2^(-(i + 1) / 256), as 11 bits (2048 = 1).
+unit OplExp(i: u8) -> u16 {
+    let t: [u16; 256] = [
+        2042, 2037, 2031, 2026, 2020, 2015, 2010, 2004, 1999, 1993, 1988, 1983, 1977, 1972, 1966, 1961,
+        1956, 1951, 1945, 1940, 1935, 1930, 1924, 1919, 1914, 1909, 1904, 1898, 1893, 1888, 1883, 1878,
+        1873, 1868, 1863, 1858, 1853, 1848, 1843, 1838, 1833, 1828, 1823, 1818, 1813, 1808, 1803, 1798,
+        1794, 1789, 1784, 1779, 1774, 1769, 1765, 1760, 1755, 1750, 1746, 1741, 1736, 1732, 1727, 1722,
+        1717, 1713, 1708, 1704, 1699, 1694, 1690, 1685, 1681, 1676, 1672, 1667, 1663, 1658, 1654, 1649,
+        1645, 1640, 1636, 1631, 1627, 1623, 1618, 1614, 1609, 1605, 1601, 1596, 1592, 1588, 1584, 1579,
+        1575, 1571, 1566, 1562, 1558, 1554, 1550, 1545, 1541, 1537, 1533, 1529, 1525, 1520, 1516, 1512,
+        1508, 1504, 1500, 1496, 1492, 1488, 1484, 1480, 1476, 1472, 1468, 1464, 1460, 1456, 1452, 1448,
+        1444, 1440, 1436, 1433, 1429, 1425, 1421, 1417, 1413, 1409, 1406, 1402, 1398, 1394, 1391, 1387,
+        1383, 1379, 1376, 1372, 1368, 1364, 1361, 1357, 1353, 1350, 1346, 1342, 1339, 1335, 1332, 1328,
+        1324, 1321, 1317, 1314, 1310, 1307, 1303, 1300, 1296, 1292, 1289, 1286, 1282, 1279, 1275, 1272,
+        1268, 1265, 1261, 1258, 1255, 1251, 1248, 1244, 1241, 1238, 1234, 1231, 1228, 1224, 1221, 1218,
+        1214, 1211, 1208, 1205, 1201, 1198, 1195, 1192, 1188, 1185, 1182, 1179, 1176, 1172, 1169, 1166,
+        1163, 1160, 1157, 1154, 1150, 1147, 1144, 1141, 1138, 1135, 1132, 1129, 1126, 1123, 1120, 1117,
+        1114, 1111, 1108, 1105, 1102, 1099, 1096, 1093, 1090, 1087, 1084, 1081, 1078, 1075, 1072, 1069,
+        1066, 1064, 1061, 1058, 1055, 1052, 1049, 1046, 1044, 1041, 1038, 1035, 1032, 1030, 1027, 1024
+    ];
+    return t[i];
+}
+
+/// An attenuation (`level`, 1/256ths of a factor of 2: the log-sin's plus
+/// the envelope's) as a level: up to 4084.
+unit OplPow(level: u32) -> u32 {
+    let l = if level > 0x1FFF { 0x1FFF } else { level };
+    return ((OplExp((l & 0xFF) as u8) as u32) << 1) >> (l >> 8);
+}
+
+/// Operator `o`'s waveform `wf` at 10-bit phase `phase`, attenuated by
+/// `att` (the envelope's 9 bits): a signed level.
+unit OplWave(wf: u2, phase: u32, att: u32) -> i32 {
+    let p = phase & 0x3FF;
+    let a = att << 3;
+    let quarter = (p & 0xFF) as u8;
+    let mirrored = if (p & 0x100) != 0 { quarter ^ 0xFF } else { quarter };
+    if wf == 0 {
+        let v = OplPow((OplLogSin(mirrored) as u32) + a) as i32;
+        return if (p & 0x200) != 0 { -v - 1 } else { v };
+    }
+    if wf == 1 {
+        // Half a sine: the second half silent.
+        return if (p & 0x200) != 0 { 0 } else { OplPow((OplLogSin(mirrored) as u32) + a) as i32 };
+    }
+    if wf == 2 {
+        // Its absolute value.
+        return OplPow((OplLogSin(mirrored) as u32) + a) as i32;
+    }
+    // A quarter, every half turn.
+    return if (p & 0x100) != 0 { 0 } else { OplPow((OplLogSin(quarter) as u32) + a) as i32 };
+}
+
+/// The multiple (MULT, register 20h's low bits), doubled.
+unit OplMult2(m: u4) -> u32 {
+    let t: [u32; 16] = [1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 20, 24, 24, 30, 30];
+    return t[m];
+}
+
+/// The key scale level's base for the F-number's top four bits.
+unit OplKsl(f: u4) -> u32 {
+    let t: [u32; 16] = [0, 32, 40, 45, 48, 51, 53, 55, 56, 58, 59, 60, 61, 62, 63, 64];
+    return t[f];
+}
+
+/// An envelope step at rate `rate` (0-63) on counter `cnt`: what the
+/// attenuation moves by this sample period. Up to rate 51, one step in
+/// 2^(12 - rate / 4) moves, by 1 on the steps of eight its low bits pick
+/// (rate 4, from the top to silence: about 39 s); at 52-59 every step
+/// moves, by 1 or 2 (or 2 or 4); at 60-63, by 4.
+unit OplEgStep(rate: u32, cnt: u32) -> u32 {
+    let r = rate >> 2;
+    let low = rate & 3;
+    if r == 0 {
+        return 0;
+    }
+    if r < 13 {
+        let slow: [u8; 4] = [0xAA, 0xBA, 0xEE, 0xFE];
+        let shift = 12 - r;
+        if (cnt & ((1 << shift) - 1)) != 0 {
+            return 0;
+        }
+        let k = (cnt >> shift) & 7;
+        return ((slow[low] >> (k as u8)) & 1) as u32;
+    }
+    if r == 15 {
+        return 4;
+    }
+    let fast: [u8; 4] = [0x00, 0x88, 0xAA, 0xEE];
+    let base: u32 = if r == 13 { 1 } else { 2 };
+    let k = cnt & 7;
+    return base << (((fast[low] >> (k as u8)) & 1) as u32);
+}
+
+/// Operator `o`'s registers' offset (20h + offset, and so on).
+unit OplOpOff(o: u32) -> u32 { return (o / 6) * 8 + (o % 6); }
+
+/// A rate register's value `r` (0-15) with the key scale `rks`.
+unit OplRate(r: u32, rks: u32) -> u32 {
+    if r == 0 { return 0; }
+    let v = r * 4 + rks;
+    return if v > 63 { 63 } else { v };
+}
+
+/// The YM3812 on the ISA bus: even ports take a register's index, odd ones
+/// its value; reading an even port gives the status (bit 7 an unmasked
+/// timer has overflowed, bit 6 timer 1, bit 5 timer 2; the low bits read
+/// 6, as the chip's do), an odd one nothing (FF).
+///
+/// The timers count up from their preset (registers 2 and 3) to 256, timer
+/// 1 every 80 us and timer 2 every 320 us (4 and 16 sample periods), set
+/// their status bits on overflowing unless masked, and start again from the
+/// preset. Register 4: bit 7 clears the status (the rest of the write is
+/// then ignored); bits 6 and 5 mask timers 1 and 2; bits 0 and 1 start
+/// them. The card raises no interrupt and masters no bus: a program sees
+/// the timers only through the status port, which catches the chip up.
+///
+/// The clock is the chip's sample period: 72 cycles of its 3.58 MHz input.
+component Opl2 {
+    ports {
+        bus port: IsaBus::Slave;
+    }
+    model {
+        /// The registers as written (0-F5).
+        mem regs: [u8; 256];
+        state index: u8 = 0;
+        /// Writes taken, for the host (and the tests) to see the chip used.
+        state writes: u32 = 0;
+
+        /// The timers: counting, their counts, and the sample periods into
+        /// the current tick of each (timer 1 ticks every 4, timer 2 every
+        /// 16).
+        state t1_on: bool = false;
+        state t2_on: bool = false;
+        state t1_count: u8 = 0;
+        state t2_count: u8 = 0;
+        state t1_phase: u8 = 0;
+        state t2_phase: u8 = 0;
+        /// The status flags: timer 1 and timer 2 overflowed.
+        state t1_flag: bool = false;
+        state t2_flag: bool = false;
+
+        /// The output: the last 64 K samples (16-bit, two's complement), and
+        /// how many have been made.
+        mem pcm: [u16; 65536];
+        state played: u32 = 0;
+        /// Per operator (0-17, the chip's order: channel c's modulator is
+        /// c % 3 + 6 * (c / 3), its carrier the third after): its phase (19
+        /// bits), its envelope's attenuation (9 bits, 511 silent) and stage
+        /// (0 attack, 1 decay, 2 sustain, 3 release), and its last two
+        /// outputs (a modulator's feedback).
+        state op_phase: [u32; 18];
+        state op_env: [u16; 18];
+        state op_stage: [u8; 18];
+        state op_out: [i32; 18];
+        state op_prev: [i32; 18];
+        state ch_key: [bool; 9];
+        /// The envelopes' common counter.
+        state eg_cnt: u32 = 0;
+
+        on reset {
+            for o in 0..18 {
+                op_env[o] = 0x1FF;
+                op_stage[o] = 3;
+            }
+        }
+
+
+        /// Operator `o` by a sample period: its envelope, then its phase.
+        fn op_clock(o: u32, fnum: u32, block: u32) {
+            let off = OplOpOff(o);
+            let r20 = regs[0x20 + off];
+            let rks0 = (block << 1) | (fnum >> 9);
+            let rks = if r20[4] == 1 { rks0 } else { rks0 >> 2 };
+            let r60 = regs[0x60 + off] as u32;
+            let r80 = regs[0x80 + off] as u32;
+            let st = op_stage[o];
+            let mut e = op_env[o] as i32;
+            if st == 0 {
+                let rate = OplRate(r60 >> 4, rks);
+                if rate >= 60 {
+                    e = 0;
+                } else {
+                    let inc = OplEgStep(rate, eg_cnt) as i32;
+                    // The attack is exponential: a share of what is left.
+                    e = e + (((0 - e - 1) * inc) >> 3);
+                }
+                if e <= 0 {
+                    e = 0;
+                    op_stage[o] = 1;
+                }
+            } else {
+                let sl_reg = r80 >> 4;
+                let sl = (if sl_reg == 15 { 31 } else { sl_reg }) << 4;
+                let rate = if st == 1 { OplRate(r60 & 15, rks) } else if st == 2 && r20[5] == 1 { 0 } else { OplRate(r80 & 15, rks) };
+                e = e + (OplEgStep(rate, eg_cnt) as i32);
+                if st == 1 && e >= (sl as i32) {
+                    op_stage[o] = 2;
+                }
+            }
+            op_env[o] = (if e > 0x1FF { 0x1FF } else { e }) as u16;
+            let inc = (((fnum << block) >> 1) * OplMult2((r20 & 15) as u4)) >> 1;
+            op_phase[o] = (op_phase[o] + inc) & 0x7FFFF;
+        }
+
+        /// Operator `o`'s attenuation: its envelope, total level and key
+        /// scale level (9 bits).
+        fn op_att(o: u32, fnum: u32, block: u32) -> u32 {
+            let r40 = regs[0x40 + OplOpOff(o)];
+            let tl = ((r40 & 63) as u32) << 2;
+            let k = ((OplKsl((fnum >> 6) as u4) << 2) as i32) - ((8 - (block as i32)) << 5);
+            let shift: [u32; 4] = [8, 1, 2, 0];
+            let ksl = (if k < 0 { 0 } else { k as u32 }) >> shift[r40 >> 6];
+            let a = (op_env[o] as u32) + tl + ksl;
+            return if a > 0x1FF { 0x1FF } else { a };
+        }
+
+        /// Operator `o`'s waveform (sine unless register 1 enables them).
+        fn op_wf(o: u32) -> u2 {
+            return if regs[1][5] == 1 { (regs[0xE0 + OplOpOff(o)] & 3) as u2 } else { 0 };
+        }
+
+        /// A sample period: each channel's operators clocked and their
+        /// output summed into `pcm`.
+        fn sample() {
+            eg_cnt = eg_cnt + 1;
+            let mut mix: i32 = 0;
+            for c in 0..9 {
+                let cc = c as u32;
+                let m = (cc / 3) * 6 + cc % 3;
+                let k = m + 3;
+                // Both operators silent and released: nothing to make.
+                if op_env[m] == 0x1FF && op_stage[m] == 3 && op_env[k] == 0x1FF && op_stage[k] == 3 {
+                    op_prev[m] = 0;
+                    op_out[m] = 0;
+                    op_out[k] = 0;
+                } else {
+                    let fnum = (((regs[0xB0 + cc] & 3) as u32) << 8) | (regs[0xA0 + cc] as u32);
+                    let block = ((regs[0xB0 + cc] >> 2) & 7) as u32;
+                    op_clock(m, fnum, block);
+                    op_clock(k, fnum, block);
+                    let c0 = regs[0xC0 + cc];
+                    let fb = ((c0 >> 1) & 7) as u32;
+                    let fbin = if fb == 0 { 0 } else { (op_prev[m] + op_out[m]) >> (9 - fb) };
+                    let mo = OplWave(op_wf(m), ((op_phase[m] >> 9) as i32 + fbin) as u32, op_att(m, fnum, block));
+                    op_prev[m] = op_out[m];
+                    op_out[m] = mo;
+                    if c0[0] == 0 {
+                        // Frequency modulation: the modulator moves the
+                        // carrier's phase.
+                        let ko = OplWave(op_wf(k), ((op_phase[k] >> 9) as i32 + mo) as u32, op_att(k, fnum, block));
+                        op_out[k] = ko;
+                        mix = mix + ko;
+                    } else {
+                        // Additive: both heard.
+                        let ko = OplWave(op_wf(k), op_phase[k] >> 9, op_att(k, fnum, block));
+                        op_out[k] = ko;
+                        mix = mix + mo + ko;
+                    }
+                }
+            }
+            let v = if mix > 32767 { 32767 } else if mix < -32768 { -32768 } else { mix };
+            pcm[played & 0xFFFF] = (v as i16) as u16;
+            played = played + 1;
+        }
+
+        fn status() -> u8 {
+            let irq = t1_flag || t2_flag;
+            return (if irq { 0x80 } else { 0 }) | (if t1_flag { 0x40 } else { 0 }) | (if t2_flag { 0x20 } else { 0 }) | 0x06;
+        }
+
+        fn write_reg(r: u8, d: u8) {
+            writes = writes + 1;
+            if r == 4 {
+                if d[7] == 1 {
+                    t1_flag = false;
+                    t2_flag = false;
+                    return;
+                }
+                regs[4] = d;
+                // A timer started counts from its preset, a period from now.
+                if d[0] == 1 && !t1_on {
+                    t1_count = regs[2];
+                    t1_phase = 0;
+                }
+                if d[1] == 1 && !t2_on {
+                    t2_count = regs[3];
+                    t2_phase = 0;
+                }
+                t1_on = d[0] == 1;
+                t2_on = d[1] == 1;
+                return;
+            }
+            regs[r] = d;
+            // Key on (register B0h + channel, bit 5): its operators start
+            // from the top of their attack, their phase from 0; key off:
+            // they release.
+            if r >= 0xB0 && r <= 0xB8 {
+                let c = (r - 0xB0) as u32;
+                let on = d[5] == 1;
+                let m = (c / 3) * 6 + c % 3;
+                if on && !ch_key[c] {
+                    for i in 0..2 {
+                        let o = m + (i as u32) * 3;
+                        op_stage[o] = 0;
+                        op_phase[o] = 0;
+                    }
+                }
+                if !on && ch_key[c] {
+                    op_stage[m] = 3;
+                    op_stage[m + 3] = 3;
+                }
+                ch_key[c] = on;
+            }
+        }
+
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            if addr[0] == 0 {
+                index = data as u8;
+            } else {
+                write_reg(index, data as u8);
+            }
+            return (wait: 0);
+        }
+
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            if addr[0] == 0 {
+                return (data: status() as u16, wait: 0);
+            }
+            return (data: 0xFF, wait: 0);
+        }
+
+        /// A timer tick: the count goes up; at 256 it starts again from the
+        /// preset, and says it overflowed.
+        fn timer1_tick() {
+            if t1_count == 0xFF {
+                t1_count = regs[2];
+                if regs[4][6] == 0 {
+                    t1_flag = true;
+                }
+            } else {
+                t1_count = t1_count + 1;
+            }
+        }
+        fn timer2_tick() {
+            if t2_count == 0xFF {
+                t2_count = regs[3];
+                if regs[4][5] == 0 {
+                    t2_flag = true;
+                }
+            } else {
+                t2_count = t2_count + 1;
+            }
+        }
+
+        /// The sample periods until a running timer next overflows (the
+        /// only change a program can see), else never.
+        fn next_overflow() -> u32 {
+            let mut d: u32 = 0xFFFFFFFF;
+            if t1_on {
+                d = (256 - (t1_count as u32)) * 4 - (t1_phase as u32);
+            }
+            if t2_on {
+                let d2 = (256 - (t2_count as u32)) * 16 - (t2_phase as u32);
+                if d2 < d { d = d2; }
+            }
+            return d;
+        }
+
+        on tick(n: u32) -> u32 {
+            // The samples of the periods passed: a program hears them, but
+            // sees nothing of them, so they are made as the chip is caught
+            // up (a register written, the status read, the host's turn).
+            let mut i: u32 = 0;
+            while i < n {
+                sample();
+                i = i + 1;
+            }
+            if t1_on || t2_on {
+                let mut left: u32 = n;
+                while left > 0 {
+                    // Whole timer ticks at once where nothing overflows.
+                    let step = next_overflow();
+                    let k = if left < step { left } else { step };
+                    if t1_on {
+                        let p = (t1_phase as u32) + k;
+                        let ticks = p / 4;
+                        t1_phase = (p % 4) as u8;
+                        if ticks > 0 {
+                            t1_count = ((t1_count as u32) + ticks - 1) as u8;
+                            timer1_tick();
+                        }
+                    }
+                    if t2_on {
+                        let p = (t2_phase as u32) + k;
+                        let ticks = p / 16;
+                        t2_phase = (p % 16) as u8;
+                        if ticks > 0 {
+                            t2_count = ((t2_count as u32) + ticks - 1) as u8;
+                            timer2_tick();
+                        }
+                    }
+                    left = left - k;
+                }
+            }
+            return next_overflow();
+        }
+    }
+}

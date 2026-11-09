@@ -347,3 +347,16 @@ enough to compile. At 16384 slots it is compiled; 36 M instructions are
 stepped, a long tail: the game 91.9G host instructions from 94.6G (65536
 slots: 91.8G); chk, mix and the boot the same.
 
+Then (2026-11-09): an OPL2 (`targets/pc/opl.machine`) at the AdLib's
+ports and the Sound Blaster's: its registers, timers and status (the
+AdLib detection finds it), and its nine two-operator channels (phase,
+envelopes, the four waveforms from the log-sin and exponent tables,
+feedback, FM and additive connection; not yet tremolo, vibrato or rhythm
+mode). The game finds the card and plays its music (Jingle Bells, by
+ear right), 3647 register writes over the run. The chip makes its
+samples as it is caught up (a register written, the status read, the
+host draining its output): a program sees none of them, so they are made
+in one batch a catch-up, exact to the sample. `play_disk` writes them to
+`PLAY_WAV`. The game with its music, undrawn, under `blocks`: 104G host
+instructions, 10.1x real time.
+

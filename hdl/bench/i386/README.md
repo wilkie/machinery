@@ -360,3 +360,12 @@ in one batch a catch-up, exact to the sample. `play_disk` writes them to
 `PLAY_WAV`. The game with its music, undrawn, under `blocks`: 104G host
 instructions, 10.1x real time.
 
+Then (2026-11-09): the OPL2's tremolo (a 3.7 Hz triangle, 4.8 or 1 dB)
+and vibrato (6.1 Hz, 1/128 or 1/256 of the F-number) for operators that
+ask, and rhythm mode (BDh bit 5: the bass drum, snare, tom-tom, top cymbal
+and hi-hat, keyed from BDh, the metallic ones' phases made from the
+hi-hat's and cymbal's bits and a 23-bit noise register, each heard
+doubled). The game sets both depths to their deepest. 104.6G host
+instructions with its music, undrawn, under `blocks`: the same as without
+them.
+

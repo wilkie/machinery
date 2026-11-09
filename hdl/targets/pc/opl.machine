@@ -2,8 +2,7 @@
 // Sound Blaster: its registers, its two timers and its status, and its
 // nine two-operator channels, after the chip as reverse-engineered (the
 // log-sin and exponent tables, the envelope's stages and rates, phase,
-// feedback and the four waveforms). Tremolo, vibrato and rhythm mode are
-// not here yet.
+// feedback and the four waveforms), tremolo and vibrato, and rhythm mode.
 
 use isabus::{Space, BusSize, IsaBus};
 
@@ -125,6 +124,12 @@ unit OplEgStep(rate: u32, cnt: u32) -> u32 {
     return base << (((fast[low] >> (k as u8)) & 1) as u32);
 }
 
+/// Rhythm mode's mix of the hi-hat's phase bits (`hh`) and the top
+/// cymbal's (`tc`), as the chip makes the metallic drums: 0 or 1.
+unit OplRhythmXor(hh: u32, tc: u32) -> u32 {
+    return (((hh >> 2) ^ (hh >> 7)) | ((hh >> 3) ^ (tc >> 5)) | ((tc >> 3) ^ (tc >> 5))) & 1;
+}
+
 /// Operator `o`'s registers' offset (20h + offset, and so on).
 unit OplOpOff(o: u32) -> u32 { return (o / 6) * 8 + (o % 6); }
 
@@ -147,6 +152,13 @@ unit OplRate(r: u32, rks: u32) -> u32 {
 /// then ignored); bits 6 and 5 mask timers 1 and 2; bits 0 and 1 start
 /// them. The card raises no interrupt and masters no bus: a program sees
 /// the timers only through the status port, which catches the chip up.
+///
+/// Sound: nine channels of two operators (a modulator, a carrier), mixed
+/// into `pcm`, a ring of the last 64 K samples (`played` counts them).
+/// Rhythm mode (BDh bit 5) makes channels 6-8 five drums. A program hears
+/// the samples but sees none of them, so they are made as the chip is
+/// caught up (a register written, the status read, the host's turn), many
+/// at once.
 ///
 /// The clock is the chip's sample period: 72 cycles of its 3.58 MHz input.
 component Opl2 {
@@ -187,9 +199,23 @@ component Opl2 {
         state op_stage: [u8; 18];
         state op_out: [i32; 18];
         state op_prev: [i32; 18];
-        state ch_key: [bool; 9];
-        /// The envelopes' common counter.
+        /// Each operator keyed on by its channel (B0h + channel, bit 5) and
+        /// by rhythm mode's drums (BDh): it sounds while either holds.
+        state op_keyn: [bool; 18];
+        state op_keyd: [bool; 18];
+        /// The envelopes' and the oscillators' common counter (a sample
+        /// period a count).
         state eg_cnt: u32 = 0;
+        /// Tremolo: a triangle of 210 steps, a step every 64 sample periods
+        /// (3.7 Hz); vibrato: 8 steps, a step every 1024 (6.1 Hz).
+        state trem_pos: u8 = 0;
+        state vib_pos: u8 = 0;
+        /// Rhythm mode: the noise (a 23-bit shift register), and the hi-hat's
+        /// and top cymbal's last phases, whose bits make the hi-hat's, the
+        /// snare's and the cymbal's.
+        state noise: u32 = 1;
+        state rm_hh: u32 = 0;
+        state rm_tc: u32 = 0;
 
         on reset {
             for o in 0..18 {
@@ -232,19 +258,38 @@ component Opl2 {
                 }
             }
             op_env[o] = (if e > 0x1FF { 0x1FF } else { e }) as u16;
-            let inc = (((fnum << block) >> 1) * OplMult2((r20 & 15) as u4)) >> 1;
+            // Vibrato (VIB, bit 6): the F-number moved by up to 1/128 of
+            // itself (BDh bit 6; 1/256 without), on a cycle of 8 steps.
+            let mut f = fnum;
+            if r20[6] == 1 {
+                let mut range = (fnum >> 7) & 7;
+                if (vib_pos & 3) == 0 {
+                    range = 0;
+                } else if (vib_pos & 1) == 1 {
+                    range = range >> 1;
+                }
+                if regs[0xBD][6] == 0 {
+                    range = range >> 1;
+                }
+                f = if vib_pos[2] == 1 { fnum - range } else { fnum + range };
+            }
+            let inc = (((f << block) >> 1) * OplMult2((r20 & 15) as u4)) >> 1;
             op_phase[o] = (op_phase[o] + inc) & 0x7FFFF;
         }
 
-        /// Operator `o`'s attenuation: its envelope, total level and key
-        /// scale level (9 bits).
+        /// Operator `o`'s attenuation: its envelope, total level, key scale
+        /// level and tremolo (9 bits).
         fn op_att(o: u32, fnum: u32, block: u32) -> u32 {
-            let r40 = regs[0x40 + OplOpOff(o)];
+            let off = OplOpOff(o);
+            let r40 = regs[0x40 + off];
+            // Tremolo (AM, bit 7): up to 4.8 dB (BDh bit 7; 1 dB without).
+            let tri = if trem_pos < 105 { trem_pos as u32 } else { 210 - (trem_pos as u32) };
+            let trem = if regs[0x20 + off][7] == 1 { tri >> (if regs[0xBD][7] == 1 { 2_u32 } else { 4_u32 }) } else { 0 };
             let tl = ((r40 & 63) as u32) << 2;
             let k = ((OplKsl((fnum >> 6) as u4) << 2) as i32) - ((8 - (block as i32)) << 5);
             let shift: [u32; 4] = [8, 1, 2, 0];
             let ksl = (if k < 0 { 0 } else { k as u32 }) >> shift[r40 >> 6];
-            let a = (op_env[o] as u32) + tl + ksl;
+            let a = (op_env[o] as u32) + tl + ksl + trem;
             return if a > 0x1FF { 0x1FF } else { a };
         }
 
@@ -253,10 +298,24 @@ component Opl2 {
             return if regs[1][5] == 1 { (regs[0xE0 + OplOpOff(o)] & 3) as u2 } else { 0 };
         }
 
-        /// A sample period: each channel's operators clocked and their
-        /// output summed into `pcm`.
+        /// The noise register shifted once: its new low bit.
+        fn noise_bit() -> u32 {
+            let b = ((noise >> 14) ^ noise) & 1;
+            noise = (noise >> 1) | (b << 22);
+            return noise & 1;
+        }
+
+        /// A sample period: the oscillators stepped, each channel's
+        /// operators clocked, and their output summed into `pcm`.
         fn sample() {
             eg_cnt = eg_cnt + 1;
+            if (eg_cnt & 63) == 0 {
+                trem_pos = if trem_pos >= 209 { 0 } else { trem_pos + 1 };
+            }
+            if (eg_cnt & 1023) == 0 {
+                vib_pos = (vib_pos + 1) & 7;
+            }
+            let rhythm = regs[0xBD][5] == 1;
             let mut mix: i32 = 0;
             for c in 0..9 {
                 let cc = c as u32;
@@ -273,28 +332,72 @@ component Opl2 {
                     op_clock(m, fnum, block);
                     op_clock(k, fnum, block);
                     let c0 = regs[0xC0 + cc];
-                    let fb = ((c0 >> 1) & 7) as u32;
-                    let fbin = if fb == 0 { 0 } else { (op_prev[m] + op_out[m]) >> (9 - fb) };
-                    let mo = OplWave(op_wf(m), ((op_phase[m] >> 9) as i32 + fbin) as u32, op_att(m, fnum, block));
-                    op_prev[m] = op_out[m];
-                    op_out[m] = mo;
-                    if c0[0] == 0 {
-                        // Frequency modulation: the modulator moves the
-                        // carrier's phase.
-                        let ko = OplWave(op_wf(k), ((op_phase[k] >> 9) as i32 + mo) as u32, op_att(k, fnum, block));
-                        op_out[k] = ko;
-                        mix = mix + ko;
+                    if rhythm && cc >= 7 {
+                        // The drums of channels 7 and 8, each an operator
+                        // alone (unmodulated), heard doubled: the hi-hat and
+                        // snare (7), the tom-tom and top cymbal (8). The
+                        // hi-hat's, snare's and cymbal's phases are made from
+                        // bits of the hi-hat's and cymbal's, and noise.
+                        let pm = op_phase[m] >> 9;
+                        let pk = op_phase[k] >> 9;
+                        let mut a: i32 = 0;
+                        let mut b: i32 = 0;
+                        if cc == 7 {
+                            rm_hh = pm;
+                            let x = OplRhythmXor(rm_hh, rm_tc);
+                            let hh = (x << 9) | (if (x ^ noise_bit()) == 1 { 0xD0 } else { 0x34 });
+                            a = OplWave(op_wf(m), hh, op_att(m, fnum, block));
+                            let b8 = (rm_hh >> 8) & 1;
+                            let sd = (b8 << 9) | ((b8 ^ noise_bit()) << 8);
+                            b = OplWave(op_wf(k), sd, op_att(k, fnum, block));
+                        } else {
+                            rm_tc = pk;
+                            let x = OplRhythmXor(rm_hh, rm_tc);
+                            a = OplWave(op_wf(m), pm, op_att(m, fnum, block));
+                            b = OplWave(op_wf(k), (x << 9) | 0x80, op_att(k, fnum, block));
+                        }
+                        op_out[m] = a;
+                        op_out[k] = b;
+                        mix = mix + 2 * (a + b);
                     } else {
-                        // Additive: both heard.
-                        let ko = OplWave(op_wf(k), op_phase[k] >> 9, op_att(k, fnum, block));
+                        let fb = ((c0 >> 1) & 7) as u32;
+                        let fbin = if fb == 0 { 0 } else { (op_prev[m] + op_out[m]) >> (9 - fb) };
+                        let mo = OplWave(op_wf(m), ((op_phase[m] >> 9) as i32 + fbin) as u32, op_att(m, fnum, block));
+                        op_prev[m] = op_out[m];
+                        op_out[m] = mo;
+                        // Frequency modulation (the modulator moves the
+                        // carrier's phase), or additive (both heard).
+                        let fm = c0[0] == 0;
+                        let ko = OplWave(op_wf(k), ((op_phase[k] >> 9) as i32 + (if fm { mo } else { 0 })) as u32, op_att(k, fnum, block));
                         op_out[k] = ko;
-                        mix = mix + mo + ko;
+                        if rhythm && cc == 6 {
+                            // The bass drum: its carrier, doubled.
+                            mix = mix + 2 * ko;
+                        } else {
+                            mix = mix + ko + (if fm { 0 } else { mo });
+                        }
                     }
                 }
             }
             let v = if mix > 32767 { 32767 } else if mix < -32768 { -32768 } else { mix };
             pcm[played & 0xFFFF] = (v as i16) as u16;
             played = played + 1;
+        }
+
+        /// Operator `o` keyed on or off (by its channel, or as a drum): it
+        /// starts its attack from phase 0 as the first key comes on, and
+        /// releases as the last goes off.
+        fn key(o: u32, on: bool, drum: bool) {
+            let was = op_keyn[o] || op_keyd[o];
+            if drum { op_keyd[o] = on; } else { op_keyn[o] = on; }
+            let now = op_keyn[o] || op_keyd[o];
+            if now && !was {
+                op_stage[o] = 0;
+                op_phase[o] = 0;
+            }
+            if !now && was {
+                op_stage[o] = 3;
+            }
         }
 
         fn status() -> u8 {
@@ -325,25 +428,23 @@ component Opl2 {
                 return;
             }
             regs[r] = d;
-            // Key on (register B0h + channel, bit 5): its operators start
-            // from the top of their attack, their phase from 0; key off:
-            // they release.
+            // Key on (register B0h + channel, bit 5): the channel's operators;
+            // BDh, in rhythm mode (bit 5): the drums' (bass drum bit 4, both
+            // of channel 6's; snare 3, tom-tom 2, top cymbal 1, hi-hat 0).
             if r >= 0xB0 && r <= 0xB8 {
                 let c = (r - 0xB0) as u32;
-                let on = d[5] == 1;
                 let m = (c / 3) * 6 + c % 3;
-                if on && !ch_key[c] {
-                    for i in 0..2 {
-                        let o = m + (i as u32) * 3;
-                        op_stage[o] = 0;
-                        op_phase[o] = 0;
-                    }
-                }
-                if !on && ch_key[c] {
-                    op_stage[m] = 3;
-                    op_stage[m + 3] = 3;
-                }
-                ch_key[c] = on;
+                key(m, d[5] == 1, false);
+                key(m + 3, d[5] == 1, false);
+            }
+            if r == 0xBD {
+                let on = d[5] == 1;
+                key(12, on && d[4] == 1, true);
+                key(15, on && d[4] == 1, true);
+                key(16, on && d[3] == 1, true);
+                key(14, on && d[2] == 1, true);
+                key(17, on && d[1] == 1, true);
+                key(13, on && d[0] == 1, true);
             }
         }
 

@@ -189,3 +189,86 @@ fn opl_decay_takes_its_time() {
     o.on_tick(&mut Quiet, 5000);
     assert_eq!(o.op_env[3], 496, "held there (sustaining)");
 }
+
+/// The peaks of each `w`-sample window.
+fn peaks(s: &[i32], w: usize) -> Vec<i32> {
+    s.chunks(w).map(|c| c.iter().map(|v| v.abs()).max().unwrap()).collect()
+}
+
+/// Tremolo (AM): the carrier's level swings by 4.8 dB over 210 steps of 64
+/// samples (BDh bit 7), by 1 dB without.
+#[test]
+fn opl_tremolo() {
+    for (bd, lo, hi) in [(0x80u8, 1.6, 1.9), (0x00, 1.08, 1.18)] {
+        let mut o = chip();
+        sine_voice(&mut o);
+        reg(&mut o, 0x23, 0xA1);
+        reg(&mut o, 0xBD, bd);
+        reg(&mut o, 0xB0, 0x20 | (4 << 2) | (580 >> 8) as u8);
+        let from = o.played;
+        o.on_tick(&mut Quiet, 13440 * 2);
+        let p = peaks(&samples(&o, from), 500);
+        let (max, min) = (*p.iter().max().unwrap() as f64, *p.iter().min().unwrap() as f64);
+        assert!((lo..hi).contains(&(max / min)), "BDh {bd:#x}: {max} / {min}");
+    }
+}
+
+/// Vibrato (VIB): the pitch swings by 1/128 of the F-number (4 of 580 at
+/// 440 Hz: +-0.7%) over 8 steps of 1024 samples (BDh bit 6).
+#[test]
+fn opl_vibrato() {
+    let mut o = chip();
+    sine_voice(&mut o);
+    reg(&mut o, 0x23, 0x61);
+    reg(&mut o, 0xBD, 0x40);
+    reg(&mut o, 0xB0, 0x20 | (4 << 2) | (580 >> 8) as u8);
+    let from = o.played;
+    o.on_tick(&mut Quiet, 8192 * 2);
+    let s = samples(&o, from);
+    // Rising zero crossings, to a fraction of a sample.
+    let at: Vec<f64> = s.windows(2).enumerate().filter(|(_, w)| w[0] < 0 && w[1] >= 0).map(|(i, w)| i as f64 + (-w[0]) as f64 / (w[1] - w[0]) as f64).collect();
+    let hz: Vec<f64> = at.windows(2).map(|w| 49716.0 / (w[1] - w[0])).collect();
+    let (min, max) = hz.iter().fold((f64::MAX, 0f64), |(a, b), &h| (a.min(h), b.max(h)));
+    assert!(min < 438.0 && max > 442.0 && min > 432.0 && max < 448.0, "{min:.1}..{max:.1} Hz");
+}
+
+/// Rhythm mode (BDh bit 5): the bass drum keys channel 6's operators (bit
+/// 4) without its channel's key; the hi-hat (bit 0), channel 7's
+/// modulator, is noise (zero crossings far from its pitch's); clearing the
+/// bits releases them.
+#[test]
+fn opl_rhythm_mode() {
+    let mut o = chip();
+    // Channel 6 (operators 12 and 15, offsets 10h and 13h) as channel 0's
+    // sine; channel 7's modulator (operator 13, offset 11h) loud and held.
+    for (r, v) in [(0x30, 0x01), (0x50, 0x3F), (0x70, 0xF0), (0x90, 0x0F), (0x33, 0x21), (0x53, 0x00), (0x73, 0xF0), (0x93, 0x0F), (0xC6, 0x00)] {
+        reg(&mut o, r, v);
+    }
+    reg(&mut o, 0xA6, (580 & 0xFF) as u8);
+    reg(&mut o, 0xB6, (4 << 2) | (580 >> 8) as u8);
+    reg(&mut o, 0xBD, 0x30);
+    let from = o.played;
+    o.on_tick(&mut Quiet, 49716);
+    let s = samples(&o, from);
+    let crossings = s.windows(2).filter(|w| w[0] < 0 && w[1] >= 0).count();
+    assert!((438..=442).contains(&crossings), "bass drum: {crossings} Hz");
+    assert!(s.iter().map(|v| v.abs()).max().unwrap() > 8000, "heard doubled");
+    // The hi-hat alone.
+    reg(&mut o, 0xBD, 0x20);
+    o.on_tick(&mut Quiet, 5000);
+    for (r, v) in [(0x31, 0x21), (0x51, 0x00), (0x71, 0xF0), (0x91, 0x0F)] {
+        reg(&mut o, r, v);
+    }
+    reg(&mut o, 0xA7, (580 & 0xFF) as u8);
+    reg(&mut o, 0xB7, (4 << 2) | (580 >> 8) as u8);
+    reg(&mut o, 0xBD, 0x21);
+    let from = o.played;
+    o.on_tick(&mut Quiet, 49716);
+    let s = samples(&o, from);
+    let crossings = s.windows(2).filter(|w| w[0] < 0 && w[1] >= 0).count();
+    assert!(crossings > 2000, "hi-hat is noise: {crossings}");
+    reg(&mut o, 0xBD, 0x20);
+    let from = o.played;
+    o.on_tick(&mut Quiet, 10000);
+    assert!(samples(&o, from)[9000..].iter().all(|v| v.abs() <= 1), "released");
+}

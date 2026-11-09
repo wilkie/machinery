@@ -15,7 +15,7 @@ HDL = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "
 B = os.path.join(HDL, "target", "bench386")
 SCR = os.path.join(HDL, "target", "bench386")
 REPS = int(os.environ.get("REPS", "3"))
-WORK = ["chk", "mix"]
+WORK = ["chk", "mix", "snd"]
 
 def timed(cmd, env=None, cwd=None):
     t = time.perf_counter()
@@ -24,7 +24,8 @@ def timed(cmd, env=None, cwd=None):
 
 def qemu(v):
     return timed(["qemu-system-i386", "-accel", "tcg", "-m", "16", "-drive", f"file={B}/{v}.img,format=raw,if=floppy",
-                  "-boot", "a", "-display", "none", "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04", "-no-reboot"])[0]
+                  "-boot", "a", "-display", "none", "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04", "-no-reboot",
+                  "-audiodev", "none,id=snd0", "-device", "sb16,audiodev=snd0"])[0]
 
 def bochs(v):
     rc = open(f"{B}/bochsrc.tmpl").read().replace("IMG", f"{B}/{v}.img")

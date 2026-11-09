@@ -213,6 +213,13 @@ impl Gen<'_> {
             return 0;
         }}
         self.bus.jit_mem_ptrs(&mut self.jit_ptrs);
+        // `sync: quantum`: no later than an urgent device is due. Steps made
+        // outside compiled code catch the devices up as the board does, not
+        // as `jit_sync_quantum` does, and may have woken one (a sound card
+        // started) since the catch-up was set.
+        if {quantum}u128 != 0 {{
+            self.jit_sync_at = self.jit_sync_at.min(self.bus.jit_urgent_due());
+        }}
         // SAFETY: `c` is this machine's compiled code for its current run,
         // which is live: runs are only replaced while stepping, not while
         // compiled code runs.
@@ -237,7 +244,12 @@ impl Gen<'_> {
             // as it returns, as well as where it went round).
             self.bus.after_step();
         }}
-        if {quantum}u128 != 0 && self.jit_bus_time(|b| Some(b.now)) >= self.jit_sync_at {{
+        // (As compiled code does at a run's end: a device made due, its
+        // deadline to be worked out again, is caught up too.)
+        if {quantum}u128 != 0
+            && (self.jit_bus_time(|b| Some(b.now)) >= self.jit_sync_at
+                || B::jit_board().is_some_and(|b| b.due.is_some()) && self.jit_bus_time(|b| b.due) == 0)
+        {{
             self.jit_sync_quantum();
         }}
         if self.jit_last != 0 {{

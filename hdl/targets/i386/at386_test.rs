@@ -312,8 +312,13 @@ fn bench_compare() {
     // hash also holds the BIOS's tick count, which moves with interrupt
     // timing).
     let edi = sys.cpu.r.EDI;
+    // The Sound Blaster's output (`snd`): the samples played, those that
+    // missed their byte, and a hash of the last 64 K.
+    let sb = &sys.board().sb;
+    let (played, underruns) = (sb.played, sb.underruns);
+    let pcm = sb.pcm.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3));
     println!(
-        "BENCH {} {} boot_instructions {n0} boot_seconds {w0:.3} run_instructions {n1} run_seconds {:.3} mips {:.1} emulated_seconds {:.3} emulated_now {} ram {ram:016x} edi {edi:08x}",
+        "BENCH {} {} boot_instructions {n0} boot_seconds {w0:.3} run_instructions {n1} run_seconds {:.3} mips {:.1} emulated_seconds {:.3} emulated_now {} ram {ram:016x} edi {edi:08x} sb_played {played} sb_underruns {underruns} pcm {pcm:016x}",
         machine_at386_vga::system::PROFILE,
         machine_at386_vga::system::CORE,
         w1 - w0,

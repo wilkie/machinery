@@ -1,0 +1,313 @@
+// The Sound Blaster's digital sound processor (DSP version 2.01, the Sound
+// Blaster 2.0's): 8-bit mono output by direct writes or by DMA, single-cycle
+// and auto-initialised, with an interrupt at each block's end. The card's
+// FM synthesiser (an OPL2 at 388h) and its mixer are not here yet.
+
+use isabus::{Space, BusSize, IsaBus, IrqLines};
+
+/// The argument bytes a DSP command takes.
+unit SbArgs(c: u8) -> u8 {
+    return if c == 0x14 || c == 0x48 { 2 } else if c == 0x10 || c == 0x40 || c == 0xE0 || c == 0xE4 { 1 } else { 0 };
+}
+
+/// The Sound Blaster's DSP at its base port (strapped by jumpers: 220h on
+/// the board here; the registers are at offsets 6, A, C and E):
+///
+/// - 6 (write): reset. Writing 1 then 0 resets the DSP, which then offers
+///   0AAh to read.
+/// - A (read): the DSP's data, the next byte it has to give (the last one
+///   again when it has none).
+/// - C (write): a command or its argument. Reading it, bit 7 is set while
+///   the DSP is busy (never, here).
+/// - E (read): bit 7 set when the DSP has data to read. Reading it also
+///   acknowledges the 8-bit interrupt.
+///
+/// The commands: 10h direct output (one sample), 14h single-cycle DMA
+/// output (the length less one, low byte first), 1Ch auto-initialised DMA
+/// output (the length set by 48h), 40h the time constant (the sample period
+/// is 256 less it, in microseconds), 48h the block length for auto-init
+/// (less one), D0h pause DMA, D4h continue it, D1h and D3h the speaker on
+/// and off, D8h the speaker's state (FFh on), DAh end auto-init after the
+/// block, E0h identification (gives its argument inverted), E1h the version
+/// (2, 1), E4h and E8h write and read the test register, F2h raise the
+/// interrupt, 20h direct input (silence, 80h). Others are taken and ignored.
+///
+/// DMA output: the DSP asks for a byte on its DMA channel (`dma_ch`) as the
+/// command starts and again as each sample plays, each sample period, so
+/// it holds the next sample as the current one plays. A byte that has not
+/// arrived when it is due is an underrun: the last sample plays again
+/// (`underruns` counts them). The byte that ends a block raises its
+/// interrupt (`irq_line`); auto-init then starts the block over (or, after
+/// DAh, stops), single-cycle stops. The interrupt stays raised until
+/// port E is read.
+///
+/// What plays goes into `pcm`, a ring of the last 64 K samples, with
+/// `played` the count since power-on: the host reads them (the speaker's
+/// state is `speaker`; muted samples are still recorded). The clock is the
+/// DSP's microsecond.
+component SoundBlaster {
+    ports {
+        bus port: IsaBus::Slave;
+        bus irq: IrqLines::Device;
+        /// The DMA channel (0-3) and the interrupt line, by jumper.
+        in dma_ch: u2;
+        in irq_line: u3;
+    }
+    model {
+        /// The output: the last 64 K samples, and how many have played.
+        mem pcm: [u8; 65536];
+        state played: u32 = 0;
+        state underruns: u32 = 0;
+        state last: u8 = 0x80;
+        state speaker: bool = false;
+
+        /// What the DSP has for the processor to read.
+        mem out: [u8; 16];
+        state out_head: u8 = 0;
+        state out_tail: u8 = 0;
+        state out_last: u8 = 0;
+
+        /// Port 6's last write was 1: the DSP is held in reset.
+        state resetting: bool = false;
+        /// The command being taken, its arguments wanted and got.
+        state cmd: u8 = 0;
+        state want: u8 = 0;
+        state got: u8 = 0;
+        state arg0: u8 = 0;
+        state test_reg: u8 = 0;
+
+        /// The time constant, and the auto-init block length less one.
+        state time_const: u8 = 0;
+        state block: u16 = 0x7FF;
+        /// DMA output: running, auto-initialised, paused, to stop at the
+        /// block's end; the bytes left in the block less one; asking for a
+        /// byte; a byte held for the next sample period.
+        state dma_on: bool = false;
+        state auto: bool = false;
+        state paused: bool = false;
+        state stop_at_end: bool = false;
+        state count: u16 = 0;
+        state req: bool = false;
+        state have: bool = false;
+        state next: u8 = 0;
+        /// Microseconds to the next sample period's start.
+        state phase: u32 = 0;
+        state irq_up: bool = false;
+
+        fn period() -> u32 { return 256 - (time_const as u32); }
+
+        fn give(b: u8) {
+            out[out_tail & 15] = b;
+            out_tail = out_tail + 1;
+        }
+
+        fn play(v: u8) {
+            pcm[played & 0xFFFF] = v;
+            played = played + 1;
+            last = v;
+        }
+
+        fn request(level: bool) {
+            req = level;
+            emit port.dreq(dma_ch) = level;
+        }
+
+        fn interrupt(level: bool) {
+            irq_up = level;
+            emit irq.request(irq_line) = level;
+        }
+
+        fn stop_dma() {
+            dma_on = false;
+            paused = false;
+            have = false;
+            request(false);
+        }
+
+        fn dsp_reset() {
+            stop_dma();
+            out_head = 0;
+            out_tail = 0;
+            want = 0;
+            got = 0;
+            speaker = false;
+            stop_at_end = false;
+            interrupt(false);
+            give(0xAA);
+        }
+
+        /// DMA output of `count` + 1 bytes (a block), from now.
+        fn start_dma(n: u16, autoinit: bool) {
+            count = n;
+            auto = autoinit;
+            dma_on = true;
+            paused = false;
+            stop_at_end = false;
+            have = false;
+            phase = period();
+            request(true);
+        }
+
+        fn perform(c: u8, a0: u8, a1: u8) {
+            if c == 0x10 {
+                play(a0);
+            } else if c == 0x14 {
+                start_dma(concat(a1, a0), false);
+            } else if c == 0x1C {
+                start_dma(block, true);
+            } else if c == 0x40 {
+                time_const = a0;
+            } else if c == 0x48 {
+                block = concat(a1, a0);
+            } else if c == 0xD0 {
+                if dma_on {
+                    paused = true;
+                    request(false);
+                }
+            } else if c == 0xD4 {
+                if dma_on && paused {
+                    paused = false;
+                    phase = period();
+                    if !have {
+                        request(true);
+                    }
+                }
+            } else if c == 0xD1 {
+                speaker = true;
+            } else if c == 0xD3 {
+                speaker = false;
+            } else if c == 0xD8 {
+                give(if speaker { 0xFF } else { 0 });
+            } else if c == 0xDA {
+                stop_at_end = true;
+            } else if c == 0xE0 {
+                give(a0 ^ 0xFF);
+            } else if c == 0xE1 {
+                give(2);
+                give(1);
+            } else if c == 0xE4 {
+                test_reg = a0;
+            } else if c == 0xE8 {
+                give(test_reg);
+            } else if c == 0xF2 {
+                interrupt(true);
+            } else if c == 0x20 {
+                give(0x80);
+            }
+        }
+
+        fn command_byte(d: u8) {
+            if want == 0 {
+                cmd = d;
+                want = SbArgs(d);
+                got = 0;
+                if want == 0 {
+                    perform(d, 0, 0);
+                }
+            } else if got == 0 && want == 2 {
+                arg0 = d;
+                got = 1;
+            } else {
+                want = 0;
+                if got == 1 {
+                    perform(cmd, arg0, d);
+                } else {
+                    perform(cmd, d, 0);
+                }
+            }
+        }
+
+        on port.write(space: Space, addr: u24, size: BusSize, data: u16) -> (wait: u8) {
+            let r = addr[3:0];
+            let d = data as u8;
+            if r == 6 {
+                if d[0] == 1 {
+                    resetting = true;
+                } else if resetting {
+                    resetting = false;
+                    dsp_reset();
+                }
+            } else if r == 12 {
+                command_byte(d);
+            }
+            return (wait: 0);
+        }
+
+        on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
+            let r = addr[3:0];
+            let ready = out_head != out_tail;
+            if r == 10 {
+                if ready {
+                    out_last = out[out_head & 15];
+                    out_head = out_head + 1;
+                }
+                return (data: out_last as u16, wait: 0);
+            }
+            if r == 12 {
+                return (data: 0x7F, wait: 0);
+            }
+            if r == 14 {
+                if irq_up {
+                    interrupt(false);
+                }
+                return (data: if ready { 0xFF } else { 0x7F }, wait: 0);
+            }
+            return (data: 0xFF, wait: 0);
+        }
+
+        /// A sample byte from memory, which the DSP asked for.
+        on port.dack_write(channel: u2, data: u8, tc: bool) -> (wait: u8) {
+            if channel != dma_ch || !req {
+                decline;
+            }
+            next = data;
+            have = true;
+            request(false);
+            if count == 0 {
+                interrupt(true);
+                if auto && !stop_at_end {
+                    count = block;
+                } else {
+                    dma_on = false;
+                }
+            } else {
+                count = count - 1;
+            }
+            return (wait: 0);
+        }
+
+        /// A sample period's start: the byte held plays (or the last one
+        /// again, short of one), and the DSP asks for the next.
+        fn sample() {
+            if have {
+                play(next);
+                have = false;
+            } else {
+                play(last);
+                underruns = underruns + 1;
+            }
+            if dma_on {
+                request(true);
+            }
+        }
+
+        /// Returns the microseconds to the next sample period while output
+        /// runs, else never.
+        on tick(n: u32) -> u32 {
+            if paused || (!dma_on && !have) {
+                return 0xFFFFFFFF;
+            }
+            let mut left: u32 = n;
+            while left >= phase {
+                left = left - phase;
+                sample();
+                phase = period();
+                if !dma_on && !have {
+                    return 0xFFFFFFFF;
+                }
+            }
+            phase = phase - left;
+            return phase;
+        }
+    }
+}

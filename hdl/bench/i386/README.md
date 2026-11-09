@@ -9,6 +9,12 @@ one host, unthrottled: guest instructions per second in steady state.
   moves and scans, a sieve; 36000 passes, about 994 M instructions. Its
   data is on pages of its own (writes beside code make tools that watch
   code by page retranslate it).
+- `snd.asm`: `chk.asm`'s checksum, laid out as it is, while a Sound
+  Blaster (220h, IRQ 5, DMA 1) plays a 4 KB buffer auto-initialised at
+  22 kHz in blocks of 2 KB: a byte by DMA every 45 us and an interrupt
+  every 92 ms. It counts the interrupts on a page of its own and leaves
+  the count in EDI. The other tools are given the card at the same
+  settings.
 
 Each marks its start and end at 0000:04F0 and then asks every tool to
 exit: port 0F4h (QEMU's `isa-debug-exit`), "Shutdown" to port 8900h
@@ -141,6 +147,26 @@ Then (2026-11-08, `quantum`): `repeat: bulk` there too, a batch ending at
 the next catch-up: mix's run 48G host instructions (from 96G), 360 MIPS
 (from 189, one run); chk the same (37G, and the same emulated time). mix's
 result (EDI) is the exact profiles'.
+
+Then (2026-11-08): a Sound Blaster 2.0's DSP on the AT board
+(`targets/pc/sb.machine`), and `snd`. Host instructions for the run, snd
+against chk:
+
+| profile | chk | snd | sound costs |
+|---|---|---|---|
+| `jit` (exact) | 79.8G | 93.5G | 17% |
+| `blocks` | 37.4G | 45.5G | 22% |
+| `quantum` | 36.7G | 44.3G | 21% |
+
+Every profile plays the same 2.7 M samples, none late (`underruns`), and
+takes 1318 interrupts; `emulate` and `jit` agree to the tick. `quantum`
+cannot defer the card (it raises signals): each sample is a catch-up, as
+under `blocks`. Two fixes on the way: `quantum`'s catch-up was set while
+the card was idle, and steps made outside compiled code woke it without
+pulling the catch-up in (213 samples late, at 30 MIPS: it is clamped to
+the urgent devices' deadline as compiled code is entered); and `snd`'s
+interrupt count, kept beside its code at first, made every interrupt
+recompile the runs on that page (8000 compiles; the JIT at 17 MIPS).
 
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry

@@ -1296,13 +1296,15 @@ impl<'a> Gen<'a> {
                 let c = cx
                     .comp
                     .ok_or_else(|| GenError::new("emit outside a component"))?;
+                // The arguments bound first: one may read a wire (`ctx`).
+                let mut lets = String::new();
                 let mut a: Vec<String> = Vec::new();
-                for x in args {
-                    a.push(self.expr(cx, x)?);
+                for (i, x) in args.iter().chain(std::iter::once(value)).enumerate() {
+                    lets.push_str(&format!("let e{i} = {};\n", self.expr(cx, x)?));
+                    a.push(format!("e{i}"));
                 }
-                a.push(self.expr(cx, value)?);
                 format!(
-                    "ctx.emit_{}_{}({});\n",
+                    "{{\n{lets}ctx.emit_{}_{}({});\n}}\n",
                     ident(&c.ports[*port as usize].name),
                     ident(&self.prog.item_name(*signal)),
                     a.join(", ")

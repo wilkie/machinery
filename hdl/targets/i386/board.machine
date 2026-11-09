@@ -16,6 +16,7 @@ use i386::{I386};
 use isabus::{Space, BusSize, IsaBus, IrqLines};
 use pc::{Pic8259, Pit8254, Dma8237, HostLink, Ega, Console, PostCard, Mc146818, Kbc8042, Fdc765, Wd1003};
 use vga::{Vga};
+use sb::{SoundBlaster};
 
 /// The 386 local bus at the transaction level: a transfer names an aligned
 /// dword (`addr`, its low two bits clear) and the byte lanes it uses
@@ -384,6 +385,7 @@ system Board386Vga {
     clock dma_clk = osc / 3;                 // 4.77 MHz
     clock vga25: 25.175 MHz;                 // the VGA's dot clocks
     clock vga28: 28.322 MHz;
+    clock sb_clk: 1 MHz;                     // the DSP's microsecond
 
     component cpu: Cpu386 @ cpu_clk;
     component ram: Ram386;
@@ -396,6 +398,7 @@ system Board386Vga {
     component link: HostLink;
     component vga: Vga @ (dot25: vga25, dot28: vga28);
     component console: Console;
+    component sb: SoundBlaster @ sb_clk;
 
     bus local: LocalBus386 @ cpu_clk {
         master cpu.local;
@@ -419,13 +422,16 @@ system Board386Vga {
         slave link.port;
         slave console.port @ io 0xE9..=0xE9;
         slave vga.port @ mem 0xA0000..=0xBFFFF, mem 0xC0000..=0xC7FFF, io 0x3B0..=0x3DF;
+        slave sb.port @ io 0x220..=0x22F;
     }
 
-    /// IRQ 0-7: the timer on 0, the slave controller on 2.
+    /// IRQ 0-7: the timer on 0, the slave controller on 2, the Sound
+    /// Blaster on 5.
     bus irq_master: IrqLines @ cpu_clk {
         master pic1.ir;
         slave pit.irq;
         slave pic2.cascade;
+        slave sb.irq;
     }
     /// IRQ 8-15: the host link on 12.
     bus irq_slave: IrqLines @ cpu_clk {
@@ -436,6 +442,9 @@ system Board386Vga {
     wire pic1.sp = true;
     wire pic2.sp = false;
     wire pic2.cas_in = pic1.cas_out;
+    /// The Sound Blaster on DMA 3 (the host link has 1) and IRQ 5.
+    wire sb.dma_ch = 3;
+    wire sb.irq_line = 5;
     wire cpu.intr_line = pic1.int;
     /// No A20 gate on this board: address line 20 always passes.
     wire cpu.a20_gate = true;
@@ -455,8 +464,9 @@ system Board386Vga {
 /// A 386 AT with a VGA: the 25 MHz 386 board with the PC/AT's system-board
 /// devices (both 8259s, the 8254 and port B, both DMA controllers and the
 /// page registers, the MC146818 clock and CMOS, the 8042 keyboard
-/// controller, the fixed disk and diskette adapter), a POST card, and the
-/// IBM VGA. It boots IBM's PC/AT BIOS (`at_test.rs`).
+/// controller, the fixed disk and diskette adapter), a POST card, the
+/// IBM VGA, and a Sound Blaster 2.0's DSP. It boots IBM's PC/AT BIOS
+/// (`at_test.rs`).
 system At386Vga {
     clock osc: 14.31818 MHz;
     clock cpu_clk: 25 MHz;
@@ -466,6 +476,7 @@ system At386Vga {
     clock rtc_clk: 32.768 kHz;
     clock vga25: 25.175 MHz;
     clock vga28: 28.322 MHz;
+    clock sb_clk: 1 MHz;
 
     component cpu: Cpu386 @ cpu_clk;
     component ram: Ram386;
@@ -482,6 +493,7 @@ system At386Vga {
     component hdc: Wd1003 @ pit_clk;
     component post: PostCard;
     component vga: Vga @ (dot25: vga25, dot28: vga28);
+    component sb: SoundBlaster @ sb_clk;
 
     bus local: LocalBus386 @ cpu_clk {
         master cpu.local;
@@ -510,6 +522,7 @@ system At386Vga {
         slave fdc.port @ io 0x3F2..=0x3F2, io 0x3F4..=0x3F5, io 0x3F7..=0x3F7;
         slave hdc.port @ io 0x1F0..=0x1F7, io 0x3F6..=0x3F6;
         slave vga.port @ mem 0xA0000..=0xBFFFF, mem 0xC0000..=0xC7FFF, io 0x3B0..=0x3DF;
+        slave sb.port @ io 0x220..=0x22F;
     }
 
     bus irq_master: IrqLines @ cpu_clk {
@@ -517,6 +530,7 @@ system At386Vga {
         slave pit.irq;
         slave kbc.irq;
         slave pic2.cascade;
+        slave sb.irq;
         slave fdc.irq;
     }
     bus irq_slave: IrqLines @ cpu_clk {
@@ -528,6 +542,9 @@ system At386Vga {
     wire pic1.sp = true;
     wire pic2.sp = false;
     wire pic2.cas_in = pic1.cas_out;
+    /// The Sound Blaster at its defaults: 220h, IRQ 5, DMA 1.
+    wire sb.dma_ch = 1;
+    wire sb.irq_line = 5;
     wire dma2.word = true;
     /// The keylock off, a colour display, no manufacturing jumper, 512 KB
     /// on the board.

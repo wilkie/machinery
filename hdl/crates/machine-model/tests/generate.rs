@@ -633,6 +633,7 @@ fn i386_at_boots_dos() {
         pc("crtc.machine"),
         pc("pc.machine"),
         pc("vga.machine"),
+        pc("sb.machine"),
         target("alu.machine"),
         target386("i386.machine"),
         target386("timing.machine"),
@@ -686,6 +687,7 @@ fn i386_board_system_boots() {
         pc("crtc.machine"),
         pc("pc.machine"),
         pc("vga.machine"),
+        pc("sb.machine"),
         read("i286", "alu.machine"),
         read("i386", "i386.machine"),
         read("i386", "timing.machine"),
@@ -737,6 +739,7 @@ fn i386_vga_board_system_boots() {
         pc("crtc.machine"),
         pc("pc.machine"),
         pc("vga.machine"),
+        pc("sb.machine"),
         read("i286", "alu.machine"),
         read("i386", "i386.machine"),
         read("i386", "timing.machine"),
@@ -759,16 +762,17 @@ fn i386_vga_board_system_boots() {
             dir.join("tests").join("vga.rs"),
         )
         .unwrap();
+        std::fs::copy(root.join("targets").join("i386").join("sb_test.rs"), dir.join("tests").join("sb.rs")).unwrap();
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
         let output = Command::new(&cargo)
-            .args(["test", "--quiet", "--test", "vga", "--manifest-path"])
+            .args(["test", "--quiet", "--test", "vga", "--test", "sb", "--manifest-path"])
             .arg(dir.join("Cargo.toml"))
             .env("CARGO_TARGET_DIR", root.join("target").join("gen-target"))
             .output()
             .expect("run cargo");
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(output.status.success(), "VGA board tests ({profile}) failed:\n{stdout}\n{stderr}");
+        assert!(output.status.success(), "VGA board tests, the Sound Blaster's too ({profile}) failed:\n{stdout}\n{stderr}");
     }
 }
 

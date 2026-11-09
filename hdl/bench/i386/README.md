@@ -263,3 +263,35 @@ Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads
 to its start goes round without returning to the dispatcher.
+
+## A game: Xmas Lemmings
+
+Psygnosis' Xmas Lemmings 1992 demo (free; `build_lemm.sh` makes a boot
+floppy of it from `~/roms`), run by `play_disk` in
+`targets/i386/at386_test.rs`: it boots, picks the keyboard (the demo
+offers a joystick otherwise, which waits on a game port the board has
+not), starts level 1 and lets the lemmings walk. Keys at instruction
+counts (`PLAY_STEPS`; a time is reached at a different instruction by
+each core, and a key there lands elsewhere):
+
+    PLAY_DISK=.../lemm.img PLAY_STEPS=292000000 \
+    PLAY_KEYS=58336855:3e,62787749:04,69604783:3b,99520663:39,110470370:39 \
+    cargo test --release --test at386 -- --ignored --nocapture play_disk
+
+It plays in the EGA's 640x350 16-colour mode, AdLib music only (not
+built: silent). Run 2026-11-09 (292 M instructions, 99 emulated seconds):
+
+| profile | speed (emulated/wall) | host instructions | screen, RAM, time |
+|---|---|---|---|
+| `emulate` | 3.5x | 466G | |
+| `jit` | 3.4x | 445G | as `emulate`, to the tick |
+| `blocks` | 4.0x | 389G | the same screen |
+| `quantum` | 4.1x | 389G | as `blocks` |
+
+The game waits for the vertical retrace each frame: 3 M instructions an
+emulated second. The processor is little of the cost: under `blocks` the
+VGA's beam and scanline renderer (`Vga::fn_advance`, the scanline memo's
+`fn_put_rec` and `Rec::block`) take 72% of the host instructions, about
+180 a dot, 70 frames a second; the screen changes every frame, so the memo
+seldom spares a line.
+

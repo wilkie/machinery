@@ -327,3 +327,102 @@ fn bench_compare() {
         sys.now()
     );
 }
+
+/// Runs the floppy image in `PLAY_DISK` (DOS with an AUTOEXEC.BAT starting
+/// a program, a game say) for `PLAY_SECONDS` of emulated time (30), pressing
+/// keys at given times (`PLAY_KEYS`: `seconds:code` pairs, comma-separated,
+/// a set-1 make code in hex), and saving the screen every `PLAY_EVERY`
+/// seconds (5) as PPM files in `PLAY_SHOTS` (when set). Reports the
+/// instructions and the time taken. Run with `PLAY_DISK=... cargo test
+/// --release -- --ignored --nocapture play_disk`.
+#[test]
+#[ignore]
+fn play_disk() {
+    let Some(path) = std::env::var_os("PLAY_DISK") else { return eprintln!("PLAY_DISK not set; skipping") };
+    let (Some(mut sys), Ok(d)) = (at(0), std::fs::read(path)) else { return skip() };
+    insert(&mut sys, &d);
+    let var = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (seconds, every) = (var("PLAY_SECONDS", 30.0), var("PLAY_EVERY", 5.0));
+    let mut keys: Vec<(f64, u8)> = std::env::var("PLAY_KEYS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|p| {
+            let (t, c) = p.split_once(':')?;
+            Some((t.trim().parse().ok()?, u8::from_str_radix(c.trim(), 16).ok()?))
+        })
+        .collect();
+    keys.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let shots = std::env::var_os("PLAY_SHOTS").map(std::path::PathBuf::from);
+    let save = |sys: &mut System, t: f64| {
+        let Some(dir) = &shots else { return };
+        let v = &sys.board().vga;
+        let (w, h) = (v.frame_width as usize, v.frame_height as usize);
+        let mut out = format!("P6 {w} {h} 255\n").into_bytes();
+        for y in 0..h {
+            for x in 0..w {
+                let at = (y * 720 + x) * 3;
+                out.extend(v.frame[at..at + 3].iter().map(|c| (c << 2) | (c >> 4)));
+            }
+        }
+        let _ = std::fs::write(dir.join(format!("shot_{:06.1}.ppm", t)), out);
+    };
+    let wall = std::time::Instant::now();
+    let mut steps = 0u64;
+    let mut next_shot = every;
+    let mut k = 0;
+    // `PLAY_STEPS`: the run, the keys' times and their holds counted in
+    // instructions, which every core counts alike (a time is reached at a
+    // different instruction by each: a key would land elsewhere).
+    if let Some(total) = std::env::var("PLAY_STEPS").ok().and_then(|v| v.parse::<u64>().ok()) {
+        for &(at, c) in &keys {
+            let at = at as u64;
+            if at > steps {
+                steps += sys.run_until(at - steps, |_| false).unwrap();
+            }
+            sys.with_kbc(|kb, ctx| kb.fn_key(ctx, c));
+            steps += sys.run_until(300_000, |_| false).unwrap();
+            sys.with_kbc(|kb, ctx| kb.fn_key(ctx, c | 0x80));
+        }
+        if total > steps {
+            steps += sys.run_until(total - steps, |_| false).unwrap();
+        }
+        next_shot = f64::MAX;
+    }
+    while sys.seconds() < seconds && next_shot != f64::MAX {
+        let until = next_shot.min(keys.get(k).map_or(f64::MAX, |p| p.0)).min(seconds);
+        steps += sys.run_until(4_000_000_000, |s| s.seconds() >= until).unwrap();
+        while k < keys.len() && keys[k].0 <= sys.seconds() {
+            // Held a while: a game may look at which keys are down once a
+            // frame, not at each press.
+            let c = keys[k].1;
+            println!("KEY {:.3} {c:02x} at instruction {steps}", sys.seconds());
+            sys.with_kbc(|kb, ctx| kb.fn_key(ctx, c));
+            wait(&mut sys, 0.15);
+            sys.with_kbc(|kb, ctx| kb.fn_key(ctx, c | 0x80));
+            k += 1;
+        }
+        if sys.seconds() >= next_shot {
+            save(&mut sys, next_shot);
+            next_shot += every;
+        }
+    }
+    let w = wall.elapsed().as_secs_f64();
+    let t = sys.seconds();
+    save(&mut sys, t);
+    let played = sys.board().sb.played;
+    // What the program shows and holds at the end, to compare profiles by.
+    let fnv = |h: u64, b: &u8| (h ^ *b as u64).wrapping_mul(0x100000001b3);
+    let frame = sys.board().vga.frame.iter().fold(0xcbf29ce484222325u64, fnv);
+    let ram = sys.board().ram.cells.iter().fold(0xcbf29ce484222325u64, fnv);
+    println!(
+        "PLAY {} {} instructions {steps} seconds {w:.3} mips {:.1} emulated_seconds {:.3} speed {:.2}x sb_played {} frame {frame:016x} ram {ram:016x} now {}",
+        machine_at386_vga::system::PROFILE,
+        machine_at386_vga::system::CORE,
+        steps as f64 / w / 1e6,
+        t,
+        t / w,
+        played,
+        sys.now()
+    );
+}
+

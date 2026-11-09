@@ -42,8 +42,11 @@ use machine_sema::ty::Ty;
 
 use super::{ident, Cx, Gen, GenError, R};
 
-/// Runs kept, direct-mapped by physical address.
-const TRACES: usize = 4096;
+/// Runs kept, direct-mapped by physical address. A game touches tens of
+/// thousands of instructions: at 4096, runs sharing a slot evicted each
+/// other before they were entered often enough to compile (Xmas
+/// Lemmings' bit-counting loop never was); 16384 keeps them, at a few MB.
+const TRACES: usize = 16384;
 /// Instructions in a run at most.
 const STEPS: usize = 64;
 

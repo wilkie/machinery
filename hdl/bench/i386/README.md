@@ -336,3 +336,14 @@ Host instructions:
 the tick `emulate` does. The generated tests compile at 64 entries and
 optimise at 1000 steps a step, so their loops run at both tiers.
 
+Then (2026-11-09): the game undrawn, counted: 248 M instructions run
+compiled, 44 M stepped (a quarter of the host instructions, about 500 a
+step), 12 M reads of the status port, 69 M VGA catch-ups (its memory's
+reads and writes, about 120 host instructions each). A fifth of the
+stepped instructions were one bit-counting loop (`shr ax,1; jnc; inc dh;
+loop`): its runs shared their slots in the run table (4096, direct
+mapped) with others', evicting each other before they were entered often
+enough to compile. At 16384 slots it is compiled; 36 M instructions are
+stepped, a long tail: the game 91.9G host instructions from 94.6G (65536
+slots: 91.8G); chk, mix and the boot the same.
+

@@ -168,6 +168,22 @@ the urgent devices' deadline as compiled code is entered); and `snd`'s
 interrupt count, kept beside its code at first, made every interrupt
 recompile the runs on that page (8000 compiles; the JIT at 17 MIPS).
 
+Then (2026-11-08): a write to recorded code costs the runs in its
+128-byte block, not the page's others (SPEC 12, the trace core): a run
+whose page was written holds while none of its blocks was. `snd` with its
+count beside its interrupt handler, as it was at first (host instructions
+for the run):
+
+| profile | before | after | count on a page of its own |
+|---|---|---|---|
+| `jit` | 594G | 92.8G | 93.5G |
+| `blocks` | 151G | 45.4G | 45.5G |
+
+The boot costs more (`jit` 58.0G from 53.5G, `blocks` 32.2G from 31.1G):
+runs DOS's writes kept invalidating now live to be compiled (210 compiles
+from 205), and a compile costs about 110 M host instructions (27 M a guest
+instruction compiled): compiling is 23G of the boot's 53G.
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

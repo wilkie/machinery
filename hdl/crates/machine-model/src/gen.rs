@@ -1402,15 +1402,16 @@ impl<'a> Gen<'a> {
             (H::Index(b, idx), Some(H::ModelMem(_, i))) if matches!(b.kind, H::ModelMem(..)) && self.stamped(cx, *i).is_some() => {
                 let m = self.stamped(cx, *i).unwrap();
                 Ok(format!(
-                    "{{ let v = {rhs}; let i = ({}) as usize; {}[i] = v; if {r}.{m}_code[i >> 12] & (1u32 << ((i >> 7) & 31)) != 0 {{ {r}.{m}_stamps[i >> 12] = {r}.{m}_stamps[i >> 12].wrapping_add(1); {r}.{m}_code[i >> 12] = 0; {r}.{m}_writes = {r}.{m}_writes.wrapping_add(1); }} }}\n",
+                    "{{ let v = {rhs}; let i = ({}) as usize; {}[i] = v; if {r}.{m}_code[i >> 12] & (1u32 << ((i >> 7) & 31)) != 0 {{ {} }} }}\n",
                     self.expr(cx, idx)?,
-                    self.lvalue(cx, b)?
+                    self.lvalue(cx, b)?,
+                    code_hit(&format!("{r}.{m}"), "i")
                 ))
             }
             (_, Some(H::ModelMem(_, i))) if self.stamped(cx, *i).is_some() => {
                 let m = self.stamped(cx, *i).unwrap();
                 let inner = self.assign_inner(cx, place, rhs)?;
-                Ok(format!("{inner}for c in {r}.{m}_stamps.iter_mut() {{ *c = c.wrapping_add(1); }} for c in {r}.{m}_code.iter_mut() {{ *c = 0; }} {r}.{m}_writes = {r}.{m}_writes.wrapping_add(1);\n"))
+                Ok(format!("{inner}for c in {r}.{m}_stamps.iter_mut() {{ *c = c.wrapping_add(1); }} for c in {r}.{m}_code.iter_mut() {{ *c = 0; }} for (b, h) in {r}.{m}_hits.iter_mut().enumerate() {{ *h = {r}.{m}_stamps[b >> 5]; }} {r}.{m}_writes = {r}.{m}_writes.wrapping_add(1);\n"))
             }
             (_, Some(H::ModelMem(_, i))) if self.memo_mem(*i).is_some() => {
                 let m = self.memo_mem(*i).unwrap();
@@ -1911,7 +1912,7 @@ impl<'a> Gen<'a> {
         if let Some(ist) = &self.isa.istream {
             let n = ident(&self.spaces[&ist.space].name);
             let _ = writeln!(s, "    /// An instruction-stream fetch (a code bus cycle); a read by default.\n    fn {n}_fetch(&mut self, addr: u64, bits: u32) -> u128 {{ self.{n}_read(addr, bits) }}");
-            let _ = writeln!(s, "    /// The trace core: the page of code memory `addr` is in, when its writes\n    /// are counted; its write count; and the fetches of `n` bytes from\n    /// `addr` as the istream makes them, their values not needed.\n    #[allow(unused_variables)]\n    fn {n}_code_page(&mut self, addr: u64) -> Option<u32> {{ None }}\n    /// Writes to code memory so far, all pages.\n    fn {n}_code_writes(&mut self) -> u64 {{ 0 }}\n    /// `n` bytes at `addr` (in `page`) hold code: writes to them count.\n    #[allow(unused_variables)]\n    fn {n}_code_mark(&mut self, page: u32, addr: u64, n: u32) {{}}\n    #[allow(unused_variables)]\n    fn {n}_code_stamp(&mut self, page: u32) -> u32 {{ 0 }}\n    fn {n}_fetch_skip(&mut self, addr: u64, n: u32) {{ for i in 0..n {{ self.{n}_fetch(addr.wrapping_add(i as u64), 8); }} }}\n    /// The same, for bytes in code page `page`.\n    fn {n}_fetch_page(&mut self, page: u32, addr: u64, n: u32) {{ let _ = page; self.{n}_fetch_skip(addr, n) }}");
+            let _ = writeln!(s, "    /// The trace core: the page of code memory `addr` is in, when its writes\n    /// are counted; its write count; and the fetches of `n` bytes from\n    /// `addr` as the istream makes them, their values not needed.\n    #[allow(unused_variables)]\n    fn {n}_code_page(&mut self, addr: u64) -> Option<u32> {{ None }}\n    /// Writes to code memory so far, all pages.\n    fn {n}_code_writes(&mut self) -> u64 {{ 0 }}\n    /// `n` bytes at `addr` (in `page`) hold code: writes to them count.\n    #[allow(unused_variables)]\n    fn {n}_code_mark(&mut self, page: u32, addr: u64, n: u32) {{}}\n    #[allow(unused_variables)]\n    fn {n}_code_stamp(&mut self, page: u32) -> u32 {{ 0 }}\n    /// Whether a run in `page` recorded at its write count `stamp` holds,\n    /// its bytes in the 128-byte blocks of `mask`: none of them written since.\n    #[allow(unused_variables)]\n    fn {n}_code_fresh(&mut self, page: u32, mask: u32, stamp: u32) -> bool {{ false }}\n    fn {n}_fetch_skip(&mut self, addr: u64, n: u32) {{ for i in 0..n {{ self.{n}_fetch(addr.wrapping_add(i as u64), 8); }} }}\n    /// The same, for bytes in code page `page`.\n    fn {n}_fetch_page(&mut self, page: u32, addr: u64, n: u32) {{ let _ = page; self.{n}_fetch_skip(addr, n) }}");
         }
         let mut ext_flat = String::new();
         for f in self.isa.fns.iter().filter(|f| f.external) {
@@ -4264,4 +4265,12 @@ fn tail_parent(o: &hir::Operand) -> Option<DefId> {
         ("parent", Ty::Operand(p)) => Some(*p),
         _ => None,
     }
+}
+
+/// A write to recorded code (the 128-byte block holding byte `k` of the
+/// direct memory whose fields start `cells`, marked as code): its page's
+/// write count bumped, the block unmarked and its last write noted, and
+/// the writes counted. Runs in the page's other blocks hold (`_code_fresh`).
+pub(crate) fn code_hit(cells: &str, k: &str) -> String {
+    format!("let p = {k} >> 12; {cells}_stamps[p] = {cells}_stamps[p].wrapping_add(1); {cells}_code[p] &= !(1u32 << (({k} >> 7) & 31)); {cells}_hits[{k} >> 7] = {cells}_stamps[p]; {cells}_writes = {cells}_writes.wrapping_add(1);")
 }

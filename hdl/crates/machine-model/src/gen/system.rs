@@ -270,7 +270,7 @@ impl<'a> Gen<'a> {
                 self.rty(&m.elem)?
             );
             if self.trace.is_some() && m.direct.is_some() {
-                let _ = writeln!(st, "    /// The trace core's code pages of `{}`: per 4 KB page, which 128-byte\n    /// blocks hold recorded code, and writes to them; and those writes in\n    /// all.\n    pub {}_code: Vec<u32>,\n    pub {}_stamps: Vec<u32>,\n    pub {}_writes: u64,", m.name, ident(&m.name), ident(&m.name), ident(&m.name));
+                let _ = writeln!(st, "    /// The trace core's code pages of `{}`: per 4 KB page, which 128-byte\n    /// blocks hold recorded code, and writes to them; and those writes in\n    /// all. Per block, the page's write count its last write made (a run\n    /// recorded at a later count holds while none of its blocks is written).\n    pub {}_code: Vec<u32>,\n    pub {}_stamps: Vec<u32>,\n    pub {}_writes: u64,\n    pub {}_hits: Vec<u32>,", m.name, ident(&m.name), ident(&m.name), ident(&m.name), ident(&m.name));
             }
         }
         let mut memo_init = String::new();
@@ -311,7 +311,7 @@ impl<'a> Gen<'a> {
                 m.len
             );
             if self.trace.is_some() && m.direct.is_some() {
-                let _ = writeln!(st, "            {}_code: vec![0; {}],\n            {}_stamps: vec![0; {}],\n            {}_writes: 0,", ident(&m.name), m.len.div_ceil(4096), ident(&m.name), m.len.div_ceil(4096), ident(&m.name));
+                let _ = writeln!(st, "            {}_code: vec![0; {}],\n            {}_stamps: vec![0; {}],\n            {}_writes: 0,\n            {}_hits: vec![0; {}],", ident(&m.name), m.len.div_ceil(4096), ident(&m.name), m.len.div_ceil(4096), ident(&m.name), ident(&m.name), m.len.div_ceil(4096) * 32);
             }
         }
         st.push_str(&memo_init);
@@ -1222,6 +1222,7 @@ impl<'a> Gen<'a> {
             // counts, and fetches charged without reading.
             let mut pages = String::new();
             let mut stamps = String::new();
+            let mut freshes = String::new();
             let mut skips = String::new();
             let mut marks = String::new();
             let mut charges = String::new();
@@ -1263,7 +1264,7 @@ impl<'a> Gen<'a> {
                             let _ = writeln!(peeks, "        if {cond} {{ let mut v: u128 = 0; for i in 0..n {{ v |= ({cells}[{}] as u128) << (8 * i); }} return Some(v); }}", index("addr + i"));
                             let _ = writeln!(costs, "        if !write && {cond} {{ return Some({units} * {} * {period}); }}", rbase as u128 + d.wait);
                             let stamp = if self.trace.is_some() {
-                                format!(" let k = {}; if {cells}_code[k >> 12] & (1u32 << ((k >> 7) & 31)) != 0 {{ {cells}_stamps[k >> 12] = {cells}_stamps[k >> 12].wrapping_add(1); {cells}_code[k >> 12] = 0; {cells}_writes = {cells}_writes.wrapping_add(1); }}", index("addr + i"))
+                                format!(" let k = {}; if {cells}_code[k >> 12] & (1u32 << ((k >> 7) & 31)) != 0 {{ {} }}", index("addr + i"), crate::gen::code_hit(&cells, "k"))
                             } else {
                                 String::new()
                             };
@@ -1296,6 +1297,7 @@ impl<'a> Gen<'a> {
                                     None => {
                                         numbered.push((*si as usize, cells.clone()));
                                         let _ = writeln!(stamps, "            {} => {cells}_stamps.get((page & 0xFF_FFFF) as usize).copied().unwrap_or(0),", numbered.len() - 1);
+                                        let _ = writeln!(freshes, "            {} => {{ let p = (page & 0xFF_FFFF) as usize; (0..32).all(|b| mask & (1u32 << b) == 0 || {cells}_hits.get(p * 32 + b).is_some_and(|h| h.wrapping_sub(stamp) as i32 <= 0)) }}", numbered.len() - 1);
                                         let _ = writeln!(marks, "            {} => {{ if let Some(c) = {cells}_code.get_mut((page & 0xFF_FFFF) as usize) {{ *c |= bits; }} }}", numbered.len() - 1);
                                         let _ = writeln!(jit_times, "            {} => {{ let last = addr.wrapping_add(n as u64 - 1); Some((last / {unit_bytes} - addr / {unit_bytes} + 1) as clock::Time * {} * {period}) }}", numbered.len() - 1, rbase as u128 + d.wait);
                                         let _ = writeln!(jit_units, "            {} => {{ let last = addr.wrapping_add(n as u64 - 1); Some((addr / {unit_bytes}, last / {unit_bytes}, {} * {period})) }}", numbered.len() - 1, rbase as u128 + d.wait);
@@ -1313,7 +1315,7 @@ impl<'a> Gen<'a> {
                                     let _ = write!(jit_mems, "JitMem {{ amask: {am:#x}, lo: {:#x}, hi: {:#x}, mask: {mk:#x}, read: {} * {period}, write: {write}, unit: {unit_bytes}, cells: {}, code: Some({}), mem: {k} }}, ", r.lo, r.hi, rbase as u128 + d.wait, 2 * k, 2 * k + 1);
                                     if !jit_ptrs.contains(&format!("out[{}]", 2 * k)) {
                                         let _ = writeln!(jit_ptrs, "        out[{}] = {cells}.as_ptr() as usize; out[{}] = {cells}_code.as_ptr() as usize;", 2 * k, 2 * k + 1);
-                                        let _ = writeln!(jit_hits, "            {k} => {{ {cells}_stamps[k >> 12] = {cells}_stamps[k >> 12].wrapping_add(1); {cells}_code[k >> 12] = 0; {cells}_writes = {cells}_writes.wrapping_add(1); }}");
+                                        let _ = writeln!(jit_hits, "            {k} => {{ {} }}", crate::gen::code_hit(&cells, "k"));
                                     }
                                 }
                                 let _ = writeln!(skips, "        if addr >= {:#x} && last <= {:#x} {{ let (u0, u1) = (addr / {unit_bytes}, last / {unit_bytes}); let c = u1 - u0 + 1 - (u0 == self.direct_code) as u64; self.direct_code = u1; let t = c as clock::Time * {} * {period}; self.sig.now += t; self.code_time += t; return true; }}", r.lo, r.hi, rbase as u128 + d.wait);
@@ -1339,7 +1341,7 @@ impl<'a> Gen<'a> {
                 format!("        /// A kernel's block (`rt::bulk`): the direct memory holding all\n        /// `len` bytes from `addr` (a read's; a write's, when `write`,\n        /// none of them recorded code), and where `addr` is in its cells.\n        /// One memory at one cost a unit, as `direct_cost` charges.\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_span(&self, addr: u64, len: u64, write: bool) -> Option<(u32, usize)> {{\n        if len == 0 {{ return None; }}\n        let last = addr.checked_add(len - 1)?;\n{spans}        None\n        }}\n        /// A memory `direct_span` named: its cells.\n        #[allow(dead_code)]\n        pub fn direct_cells(&mut self, mem: u32) -> &mut [u8] {{\n            match mem {{\n{arms}            _ => &mut [],\n            }}\n        }}\n")
             };
             let trace_direct = if self.trace.is_some() {
-                format!("        /// The trace core: the code page `addr` is in (memory, page), its\n        /// write count, and `n` code bytes' fetches charged as `direct_fetch`\n        /// charges them (false: not all in one direct memory).\n        #[inline]\n        fn direct_code_page(&self, addr: u64) -> Option<u32> {{\n{pages}        None\n        }}\n        #[inline]\n        fn direct_code_stamp(&self, page: u32) -> u32 {{\n            match page >> 24 {{\n{stamps}            _ => 0,\n            }}\n        }}\n        #[inline]\n        fn direct_code_writes(&self) -> u64 {{ 0{wsum} }}\n        /// Code bytes' fetches charged, in the memory their page is in.\n        #[inline]\n        fn direct_charge(&mut self, page: u32, addr: u64, n: u32) -> bool {{\n            match page >> 24 {{\n{charges}            _ => false,\n            }}\n        }}\n        /// The JIT core: what charging `n` code bytes from `addr` costs when
+                format!("        /// The trace core: the code page `addr` is in (memory, page), its\n        /// write count, and `n` code bytes' fetches charged as `direct_fetch`\n        /// charges them (false: not all in one direct memory).\n        #[inline]\n        fn direct_code_page(&self, addr: u64) -> Option<u32> {{\n{pages}        None\n        }}\n        #[inline]\n        fn direct_code_stamp(&self, page: u32) -> u32 {{\n            match page >> 24 {{\n{stamps}            _ => 0,\n            }}\n        }}\n        /// Whether a run in `page` recorded at its write count `stamp`, over\n        /// the blocks in `mask`, holds: none of them written since.\n        #[allow(unused_variables)]\n        fn direct_code_fresh(&self, page: u32, mask: u32, stamp: u32) -> bool {{\n            match page >> 24 {{\n{freshes}            _ => false,\n            }}\n        }}\n        #[inline]\n        fn direct_code_writes(&self) -> u64 {{ 0{wsum} }}\n        /// Code bytes' fetches charged, in the memory their page is in.\n        #[inline]\n        fn direct_charge(&mut self, page: u32, addr: u64, n: u32) -> bool {{\n            match page >> 24 {{\n{charges}            _ => false,\n            }}\n        }}\n        /// The JIT core: what charging `n` code bytes from `addr` costs when
         /// the code unit last fetched is not among them (a serial fetch).
         #[allow(dead_code)]
         fn direct_jit_time(&self, page: u32, addr: u64, n: u32) -> Option<clock::Time> {{
@@ -1457,7 +1459,7 @@ impl<'a> Gen<'a> {
             if self.trace.is_some() {
                 let _ = write!(
                     bus_impl,
-                    "    #[inline]\n    fn {n}_code_page(&mut self, addr: u64) -> Option<u32> {{ self.direct_code_page(addr & {amask}) }}\n    #[inline]\n    fn {n}_code_stamp(&mut self, page: u32) -> u32 {{ self.direct_code_stamp(page) }}\n    #[inline]\n    fn {n}_code_writes(&mut self) -> u64 {{ self.direct_code_writes() }}\n    fn {n}_code_mark(&mut self, page: u32, addr: u64, n: u32) {{ self.direct_code_mark(page, addr, n) }}\n    #[inline]\n    fn {n}_fetch_page(&mut self, page: u32, addr: u64, n: u32) {{\n        if !self.direct_charge(page, addr & {amask}, n) {{ self.{n}_fetch_skip(addr, n); }}\n    }}\n    #[inline]\n    fn {n}_fetch_skip(&mut self, addr: u64, n: u32) {{\n        if self.direct_skip(addr & {amask}, n) {{ return; }}\n        for i in 0..n {{ self.{n}_fetch(addr.wrapping_add(i as u64), 8); }}\n    }}\n"
+                    "    #[inline]\n    fn {n}_code_page(&mut self, addr: u64) -> Option<u32> {{ self.direct_code_page(addr & {amask}) }}\n    #[inline]\n    fn {n}_code_stamp(&mut self, page: u32) -> u32 {{ self.direct_code_stamp(page) }}\n    fn {n}_code_fresh(&mut self, page: u32, mask: u32, stamp: u32) -> bool {{ self.direct_code_fresh(page, mask, stamp) }}\n    #[inline]\n    fn {n}_code_writes(&mut self) -> u64 {{ self.direct_code_writes() }}\n    fn {n}_code_mark(&mut self, page: u32, addr: u64, n: u32) {{ self.direct_code_mark(page, addr, n) }}\n    #[inline]\n    fn {n}_fetch_page(&mut self, page: u32, addr: u64, n: u32) {{\n        if !self.direct_charge(page, addr & {amask}, n) {{ self.{n}_fetch_skip(addr, n); }}\n    }}\n    #[inline]\n    fn {n}_fetch_skip(&mut self, addr: u64, n: u32) {{\n        if self.direct_skip(addr & {amask}, n) {{ return; }}\n        for i in 0..n {{ self.{n}_fetch(addr.wrapping_add(i as u64), 8); }}\n    }}\n"
                 );
             }
             let _ = write!(

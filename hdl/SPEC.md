@@ -1676,8 +1676,13 @@ system PcAt386 {
     leaves it).
   - Each direct memory marks the 128-byte blocks of each 4 KB page that
     hold recorded code; a write to a marked block counts against its page,
-    and a run is replayed only while its page's count is unchanged. Writes
-    to data beside code cost nothing; code that changes is decoded again.
+    unmarks the block and notes the page's count in it. A run is replayed
+    while its page's count is unchanged, or none of the blocks it lies in
+    has been written since it was recorded (it then takes the page's
+    count). Writes to data beside code cost nothing; a write to data in a
+    block of code (a counter beside an interrupt handler) costs the runs
+    in that block, not the page's others; code that changes is decoded
+    again.
   Interrupts, device catch-up and timing run per instruction as with
   `decode`, so the machine's behaviour and time are the same; the host
   calls `code_changed()` after writing memory or the processor's state

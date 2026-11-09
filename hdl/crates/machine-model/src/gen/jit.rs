@@ -580,7 +580,10 @@ impl Gen<'_> {
     fn jit_code_ok(&mut self, page: u32, stamp: u32) -> bool {{
         let w = self.bus.{sp}_code_writes();
         if w != self.tr_w {{
-            if self.bus.{sp}_code_stamp(page) != stamp {{
+            // (The run whose code asks: the current one, its stamp its own,
+            // which a check may have moved on since it was compiled.)
+            let _ = stamp;
+            if !self.tr_fresh(self.tr_cur as usize, page) {{
                 self.tr_on = false;
                 self.tr_prev = u32::MAX;
                 return false;

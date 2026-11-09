@@ -230,3 +230,41 @@ fn self_modifying_code_agrees_with_stepping() {
     assert_eq!(b.board().ram.cells[7], 0);
     assert_eq!(b.cpu.r.AF >> 8, (40 * (255 * 256 / 2) % 256) as u16);
 }
+
+/// A hot loop that rewrites code in another 128-byte block of its page: it
+/// calls a routine at 0100h, then increments the operand of the routine's
+/// `ADD A,n`, 10240 times. The routine's run must see each write; the
+/// loop's own run, in a block nothing writes, holds through them. Every
+/// core agrees with stepping.
+#[test]
+fn code_rewritten_beside_a_loop_agrees_with_stepping() {
+    let mut prog = vec![0u8; 0x104];
+    prog[..18].copy_from_slice(&[
+        0x31, 0x00, 0x80, // LD SP,8000h
+        0x01, 0x28, 0x00, // LD BC,0028h: B = 0 (256), C = 40
+        0x21, 0x01, 0x01, // LD HL,0101h: the routine's operand
+        0xCD, 0x00, 0x01, // loop: CALL 0100h
+        0x34, //             INC (HL)
+        0x10, 0xFA, //       DJNZ loop
+        0x0D, //             DEC C
+        0x20, 0xF7, //       JR NZ,loop
+    ]);
+    prog[18] = 0x76; //      HALT
+    prog[0x100..0x103].copy_from_slice(&[0xC6, 0x00, 0xC9]); // ADD A,n; RET
+    let mut a = boot(&prog);
+    let mut b = a.clone();
+    let mut na = 0;
+    while !a.cpu.halted {
+        a.step().unwrap();
+        na += 1;
+    }
+    let nb = b.run(1_000_000).unwrap();
+    assert!(b.cpu.halted);
+    assert_eq!(na, nb, "steps made");
+    assert_eq!(a.cpu.r, b.cpu.r, "registers");
+    if machine_board_z80::system::EXACT {
+        assert_eq!(a.now(), b.now(), "time");
+    }
+    assert_eq!(b.board().ram.cells[0x101], 0);
+    assert_eq!(b.cpu.r.AF >> 8, (40 * (255 * 256 / 2) % 256) as u16);
+}

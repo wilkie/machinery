@@ -2930,6 +2930,14 @@ impl<'a> Gen<'a> {
         s.push_str(&format!(
             "    /// Decode and execute one instruction from the instruction stream.\n    pub fn step(&mut self) -> Result<(), Fault> {{\n{prologue}{find}{tail}    }}\n"
         ));
+        // The trace core's replay loop: the step's prologue and tail, for a
+        // replayed instruction (the prologue sets `tr_go` when it leaves
+        // the step to the instruction).
+        if self.trace.is_some() {
+            s.push_str(&format!(
+                "    /// `step`'s prologue, for the replay loop: `tr_go` when the instruction is to run.\n    #[inline]\n    fn replay_prologue(&mut self) -> Result<(), Fault> {{\n{prologue}        self.tr_go = true;\n        Ok(())\n    }}\n    /// `step`'s tail, for the replay loop.\n    #[inline]\n    fn replay_tail(&mut self, start: u64, r: Result<(), Fault>) -> Result<(), Fault> {{\n        let mut sched = Schedule::default();\n{tail}    }}\n"
+            ));
+        }
         // The JIT core: the step's prologue and tail, for a compiled
         // instruction (the prologue sets `jit_go` when it leaves the step to
         // the instruction).

@@ -1784,6 +1784,11 @@ impl<'a> Gen<'a> {
         // the rest of a compiled run it entered).
         let run_loop = if self.jit {
             "            let mut n = 0;\n            while n < max {{\n                if stop(self) {{\n                    return Ok(n);\n                }}\n                n += self.CPU.jit_burst(max - n)?;\n            }}\n            Ok(n)\n".replace("{{", "{").replace("}}", "}").replace("CPU", &cpu_name)
+        } else if self.trace.is_some() {
+            // The trace core: a run being replayed, its steps in the replay
+            // loop (`stop` checked between its bursts, as the JIT core's);
+            // else a step.
+            "            let mut n = 0;\n            while n < max {\n                if stop(self) {\n                    return Ok(n);\n                }\n                let k = self.CPU.trace_burst(max - n)?;\n                if k == 0 {\n                    self.step()?;\n                    n += 1;\n                } else {\n                    n += k;\n                }\n            }\n            Ok(n)\n".replace("CPU", &cpu_name)
         } else {
             "            for n in 0..max {\n                if stop(self) {\n                    return Ok(n);\n                }\n                self.step()?;\n            }\n            Ok(max)\n".to_string()
         };

@@ -512,7 +512,7 @@ impl Gen<'_> {
             return ("", "");
         }
         (
-            "    /// The trace core: replaying run `tr_cur` (when `tr_on`) at\n    /// instruction `tr_idx`, entered at epoch `tr_ep0`; the epoch, bumped\n    /// by writes to what runs depend on; recording this step; code memory's\n    /// write total when last checked; the run that just ended.\n    pub tr_on: bool,\n    pub tr_rec_now: bool,\n    pub tr_idx: u32,\n    pub tr_cur: u32,\n    pub tr_prev: u32,\n    pub tr_epoch: u64,\n    pub tr_ep0: u64,\n    pub tr_aepoch: u64,\n    pub tr_kepoch: u64,\n    pub tr_w: u64,\n    pub tr_phys: u64,\n",
+            "    /// The trace core: replaying run `tr_cur` (when `tr_on`) at\n    /// instruction `tr_idx`, entered at epoch `tr_ep0`; the epoch, bumped\n    /// by writes to what runs depend on; recording this step; code memory's\n    /// write total when last checked; the run that just ended.\n    pub tr_on: bool,\n    pub tr_rec_now: bool,\n    pub tr_idx: u32,\n    pub tr_cur: u32,\n    pub tr_prev: u32,\n    pub tr_epoch: u64,\n    pub tr_ep0: u64,\n    pub tr_aepoch: u64,\n    pub tr_kepoch: u64,\n    pub tr_w: u64,\n    pub tr_phys: u64,\n    /// The replay loop: the step's prologue left the step to the\n    /// instruction (`replay_prologue`).\n    pub tr_go: bool,\n",
             "    /// The runs kept, and the one being recorded (from epoch\n    /// `tr_rec_ep`).\n    pub traces: Box<[Option<Trace>]>,\n    pub tr_rec: Option<Trace>,\n    pub tr_rec_ep: u64,\n",
         )
     }
@@ -521,7 +521,7 @@ impl Gen<'_> {
         if self.trace.is_none() {
             return String::new();
         }
-        format!("            tr_on: false,\n            tr_rec_now: false,\n            tr_idx: 0,\n            tr_cur: 0,\n            tr_prev: u32::MAX,\n            tr_epoch: 0,\n            tr_ep0: 0,\n            tr_aepoch: 0,\n            tr_kepoch: 0,\n            tr_w: u64::MAX,\n            tr_phys: 0,\n            traces: vec![None; {TRACES}].into_boxed_slice(),\n            tr_rec: None,\n            tr_rec_ep: 0,\n")
+        format!("            tr_on: false,\n            tr_rec_now: false,\n            tr_idx: 0,\n            tr_cur: 0,\n            tr_prev: u32::MAX,\n            tr_epoch: 0,\n            tr_ep0: 0,\n            tr_aepoch: 0,\n            tr_kepoch: 0,\n            tr_w: u64::MAX,\n            tr_phys: 0,\n            tr_go: false,\n            traces: vec![None; {TRACES}].into_boxed_slice(),\n            tr_rec: None,\n            tr_rec_ep: 0,\n")
     }
 
     /// The trace core's methods (inside the machine's impl).
@@ -658,6 +658,81 @@ impl Gen<'_> {
         self.last_start = phys;
         self.bus.{sp}_fetch_page(page, phys, len as u32);
         Some((phys, self.run_instr(instr)))
+    }}
+    /// The replay loop: the steps of the run being replayed, one after
+    /// another, each as `step` and `System::step` make it (its prologue,
+    /// the interrupt boundary among it; the step restored, its fetch
+    /// charged, run, its tail; the devices after it), with the run in hand
+    /// (taken from its slot for the loop: nothing a step does reaches the
+    /// table). It leaves the steps it cannot make as `step` would to
+    /// `step`: a pc not the run's, code written since the last check, the
+    /// processor halted, a prologue that ends the step (an interrupt taken,
+    /// the reset line, shutdown: that step made here), the run's end, or
+    /// `max` made. The steps made (0: none to replay).
+    pub fn trace_burst(&mut self, max: u64) -> Result<u64, Fault> {{
+        if !self.tr_on || max == 0 {{
+            return Ok(0);
+        }}
+        let cur = self.tr_cur as usize;
+        let Some(t) = self.traces[cur].take() else {{ return Ok(0) }};
+        let mut n = 0u64;
+        let r = loop {{
+            if n >= max || !self.tr_on || self.halted {{
+                break Ok(());
+            }}
+            let idx = self.tr_idx as usize;
+            let Some(s) = t.steps.get(idx) else {{ break Ok(()) }};
+            // `trace_check`, the run in hand (code written since: `step`
+            // checks it, with the table).
+            if self.tr_epoch != self.tr_ep0 || self.r.{pc0} as u64 != t.pc.wrapping_add(s.off as u64) {{
+                self.tr_on = false;
+                self.tr_prev = cur as u32;
+                break Ok(());
+            }}
+            if self.bus.{sp}_code_writes() != self.tr_w {{
+                break Ok(());
+            }}
+            self.tr_go = false;
+            let r = self.replay_prologue();
+            if !self.tr_go {{
+                // The step ended in its prologue.
+                self.bus.after_step();
+                n += 1;
+                break r;
+            }}
+            self.tr_rec_now = false;
+            self.decoded = false;
+            // `trace_restore`, the run in hand.
+            let phys = t.phys + s.off as u64;
+            let page = t.page;
+            let last = idx + 1 == t.steps.len();
+            let instr = s.instr;
+            let len = s.len;
+            self.fetched = len;
+            self.known_opcode = s.known;
+            self.prefix_cycles = s.prefix_cycles;
+            if B::SCHEDULE {{ self.decode_at = s.decode_at; }}
+            let opcodes = s.opcodes;
+{restore}            self.tr_idx += 1;
+{opcode_replay}
+            if last {{
+                self.tr_on = false;
+                self.tr_prev = cur as u32;
+            }}
+            self.tr_phys = phys;
+            self.restarted = phys == self.last_start;
+            self.last_start = phys;
+            self.bus.{sp}_fetch_page(page, phys, len as u32);
+            let r = self.run_instr(instr);
+            let r = self.replay_tail(phys, r);
+            self.bus.after_step();
+            n += 1;
+            if r.is_err() {{
+                break r;
+            }}
+        }};
+        self.traces[cur] = Some(t);
+        r.map(|()| n)
     }}
     /// The run the last one led to before, at this pc and epoch: entered
     /// without finding where the pc is (it is where it was).

@@ -377,6 +377,10 @@ impl Gen<'_> {
                 self.jit_compile(slot);
             }}
         }}
+        // A run being replayed goes on in the replay loop.
+        if self.tr_on && budget > n {{
+            n += self.trace_burst(budget - n)?;
+        }}
         Ok(n)
     }}
 "#

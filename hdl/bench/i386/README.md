@@ -435,3 +435,15 @@ it offers no headless way to read the guest's time or press a key. The
 game's launcher reads the keyboard itself, so a key stuffed into the
 BIOS's buffer does not reach it.
 
+Then (2026-11-09): the replay loop. A step that enters a recorded run
+now replays the run's rest in one loop (`trace_burst`), keeping each
+step's checks, its interrupt check and the devices' catch-up, but not
+returning through `step` and the system's run loop between
+instructions. The `jit` profiles use it where they interpret. On `chk`
+under `trace`, host instructions per guest instruction (N passes less
+none) went from 412.5 to 377.8 (-8.4%); the run ends alike (the tick,
+the memory, the samples). On the Lemmings script (every frame drawn), where
+compiled code does most of the work, it is about 1%: `jit` 214.1 G to
+212.3 G host instructions, `blocks` 188.7 G to 186.8 G, each ending as
+before (frame, memory, tick).
+

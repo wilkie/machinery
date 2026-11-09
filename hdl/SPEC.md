@@ -1684,12 +1684,18 @@ system PcAt386 {
     in that block, not the page's others; code that changes is decoded
     again.
   Interrupts, device catch-up and timing run per instruction as with
-  `decode`, so the machine's behaviour and time are the same; the host
+  `decode`, so the machine's behaviour and time are the same. A step that
+  enters a run stays in one loop for the run's rest (the replay loop):
+  each step's pc, epoch and code-write checks, its interrupt check and the
+  devices' catch-up are made in the loop, without returning through the
+  step and the system's run loop between instructions; the host
   calls `code_changed()` after writing memory or the processor's state
   directly. On the 386 board, 32-bit code with paging on runs about 50%
   faster (decoding, fetching and translating the code address are done
   once per run), real-mode code about 27%; a DOS boot, mostly short loops
-  polling devices, about the same (-3% to +7%).
+  polling devices, about the same (-3% to +7%). The replay loop takes 8%
+  off each interpreted instruction's cost (412.5 to 377.8 host
+  instructions on `chk`).
 - `core: jit;` (with `memory: direct`) is the trace core with runs entered
   often (16384 times: a compile costs what thousands of entries do)
   compiled to host code, quickly (Cranelift's optimiser off), and again

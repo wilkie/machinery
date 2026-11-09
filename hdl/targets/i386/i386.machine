@@ -79,6 +79,10 @@ isa I386 {
     /// taken (STI from IF clear, MOV SS, POP SS), cleared at the next boundary.
     register INHIBIT: u1;
     register CS: Segment;
+    /// Internal: CS was last loaded out of protected mode (real mode,
+    /// virtual-8086 mode, reset). Its RPL is not the privilege level then:
+    /// setting PE leaves CPL 0 until a far transfer loads CS.
+    register CS_REAL: u1;
     register DS: Segment;
     register ES: Segment;
     register SS: Segment;
@@ -159,10 +163,13 @@ isa I386 {
     fn protected() -> bool { return CR0.PE == 1 && EFLAGS.VM == 0; }
 
     /// The current privilege level: CS's RPL in protected mode, 3 in
-    /// virtual-8086 mode, 0 in real mode.
+    /// virtual-8086 mode, 0 in real mode, and 0 still once PE is set until
+    /// a far transfer loads CS (a real-mode selector's low bits are not a
+    /// privilege level: DOS extenders set PE running in segments such as
+    /// 291Dh, and jump on to ring 0).
     fn cpl() -> u2 {
         if EFLAGS.VM == 1 { return 3; }
-        return if CR0.PE == 1 { CS.selector[1:0] } else { 0 };
+        return if CR0.PE == 1 && CS_REAL == 0 { CS.selector[1:0] } else { 0 };
     }
 
     fn operand_size() -> u6 { return if (opsize ^ (CS.big as u1)) == 1 { 32 } else { 16 }; }
@@ -226,7 +233,7 @@ isa I386 {
     /// Processor reset: execution starts at F000:FFF0 with the code
     /// segment's base at FFFF0000.
     fn reset() {
-        CS = Segment { selector: 0xF000, base: 0xFFFF0000, limit: 0xFFFF, rights: 0x9B, big: false, stack: false };
+        CS = Segment { selector: 0xF000, base: 0xFFFF0000, limit: 0xFFFF, rights: 0x9B, big: false, stack: false }; CS_REAL = 1;
         DS = real_mode_segment(0, false);
         ES = real_mode_segment(0, false);
         SS = real_mode_segment(0, true);
@@ -544,10 +551,10 @@ isa I386 {
     /// The far JMP: to a code segment, through a call gate (at the same
     /// level), or to a task.
     fn jump_far(sel: u16, off: u32) {
-        if !protected() { CS = plain_code(sel, off); EIP = off; return; }
+        if !protected() { CS = plain_code(sel, off); CS_REAL = (!protected()) as u1; EIP = off; return; }
         if (sel & 0xFFFC) == 0 { raise GP(0); }
         let d = descriptor(sel);
-        if d.rights[4] == 1 { CS = same_level_code(sel, d, off); EIP = off; return; }
+        if d.rights[4] == 1 { CS = same_level_code(sel, d, off); CS_REAL = (!protected()) as u1; EIP = off; return; }
         let t = system_type(d.rights);
         if t == 1 || t == 9 || t == 5 { enter_task(sel, d, 0); return; }
         if t != 4 && t != 12 { raise GP(sel_error(sel)); }
@@ -562,7 +569,7 @@ isa I386 {
             raise GP(sel_error(tsel));
         }
         let goff = gate_offset(d);
-        CS = code_segment(tsel, td, cpl(), goff);
+        CS = code_segment(tsel, td, cpl(), goff); CS_REAL = (!protected()) as u1;
         EIP = goff;
     }
 
@@ -580,7 +587,7 @@ isa I386 {
         if !protected() {
             let s = plain_code(sel, off);
             push_return(W == 32, CS.selector, EIP);
-            CS = s;
+            CS = s; CS_REAL = (!protected()) as u1;
             EIP = off;
             return;
         }
@@ -589,7 +596,7 @@ isa I386 {
         if d.rights[4] == 1 {
             let cs = same_level_code(sel, d, off);
             push_return(W == 32, CS.selector, EIP);
-            CS = cs;
+            CS = cs; CS_REAL = (!protected()) as u1;
             EIP = off;
             return;
         }
@@ -611,7 +618,7 @@ isa I386 {
             let old_ss = SS;
             let old_esp = ESP;
             let old_top = stack_top(0);
-            CS = code_segment(tsel, td, level, goff);
+            CS = code_segment(tsel, td, level, goff); CS_REAL = (!protected()) as u1;
             stack_for(level);
             if wide { push<32>(old_ss.selector as u32); push<32>(old_esp); } else { push<16>(old_ss.selector); push<16>(old_esp as u16); }
             for i in 0..32 {
@@ -632,7 +639,7 @@ isa I386 {
         }
         let cs = code_segment(tsel, td, cpl(), goff);
         push_return(wide, old_cs, old_eip);
-        CS = cs;
+        CS = cs; CS_REAL = (!protected()) as u1;
         EIP = goff;
     }
 
@@ -665,7 +672,7 @@ isa I386 {
         if !protected() {
             let s = plain_code(cs, ip);
             release(2 * k + (n as u32));
-            CS = s;
+            CS = s; CS_REAL = (!protected()) as u1;
             EIP = ip;
             return;
         }
@@ -679,14 +686,14 @@ isa I386 {
             raise GP(sel_error(cs));
         }
         if rpl == cpl() {
-            CS = code_segment(cs, d, rpl, ip);
+            CS = code_segment(cs, d, rpl, ip); CS_REAL = (!protected()) as u1;
             release(2 * k + (n as u32));
             EIP = ip;
             return;
         }
         let sp = peek<W>(2 * k + (n as u32)) as u32;
         let ss = peek<W>(3 * k + (n as u32)) as u16;
-        CS = code_segment(cs, d, rpl, ip);
+        CS = code_segment(cs, d, rpl, ip); CS_REAL = (!protected()) as u1;
         EIP = ip;
         SS = load_stack_segment(ss, SS);
         if W == 32 { ESP = sp; } else { SP = sp as u16; }
@@ -724,7 +731,7 @@ isa I386 {
             let fl = peek<W>(2 * k) as u32;
             let s = plain_code(cs, ip);
             release(3 * k);
-            CS = s;
+            CS = s; CS_REAL = (!protected()) as u1;
             EIP = ip;
             load_flags(fl, W == 32);
             return;
@@ -757,14 +764,14 @@ isa I386 {
         load_flags(fl, W == 32);
         if W == 32 { EFLAGS.RF = fl[16]; }
         if rpl == cpl() {
-            CS = code_segment(cs, d, rpl, ip);
+            CS = code_segment(cs, d, rpl, ip); CS_REAL = (!protected()) as u1;
             release(3 * k);
             EIP = ip;
             return;
         }
         let sp = peek<W>(3 * k) as u32;
         let ss = peek<W>(4 * k) as u16;
-        CS = code_segment(cs, d, rpl, ip);
+        CS = code_segment(cs, d, rpl, ip); CS_REAL = (!protected()) as u1;
         EIP = ip;
         SS = load_stack_segment(ss, SS);
         if W == 32 { ESP = sp; } else { SP = sp as u16; }
@@ -782,7 +789,7 @@ isa I386 {
         let fs = peek<32>(28) as u16;
         let gs = peek<32>(32) as u16;
         EFLAGS = (EFLAGS & 0xFFFC8000) | (fl & 0x00037FD5) | 0x0002;
-        CS = plain_segment(CS, cs);
+        CS = plain_segment(CS, cs); CS_REAL = (!protected()) as u1;
         SS = plain_segment(SS, ss);
         ES = plain_segment(ES, es);
         DS = plain_segment(DS, ds);
@@ -812,7 +819,7 @@ isa I386 {
         push<16>(IP);
         EFLAGS.IF = 0;
         EFLAGS.TF = 0;
-        CS = plain_segment(CS, cs);
+        CS = plain_segment(CS, cs); CS_REAL = (!protected()) as u1;
         EIP = ip as u32;
     }
 
@@ -862,7 +869,7 @@ isa I386 {
         if inner {
             let old_ss = SS.selector;
             let old_esp = ESP;
-            CS = cs;
+            CS = cs; CS_REAL = (!protected()) as u1;
             EFLAGS.VM = 0;
             stack_for(level);
             if v86 {
@@ -882,7 +889,7 @@ isa I386 {
         if has_error {
             if wide { push<32>(error as u32); } else { push<16>(error); }
         }
-        CS = cs;
+        CS = cs; CS_REAL = (!protected()) as u1;
         EIP = off;
         EFLAGS.TF = 0;
         EFLAGS.NT = 0;
@@ -1013,7 +1020,7 @@ isa I386 {
         // The new task's LDT, then its segments, checked as #TS.
         LDTR = task_ldt(ldt);
         if EFLAGS.VM == 1 {
-            CS = plain_segment(CS, cs);
+            CS = plain_segment(CS, cs); CS_REAL = (!protected()) as u1;
             SS = plain_segment(SS, ss);
             DS = plain_segment(DS, ds);
             ES = plain_segment(ES, es);
@@ -1026,7 +1033,7 @@ isa I386 {
         if !is_code(cd.rights) { raise InvalidTss(sel_error(cs)); }
         if cd.rights[7] == 0 { raise NP(sel_error(cs)); }
         mark_accessed(cs, cd.rights);
-        CS = cached(cs, cd, false);
+        CS = cached(cs, cd, false); CS_REAL = (!protected()) as u1;
         if (ss & 0xFFFC) == 0 || !descriptor_at(ss) { raise InvalidTss(sel_error(ss)); }
         let sd = descriptor(ss);
         if !is_data(sd.rights) || sd.rights[1] == 0 || dpl(sd.rights) != cs[1:0] { raise InvalidTss(sel_error(ss)); }

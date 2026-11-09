@@ -728,7 +728,7 @@ fn i386_board_system_boots() {
         output.status.success(),
         "board tests failed:\n{stdout}\n{stderr}"
     );
-    assert!(stdout.contains("12 passed"), "expected 12 tests:\n{stdout}");
+    assert!(stdout.contains("13 passed"), "expected 13 tests:\n{stdout}");
 }
 
 /// The 386 board with a VGA (`Board386Vga`): generates, compiles, and runs

@@ -386,3 +386,24 @@ menu) unattended:
 effects are short single-cycle transfers: half a second of samples in
 the run, little load on the DSP.
 
+## A protected-mode game: One Must Fall: 2097
+
+Epic's One Must Fall: 2097 (freeware since 1999; `build_omf.sh` makes a
+20 MB fixed disk holding it and a DOS 3.30 boot floppy starting it, with
+FILES=30 and BUFFERS=30, from `~/roms`) runs in 32-bit protected mode
+under the DOS/4GW extender, its music mixed in software and streamed to
+the DSP by auto-initialised DMA (8-bit, 20.4 kHz; its driver polls the
+8237's count, and takes no interrupt). Enter at its launcher picks the
+regular game:
+
+    PLAY_DISK=.../omf.img PLAY_HD=.../omf_hd.img PLAY_STEPS=800000000 \
+    PLAY_KEYS=76737581:1c PLAY_SBWAV=omf.wav \
+    cargo test --release --test at386 -- --ignored --nocapture play_disk
+
+It found a bug in the 386: CPL was CS's RPL whenever PE was set, so
+setting PE in a real-mode segment whose low bits are not 0 (DOS/4GW runs
+in 291Dh) made the far jump into its ring-0 code a #GP, then a shutdown.
+CPL is now 0 until a far transfer loads CS. After about 80 s of loading
+(DOS 3.30, an MFM disk), the intro plays, its music right by ear; under
+`blocks` at about 10x real time (2026-11-09).
+

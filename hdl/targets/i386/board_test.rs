@@ -113,6 +113,43 @@ fn protected_mode_reaches_extended_memory() {
     assert_eq!(&b.ram.cells[0x100010..0x100015], &[0xEF, 0xBE, 0xAD, 0x34, 0x12]);
 }
 
+/// Setting PE leaves CPL 0 until a far transfer loads CS, whatever the
+/// real-mode CS's low bits (DOS extenders set PE running in segments such
+/// as 291Dh): from segment EFFFh (low bits 11), PE set, a far jump to a
+/// ring-0 code selector is taken, not refused as from ring 3.
+#[test]
+fn protected_mode_entered_from_an_odd_segment() {
+    let mut code = vec![
+        0xEA, 0x20, 0x00, 0xFF, 0xEF, // jmp far EFFF:0020 (F0010)
+    ];
+    code.resize(0x10, 0x90);
+    code.extend_from_slice(&[
+        0x2E, 0x0F, 0x01, 0x16, 0x70, 0x00, // lgdt cs:[0x0070] (F0060)
+        0x0F, 0x20, 0xC0, // mov eax, cr0
+        0x0C, 0x01, // or al, 1
+        0x0F, 0x22, 0xC0, // mov cr0, eax
+        0xEA, 0x30, 0x00, 0x08, 0x00, // jmp far 0008:0030 (ring-0 code at F0000)
+    ]);
+    code.resize(0x30, 0x90);
+    code.extend_from_slice(&[
+        0xB8, 0x10, 0x00, // mov ax, 0x10
+        0x8E, 0xD8, // mov ds, ax (data at 0)
+        0xC7, 0x06, 0x00, 0x05, 0xEF, 0xBE, // mov word [0x0500], 0xBEEF
+        0xF4, // hlt
+    ]);
+    code.resize(0x40, 0x90);
+    code.extend_from_slice(&[0; 8]); // null descriptor
+    code.extend_from_slice(&[0xFF, 0xFF, 0x00, 0x00, 0x0F, 0x9B, 0x00, 0x00]); // code, base F0000, DPL 0
+    code.extend_from_slice(&[0xFF, 0xFF, 0x00, 0x00, 0x00, 0x93, 0x00, 0x00]); // data, base 0
+    code.resize(0x60, 0x90);
+    code.extend_from_slice(&[0x17, 0x00, 0x40, 0x00, 0x0F, 0x00]); // limit 23, base 0F0040
+    let mut sys = boot(rom(&code, &[]));
+    let n = sys.run(10_000).expect("no undeliverable fault");
+    assert!(sys.cpu.halted, "halted after {n} steps");
+    assert_eq!(sys.cpu.r.CS.selector, 0x0008, "in ring-0 code");
+    assert_eq!(&sys.board().ram.cells[0x500..0x502], &[0xEF, 0xBE]);
+}
+
 fn tick_program(imr: u8) -> Vec<u8> {
     let mut code = SETUP.to_vec();
     code.extend(init(imr));

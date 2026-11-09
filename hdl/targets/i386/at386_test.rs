@@ -333,16 +333,23 @@ fn bench_compare() {
 /// keys at given times (`PLAY_KEYS`: `seconds:code` pairs, comma-separated,
 /// a set-1 make code in hex), and saving the screen every `PLAY_EVERY`
 /// seconds (5) as PPM files in `PLAY_SHOTS` (when set; the VGA draws one
-/// frame in `PLAY_DRAW`, 1, 0 for none; with `PLAY_STEPS`, the FM chip's
-/// output in the WAV file `PLAY_WAV`). Reports the
+/// frame in `PLAY_DRAW`, 1, 0 for none; a fixed disk's image as drive C
+/// with `PLAY_HD`; with `PLAY_STEPS`, the FM chip's output in the WAV file
+/// `PLAY_WAV`, the DSP's in `PLAY_SBWAV`). Reports the
 /// instructions and the time taken. Run with `PLAY_DISK=... cargo test
 /// --release -- --ignored --nocapture play_disk`.
 #[test]
 #[ignore]
 fn play_disk() {
     let Some(path) = std::env::var_os("PLAY_DISK") else { return eprintln!("PLAY_DISK not set; skipping") };
-    let (Some(mut sys), Ok(d)) = (at(0), std::fs::read(path)) else { return skip() };
+    // `PLAY_HD`: a fixed disk image as drive C (type 2: 615 cylinders, 4
+    // heads, 17 sectors).
+    let hd = std::env::var_os("PLAY_HD").map(|p| std::fs::read(p).expect("PLAY_HD"));
+    let (Some(mut sys), Ok(d)) = (at(if hd.is_some() { 2 } else { 0 }), std::fs::read(path)) else { return skip() };
     insert(&mut sys, &d);
+    if let Some(h) = &hd {
+        sys.board().hdc.image[..h.len()].copy_from_slice(h);
+    }
     let var = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
     // `PLAY_DRAW`: the VGA draws one frame in so many (0: none); the machine
     // runs the same whatever it is.
@@ -383,12 +390,24 @@ fn play_disk() {
     let wav_path = std::env::var_os("PLAY_WAV");
     let mut wav: Vec<i16> = Vec::new();
     let mut heard = 0u32;
+    // `PLAY_SBWAV` (with `PLAY_STEPS`): the Sound Blaster DSP's output
+    // likewise (8-bit, at the rate its time constant gives at the end).
+    let sbwav_path = std::env::var_os("PLAY_SBWAV");
+    let mut sbwav: Vec<i16> = Vec::new();
+    let mut sb_heard = 0u32;
     if let Some(total) = std::env::var("PLAY_STEPS").ok().and_then(|v| v.parse::<u64>().ok()) {
         let mut run = |sys: &mut System, n: u64| -> u64 {
             let mut made = 0;
             while made < n {
-                let chunk = (n - made).min(if wav_path.is_some() { 1_000_000 } else { u64::MAX });
+                let chunk = (n - made).min(if wav_path.is_some() || sbwav_path.is_some() { 1_000_000 } else { u64::MAX });
                 made += sys.run_until(chunk, |_| false).unwrap();
+                if sbwav_path.is_some() {
+                    sys.with_sb(|d, _| {
+                        assert!(d.played - sb_heard <= 0x10000, "the DSP's ring overran");
+                        sbwav.extend((sb_heard..d.played).map(|i| ((d.pcm[(i & 0xFFFF) as usize] as i16) - 128) << 8));
+                        sb_heard = d.played;
+                    });
+                }
                 if wav_path.is_some() {
                     sys.with_opl(|o, _| {
                         assert!(o.played - heard <= 0x10000, "the FM chip's ring overran");
@@ -413,9 +432,10 @@ fn play_disk() {
         }
         next_shot = f64::MAX;
     }
-    if let Some(path) = &wav_path {
+    let sb_rate = 1_000_000 / (256 - sys.board().sb.time_const as u32);
+    for (path, wav, rate) in [(&wav_path, &wav, 49716u32), (&sbwav_path, &sbwav, sb_rate)] {
+        let Some(path) = path else { continue };
         let data: Vec<u8> = wav.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let rate = 49716u32;
         let mut out = Vec::new();
         out.extend_from_slice(b"RIFF");
         out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
@@ -431,7 +451,7 @@ fn play_disk() {
         out.extend_from_slice(&(data.len() as u32).to_le_bytes());
         out.extend_from_slice(&data);
         std::fs::write(path, out).unwrap();
-        println!("WAV {} samples, peak {}", wav.len(), wav.iter().map(|v| (*v as i32).abs()).max().unwrap_or(0));
+        println!("WAV {} samples at {rate} Hz, peak {}", wav.len(), wav.iter().map(|v| (*v as i32).abs()).max().unwrap_or(0));
     }
     while sys.seconds() < seconds && next_shot != f64::MAX {
         let until = next_shot.min(keys.get(k).map_or(f64::MAX, |p| p.0)).min(seconds);

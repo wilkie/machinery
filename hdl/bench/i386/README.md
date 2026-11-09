@@ -208,6 +208,41 @@ hundreds of thousands of times to pay. Runs are now compiled when entered
 
 The `jit` profile still ends chk, mix and snd at the tick `emulate` does.
 
+Then (2026-11-08): experiments on the compile cost, each measured on the
+boot with runs compiled at 64 entries (210 compiles: the compile cost
+shows) and on chk and mix whole at 4096 (host instructions; chk's and
+mix's totals, boot included: with compiles at 4096 the 0-pass run no
+longer cancels them, and N less 0 misleads by a few percent). Every row
+ends chk and mix at the same tick.
+
+| `jit` profile | boot at 64 | IR a step | code a step | boot | chk | mix |
+|---|---|---|---|---|---|---|
+| as committed | 53.7G | 1912 | 7.9 KB | 30.2G | 101.1G | 148.7G |
+| Cranelift's single-pass allocator | 57.0G | 1912 | 14.0 KB | 36.0G | | (runs twice as slow) |
+| no ticks-left recompute after a call that leaves (`call_leaving`) | 47.8G | 1632 | 7.0 KB | 27.5G | 100.3G | 144.8G |
+| and IR constants folded by the emitter | 47.9G | 1632 | 7.0 KB | 27.5G | 100.3G | 144.9G |
+| `call_leaving`, Cranelift `opt_level=speed` | 52.1G | 1632 | 6.8 KB | 27.9G | 98.6G | 136.6G |
+
+| `blocks` profile | boot at 64 | IR a step | boot | chk | mix |
+|---|---|---|---|---|---|
+| as committed | 31.6G | 855 | 21.9G | 57.1G | 67.5G |
+| `call_leaving` | 30.7G | 773 | 21.8G | 56.6G | 67.1G |
+| `call_leaving`, `opt_level=speed` | 33.1G | 773 | 22.2G | 53.1G | 62.1G |
+
+The single-pass allocator compiles 40% faster and spills: the code is
+twice the size and runs at half the speed. The constants a branch
+condition is found to be come to the emitter as block parameters, which
+Cranelift resolves only once the blocks are sealed: the emitter cannot
+fold them (no change; not kept). Cranelift's optimiser compiles a third
+slower, and at 4096 entries a run that is compiled runs long enough to
+repay it: 6-8% off chk and mix under `blocks`, 2% on the boot. Kept:
+`call_leaving` (fault raises and the emitter's returns), and
+`opt_level=speed` by default (`MACHINE_JIT_OPT=none` without).
+
+Not tried yet: moving the rare paths (18 a step, 47 IR instructions each
+on average: guards, slow memory paths and fault exits, each storing what
+the run owes) out of line, into shared code.
+
 Since (2026-11-05, our JIT only, two runs): 113 MIPS on chk and 70 on mix.
 The flags wait to be put in EFLAGS until it is needed whole, joins carry
 fields in registers past the devices' check, and a run whose end leads

@@ -392,6 +392,8 @@ pub struct Em<'a, 'f> {
     /// The step being emitted.
     pub(crate) k: usize,
     live: bool,
+    /// The call being made is followed by a way out (`call_leaving`).
+    leaving: bool,
     slots: Vec<SlotState>,
     regs: HashMap<(usize, N), Known>,
     sigs: HashMap<(usize, bool), SigRef>,
@@ -465,7 +467,7 @@ pub struct Em<'a, 'f> {
 
 impl<'a, 'f> Em<'a, 'f> {
     pub(crate) fn new(b: &'a mut FunctionBuilder<'f>, ptr: Type, cc: CallConv, m: Value, out: Block, made_base: Variable) -> Self {
-        Em { b, ptr, cc, m, out, k: 0, live: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), consts: 0, ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), repeat_plans: Vec::new(), repeat_seen: Vec::new(), repeat_n: 0, repeat_in_first: false, repeat_stack: Vec::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new(), combos: HashMap::new(), clock: None }
+        Em { b, ptr, cc, m, out, k: 0, live: false, leaving: false, slots: Vec::new(), regs: HashMap::new(), sigs: HashMap::new(), regions: Vec::new(), epochs: None, volatile: Vec::new(), bumped: false, code_calls: 0, trial_limit: None, trial_over: false, wasted: 0, dirty: Vec::new(), consts: 0, ret_exits: Vec::new(), next_ret_exit: None, pieces: HashMap::new(), made_base, first: None, steps: 0, plan: None, seen: None, loop_params: Vec::new(), entry_pads: HashMap::new(), repeat_plans: Vec::new(), repeat_seen: Vec::new(), repeat_n: 0, repeat_in_first: false, repeat_stack: Vec::new(), sels: HashMap::new(), facts: HashMap::new(), bits: HashMap::new(), combos: HashMap::new(), clock: None }
     }
 
     /// Code is being emitted (not after an exit or a return).
@@ -1330,7 +1332,7 @@ impl<'a, 'f> Em<'a, 'f> {
         }
         if let Some(Some((slot, call, made))) = self.ret_exits.last().copied() {
             if matches!(self.get(slot), V::K(v) if v != 0) {
-                let _ = self.call(call, &[], N::U64, false);
+                let _ = self.call_leaving(call, &[], N::U64);
                 self.exit(made);
                 return;
             }
@@ -2244,6 +2246,15 @@ impl<'a, 'f> Em<'a, 'f> {
         self.call_with(f, args, ret, pure, None)
     }
 
+    /// A call the code leaves the run right after (`exit`): the ticks left
+    /// are not worked out again (no one reads them).
+    pub fn call_leaving(&mut self, f: usize, args: &[(V, N)], ret: N) -> V {
+        self.leaving = true;
+        let r = self.call_with(f, args, ret, false, None);
+        self.leaving = false;
+        r
+    }
+
     /// A call that may change the machine (not pure) but leaves the bytes
     /// in `kept` alone (neither reads nor writes them) and only reads those
     /// in `read`: what the code owes in `kept` stays owed (in host values),
@@ -2345,7 +2356,9 @@ impl<'a, 'f> Em<'a, 'f> {
                 self.forget_volatile();
             }
         }
-        self.clock_budget();
+        if !self.leaving {
+            self.clock_budget();
+        }
         let r = match ret.width() {
             64 => r,
             128 => self.b.ins().uextend(types::I128, r),

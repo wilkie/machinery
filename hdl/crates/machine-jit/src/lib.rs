@@ -89,10 +89,17 @@ pub const LIMIT: usize = 16384;
 
 fn new_module() -> Option<JITModule> {
     let mut flags = settings::builder();
-    // Cranelift's own optimisation (`MACHINE_JIT_OPT=speed`): none by
-    // default, the emitter folding what it knows.
-    let opt = std::env::var("MACHINE_JIT_OPT").unwrap_or_else(|_| "none".to_string());
+    // Cranelift's own optimisation (`MACHINE_JIT_OPT=none` without): it
+    // compiles a third slower, and the code runs 6-8% faster (the 386
+    // board's `blocks` profile); with runs compiled only once entered
+    // thousands of times, the code is what counts.
+    let opt = std::env::var("MACHINE_JIT_OPT").unwrap_or_else(|_| "speed".to_string());
     flags.set("opt_level", &opt).ok()?;
+    // The register allocator (`MACHINE_JIT_REGALLOC=single_pass`: quicker
+    // to compile, more spills).
+    if let Ok(ra) = std::env::var("MACHINE_JIT_REGALLOC") {
+        flags.set("regalloc_algorithm", &ra).ok()?;
+    }
     // The verifier checks what the emitter builds; on with
     // `MACHINE_JIT_VERIFY` (and in this crate's tests).
     let verify = cfg!(test) || std::env::var_os("MACHINE_JIT_VERIFY").is_some();

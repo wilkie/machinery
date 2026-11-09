@@ -1061,7 +1061,7 @@ impl Gen<'_> {
                     let _ = write!(s, "let x{i} = {}; let x{i} = e.cast(x{i}, {}, machine_jit::N::U64); ", self.jexpr(cx, a)?, self.jn(t)?);
                     list.push(format!("(x{i}, machine_jit::N::U64)"));
                 }
-                let _ = writeln!(s, "let _ = e.call(Self::jit_raise_{} as *const () as usize, &[{}], machine_jit::N::U64, false); e.exit(true); }}", ident(&f.name), list.join(", "));
+                let _ = writeln!(s, "let _ = e.call_leaving(Self::jit_raise_{} as *const () as usize, &[{}], machine_jit::N::U64); e.exit(true); }}", ident(&f.name), list.join(", "));
                 s
             }
             S::OperandWrite(i, v) => {

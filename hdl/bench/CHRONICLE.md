@@ -101,6 +101,8 @@ Games (host instructions an emulated second, `blocks`, drawing none;
 | 2026-11-10 | JIT | the next compiled run entered from `jit_burst` | Jetpack +3% | not kept | experiments/2026-11-10-chain-in-jit-burst.patch |
 | 2026-11-10 | trace core | four links a run, the last found first | Jetpack +3% | not kept | experiments/2026-11-10-four-links.patch |
 | 2026-11-10 | JIT | compiled runs chained in compiled code | 8% of hops chain; Jetpack +5%, One Must Fall +2.4% | not kept, to retry | experiments/2026-11-10-chain-in-compiled-code.patch |
+| 2026-11-10 | trace core | links checked by value (what maps the pc to its address), not an address epoch | Jetpack −2.9%, One Must Fall +1.2%, Lemmings +0.3% | not kept (mixed) | experiments/2026-11-10-value-checked-links.patch |
+| 2026-11-10 | JIT | chaining in compiled code, with value-checked links | 40% of hops chain; Jetpack +4%, One Must Fall +3.4%, Lemmings +1% (against value links alone) | not kept | experiments/2026-11-10-chain-with-value-links.patch |
 
 ## Entries
 
@@ -202,9 +204,55 @@ about 450 host instructions a hop. The entries below follow from this.
 - Code: `experiments/2026-11-10-chain-in-compiled-code.patch`, on
   857c893.
 
+### 2026-11-10: links checked by value (not kept: mixed)
+
+- Idea: a link is stale when the address epoch moved, and every far call
+  or return (`CS_REAL`) and `POPF` (`EFLAGS.VM`) moves it, though the pc
+  maps where it did. Compare what maps the pc instead.
+- Change: what the istream's address, window and limit fns read besides
+  the key and the pc is split: scalar registers, fields and the mode
+  (`TAddr`; on the 386 `CR0.PE`, `CR0.PG`, `EFLAGS.VM`, `CS_REAL`, `CR3`)
+  are snapshotted in each link and compared where it is followed; their
+  writes still bump the epoch (a run stops) but not the address epoch;
+  arrays (the TLB) still bump the address epoch.
+- Exact: `jit` and `trace` alike at 300 M of Jetpack, and as before.
+- Measured (`blocks`, drawing none, repeated: identical): Jetpack 1.165 →
+  1.131 G (−2.9%), One Must Fall 0.694 → 0.703 G (+1.2%), Lemmings 0.768
+  → 0.770 G (+0.3%).
+- Learned: far-call-heavy real-mode code gains a little (fewer lookups by
+  address); flat protected-mode code pays the snapshot's compare on each
+  follow for little. Not worth its machinery alone.
+- Code: `experiments/2026-11-10-value-checked-links.patch`, on d61f355.
+
+### 2026-11-10: chaining with value-checked links (not kept)
+
+- Idea: with links that survive far transfers, the chaining patch should
+  fire on most hops.
+- Change: both patches, and compiled code compares the link's snapshot
+  (`jit_av_eq`, generated from the same cells: loads, shifts, masks).
+- Exact: `jit` and `trace` alike at 300 M of Jetpack.
+- Measured (`blocks`, drawing none, chaining against
+  `MACHINE_JIT_NOCHAIN` in the same binary): Jetpack 1.139 → 1.187 G
+  (+4%), One Must Fall 0.706 → 0.730 G (+3.4%), Lemmings 0.770 → 0.778 G
+  (+1%). 40% of hops chained (14.1 M of 35.2 M; from 8%); the rest failed
+  on the key epoch (CS, in the key, 7.4 M: compiled code does not compare
+  the key by value), on blocks outside the run's checked mask (5.7 M), or
+  ended where no chain code was emitted (6.9 M).
+- Learned: a chained hop is not much cheaper than the Rust path's: what
+  is left of a hop is the run's state stored and loaded across separate
+  functions and the per-run bookkeeping kept in `jit_enter`'s loop (the
+  `blocks` profile's device catch-up among it), and the checks emitted at
+  every run's end (two links, their snapshots, the table) are paid
+  whether it chains or not. Chaining pays only if runs share state across
+  the hop (one function for runs that follow each other), not by moving
+  the dispatcher's checks into compiled code.
+- Code: `experiments/2026-11-10-chain-with-value-links.patch`, on d61f355.
+
 ## Open leads
 
-- **Links checked by value**, then the chaining patch again (above).
+- **Runs that follow each other compiled into one function** (a
+  superblock or trace tree), so a hop keeps its state in registers: what
+  chaining would need to pay (above).
 - **Lazy device catch-up:** skip a device's catch-up before a transaction
   whose handler reads none of what its tick writes, while the tick reports
   nothing due before then (the VGA's memory accesses, the PIT's reads).

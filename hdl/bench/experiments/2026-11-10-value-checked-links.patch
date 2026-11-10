@@ -1,0 +1,177 @@
+Value-checked links (not kept: mixed).
+
+Base: d61f355 (the code of 857c893). Apply from the repository root: git apply hdl/bench/experiments/2026-11-10-value-checked-links.patch
+What it did and why it was not kept: hdl/bench/CHRONICLE.md, 2026-11-10.
+
+diff --git a/hdl/crates/machine-model/src/gen/jit.rs b/hdl/crates/machine-model/src/gen/jit.rs
+index 071ebf8..e6da2f2 100644
+--- a/hdl/crates/machine-model/src/gen/jit.rs
++++ b/hdl/crates/machine-model/src/gen/jit.rs
+@@ -306,8 +306,9 @@ impl Gen<'_> {
+         }}
+         let aep = self.tr_aepoch;
+         let prev = self.tr_prev as usize;
++        let av = self.taddr();
+         if let Some(p) = self.traces.get_mut(prev).and_then(|t| t.as_mut()) {{
+-            let l = TLink {{ pc, phys: start, ep: aep, kep: self.tr_kepoch, slot: slot as u32 }};
++            let l = TLink {{ pc, phys: start, ep: aep, kep: self.tr_kepoch, slot: slot as u32, av }};
+             if p.links[0].pc == pc || p.links[0].ep != aep {{ p.links[0] = l; }} else {{ p.links[1] = l; }}
+         }}
+         self.tr_on = true;
+diff --git a/hdl/crates/machine-model/src/gen/trace.rs b/hdl/crates/machine-model/src/gen/trace.rs
+index 466ddbb..eb96cea 100644
+--- a/hdl/crates/machine-model/src/gen/trace.rs
++++ b/hdl/crates/machine-model/src/gen/trace.rs
+@@ -65,6 +65,13 @@ pub(crate) struct TracePlan {
+     pub key_mode: bool,
+     /// What a run depends on staying put: assignments to it bump the epoch.
+     pub watched: Vec<Cell>,
++    /// What maps the pc to its address besides the key (what the
++    /// istream's address, window and limit fns read): compared by value
++    /// where a link is followed (`TAddr`), the scalar registers, fields and
++    /// mode; and the rest (arrays: a TLB), whose writes bump the address
++    /// epoch.
++    pub aval: Vec<Cell>,
++    pub aarr: Vec<Cell>,
+     /// The registers the istream's `next` fn advances.
+     pub pc: Vec<DefId>,
+     /// Registers the JIT core speculates on (`jit_spec_regs`).
+@@ -389,6 +396,13 @@ impl Gen<'_> {
+             }
+         }
+         let mut watched: Vec<Cell> = addr.cells.into_iter().filter(not_pc).collect();
++        let in_key = |c: &Cell| match c {
++            Cell::Reg(d) | Cell::Field(d, _) => key.contains(d),
++            Cell::Mode => key_mode,
++        };
++        let arrayed = |c: &Cell| matches!(c, Cell::Reg(d) if matches!(self.regs[d].1.ty, Ty::Array(..)));
++        let aval: Vec<Cell> = watched.iter().filter(|c| !in_key(c) && !arrayed(c)).copied().collect();
++        let aarr: Vec<Cell> = watched.iter().filter(|c| !in_key(c) && arrayed(c)).copied().collect();
+         // The JIT core's speculated registers: watched, so a write ends the
+         // run and, inside one, they hold the values its entry checked.
+         let spec = if jit { self.jit_spec_regs(&pc, &key) } else { Vec::new() };
+@@ -397,7 +411,50 @@ impl Gen<'_> {
+                 watched.push(Cell::Reg(*d));
+             }
+         }
+-        Ok(TracePlan { key, key_mode, watched, pc, spec })
++        Ok(TracePlan { key, key_mode, watched, aval, aarr, pc, spec })
++    }
++
++    /// Register `d`'s field `i`: its first bit and the bit past its last.
++    pub(super) fn field_bits(&self, d: DefId, i: u32) -> (u32, u32) {
++        let f = &self.regs[&d].1.fields[i as usize];
++        let w = match &f.ty {
++            Ty::UInt(n) | Ty::SInt(n) => *n,
++            Ty::Bool => 1,
++            Ty::Enum(e) => self.enums[e].width,
++            _ => 8,
++        };
++        (f.offset, f.offset + w)
++    }
++
++    /// `TAddr`'s fields (module level) and what `taddr()` makes of them.
++    fn taddr_parts(&self, p: &TracePlan) -> R<(String, String)> {
++        let (mut fields, mut init) = (String::new(), String::new());
++        for c in &p.aval {
++            match c {
++                Cell::Reg(d) => {
++                    let r = self.regs[d].1;
++                    let n = ident(&r.name);
++                    let _ = writeln!(fields, "    pub r_{n}: {},", self.rty(&r.ty)?);
++                    let _ = write!(init, "r_{n}: self.r.{n}, ");
++                }
++                Cell::Field(d, i) => {
++                    let n = ident(&self.regs[d].1.name);
++                    let (a, b) = self.field_bits(*d, *i);
++                    let mask = if b - a >= 64 { u64::MAX } else { (1u64 << (b - a)) - 1 };
++                    let _ = writeln!(fields, "    pub f_{n}_{i}: u64,");
++                    let _ = write!(init, "f_{n}_{i}: ((self.r.{n} as u64) >> {a}) & {mask:#x}, ");
++                }
++                Cell::Mode => {
++                    let mode_ty = match self.isa.mode {
++                        Some(m) => super::native(self.enums[&m].width, false).1,
++                        None => "u8",
++                    };
++                    let _ = writeln!(fields, "    pub mode: {mode_ty},");
++                    init.push_str("mode: self.mode, ");
++                }
++            }
++        }
++        Ok((fields, init))
+     }
+ 
+     /// The epoch bump after an assignment to `place`, when it writes
+@@ -456,7 +513,9 @@ impl Gen<'_> {
+             Cell::Mode => p.key_mode,
+         };
+         let any = p.watched.iter().any(hits);
+-        let outside = p.watched.iter().filter(|c| !in_key(c)).any(hits);
++        // (What `TAddr` holds is compared by value where a link is
++        // followed: only the rest moves the address epoch.)
++        let outside = p.aarr.iter().any(hits);
+         let mut s = String::new();
+         if any {
+             let _ = writeln!(s, "{0}.tr_epoch = {0}.tr_epoch.wrapping_add(1);", recv);
+@@ -497,9 +556,10 @@ impl Gen<'_> {
+             let _ = writeln!(step, "    pub pc_{}: {},", ident(&r.name), self.rty(&r.ty)?);
+         }
+         let jit = self.jit_trace_fields();
++        let (afields, _) = self.taddr_parts(&p)?;
+         let _ = write!(
+             self.out,
+-            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}    /// What the board's direct memory does to addresses (the processor's\n    /// `on <space>.address` hook's wires: `<space>_addr_key`).\n    pub bus: u64,\n}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start (back before it too, within the\n    /// page), and how many.\n    pub off: i16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n    /// Opcode bytes fetched (`istream {{ opcode }}` runs that often).\n    pub opcodes: u8,\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`, or none of its\n/// blocks has been written since. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    /// The page's 128-byte blocks its bytes are in: while none of them is\n    /// written, it holds though the page's count moved (`_code_fresh`).\n    pub mask: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n{jit}}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n}}\n"
++            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}    /// What the board's direct memory does to addresses (the processor's\n    /// `on <space>.address` hook's wires: `<space>_addr_key`).\n    pub bus: u64,\n}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start (back before it too, within the\n    /// page), and how many.\n    pub off: i16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n    /// Opcode bytes fetched (`istream {{ opcode }}` runs that often).\n    pub opcodes: u8,\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`, or none of its\n/// blocks has been written since. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    /// The page's 128-byte blocks its bytes are in: while none of them is\n    /// written, it holds though the page's count moved (`_code_fresh`).\n    pub mask: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n{jit}}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n    /// What mapped the pc to its address as the link was made, compared\n    /// where it is followed (a far call and return leave it as it was).\n    pub av: TAddr,\n}}\n/// What maps the pc to its address besides the key, by value: the\n/// registers, fields and mode the istream's address, window and limit fns\n/// read (the rest, arrays, moves the address epoch).\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TAddr {{\n{afields}}}\n"
+         );
+         let jt = self.jit_types();
+         self.out.push_str(jt);
+@@ -534,6 +594,7 @@ impl Gen<'_> {
+             let n = ident(&self.regs[d].1.name);
+             let _ = write!(key, "r_{n}: self.r.{n}, ");
+         }
++        let (_, ainit) = self.taddr_parts(&p)?;
+         if p.key_mode {
+             key.push_str("mode: self.mode, ");
+         }
+@@ -574,6 +635,10 @@ impl Gen<'_> {
+     /// What the decoder reads: a run's key.
+     #[inline]
+     fn tkey(&self) -> TKey {{ TKey {{ {key}bus: self.bus.{sp}_addr_key() }} }}
++    /// What maps the pc to its address besides the key, by value (a
++    /// link's `av`).
++    #[inline]
++    fn taddr(&self) -> TAddr {{ TAddr {{ {ainit}}} }}
+     /// The board's address key changed since it was last looked at (seen
+     /// where code memory's write total moves, which counts its changes):
+     /// what depends on it stops, as a write to the key does.
+@@ -766,7 +831,8 @@ impl Gen<'_> {
+         self.tr_bus();
+         let prev = self.tr_prev as usize;
+         let pc = self.r.{pc0} as u64;
+-        let li = self.traces.get(prev)?.as_ref()?.links.iter().position(|l| l.pc == pc && l.ep == self.tr_aepoch)?;
++        let av = self.taddr();
++        let li = self.traces.get(prev)?.as_ref()?.links.iter().position(|l| l.pc == pc && l.ep == self.tr_aepoch && l.av == av)?;
+         let l = self.traces[prev].as_ref()?.links[li];
+         // The key: unchanged since it was last found to hold, else compared.
+         let kep = self.tr_kepoch;
+@@ -807,8 +873,9 @@ impl Gen<'_> {
+             t.ok_ep = ep;
+         }}
+         let prev = self.tr_prev as usize;
++        let av = self.taddr();
+         if let Some(p) = self.traces.get_mut(prev).and_then(|t| t.as_mut()) {{
+-            let l = TLink {{ pc, phys: start, ep: aep, kep: self.tr_kepoch, slot: slot as u32 }};
++            let l = TLink {{ pc, phys: start, ep: aep, kep: self.tr_kepoch, slot: slot as u32, av }};
+             if p.links[0].pc == pc || p.links[0].ep != aep {{ p.links[0] = l; }} else {{ p.links[1] = l; }}
+         }}
+         self.tr_on = true;
+@@ -938,7 +1005,8 @@ impl Gen<'_> {
+     fn jit_follow(&mut self) -> Option<(usize, u64)> {{
+         let prev = self.tr_prev as usize;
+         let pc = self.r.{pc0} as u64;
+-        let li = self.traces.get(prev)?.as_ref()?.links.iter().position(|l| l.pc == pc && l.ep == self.tr_aepoch)?;
++        let av = self.taddr();
++        let li = self.traces.get(prev)?.as_ref()?.links.iter().position(|l| l.pc == pc && l.ep == self.tr_aepoch && l.av == av)?;
+         let l = self.traces[prev].as_ref()?.links[li];
+         let kep = self.tr_kepoch;
+         let key_known = l.kep == kep;

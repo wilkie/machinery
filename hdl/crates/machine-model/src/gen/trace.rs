@@ -499,7 +499,7 @@ impl Gen<'_> {
         let jit = self.jit_trace_fields();
         let _ = write!(
             self.out,
-            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}    /// What the board's direct memory does to addresses (the processor's\n    /// `on <space>.address` hook's wires: `<space>_addr_key`).\n    pub bus: u64,\n}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start, and how many.\n    pub off: u16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n    /// Opcode bytes fetched (`istream {{ opcode }}` runs that often).\n    pub opcodes: u8,\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`, or none of its\n/// blocks has been written since. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    /// The page's 128-byte blocks its bytes are in: while none of them is\n    /// written, it holds though the page's count moved (`_code_fresh`).\n    pub mask: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n{jit}}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n}}\n"
+            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}    /// What the board's direct memory does to addresses (the processor's\n    /// `on <space>.address` hook's wires: `<space>_addr_key`).\n    pub bus: u64,\n}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start (back before it too, within the\n    /// page), and how many.\n    pub off: i16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n    /// Opcode bytes fetched (`istream {{ opcode }}` runs that often).\n    pub opcodes: u8,\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`, or none of its\n/// blocks has been written since. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    /// The page's 128-byte blocks its bytes are in: while none of them is\n    /// written, it holds though the page's count moved (`_code_fresh`).\n    pub mask: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n{jit}}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n}}\n"
         );
         let jt = self.jit_types();
         self.out.push_str(jt);
@@ -602,7 +602,7 @@ impl Gen<'_> {
         let idx = self.tr_idx as usize;
         let Some(t) = self.traces[cur].as_ref() else {{ self.tr_on = false; return false; }};
         let Some(s) = t.steps.get(idx) else {{ self.tr_on = false; return false; }};
-        if self.tr_epoch != self.tr_ep0 || self.r.{pc0} as u64 != t.pc.wrapping_add(s.off as u64) {{
+        if self.tr_epoch != self.tr_ep0 || self.r.{pc0} as u64 != t.pc.wrapping_add(s.off as i64 as u64) {{
             self.tr_on = false;
             self.tr_prev = cur as u32;
             return false;
@@ -650,7 +650,7 @@ impl Gen<'_> {
         let idx = self.tr_idx as usize;
         let t = self.traces[cur].as_ref().unwrap();
         let s = &t.steps[idx];
-        let phys = t.phys + s.off as u64;
+        let phys = t.phys.wrapping_add(s.off as i64 as u64);
         let page = t.page;
         let last = idx + 1 == t.steps.len();
         let instr = s.instr;
@@ -707,7 +707,7 @@ impl Gen<'_> {
             let Some(s) = t.steps.get(idx) else {{ break Ok(()) }};
             // `trace_check`, the run in hand (code written since: `step`
             // checks it, with the table).
-            if self.tr_epoch != self.tr_ep0 || self.r.{pc0} as u64 != t.pc.wrapping_add(s.off as u64) {{
+            if self.tr_epoch != self.tr_ep0 || self.r.{pc0} as u64 != t.pc.wrapping_add(s.off as i64 as u64) {{
                 self.tr_on = false;
                 self.tr_prev = cur as u32;
                 break Ok(());
@@ -726,7 +726,7 @@ impl Gen<'_> {
             self.tr_rec_now = false;
             self.decoded = false;
             // `trace_restore`, the run in hand.
-            let phys = t.phys + s.off as u64;
+            let phys = t.phys.wrapping_add(s.off as i64 as u64);
             let page = t.page;
             let last = idx + 1 == t.steps.len();
             let instr = s.instr;
@@ -821,9 +821,12 @@ impl Gen<'_> {
     /// The instruction at `start` is about to be decoded: record it, in the
     /// run being recorded if it follows on, else in a new one. It follows
     /// on wherever the step before led in the run's page (a jump, a call
-    /// or a return taken too: replay checks each step's pc), but not back
-    /// before the run's start or to a step already in it (the run ends,
-    /// and one starts there).
+    /// or a return taken too, forward or back: replay checks each step's
+    /// pc), but not to a step already in it (the run ends, and one starts
+    /// there; one that leads back to its start goes round when compiled).
+    /// Back before the run's start too: a loop whose head lies before where
+    /// it was entered, or a call to a routine earlier in the page, stays in
+    /// one run rather than several a few instructions long.
     #[inline(never)]
     fn trace_note(&mut self, start: u64) {{
         self.tr_prev = u32::MAX;
@@ -832,7 +835,7 @@ impl Gen<'_> {
         let follows = match self.tr_rec.as_ref() {{
             Some(t) => {{
                 let off = start.wrapping_sub(t.phys);
-                t.steps.len() < {STEPS} && start >= t.phys && start >> 12 == t.phys >> 12 && self.r.{pc0} as u64 == t.pc.wrapping_add(off) && self.tr_epoch == self.tr_rec_ep && !t.steps.iter().any(|s| s.off as u64 == off) && (self.bus.{sp}_code_stamp(t.page) == t.stamp || self.bus.{sp}_code_fresh(t.page, t.mask, t.stamp))
+                t.steps.len() < {STEPS} && start >> 12 == t.phys >> 12 && self.r.{pc0} as u64 == t.pc.wrapping_add(off) && self.tr_epoch == self.tr_rec_ep && !t.steps.iter().any(|s| s.off as i64 as u64 == off) && (self.bus.{sp}_code_stamp(t.page) == t.stamp || self.bus.{sp}_code_fresh(t.page, t.mask, t.stamp))
             }}
             None => false,
         }};
@@ -876,7 +879,7 @@ impl Gen<'_> {
         let s = TStep {{ instr: i, off: 0, len: n, known: self.known_opcode, prefix_cycles: self.prefix_cycles, decode_at: self.decode_at, opcodes: {opcodes}, {save}}};
         let page = match self.tr_rec.as_mut() {{
             Some(t) if ok => {{
-                t.steps.push(TStep {{ off: (self.tr_phys - t.phys) as u16, ..s }});
+                t.steps.push(TStep {{ off: self.tr_phys.wrapping_sub(t.phys) as i64 as i16, ..s }});
                 let (b0, b1) = ((self.tr_phys & 0xFFF) >> 7, ((self.tr_phys & 0xFFF) + n as u64 - 1) >> 7);
                 t.mask |= (u32::MAX >> (31 - b1)) & (u32::MAX << b0);
                 t.page

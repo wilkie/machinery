@@ -162,8 +162,8 @@ impl Gen<'_> {
                 let n = t.steps.len();
                 t.jit_steps = t.steps.iter().enumerate().map(|(k, s)| JitStep {{
                     step: *s,
-                    pc: t.pc.wrapping_add(s.off as u64),
-                    phys: t.phys + s.off as u64,
+                    pc: t.pc.wrapping_add(s.off as i64 as u64),
+                    phys: t.phys.wrapping_add(s.off as i64 as u64),
                     page: t.page,
                     stamp: t.stamp,
                     slot: slot as u32,

@@ -1675,8 +1675,8 @@ system PcAt386 {
   prefixes' latches, the pc after it, the decoder's clocks) while the
   instructions it reaches stay within its page of code memory: past taken
   jumps, calls and returns (each step's pc is checked as it is replayed:
-  a jump taken otherwise ends the run), up to one before its start or
-  already in it, where it ends and another starts; when a
+  a jump taken otherwise ends the run), back before its start too, up to
+  one already in it, where it ends and another starts; when a
   run's start is reached again, its instructions are replayed: pc, latches
   and decoder state set as decoding left them, the fetches charged as they
   cost, then the instruction. The compiler derives what makes a replay

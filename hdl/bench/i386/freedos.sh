@@ -5,12 +5,12 @@
 #
 # freedos_floppy IMG: a fresh 1.2 MB disk at IMG that boots FreeDOS's kernel
 # (KERNEL.SYS, for an 8086 and up) and its shell (FreeCOM, COMMAND.COM), with
-# FDCONFIG.SYS: no boot delay or F5/F8 prompt; HimemX, so FreeCOM swaps
-# itself to XMS (without it FreeDOS leaves Jetpack 20 KB short of the memory
-# it needs), but not DOS=HIGH: programs would load below 64 KB, where old
-# packed executables (Lemmings' VGAL) wrap at 1 MB and need A20 off, which
-# our direct-memory profiles do not model; 30 files and 30 buffers (the
-# games keep files open and load megabytes through the FAT).
+# FDCONFIG.SYS: no boot delay or F5/F8 prompt; HimemX and DOS=HIGH (the
+# kernel in the high memory area, FreeCOM swapped to XMS: without HimemX,
+# FreeDOS leaves Jetpack 20 KB short of the memory it needs; with DOS=HIGH
+# programs load below 64 KB, and Lemmings' packed VGAL wraps at 1 MB, which
+# needs the A20 gate, closed, to wrap); 30 files and 30 buffers (the games
+# keep files open and load megabytes through the FAT).
 # The caller adds
 # AUTOEXEC.BAT and its files. FreeDOS's boot sector reads the disk's
 # parameter block and finds KERNEL.SYS by name, so mformat's block serves.
@@ -38,7 +38,7 @@ freedos_floppy() {
   mcopy -i "$FD_BOOT" ::KERNEL.SYS "$fd_tmp/KERNEL.SYS"
   mcopy -i "$FD_BOOT" ::freedos/bin/command.com "$fd_tmp/COMMAND.COM"
   unzip -p "$FD_HIMEMX" HimemX.exe > "$fd_tmp/HIMEMX.EXE"
-  printf 'SWITCHES=/F /N\r\nDEVICE=HIMEMX.EXE\r\nFILES=30\r\nBUFFERS=30\r\n' > "$fd_tmp/FDCONFIG.SYS"
+  printf 'SWITCHES=/F /N\r\nDEVICE=HIMEMX.EXE\r\nDOS=HIGH\r\nFILES=30\r\nBUFFERS=30\r\n' > "$fd_tmp/FDCONFIG.SYS"
   mcopy -i "$1" "$fd_tmp/KERNEL.SYS" "$fd_tmp/COMMAND.COM" "$fd_tmp/HIMEMX.EXE" "$fd_tmp/FDCONFIG.SYS" ::
   rm -rf "$fd_tmp"
 }

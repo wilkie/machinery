@@ -580,6 +580,17 @@ impl Checker<'_> {
                         && self.isa_space(cs.isa, &port.name).is_some() =>
                 {
                     let sp = self.isa_space(cs.isa, &port.name).unwrap();
+                    if event.name == "address" {
+                        if clock.is_some() {
+                            self.error(module, "E1041", span, "a space handler takes no `@ clock`");
+                            return None;
+                        }
+                        (
+                            HandlerKind::SpaceAddress { space: sp.def },
+                            Some(vec![("addr".into(), sp.addr.clone())]),
+                            sp.addr.clone(),
+                        )
+                    } else {
                     // 0 read, 1 write, 2 fetch (instruction stream).
                     let parsed = event
                         .name
@@ -592,7 +603,7 @@ impl Checker<'_> {
                         parsed.filter(|(_, b)| *b > 0 && *b <= 128 && b % sp.cell_bits == 0)
                     else {
                         let msg = format!(
-                            "a space handler is `on {0}.read_uN(addr) -> uN`, `on {0}.write_uN(addr, data: uN)` or `on {0}.fetch_uN(addr) -> uN`, N a multiple of the {1}-bit cell; found `{2}`",
+                            "a space handler is `on {0}.read_uN(addr) -> uN`, `on {0}.write_uN(addr, data: uN)`, `on {0}.fetch_uN(addr) -> uN` (N a multiple of the {1}-bit cell) or `on {0}.address(addr) -> ...`; found `{2}`",
                             sp.name, sp.cell_bits, event.name
                         );
                         self.error(module, "E1041", event.span, msg);
@@ -641,6 +652,7 @@ impl Checker<'_> {
                             Some(vec![("addr".into(), sp.addr.clone())]),
                             Ty::UInt(bits),
                         ),
+                    }
                     }
                 }
                 [port, event] => {

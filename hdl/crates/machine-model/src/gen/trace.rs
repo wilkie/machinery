@@ -499,7 +499,7 @@ impl Gen<'_> {
         let jit = self.jit_trace_fields();
         let _ = write!(
             self.out,
-            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start, and how many.\n    pub off: u16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n    /// Opcode bytes fetched (`istream {{ opcode }}` runs that often).\n    pub opcodes: u8,\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`, or none of its\n/// blocks has been written since. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    /// The page's 128-byte blocks its bytes are in: while none of them is\n    /// written, it holds though the page's count moved (`_code_fresh`).\n    pub mask: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n{jit}}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n}}\n"
+            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}    /// What the board's direct memory does to addresses (the processor's\n    /// `on <space>.address` hook's wires: `<space>_addr_key`).\n    pub bus: u64,\n}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start, and how many.\n    pub off: u16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n    /// Opcode bytes fetched (`istream {{ opcode }}` runs that often).\n    pub opcodes: u8,\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`, or none of its\n/// blocks has been written since. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    /// The page's 128-byte blocks its bytes are in: while none of them is\n    /// written, it holds though the page's count moved (`_code_fresh`).\n    pub mask: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n{jit}}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n}}\n"
         );
         let jt = self.jit_types();
         self.out.push_str(jt);
@@ -512,7 +512,7 @@ impl Gen<'_> {
             return ("", "");
         }
         (
-            "    /// The trace core: replaying run `tr_cur` (when `tr_on`) at\n    /// instruction `tr_idx`, entered at epoch `tr_ep0`; the epoch, bumped\n    /// by writes to what runs depend on; recording this step; code memory's\n    /// write total when last checked; the run that just ended.\n    pub tr_on: bool,\n    pub tr_rec_now: bool,\n    pub tr_idx: u32,\n    pub tr_cur: u32,\n    pub tr_prev: u32,\n    pub tr_epoch: u64,\n    pub tr_ep0: u64,\n    pub tr_aepoch: u64,\n    pub tr_kepoch: u64,\n    pub tr_w: u64,\n    pub tr_phys: u64,\n    /// The replay loop: the step's prologue left the step to the\n    /// instruction (`replay_prologue`).\n    pub tr_go: bool,\n",
+            "    /// The trace core: replaying run `tr_cur` (when `tr_on`) at\n    /// instruction `tr_idx`, entered at epoch `tr_ep0`; the epoch, bumped\n    /// by writes to what runs depend on; recording this step; code memory's\n    /// write total when last checked; the run that just ended.\n    pub tr_on: bool,\n    pub tr_rec_now: bool,\n    pub tr_idx: u32,\n    pub tr_cur: u32,\n    pub tr_prev: u32,\n    pub tr_epoch: u64,\n    pub tr_ep0: u64,\n    pub tr_aepoch: u64,\n    pub tr_kepoch: u64,\n    pub tr_w: u64,\n    /// The board's address key when last looked at (`tr_bus`).\n    pub tr_bkey: u64,\n    pub tr_phys: u64,\n    /// The replay loop: the step's prologue left the step to the\n    /// instruction (`replay_prologue`).\n    pub tr_go: bool,\n",
             "    /// The runs kept, and the one being recorded (from epoch\n    /// `tr_rec_ep`).\n    pub traces: Box<[Option<Trace>]>,\n    pub tr_rec: Option<Trace>,\n    pub tr_rec_ep: u64,\n",
         )
     }
@@ -521,7 +521,7 @@ impl Gen<'_> {
         if self.trace.is_none() {
             return String::new();
         }
-        format!("            tr_on: false,\n            tr_rec_now: false,\n            tr_idx: 0,\n            tr_cur: 0,\n            tr_prev: u32::MAX,\n            tr_epoch: 0,\n            tr_ep0: 0,\n            tr_aepoch: 0,\n            tr_kepoch: 0,\n            tr_w: u64::MAX,\n            tr_phys: 0,\n            tr_go: false,\n            traces: vec![None; {TRACES}].into_boxed_slice(),\n            tr_rec: None,\n            tr_rec_ep: 0,\n")
+        format!("            tr_on: false,\n            tr_rec_now: false,\n            tr_idx: 0,\n            tr_cur: 0,\n            tr_prev: u32::MAX,\n            tr_epoch: 0,\n            tr_ep0: 0,\n            tr_aepoch: 0,\n            tr_kepoch: 0,\n            tr_w: u64::MAX,\n            tr_bkey: 0,\n            tr_phys: 0,\n            tr_go: false,\n            traces: vec![None; {TRACES}].into_boxed_slice(),\n            tr_rec: None,\n            tr_rec_ep: 0,\n")
     }
 
     /// The trace core's methods (inside the machine's impl).
@@ -567,10 +567,33 @@ impl Gen<'_> {
         let _ = write!(
             self.out,
             r#"    #[inline]
-    fn tr_slot(phys: u64) -> usize {{ ((phys ^ (phys >> 12)) as usize) & {mask} }}
+    /// The slot of the run at `phys` under the board's address key `bus`
+    /// (0 on boards without one): the runs for each value of the key, at
+    /// different slots as a rule, are kept together.
+    fn tr_slot(phys: u64, bus: u64) -> usize {{ ((phys ^ (phys >> 12) ^ (bus.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 50)) as usize) & {mask} }}
     /// What the decoder reads: a run's key.
     #[inline]
-    fn tkey(&self) -> TKey {{ TKey {{ {key}}} }}
+    fn tkey(&self) -> TKey {{ TKey {{ {key}bus: self.bus.{sp}_addr_key() }} }}
+    /// The board's address key changed since it was last looked at (seen
+    /// where code memory's write total moves, which counts its changes):
+    /// what depends on it stops, as a write to the key does.
+    #[inline(always)]
+    fn tr_bus(&mut self) -> bool {{
+        let k = self.bus.{sp}_addr_key();
+        if k == self.tr_bkey {{
+            return false;
+        }}
+        self.tr_bus_changed(k)
+    }}
+    #[cold]
+    #[inline(never)]
+    fn tr_bus_changed(&mut self, k: u64) -> bool {{
+        self.tr_bkey = k;
+        self.tr_epoch = self.tr_epoch.wrapping_add(1);
+        self.tr_aepoch = self.tr_aepoch.wrapping_add(1);
+        self.tr_kepoch = self.tr_kepoch.wrapping_add(1);
+        true
+    }}
     /// Can the run being replayed go on with its next instruction? When
     /// not, it stops replaying (and nothing else changes).
     #[inline]
@@ -587,7 +610,7 @@ impl Gen<'_> {
         let w = self.bus.{sp}_code_writes();
         if w != self.tr_w {{
             let page = t.page;
-            if !self.tr_fresh(cur, page) {{
+            if self.tr_bus() || !self.tr_fresh(cur, page) {{
                 self.tr_on = false;
                 self.tr_prev = u32::MAX;
                 return false;
@@ -738,6 +761,9 @@ impl Gen<'_> {
     /// without finding where the pc is (it is where it was).
     #[inline]
     fn trace_follow(&mut self) -> Option<(u64, Result<(), Fault>)> {{
+        // (The board's address key: a change since makes the link look at
+        // the key.)
+        self.tr_bus();
         let prev = self.tr_prev as usize;
         let pc = self.r.{pc0} as u64;
         let li = self.traces.get(prev)?.as_ref()?.links.iter().position(|l| l.pc == pc && l.ep == self.tr_aepoch)?;
@@ -764,7 +790,7 @@ impl Gen<'_> {
     /// linked from the run before), and its first instruction.
     #[inline]
     fn trace_enter(&mut self, start: u64) -> Option<(u64, Result<(), Fault>)> {{
-        let slot = Self::tr_slot(start);
+        let slot = Self::tr_slot(start, self.tr_bkey);
         let pc = self.r.{pc0} as u64;
         let ep = self.tr_epoch;
         let aep = self.tr_aepoch;
@@ -830,7 +856,7 @@ impl Gen<'_> {
     fn trace_close(&mut self) {{
         if let Some(mut t) = self.tr_rec.take() {{
             if !t.steps.is_empty() {{
-                let slot = Self::tr_slot(t.phys);
+                let slot = Self::tr_slot(t.phys, t.key.bus);
                 if (self.tr_on && self.tr_cur as usize == slot) || self.tr_prev as usize == slot {{
                     self.tr_on = false;
                     self.tr_prev = u32::MAX;
@@ -894,7 +920,7 @@ impl Gen<'_> {
         }}
         let w = self.bus.{sp}_code_writes();
         if w != self.tr_w {{
-            if !self.tr_fresh(j.slot as usize, j.page) {{
+            if self.tr_bus() || !self.tr_fresh(j.slot as usize, j.page) {{
                 self.tr_on = false;
                 self.tr_prev = u32::MAX;
                 return false;

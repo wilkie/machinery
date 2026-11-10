@@ -145,6 +145,14 @@ impl Gen<'_> {
     }}
     /// Compiles the run in `slot`.
     fn jit_compile(&mut self, slot: usize) {{
+        // A run is compiled under the board's address key it was recorded
+        // at (its direct accesses through the mask the processor's address
+        // hook makes for it): not while the key is another.
+        match self.traces[slot].as_ref() {{
+            Some(t) if t.key.bus == self.bus.{sp}_addr_key() => {{}}
+            _ => return,
+        }}
+        JIT_GATE.with(|g| g.set(self.bus.{sp}_addr_mask()));
         if self.jit.count() >= machine_jit::LIMIT {{
             self.jit.clear();
             for t in self.traces.iter_mut().flatten() {{ t.code = machine_jit::Code::default(); }}
@@ -283,7 +291,7 @@ impl Gen<'_> {
     /// length.
     fn jit_lookup(&mut self) -> Option<(usize, u64)> {{
         let start = self.fn_{address}().ok()? as u64;
-        let slot = Self::tr_slot(start);
+        let slot = Self::tr_slot(start, self.tr_bkey);
         let pc = self.r.{pc0n} as u64;
         let ep = self.tr_epoch;
         let key = self.tkey();
@@ -317,6 +325,9 @@ impl Gen<'_> {
     /// made.
     pub fn jit_burst(&mut self, budget: u64) -> Result<u64, Fault> {{
         if !self.tr_on && !self.halted && !self.in_reset {{
+            // (The board's address key, looked at before a run is entered:
+            // a change since makes links and entries look at the key.)
+            self.tr_bus();
             let found = if self.tr_prev != u32::MAX {{ self.jit_follow() }} else {{ None }};
             let found = match found {{
                 Some(f) => Some(f),
@@ -623,7 +634,7 @@ impl Gen<'_> {
             // (The run whose code asks: the current one, its stamp its own,
             // which a check may have moved on since it was compiled.)
             let _ = stamp;
-            if !self.tr_fresh(self.tr_cur as usize, page) {{
+            if self.tr_bus() || !self.tr_fresh(self.tr_cur as usize, page) {{
                 self.tr_on = false;
                 self.tr_prev = u32::MAX;
                 return false;
@@ -653,9 +664,11 @@ impl Gen<'_> {
     #[allow(clippy::all)]
     fn jm_read(e: &mut machine_jit::Em, a: machine_jit::V, n: u32, shim: usize, pure: bool) -> machine_jit::V {{
         let mems = B::jit_mems();
+        // (Through the processor's address hook, as a mask; 0: by the bus.)
+        let gm = JIT_GATE.with(|g| g.get());
         match B::jit_board() {{
-            Some(b) if !mems.is_empty() => {{
-                let a = e.op(machine_jit::Op::And, a, machine_jit::V::K(mems[0].amask as u128), machine_jit::N::U64);
+            Some(b) if !mems.is_empty() && gm != 0 => {{
+                let a = e.op(machine_jit::Op::And, a, machine_jit::V::K((mems[0].amask & gm) as u128), machine_jit::N::U64);
                 Self::jm_access(e, a, n, None, mems, b, shim, pure)
             }}
             _ => e.call(shim, &[(a, machine_jit::N::U64)], Self::jm_n(n), pure),
@@ -665,9 +678,11 @@ impl Gen<'_> {
     #[allow(clippy::all)]
     fn jm_write(e: &mut machine_jit::Em, a: machine_jit::V, v: machine_jit::V, n: u32, shim: usize, pure: bool) {{
         let mems = B::jit_mems();
+        // (Through the processor's address hook, as a mask; 0: by the bus.)
+        let gm = JIT_GATE.with(|g| g.get());
         match B::jit_board() {{
-            Some(b) if !mems.is_empty() => {{
-                let a = e.op(machine_jit::Op::And, a, machine_jit::V::K(mems[0].amask as u128), machine_jit::N::U64);
+            Some(b) if !mems.is_empty() && gm != 0 => {{
+                let a = e.op(machine_jit::Op::And, a, machine_jit::V::K((mems[0].amask & gm) as u128), machine_jit::N::U64);
                 let _ = Self::jm_access(e, a, n, Some(v), mems, b, shim, pure);
             }}
             _ => {{

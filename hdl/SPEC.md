@@ -656,6 +656,20 @@ fetches separately, which is what lets execution overlap them; the i286
 board's processor fetches aligned words into a one-word buffer, as its bus
 unit does.
 
+`on <space>.address(addr) -> A` says what the processor does to the
+space's addresses on their way to its bus (the AT's A20 gate: bit 20 held
+low while the keyboard controller closes it). The handlers apply it
+themselves (they may call it); it exists for the emulator profiles, whose
+direct memory bypasses them (section 12, `memory: direct`). It must be a
+fn of the address and the model's input wires alone: no state, no bus, no
+outputs (checked when a system is generated). The wires it reads are its
+key.
+
+```
+fn gate(a: u32) -> u32 { return if a20_gate { a } else { a & 0xFFEFFFFF }; }
+on mem.address(addr: u32) -> u32 { return gate(addr); }
+```
+
 The model also supplies every `extern fn` of the isa with a handler of the
 same name and signature (E1041), typically from signals and transactions,
 and may factor its handlers through model fns (section 8.3a):
@@ -1643,8 +1657,13 @@ system PcAt386 {
   declared waits once per bus-width unit it touches, and code once per
   unit fetched, as a one-unit buffer would. Time is approximate: a
   processor model's own buffering and its view of writes into it are
-  bypassed, and so is anything they do to the address (the AT's A20
-  gate: an emulator addresses memory above 1 MB with the gate closed).
+  bypassed. What they do to the address comes from the processor's `on
+  <space>.address` (section 8): an access goes to direct memory at the
+  address it makes when its first and last bytes stay as far apart, else
+  by the model's handlers (an access straddling the AT's 1 MB wrap). A
+  change of a wire it reads counts as a write to code memory, so the
+  cores see it where they check those; the trace and JIT cores keep runs
+  for each value of its key.
   Processor models that time instructions themselves (`on
   retire`) can't be built this way. `memory: bus;` is the default.
 - `core: decode | trace;` in a profile chooses how the processor's
@@ -1665,6 +1684,15 @@ system PcAt386 {
   - What the decoder reads besides the bytes and the pc (on the 386: `CS`,
     for the operand size) is a run's key, compared by value where a run is
     entered.
+  - The board's address key (the wires the processor's `on <space>.address`
+    reads: the AT's A20 gate) is in a run's key too, and in the hash of
+    its slot, so the runs for each value are kept together. A change of it
+    counts as a code write; where that total has moved, and before a run is
+    followed or looked up, the core looks at the key, and a change stops
+    what depends on it, as a write to a key register does. A compiled run
+    is compiled for its key: its direct accesses through the mask the hook
+    makes then (folded into the space's mask: nothing with the gate open,
+    one AND with it closed), or by the bus when the hook is not a mask.
   - Every assignment the compiler emits to state the decoder or the
     istream's address, window and limit fns read, other than the pc, bumps
     an epoch, field by field (a far jump, a task switch, a `CR0` or `CR3`

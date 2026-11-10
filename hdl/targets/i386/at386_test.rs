@@ -229,14 +229,10 @@ const A20: &[u8] = &[
 /// The A20 gate: with it open FFFF:0010 is the first byte above 1 MB; the
 /// 8042 closes it and the address wraps to 0, as on an 8086 (a write there
 /// lands in low memory); opened again, the memory above 1 MB is back. No
-/// ROM images needed: the program is the boot ROM.
+/// ROM images needed: the program is the boot ROM. Every profile: direct
+/// memory applies the gate through the processor's `on mem.address`.
 #[test]
 fn a20_gate_wraps_memory_at_1_mb() {
-    // Direct memory bypasses the gate (SPEC 12): an emulator built so never
-    // wraps.
-    if machine_at386_vga::system::DIRECT_MEMORY {
-        return;
-    }
     let mut sys = System::new();
     let mut rom = vec![0xF4u8; 0x10000];
     rom[..A20.len()].copy_from_slice(A20);
@@ -248,6 +244,38 @@ fn a20_gate_wraps_memory_at_1_mb() {
     let r = &sys.board().ram.cells;
     assert_eq!(&r[0x500..0x503], &[0x22, 0x11, 0x22], "open, closed (wraps to 0:0000), open");
     assert_eq!((r[0x100000], r[0x010], r[0x100010]), (0x22, 0x33, 0), "the closed write wrapped to 0:0010");
+}
+
+/// The A20 gate closed and opened 1200 times over (`a20loop.asm`): each
+/// time, the same routine reads and increments FFFF:0010, low memory's
+/// first byte with the gate closed, the first above 1 MB with it open,
+/// and the value read is added to BL (closed) or BH (open), stored at
+/// 0:0500. The JIT core compiles the routine for each state of the gate
+/// (the board's address key) and keeps both.
+const A20_LOOP: &[u8] = &[
+    0xfa, 0x31, 0xc0, 0x8e, 0xd8, 0x8e, 0xd0, 0xbc, 0x00, 0x70, 0xb8, 0xff,
+    0xff, 0x8e, 0xc0, 0xb9, 0xb0, 0x04, 0x31, 0xdb, 0xb0, 0xd1, 0xe6, 0x64,
+    0xb0, 0xdd, 0xe6, 0x60, 0xe8, 0x16, 0x00, 0x00, 0xc3, 0xb0, 0xd1, 0xe6,
+    0x64, 0xb0, 0xdf, 0xe6, 0x60, 0xe8, 0x09, 0x00, 0x00, 0xc7, 0xe2, 0xe4,
+    0x89, 0x1e, 0x00, 0x05, 0xf4, 0x26, 0xa0, 0x10, 0x00, 0x26, 0xfe, 0x06,
+    0x10, 0x00, 0xc3,
+];
+
+#[test]
+fn a20_gate_toggled_in_a_loop() {
+    let mut sys = System::new();
+    let mut rom = vec![0xF4u8; 0x10000];
+    rom[..A20_LOOP.len()].copy_from_slice(A20_LOOP);
+    rom[0xFFF0..0xFFF5].copy_from_slice(&[0xEA, 0x00, 0x00, 0x00, 0xF0]); // jmp far F000:0000
+    sys.board().rom.cells = rom;
+    sys.reset();
+    sys.run(200_000).unwrap();
+    assert!(sys.cpu.halted, "the loop ran to its end");
+    let n = 1200u32;
+    let sum = ((0..n).sum::<u32>() & 0xFF) as u8;
+    let r = &sys.board().ram.cells;
+    assert_eq!((r[0x500], r[0x501]), (sum, sum), "the values read, closed and open");
+    assert_eq!((r[0x000], r[0x100000]), (n as u8, n as u8), "each byte incremented in its own state");
 }
 
 /// Runs until `stop` (or `steps` instructions) and reports the stretch:

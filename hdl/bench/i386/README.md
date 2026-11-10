@@ -481,10 +481,11 @@ instruction), so its work is not exact; ours (`jit`) is.
 
 Then (2026-11-09): the comparison repeatable from a clone. The disks
 boot FreeDOS 1.4 (GPL) instead of MS-DOS 3.30, with HimemX (without it
-FreeDOS leaves Jetpack 20 KB short) but not DOS=HIGH: with the kernel in
-the high memory area, programs load below 64 KB, and Lemmings' packed VGAL
-then wraps at 1 MB, needing A20 off, which the direct-memory profiles do
-not model (an "Invalid Opcode" on ours, fine in DOSBox). `fetch_games.sh`
+FreeDOS leaves Jetpack 20 KB short) and DOS=HIGH (first left out: with
+the kernel in the high memory area, programs load below 64 KB, and
+Lemmings' packed VGAL then wraps at 1 MB, which needs the A20 gate closed,
+and the direct-memory profiles ignored the gate: an "Invalid Opcode" on
+ours, fine in DOSBox; fixed below). `fetch_games.sh`
 fetches FreeDOS's Floppy Edition and HimemX from their releases and the
 three freeware games from archive.org, each checked by SHA-256; the
 `build_*.sh` scripts make the same disks byte for byte on every build
@@ -543,3 +544,49 @@ Drawing is the larger gap where the screen changes most (Lemmings'
 scrolling banner: 6 times DOSBox's); the processor elsewhere: Jetpack's
 demo costs `blocks` 363 host instructions a guest instruction against 59
 for DOSBox's dynamic core. One Must Fall's menu is the closest: `blocks` 143 against 36.
+
+Then (2026-11-10): the A20 gate in direct memory. The 386's model now
+declares what it does to addresses on their way to the bus, `on
+mem.address(addr) -> u32` (the gate), a fn of the address and its input
+wires alone; the emulator profiles' direct memory, which bypasses the
+model's handlers, applies it from there (an access straddling the wrap
+goes by the handlers). The wires it reads are a key: a change counts as
+a code write, runs are kept and compiled for each value of the key (in
+their key and slot hash), and compiled code folds the gate into the
+address mask it already applies. HimemX now finds the keyboard
+controller's A20 method (it found the gate "always on" before), and the
+disks boot with DOS=HIGH again: Lemmings runs on every profile, `trace`
+and `jit` ending alike (frame, memory, time at 110 M instructions).
+
+Cost: interpreted code pays a load and an AND per access and fetch, and
+one more counter in the code-write check: `chk` under `trace` 377.9 to
+391.5 host instructions a guest instruction (+3.6%; a first version, the
+hook called at each access, +4%). Compiled code pays nothing; on the games
+(table below, DOS=HIGH) ours moves within about 2% of the table above.
+
+Xmas Lemmings, its main menu (a banner scrolling), 40 s to 90 s; DOSBox at `cycles=fixed 2940`:
+
+| | every frame | drawing none | drawing | the rest, a guest instruction | guest instructions an emulated second |
+|---|---|---|---|---|---|
+| ours, `jit` | 2.32 G | 0.98 G (none) | 1.34 G | 373 | 2.62 M |
+| ours, `blocks` | 2.14 G | 0.81 G (none) | 1.34 G | 307 | 2.62 M |
+| DOSBox 0.74-3, normal | 0.54 G | 0.33 G (1 in 11) | 0.23 G | 116 | 2.65 M |
+| DOSBox 0.74-3, dynamic | 0.39 G | 0.19 G (1 in 11) | 0.23 G | 63 | 2.65 M |
+
+Jetpack, its attract mode (title, demo, high scores), 60 s to 180 s; DOSBox at `cycles=fixed 4580`:
+
+| | every frame | drawing none | drawing | the rest, a guest instruction | guest instructions an emulated second |
+|---|---|---|---|---|---|
+| ours, `jit` | 1.99 G | 1.38 G (none) | 0.61 G | 409 | 3.38 M |
+| ours, `blocks` | 1.81 G | 1.21 G (none) | 0.61 G | 357 | 3.38 M |
+| DOSBox 0.74-3, normal | 0.53 G | 0.40 G (1 in 11) | 0.15 G | 113 | 3.38 M |
+| DOSBox 0.74-3, dynamic | 0.35 G | 0.21 G (1 in 11) | 0.15 G | 58 | 3.38 M |
+
+One Must Fall 2097, its main menu (music playing; Enter at 45 s), 160 s to 240 s; DOSBox at `cycles=fixed 5600`:
+
+| | every frame | drawing none | drawing | the rest, a guest instruction | guest instructions an emulated second |
+|---|---|---|---|---|---|
+| ours, `jit` | 1.54 G | 1.19 G (none) | 0.35 G | 221 | 5.37 M |
+| ours, `blocks` | 1.14 G | 0.79 G (none) | 0.35 G | 146 | 5.38 M |
+| DOSBox 0.74-3, normal | 0.70 G | 0.58 G (1 in 11) | 0.13 G | 105 | 5.40 M |
+| DOSBox 0.74-3, dynamic | 0.33 G | 0.21 G (1 in 11) | 0.13 G | 36 | 5.40 M |

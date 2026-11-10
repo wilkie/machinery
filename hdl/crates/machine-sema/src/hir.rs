@@ -866,6 +866,14 @@ pub enum HandlerKind {
         space: DefId,
         bits: u32,
     },
+    /// `on <space>.address(addr) -> <addr>`: what a processor does to a
+    /// space's addresses on their way to the bus (the AT's A20 gate), as a
+    /// fn of the address and the model's input wires alone. Its handlers
+    /// apply it themselves; an emulator's direct memory (`memory: direct`),
+    /// which bypasses them, applies it from here.
+    SpaceAddress {
+        space: DefId,
+    },
     /// A processor's implementation of an isa `extern fn`.
     Extern {
         def: DefId,

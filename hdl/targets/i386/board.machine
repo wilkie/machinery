@@ -98,6 +98,11 @@ component Cpu386 {
 
         /// A memory address through the A20 gate.
         fn gate(a: u32) -> u32 { return if a20_gate { a } else { a & 0xFFEFFFFF }; }
+        /// What the processor does to memory addresses on their way to the
+        /// bus: the A20 gate. The handlers below apply it themselves; an
+        /// emulator's direct memory, which bypasses them, applies it from
+        /// here.
+        on mem.address(addr: u32) -> u32 { return gate(addr); }
 
         on mem.fetch_u8(addr: u32) -> u8 {
             let d = gate(addr) & 0xFFFFFFFC;

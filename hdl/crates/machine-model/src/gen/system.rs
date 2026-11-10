@@ -434,6 +434,9 @@ impl<'a> Gen<'a> {
                 HandlerKind::SpaceFetch { space, bits } => {
                     format!("{}_fetch_u{bits}", ident(&self.spaces[space].name))
                 }
+                HandlerKind::SpaceAddress { space } => {
+                    format!("{}_address", ident(&self.spaces[space].name))
+                }
                 HandlerKind::Extern { def } => format!("ext_{}", ident(&self.prog.item_name(*def))),
                 HandlerKind::Input { port } => {
                     format!("on_{}", ident(&comp.ports[*port as usize].name))
@@ -544,6 +547,41 @@ impl<'a> Gen<'a> {
         }
         let cpu = &insts[proc_idx];
         let cpu_name = ident(&cpu.name);
+        // An emulator's direct memory bypasses the processor model's
+        // handlers: what they do to the istream space's addresses comes from
+        // its `on <space>.address` hook. Its key (the input wires it reads,
+        // packed) and the output ports that drive them: a change of one
+        // counts as a code write (`sig.addr_gen`).
+        let addr_hook = match (prof.is_some_and(|p| p.direct_memory), self.isa.istream.as_ref()) {
+            (true, Some(ist)) => self.addr_hook(cpu.comp, ist.space)?,
+            _ => None,
+        };
+        let mut addr_key = String::new();
+        let mut addr_drivers: Vec<(u32, u32)> = Vec::new();
+        if let Some(wires) = &addr_hook {
+            let mut at = 0u32;
+            for &pi in wires {
+                let (PortKind::In(t) | PortKind::AsyncIn(t)) = &cpu.comp.ports[pi as usize].kind else { continue };
+                let w = match t {
+                    Ty::Bool => 1,
+                    Ty::UInt(n) => *n,
+                    _ => return Err(GenError::new(format!("`on .address` of `{}` reads `{}`: only bool and uN wires make a key", cpu.comp.name, cpu.comp.ports[pi as usize].name))),
+                };
+                let v = match sys.wires.iter().find(|w| w.target == (proc_idx as u32, pi)).map(|w| &w.source) {
+                    Some(hir::WireSource::Port((si, sp))) => {
+                        addr_drivers.push((*si, *sp));
+                        format!("self.sig.w_{}_{}", ident(&insts[*si as usize].name), ident(&insts[*si as usize].comp.ports[*sp as usize].name))
+                    }
+                    Some(hir::WireSource::Const(v)) => format!("{v}u128"),
+                    None => "0u8".to_string(),
+                };
+                let _ = write!(addr_key, " | (({v}) as u64) << {at}");
+                at += w;
+            }
+            if at > 64 {
+                return Err(GenError::new(format!("`on .address` of `{}` reads more than 64 bits of wires", cpu.comp.name)));
+            }
+        }
         // A processor model with `on retire` owns its timing (SPEC 11.2c):
         // its own transactions are charged only their wait states.
         let cpu_retire = cpu
@@ -574,7 +612,7 @@ impl<'a> Gen<'a> {
         let mut o = String::new();
         let _ = write!(
             o,
-            "\n/// The system `{}`.\npub mod system {{\n    use super::*;\n\n    /// `e / p` for times: in 64 bits when both fit (an elapsed time is\n    /// short), else in 128.\n    #[inline(always)]\n    pub fn div_time(e: clock::Time, p: clock::Time) -> clock::Time {{\n        if (e | p) >> 64 == 0 {{ (e as u64 / p as u64) as clock::Time }} else {{ e / p }}\n    }}\n\n    /// The time unit is `BASE_NUM / BASE_DEN` seconds.\n    pub const BASE_NUM: u128 = {};\n    pub const BASE_DEN: u128 = {};\n    /// The profile this crate was built with, its core, and whether the\n    /// processor reaches memory directly (`memory: direct`: no A20 gate,\n    /// approximate time).\n    pub const PROFILE: &str = {:?};\n    pub const CORE: &str = {:?};\n    pub const DIRECT_MEMORY: bool = {};\n    /// No concession: time and device order as the decode core keeps them\n    /// (any concession: `sync: run`, `sync: quantum`, `events: block`,\n    /// `timing: approximate`, makes it false).\n    pub const EXACT: bool = {};\n    /// Clock periods in time units.\n    pub mod clock {{\n        /// A time: a count of the system's time unit. 128 bits, so that time\n        /// stays exact over any run however fine the unit the clocks need.\n        pub type Time = u128;\n",
+            "\n/// The system `{}`.\npub mod system {{\n    use super::*;\n\n    /// `e / p` for times: in 64 bits when both fit (an elapsed time is\n    /// short), else in 128.\n    #[inline(always)]\n    pub fn div_time(e: clock::Time, p: clock::Time) -> clock::Time {{\n        if (e | p) >> 64 == 0 {{ (e as u64 / p as u64) as clock::Time }} else {{ e / p }}\n    }}\n\n    /// The time unit is `BASE_NUM / BASE_DEN` seconds.\n    pub const BASE_NUM: u128 = {};\n    pub const BASE_DEN: u128 = {};\n    /// The profile this crate was built with, its core, and whether the\n    /// processor reaches memory directly (`memory: direct`: approximate\n    /// time).\n    pub const PROFILE: &str = {:?};\n    pub const CORE: &str = {:?};\n    pub const DIRECT_MEMORY: bool = {};\n    /// No concession: time and device order as the decode core keeps them\n    /// (any concession: `sync: run`, `sync: quantum`, `events: block`,\n    /// `timing: approximate`, makes it false).\n    pub const EXACT: bool = {};\n    /// Clock periods in time units.\n    pub mod clock {{\n        /// A time: a count of the system's time unit. 128 bits, so that time\n        /// stays exact over any run however fine the unit the clocks need.\n        pub type Time = u128;\n",
             sys.name,
             sys.base_num,
             sys.base_den,
@@ -622,7 +660,7 @@ impl<'a> Gen<'a> {
         }
         let _ = write!(
             o,
-            "    #[allow(non_camel_case_types)]\n    #[derive(Clone, Copy, Debug, PartialEq)]\n    pub enum Event {{\n{events}    }}\n    /// Time and signal levels.\n    #[derive(Clone, Debug)]\n    pub struct Signals {{\n        /// Time in units of `BASE_NUM / BASE_DEN` seconds.\n        pub now: clock::Time,\n{sig_fields}        /// Edges not yet delivered, and whether there are any (for compiled\n        /// code, which cannot look into the queue).\n        pub events: Vec<Event>,\n        pub pending: bool,\n    }}\n    impl Signals {{\n        pub fn new() -> Signals {{\n            Signals {{\n                now: 0,\n{sig_init}                events: Vec::new(),\n                pending: false,\n            }}\n        }}\n    }}\n"
+            "    #[allow(non_camel_case_types)]\n    #[derive(Clone, Copy, Debug, PartialEq)]\n    pub enum Event {{\n{events}    }}\n    /// Time and signal levels.\n    #[derive(Clone, Debug)]\n    pub struct Signals {{\n        /// Time in units of `BASE_NUM / BASE_DEN` seconds.\n        pub now: clock::Time,\n{sig_fields}        /// Edges not yet delivered, and whether there are any (for compiled\n        /// code, which cannot look into the queue).\n        pub events: Vec<Event>,\n        pub pending: bool,\n        /// Changes of the wires the processor's address hook reads (its\n        /// key, `<space>_addr_key`): counted with code memory's writes, so\n        /// that what checks those sees them.\n        pub addr_gen: u64,\n        /// The mask the address hook makes (`<space>_addr_mask`) as of\n        /// `addr_gen` = `gate_seen`; 0 until it is worked out (a change of\n        /// a wire it reads zeroes it), or when the hook is not a mask.\n        pub gate_seen: u64,\n        pub gate_mask: u64,\n    }}\n    impl Signals {{\n        pub fn new() -> Signals {{\n            Signals {{\n                now: 0,\n{sig_init}                events: Vec::new(),\n                pending: false,\n                addr_gen: 0,\n                gate_seen: u64::MAX,\n                gate_mask: 0,\n            }}\n        }}\n    }}\n"
         );
 
         // Tick marks: the last time each device's clock was caught up to.
@@ -1091,7 +1129,10 @@ impl<'a> Gen<'a> {
                             m,
                             "        fn read_{pn}(&mut self) -> {rt} {{ self.sig.{f} }}"
                         );
-                        let _ = writeln!(m, "        fn write_{pn}(&mut self, value: {rt}) {{ if self.sig.{f} != value {{ self.sig.{f} = value; self.sig.events.push(Event::{f}); self.sig.pending = true; }} }}");
+                        // (A wire the processor's address hook reads: its key
+                        // changed, which counts as a code write.)
+                        let gen = if addr_drivers.contains(&(ii as u32, pi as u32)) { " self.sig.addr_gen = self.sig.addr_gen.wrapping_add(1); self.sig.gate_mask = 0;" } else { "" };
+                        let _ = writeln!(m, "        fn write_{pn}(&mut self, value: {rt}) {{ if self.sig.{f} != value {{ self.sig.{f} = value; self.sig.events.push(Event::{f}); self.sig.pending = true;{gen} }} }}");
                     }
                     PortKind::In(t) | PortKind::AsyncIn(t) => {
                         let rt = self.rty(t)?;
@@ -1191,6 +1232,12 @@ impl<'a> Gen<'a> {
         // they touch; code is charged once a unit, as a one-unit buffer.
         let mut direct = String::new();
         let mut direct_hooks = (String::new(), String::new(), String::new());
+        // The processor's address hook in direct memory: the board's fns
+        // (`cpu_addr`, `cpu_span`), the bus's (`<space>_addr_key`,
+        // `<space>_addr_mask`), and the trace core's code pages through it.
+        let mut gate_fns = String::new();
+        let mut gate_bus = String::new();
+        let mut gate_code: Option<String> = None;
         // The JIT core: the code-write counters' offsets in the board, the
         // direct memory's ranges, their pointers, and code hits.
         let mut jit_writes = String::new();
@@ -1324,18 +1371,51 @@ impl<'a> Gen<'a> {
                         }
                     }
                 }
-                let amask = mask_literal(match &msp.addr { Ty::UInt(b) => *b, _ => 64 }, "u64");
+                let abits = match &msp.addr { Ty::UInt(b) => *b, _ => 64 };
+                let amask = mask_literal(abits, "u64");
+                if addr_hook.is_some() {
+                    // Through the processor's `on <space>.address` (the A20
+                    // gate): an access whose bytes it keeps together, else
+                    // the model's handlers, which apply it themselves.
+                    let aty = native(abits, false).1;
+                    let sn = ident(&msp.name);
+                    let _ = write!(
+                        gate_fns,
+                        "        /// The processor's `on {sn}.address` itself (the bus's mask first).\n        #[inline]\n        pub fn cpu_hook(&mut self, a: u64) -> u64 {{\n            let mut ctx = {};\n            self.{cpu_name}.{sn}_address(&mut ctx, (a & {amask}) as {aty}) as u64\n        }}\n        /// The hook as the AND with a mask (`sig.gate_mask`; 0: it is not\n        /// one), worked out again when a wire it reads has changed\n        /// (`sig.addr_gen`): the AND it is on single bits and a few patterns.\n        #[cold]\n        #[inline(never)]\n        pub fn gate_mask(&mut self) -> u64 {{\n            if self.sig.gate_seen != self.sig.addr_gen {{\n                self.sig.gate_seen = self.sig.addr_gen;\n                let m = self.cpu_hook({amask});\n                let plain = self.cpu_hook(0) == 0\n                    && (0..{abits}).all(|i| {{ let b = 1u64 << i; self.cpu_hook(b) == b & m }})\n                    && [0x5555_5555_5555_5555u64, 0xAAAA_AAAA_AAAA_AAAA, 0x0F0F_0F0F_0F0F_0F0F].iter().all(|p| {{ let p = p & {amask}; self.cpu_hook(p) == p & m }});\n                // (Kept with the bus's mask in: one AND.)\n                self.sig.gate_mask = if plain {{ m & {amask} }} else {{ 0 }};\n            }}\n            self.sig.gate_mask\n        }}\n        /// An address as it leaves the processor.\n        #[inline]\n        pub fn cpu_addr(&mut self, a: u64) -> u64 {{\n            let m = self.sig.gate_mask;\n            if m != 0 {{ a & m }} else {{ self.cpu_addr_slow(a) }}\n        }}\n        #[cold]\n        #[inline(never)]\n        fn cpu_addr_slow(&mut self, a: u64) -> u64 {{\n            match self.gate_mask() {{ 0 => self.cpu_hook(a), m => a & m }}\n        }}\n        /// `n` bytes from `a` as they leave the processor: where they start,\n        /// when its first and last stay as far apart.\n        #[inline]\n        pub fn cpu_span(&mut self, a: u64, n: u64) -> Option<u64> {{\n            let m = self.sig.gate_mask;\n            if m == 0 {{\n                return self.cpu_span_slow(a, n);\n            }}\n            // (Its first and last bytes differ in no bit the mask clears,\n            // the bus's included: they stay as far apart.)\n            if n <= 1 || (a ^ a.wrapping_add(n - 1)) & !m == 0 {{ Some(a & m) }} else {{ None }}\n        }}\n        #[cold]\n        #[inline(never)]\n        fn cpu_span_slow(&mut self, a: u64, n: u64) -> Option<u64> {{\n            if self.gate_mask() != 0 {{\n                return self.cpu_span(a, n);\n            }}\n            let g = self.cpu_hook(a);\n            if n <= 1 || self.cpu_hook(a.wrapping_add(n - 1)) == g.wrapping_add(n - 1) {{ Some(g) }} else {{ None }}\n        }}\n",
+                        ctx_cpu("self")
+                    );
+                    direct_hooks = (
+                        "        if let Some(g) = self.cpu_span(addr, (bits / 8) as u64) {{ if let Some(v) = self.direct_read(g, (bits / 8) as u64) {{ return v; }} }}\n".replace("{{", "{").replace("}}", "}"),
+                        "        if let Some(g) = self.cpu_span(addr, (bits / 8) as u64) {{ if self.direct_write(g, (bits / 8) as u64, value) {{ return; }} }}\n".replace("{{", "{").replace("}}", "}"),
+                        "        if bits == 8 {{ let g = self.cpu_addr(addr); if let Some(b) = self.direct_fetch(g) {{ return b as u128; }} }}\n".replace("{{", "{").replace("}}", "}"),
+                    );
+                    gate_code = Some(amask.clone());
+                    let _ = write!(
+                        gate_bus,
+                        "    fn {sn}_addr_key(&self) -> u64 {{ 0{addr_key} }}\n    fn {sn}_addr_mask(&mut self) -> u64 {{ let m = if self.sig.gate_seen == self.sig.addr_gen {{ self.sig.gate_mask }} else {{ self.gate_mask() }}; if m == 0 {{ 0 }} else {{ m | !{amask} }} }}\n"
+                    );
+                    if self.jit {
+                        direct_fwd = format!("    fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let g = self.cpu_span(addr, n)?;\n        Board::direct_peek(self, g, n)\n    }}\n    fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        match self.cpu_span(addr, n) {{ Some(g) => Board::direct_poke(self, g, n, value), None => false }}\n    }}\n    fn direct_cost(&mut self, addr: u64, n: u64, write: bool) -> Option<u128> {{\n        let g = self.cpu_span(addr, n)?;\n        Board::direct_cost(self, g, n, write)\n    }}\n    fn direct_span(&mut self, addr: u64, len: u64, write: bool) -> Option<(u32, usize)> {{\n        if len == 0 {{ return None; }}\n        let last = addr.checked_add(len - 1)?;\n        if addr & {amask} != addr || last & {amask} != last {{ return None; }}\n        let g = self.cpu_span(addr, len)?;\n        Board::direct_span(self, g, len, write)\n    }}\n    fn direct_cells(&mut self, mem: u32) -> &mut [u8] {{\n        Board::direct_cells(self, mem)\n    }}\n");
+                    }
+                } else {
                 direct_hooks = (
                     format!("        if let Some(v) = self.direct_read(addr & {amask}, (bits / 8) as u64) {{ return v; }}\n"),
                     format!("        if self.direct_write(addr & {amask}, (bits / 8) as u64, value) {{ return; }}\n"),
                     format!("        if bits == 8 {{ if let Some(b) = self.direct_fetch(addr & {amask}) {{ return b as u128; }} }}\n"),
                 );
                 if self.jit {
-                    direct_fwd = format!("    fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        Board::direct_peek(self, addr & {amask}, n)\n    }}\n    fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        Board::direct_poke(self, addr & {amask}, n, value)\n    }}\n    fn direct_cost(&self, addr: u64, n: u64, write: bool) -> Option<u128> {{\n        Board::direct_cost(self, addr & {amask}, n, write)\n    }}\n    fn direct_span(&self, addr: u64, len: u64, write: bool) -> Option<(u32, usize)> {{\n        if len == 0 {{ return None; }}\n        let last = addr.checked_add(len - 1)?;\n        if addr & {amask} != addr || last & {amask} != last {{ return None; }}\n        Board::direct_span(self, addr, len, write)\n    }}\n    fn direct_cells(&mut self, mem: u32) -> &mut [u8] {{\n        Board::direct_cells(self, mem)\n    }}\n");
+                    direct_fwd = format!("    fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        Board::direct_peek(self, addr & {amask}, n)\n    }}\n    fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        Board::direct_poke(self, addr & {amask}, n, value)\n    }}\n    fn direct_cost(&mut self, addr: u64, n: u64, write: bool) -> Option<u128> {{\n        Board::direct_cost(self, addr & {amask}, n, write)\n    }}\n    fn direct_span(&mut self, addr: u64, len: u64, write: bool) -> Option<(u32, usize)> {{\n        if len == 0 {{ return None; }}\n        let last = addr.checked_add(len - 1)?;\n        if addr & {amask} != addr || last & {amask} != last {{ return None; }}\n        Board::direct_span(self, addr, len, write)\n    }}\n    fn direct_cells(&mut self, mem: u32) -> &mut [u8] {{\n        Board::direct_cells(self, mem)\n    }}\n");
+                }
                 }
             }
-            let wsum: String = numbered.iter().map(|(_, c)| format!(" + {c}_writes")).collect();
+            let mut wsum: String = numbered.iter().map(|(_, c)| format!(" + {c}_writes")).collect();
             jit_writes = numbered.iter().map(|(_, c)| format!("std::mem::offset_of!(Board, {}_writes), ", c.trim_start_matches("self."))).collect();
+            if gate_code.is_some() {
+                // (A change of the address hook's key: what checks code
+                // writes sees it, and the trace core then looks at the key.)
+                wsum.push_str(" + self.sig.addr_gen");
+                jit_writes.push_str("std::mem::offset_of!(Board, sig.addr_gen), ");
+            }
             let span_fns = {
                 let arms: String = span_cells.iter().enumerate().map(|(k, c)| format!("            {k} => &mut {c}[..],\n")).collect();
                 format!("        /// A kernel's block (`rt::bulk`): the direct memory holding all\n        /// `len` bytes from `addr` (a read's; a write's, when `write`,\n        /// none of them recorded code), and where `addr` is in its cells.\n        /// One memory at one cost a unit, as `direct_cost` charges.\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_span(&self, addr: u64, len: u64, write: bool) -> Option<(u32, usize)> {{\n        if len == 0 {{ return None; }}\n        let last = addr.checked_add(len - 1)?;\n{spans}        None\n        }}\n        /// A memory `direct_span` named: its cells.\n        #[allow(dead_code)]\n        pub fn direct_cells(&mut self, mem: u32) -> &mut [u8] {{\n            match mem {{\n{arms}            _ => &mut [],\n            }}\n        }}\n")
@@ -1363,10 +1443,11 @@ impl<'a> Gen<'a> {
             };
             let _ = write!(
                 direct,
-                "        /// `memory: direct`: `n` bytes at `addr` from a memory that\n        /// declares `direct`, else None.\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_read(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{reads}        None\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_write(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{writes}        false\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_fetch(&mut self, addr: u64) -> Option<u8> {{\n{fetches}        self.direct_code = u64::MAX;\n        None\n        }}\n        /// As `direct_read` and `direct_write`, the time not charged (a\n        /// repeated instruction's elements run as a block: their time is\n        /// the caller's).\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{peeks}        None\n        }}\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{pokes}        false\n        }}\n        /// What `direct_read` (`direct_write`, when `write`) would charge.\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_cost(&self, addr: u64, n: u64, write: bool) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{costs}        None\n        }}\n{span_fns}{trace_direct}"
+                "        /// `memory: direct`: `n` bytes at `addr` from a memory that\n        /// declares `direct`, else None.\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_read(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{reads}        None\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_write(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{writes}        false\n        }}\n        #[inline]\n        #[allow(unused_variables)]\n        fn direct_fetch(&mut self, addr: u64) -> Option<u8> {{\n{fetches}        self.direct_code = u64::MAX;\n        None\n        }}\n        /// As `direct_read` and `direct_write`, the time not charged (a\n        /// repeated instruction's elements run as a block: their time is\n        /// the caller's).\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_peek(&mut self, addr: u64, n: u64) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{peeks}        None\n        }}\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_poke(&mut self, addr: u64, n: u64, value: u128) -> bool {{\n        let last = addr.wrapping_add(n - 1);\n{pokes}        false\n        }}\n        /// What `direct_read` (`direct_write`, when `write`) would charge.\n        #[inline]\n        #[allow(unused_variables, dead_code)]\n        pub fn direct_cost(&self, addr: u64, n: u64, write: bool) -> Option<u128> {{\n        let last = addr.wrapping_add(n - 1);\n{costs}        None\n        }}\n{span_fns}{trace_direct}{gate_fns}"
             );
         }
         let mut bus_impl = std::mem::take(&mut direct_fwd);
+        bus_impl.push_str(&gate_bus);
         for sp in &self.isa.spaces {
             let n = ident(&sp.name);
             let (abits, aty) = match &sp.addr {
@@ -1456,10 +1537,12 @@ impl<'a> Gen<'a> {
                 direct_hooks.2,
                 ctx_cpu("self")
             );
+            // (Code pages and fetches through the processor's address hook.)
+            let (g0, g1) = if gate_code.is_some() { ("self.cpu_addr(", ")") } else { ("", "") };
             if self.trace.is_some() {
                 let _ = write!(
                     bus_impl,
-                    "    #[inline]\n    fn {n}_code_page(&mut self, addr: u64) -> Option<u32> {{ self.direct_code_page(addr & {amask}) }}\n    #[inline]\n    fn {n}_code_stamp(&mut self, page: u32) -> u32 {{ self.direct_code_stamp(page) }}\n    fn {n}_code_fresh(&mut self, page: u32, mask: u32, stamp: u32) -> bool {{ self.direct_code_fresh(page, mask, stamp) }}\n    #[inline]\n    fn {n}_code_writes(&mut self) -> u64 {{ self.direct_code_writes() }}\n    fn {n}_code_mark(&mut self, page: u32, addr: u64, n: u32) {{ self.direct_code_mark(page, addr, n) }}\n    #[inline]\n    fn {n}_fetch_page(&mut self, page: u32, addr: u64, n: u32) {{\n        if !self.direct_charge(page, addr & {amask}, n) {{ self.{n}_fetch_skip(addr, n); }}\n    }}\n    #[inline]\n    fn {n}_fetch_skip(&mut self, addr: u64, n: u32) {{\n        if self.direct_skip(addr & {amask}, n) {{ return; }}\n        for i in 0..n {{ self.{n}_fetch(addr.wrapping_add(i as u64), 8); }}\n    }}\n"
+                    "    #[inline]\n    fn {n}_code_page(&mut self, addr: u64) -> Option<u32> {{ let a = {g0}addr & {amask}{g1}; self.direct_code_page(a) }}\n    #[inline]\n    fn {n}_code_stamp(&mut self, page: u32) -> u32 {{ self.direct_code_stamp(page) }}\n    fn {n}_code_fresh(&mut self, page: u32, mask: u32, stamp: u32) -> bool {{ self.direct_code_fresh(page, mask, stamp) }}\n    #[inline]\n    fn {n}_code_writes(&mut self) -> u64 {{ self.direct_code_writes() }}\n    fn {n}_code_mark(&mut self, page: u32, addr: u64, n: u32) {{ self.direct_code_mark(page, addr, n) }}\n    #[inline(always)]\n    fn {n}_fetch_page(&mut self, page: u32, addr: u64, n: u32) {{\n        let a = {g0}addr & {amask}{g1};\n        if !self.direct_charge(page, a, n) {{ self.{n}_fetch_skip(addr, n); }}\n    }}\n    #[inline]\n    fn {n}_fetch_skip(&mut self, addr: u64, n: u32) {{\n        let a = {g0}addr & {amask}{g1};\n        if self.direct_skip(a, n) {{ return; }}\n        for i in 0..n {{ self.{n}_fetch(addr.wrapping_add(i as u64), 8); }}\n    }}\n"
                 );
             }
             let _ = write!(
@@ -1900,5 +1983,65 @@ impl<'a> Gen<'a> {
         );
         self.out.push_str(&o);
         Ok(())
+    }
+}
+
+impl Gen<'_> {
+    /// The processor model's `on <space>.address` hook for `space`, if it
+    /// has one: the input wire ports it reads, through the model fns it
+    /// calls (its key, `<space>_addr_key`). It must be a fn of the address
+    /// and those wires alone, for an emulator's direct memory to apply it
+    /// where the model's handlers are bypassed, and the JIT core to compile
+    /// a run for each value of its key.
+    pub(super) fn addr_hook(&self, comp: &hir::ComponentInfo, space: DefId) -> R<Option<Vec<u32>>> {
+        let Some(model) = comp.model.as_ref() else { return Ok(None) };
+        let Some(h) = model.handlers.iter().find(|h| h.kind == HandlerKind::SpaceAddress { space }) else {
+            return Ok(None);
+        };
+        let mut wires: Vec<u32> = Vec::new();
+        let mut bad: Option<String> = None;
+        let mut seen: Vec<u32> = Vec::new();
+        let mut todo: Vec<&hir::Block> = vec![&h.body];
+        while let Some(b) = todo.pop() {
+            let mut calls: Vec<u32> = Vec::new();
+            hir::visit_block(b, &mut |_| {}, &mut |x| match &x.kind {
+                hir::ExprKind::Port(_, pi, false) => {
+                    if matches!(comp.ports[*pi as usize].kind, PortKind::In(_) | PortKind::AsyncIn(_)) {
+                        if !wires.contains(pi) {
+                            wires.push(*pi);
+                        }
+                    } else {
+                        bad.get_or_insert_with(|| format!("reads `{}`, not an input wire", comp.ports[*pi as usize].name));
+                    }
+                }
+                hir::ExprKind::Port(_, pi, true) => {
+                    bad.get_or_insert_with(|| format!("drives `{}`", comp.ports[*pi as usize].name));
+                }
+                hir::ExprKind::State(_, i) => {
+                    bad.get_or_insert_with(|| format!("reads the state `{}`", model.states[*i as usize].name));
+                }
+                hir::ExprKind::ModelMem(..) => {
+                    bad.get_or_insert_with(|| "reads the model's memory".into());
+                }
+                hir::ExprKind::BusCall(..) | hir::ExprKind::SignalLevel(..) => {
+                    bad.get_or_insert_with(|| "reaches a bus".into());
+                }
+                hir::ExprKind::ModelFnCall(i, _) => calls.push(*i),
+                _ => {}
+            });
+            for i in calls {
+                if !seen.contains(&i) {
+                    seen.push(i);
+                    todo.push(&model.fns[i as usize].body);
+                }
+            }
+        }
+        if let Some(why) = bad {
+            return Err(GenError::new(format!(
+                "`on {}.address` of `{}` {why}: it must be a fn of the address and the model's input wires alone",
+                self.spaces[&space].name, comp.name
+            )));
+        }
+        Ok(Some(wires))
     }
 }

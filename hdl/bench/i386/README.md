@@ -644,3 +644,31 @@ One Must Fall 2097, its main menu (music playing; Enter at 45 s), 160 s to 240 s
 | ours, `blocks` | 1.13 G | 0.78 G (none) | 0.35 G | 144 | 5.38 M |
 | DOSBox 0.74-3, normal | 0.70 G | 0.58 G (1 in 11) | 0.13 G | 105 | 5.40 M |
 | DOSBox 0.74-3, dynamic | 0.33 G | 0.21 G (1 in 11) | 0.14 G | 36 | 5.40 M |
+
+Then (2026-11-10): where a game's window goes (`profile_game.py`, drawing
+none, `blocks`, host instructions a guest instruction). Lemmings 306:
+the video memory path 170 (the VGA caught up at each access, 23%; the
+bus layers, 25%). Jetpack 348: the dispatcher and interpreted steps 128,
+compiled code 85. One Must Fall 139: compiled code 73. `play_disk`'s
+stop test had cost Jetpack 7.5% (a 128-bit time turned to seconds after
+each burst); it compares integer time now.
+
+Jetpack's hot loop calls a routine that reads the PIT, with far calls
+and returns; its runs are 2 to 5 instructions, 56 M entries in 120 s,
+each hop about 450 host instructions. Tried:
+- runs that go on back before their start, within the page (kept):
+  One Must Fall 6.6% cheaper, Lemmings 0.6%, Jetpack unchanged (its
+  runs grow but are left where its branches go otherwise);
+- the VGA's beam move within a line an add (kept): Lemmings 3.7%;
+- the next compiled run entered from `jit_burst` without returning to
+  the caller: Jetpack 3% dearer (not kept);
+- four links a run instead of two, the last found first: Jetpack 3%
+  dearer (not kept);
+- compiled runs chained in compiled code (a run's end checks its link,
+  the next run's entry in a table by slot, and hands its code to a loop
+  in `jit_enter`): exact, but it chains 8% of hops; 26.5 M of 35 M fail
+  on the link's address epoch, which every load of CS bumps, so a link
+  is stale after each far call or return even when CS comes back to
+  what it was. Jetpack 5% dearer, One Must Fall 2.4% (not kept).
+A link that held across far transfers needs the address state compared
+by value (as the run key is), not an epoch.

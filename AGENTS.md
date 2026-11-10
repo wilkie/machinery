@@ -20,3 +20,7 @@ These are the main subdirectories for sub-projects:
 - compilers - These are implementations of compilers for a variety of targets, some of which are classical.
 - assemblers - These are assemblers for different targets.
 - formats - These are different processors of file formats that are relevant to the preservation of systems.
+
+## Performance work
+
+Record every performance approach, kept or not, in `hdl/bench/CHRONICLE.md`: an index row and an entry (the idea, the change, before and after in host instructions with how they were measured, exactness, the outcome). Kept approaches name their commit. Approaches not kept leave their code as a patch in `hdl/bench/experiments/<date>-<name>.patch`, made with `git diff` from the repository root, headed with the commit it applies to.

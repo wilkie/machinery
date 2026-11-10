@@ -1,5 +1,10 @@
 # 386 comparison
 
+How the 386 is measured against other emulators, and the dated notes as
+it went. Every performance approach, kept or not, is indexed with its
+numbers and code in `../CHRONICLE.md`; these notes hold the older ones'
+details.
+
 The same two DOS programs on our 386 AT board and on other emulators, on
 one host, unthrottled: guest instructions per second in steady state.
 

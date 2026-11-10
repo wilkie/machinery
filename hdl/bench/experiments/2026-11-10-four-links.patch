@@ -1,0 +1,49 @@
+Four links a run, the last found first (not kept).
+
+Base: 857c893. Apply from the repository root: git apply hdl/bench/experiments/2026-11-10-four-links.patch
+What it did and why it was not kept: hdl/bench/CHRONICLE.md, 2026-11-10.
+
+diff --git a/hdl/crates/machine-model/src/gen/jit.rs b/hdl/crates/machine-model/src/gen/jit.rs
+index 071ebf8..b304738 100644
+--- a/hdl/crates/machine-model/src/gen/jit.rs
++++ b/hdl/crates/machine-model/src/gen/jit.rs
+@@ -308,7 +308,7 @@ impl Gen<'_> {
+         let prev = self.tr_prev as usize;
+         if let Some(p) = self.traces.get_mut(prev).and_then(|t| t.as_mut()) {{
+             let l = TLink {{ pc, phys: start, ep: aep, kep: self.tr_kepoch, slot: slot as u32 }};
+-            if p.links[0].pc == pc || p.links[0].ep != aep {{ p.links[0] = l; }} else {{ p.links[1] = l; }}
++            TLink::put(&mut p.links, l);
+         }}
+         self.tr_on = true;
+         self.tr_cur = slot as u32;
+diff --git a/hdl/crates/machine-model/src/gen/trace.rs b/hdl/crates/machine-model/src/gen/trace.rs
+index 466ddbb..59ac729 100644
+--- a/hdl/crates/machine-model/src/gen/trace.rs
++++ b/hdl/crates/machine-model/src/gen/trace.rs
+@@ -499,7 +499,7 @@ impl Gen<'_> {
+         let jit = self.jit_trace_fields();
+         let _ = write!(
+             self.out,
+-            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}    /// What the board's direct memory does to addresses (the processor's\n    /// `on <space>.address` hook's wires: `<space>_addr_key`).\n    pub bus: u64,\n}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start (back before it too, within the\n    /// page), and how many.\n    pub off: i16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n    /// Opcode bytes fetched (`istream {{ opcode }}` runs that often).\n    pub opcodes: u8,\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`, or none of its\n/// blocks has been written since. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    /// The page's 128-byte blocks its bytes are in: while none of them is\n    /// written, it holds though the page's count moved (`_code_fresh`).\n    pub mask: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; 2],\n    pub steps: Vec<TStep>,\n{jit}}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n}}\n"
++            "/// What the decoder reads besides the bytes and the pc: a run starts\n/// only where it is as it was.\n#[derive(Clone, Copy, Debug, Default, PartialEq)]\npub struct TKey {{\n{key}    /// What the board's direct memory does to addresses (the processor's\n    /// `on <space>.address` hook's wires: `<space>_addr_key`).\n    pub bus: u64,\n}}\n/// An instruction of a run, decoded, and what decoding left behind.\n#[derive(Clone, Copy, Debug)]\npub struct TStep {{\n    pub instr: Instr,\n    /// Its bytes: from the run's start (back before it too, within the\n    /// page), and how many.\n    pub off: i16,\n    pub len: u8,\n    pub known: bool,\n    pub prefix_cycles: u32,\n    pub decode_at: [u8; 16],\n    /// Opcode bytes fetched (`istream {{ opcode }}` runs that often).\n    pub opcodes: u8,\n{step}}}\n/// A run of instructions in a page of code memory, from `phys` (pc\n/// `pc`): valid while the page's write count is `stamp`, or none of its\n/// blocks has been written since. Its key was last\n/// found to hold at epoch `ok_ep`; and the runs that followed it, by pc,\n/// at an address epoch (while it is current, and the key holds, the pc\n/// still leads there).\n#[derive(Clone, Debug)]\npub struct Trace {{\n    pub phys: u64,\n    pub pc: u64,\n    pub key: TKey,\n    pub page: u32,\n    pub stamp: u32,\n    /// The page's 128-byte blocks its bytes are in: while none of them is\n    /// written, it holds though the page's count moved (`_code_fresh`).\n    pub mask: u32,\n    pub ok_ep: u64,\n    pub links: [TLink; TLINKS],\n    pub steps: Vec<TStep>,\n{jit}}}\n/// A run that followed another: at pc `pc`, run `slot` (at `phys`), at\n/// address epoch `ep`; its key last found to hold at key epoch `kep`.\n#[derive(Clone, Copy, Debug, Default)]\npub struct TLink {{\n    pub pc: u64,\n    pub phys: u64,\n    pub ep: u64,\n    pub kep: u64,\n    pub slot: u32,\n}}\n/// The runs a run's end leads to that are kept: a run that returns to\n/// several callers leads to as many.\npub const TLINKS: usize = 4;\nimpl TLink {{\n    /// `l` into `links`, first (the last found is looked at first): in place\n    /// of the one at its pc, else of one from another address epoch, else of\n    /// the last (the least lately found).\n    #[inline]\n    pub fn put(links: &mut [TLink; TLINKS], l: TLink) {{\n        let i = links.iter().position(|x| x.pc == l.pc).or_else(|| links.iter().position(|x| x.ep != l.ep)).unwrap_or(TLINKS - 1);\n        links.copy_within(0..i, 1);\n        links[0] = l;\n    }}\n}}\n"
+         );
+         let jt = self.jit_types();
+         self.out.push_str(jt);
+@@ -809,7 +809,7 @@ impl Gen<'_> {
+         let prev = self.tr_prev as usize;
+         if let Some(p) = self.traces.get_mut(prev).and_then(|t| t.as_mut()) {{
+             let l = TLink {{ pc, phys: start, ep: aep, kep: self.tr_kepoch, slot: slot as u32 }};
+-            if p.links[0].pc == pc || p.links[0].ep != aep {{ p.links[0] = l; }} else {{ p.links[1] = l; }}
++            TLink::put(&mut p.links, l);
+         }}
+         self.tr_on = true;
+         self.tr_cur = slot as u32;
+@@ -848,7 +848,7 @@ impl Gen<'_> {
+             self.trace_close();
+             if let Some(page) = self.bus.{sp}_code_page(start) {{
+                 let stamp = self.bus.{sp}_code_stamp(page);
+-                self.tr_rec = Some(Trace {{ phys: start, pc: self.r.{pc0} as u64, key: self.tkey(), page, stamp, mask: 0, ok_ep: self.tr_epoch, links: [TLink::default(); 2], {jit_init}steps: Vec::new() }});
++                self.tr_rec = Some(Trace {{ phys: start, pc: self.r.{pc0} as u64, key: self.tkey(), page, stamp, mask: 0, ok_ep: self.tr_epoch, links: [TLink::default(); TLINKS], {jit_init}steps: Vec::new() }});
+                 self.tr_rec_ep = self.tr_epoch;
+             }}
+         }}

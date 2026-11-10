@@ -1,0 +1,413 @@
+Compiled runs chained in compiled code (not kept).
+
+Base: 857c893. Apply from the repository root: git apply hdl/bench/experiments/2026-11-10-chain-in-compiled-code.patch
+What it did and why it was not kept: hdl/bench/CHRONICLE.md, 2026-11-10.
+
+diff --git a/hdl/crates/machine-model/src/gen.rs b/hdl/crates/machine-model/src/gen.rs
+index 1004cf0..7b27dc5 100644
+--- a/hdl/crates/machine-model/src/gen.rs
++++ b/hdl/crates/machine-model/src/gen.rs
+@@ -1897,7 +1897,7 @@ impl<'a> Gen<'a> {
+             None => "u8",
+         };
+         if self.jit {
+-            self.out.push_str("/// How a board keeps time, for the JIT core's compiled steps to keep it\n/// too (`Bus::jit_board`). Offsets are within the bus.\n#[derive(Clone, Copy, Debug)]\npub struct JitBoard {\n    /// The time (a `u128`), the time spent fetching code (`u128`), and the\n    /// unit code was last fetched from (`u64`).\n    pub now: usize,\n    pub code_time: usize,\n    pub direct_code: usize,\n    /// Code-write counters (`u64`): their sum is the code-write count.\n    pub writes: &'static [usize],\n    /// The time of a processor clock.\n    pub clock: u128,\n    /// Code fetches are serial: the instruction's cycles follow them.\n    pub serial: bool,\n    /// `after_step` has nothing to do before this deadline (a `u128`)\n    /// unless a signal edge waits; None: it always may.\n    pub due: Option<usize>,\n    /// Whether a signal edge waits (a bool).\n    pub pending: usize,\n    /// Signal edges can be waiting (after a bus access).\n    pub events: bool,\n    /// No device is caught up by `after_step`: it only delivers edges.\n    pub idle: bool,\n}\n/// A range of the istream space's direct memory, for the JIT core's\n/// compiled accesses (`Bus::jit_mems`): addresses (after `amask`) from `lo`\n/// to `hi` are bytes at `cells[addr & mask]`, `cells` the pointer in slot\n/// `cells` of `Bus::jit_mem_ptrs`. A read costs `read`, a write `write` (None:\n/// not written directly); a write to recorded code hits the code bitmap in\n/// slot `code` (`Bus::jit_code_hit` with `mem`).\n#[derive(Clone, Copy, Debug)]\npub struct JitMem {\n    pub amask: u64,\n    pub lo: u64,\n    pub hi: u64,\n    pub mask: u64,\n    pub read: u128,\n    pub write: Option<u128>,\n    /// Bytes a bus unit holds (an access costs each unit it spans).\n    pub unit: u64,\n    pub cells: usize,\n    pub code: Option<usize>,\n    pub mem: u32,\n}\nthread_local! {\n    /// The mask the processor's address hook makes for the run being\n    /// compiled (`Bus::<space>_addr_mask`): its direct accesses go through\n    /// it (0: by the bus).\n    pub static JIT_GATE: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };\n}\n");
++            self.out.push_str("/// How a board keeps time, for the JIT core's compiled steps to keep it\n/// too (`Bus::jit_board`). Offsets are within the bus.\n#[derive(Clone, Copy, Debug)]\npub struct JitBoard {\n    /// The time (a `u128`), the time spent fetching code (`u128`), and the\n    /// unit code was last fetched from (`u64`).\n    pub now: usize,\n    pub code_time: usize,\n    pub direct_code: usize,\n    /// Code-write counters (`u64`): their sum is the code-write count.\n    pub writes: &'static [usize],\n    /// The time of a processor clock.\n    pub clock: u128,\n    /// Code fetches are serial: the instruction's cycles follow them.\n    pub serial: bool,\n    /// `after_step` has nothing to do before this deadline (a `u128`)\n    /// unless a signal edge waits; None: it always may.\n    pub due: Option<usize>,\n    /// Whether a signal edge waits (a bool).\n    pub pending: usize,\n    /// Signal edges can be waiting (after a bus access).\n    pub events: bool,\n    /// No device is caught up by `after_step`: it only delivers edges.\n    pub idle: bool,\n}\n/// A range of the istream space's direct memory, for the JIT core's\n/// compiled accesses (`Bus::jit_mems`): addresses (after `amask`) from `lo`\n/// to `hi` are bytes at `cells[addr & mask]`, `cells` the pointer in slot\n/// `cells` of `Bus::jit_mem_ptrs`. A read costs `read`, a write `write` (None:\n/// not written directly); a write to recorded code hits the code bitmap in\n/// slot `code` (`Bus::jit_code_hit` with `mem`).\n#[derive(Clone, Copy, Debug)]\npub struct JitMem {\n    pub amask: u64,\n    pub lo: u64,\n    pub hi: u64,\n    pub mask: u64,\n    pub read: u128,\n    pub write: Option<u128>,\n    /// Bytes a bus unit holds (an access costs each unit it spans).\n    pub unit: u64,\n    pub cells: usize,\n    pub code: Option<usize>,\n    pub mem: u32,\n}\n/// A compiled run, by its slot, for compiled code to chain to (`jit_tab`):\n/// its code (0: none), its address and pc, its code page, the page's count\n/// it holds at, the blocks it lies in, and its length. Kept as the runs are\n/// compiled, replaced and found to hold.\n#[repr(C)]\n#[derive(Clone, Copy, Debug, Default)]\npub struct JitEnt {\n    pub code: u64,\n    pub phys: u64,\n    pub pc: u64,\n    pub page: u32,\n    pub stamp: u32,\n    pub mask: u32,\n    pub len: u32,\n}\n/// The compiled runs by slot. A copy of a machine has none: its code\n/// belongs to the machine it was compiled for.\n#[derive(Debug)]\npub struct JitTab(pub Box<[JitEnt]>);\nimpl JitTab {\n    pub fn new(n: usize) -> JitTab {\n        JitTab(vec![JitEnt::default(); n].into_boxed_slice())\n    }\n}\nimpl Clone for JitTab {\n    fn clone(&self) -> Self {\n        JitTab::new(self.0.len())\n    }\n}\nthread_local! {\n    /// The mask the processor's address hook makes for the run being\n    /// compiled (`Bus::<space>_addr_mask`): its direct accesses go through\n    /// it (0: by the bus).\n    pub static JIT_GATE: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };\n}\n");
+         }
+         // The bus: how the machine reaches its address spaces.
+         let mut s = String::from("/// The isa's address spaces as the machine reaches them: plain memory\n/// ([`Flat`]) or a system's buses.\npub trait Bus {\n    /// Whether `retire` looks at its schedule: without, the interpreter\n    /// doesn't build one.\n    const SCHEDULE: bool = true;\n");
+diff --git a/hdl/crates/machine-model/src/gen/jit.rs b/hdl/crates/machine-model/src/gen/jit.rs
+index 071ebf8..8512435 100644
+--- a/hdl/crates/machine-model/src/gen/jit.rs
++++ b/hdl/crates/machine-model/src/gen/jit.rs
+@@ -40,20 +40,22 @@ const HOT2: u64 = 1_000_000;
+ /// (a memory read through a segment folds in real mode); larger budgets
+ /// compile more than they save.
+ const JIT_TRIAL: usize = 400;
++// (`jit_init` sizes the table of compiled runs as the trace core's table.)
++const _: () = assert!(super::trace::TRACES == 16384);
+ 
+ impl Gen<'_> {
+     pub(crate) fn jit_fields(&self) -> &'static str {
+         if !self.jit {
+             return "";
+         }
+-        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n    /// The steps compiled code may make before it returns (a run whose\n    /// end leads to its start goes round while they last).\n    pub jit_left: u64,\n    /// A fault an outlined fn raised, for `jit_deliver_c` to deliver.\n    pub jit_fault: Option<Fault>,\n    /// `sync: quantum(...)`: when the devices are next caught up.\n    pub jit_sync_at: u128,\n    /// `repeat: bulk(n)`: the time as an element ended, a period of elements\n    /// before a kernel runs (its low half); the time the kernel's elements\n    /// took.\n    pub jit_bulk_mark: u64,\n    pub jit_bulk_dt: u128,\n    /// A kernel's dry code: it stopped (a path no kernel takes), and its\n    /// accesses (the kind, the bits, the address, a write's value).\n    pub probe_bad: bool,\n    pub probe_n: u8,\n    pub probe_acc: [(u8, u32, u64, u128); 4],\n"
++        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n    /// The steps compiled code may make before it returns (a run whose\n    /// end leads to its start goes round while they last).\n    pub jit_left: u64,\n    /// Chaining: the compiled runs by slot (`JitTab`), and the code a\n    /// run's end handed on to, its link checked (0: none).\n    pub jit_tab: JitTab,\n    pub jit_next: u64,\n    /// A fault an outlined fn raised, for `jit_deliver_c` to deliver.\n    pub jit_fault: Option<Fault>,\n    /// `sync: quantum(...)`: when the devices are next caught up.\n    pub jit_sync_at: u128,\n    /// `repeat: bulk(n)`: the time as an element ended, a period of elements\n    /// before a kernel runs (its low half); the time the kernel's elements\n    /// took.\n    pub jit_bulk_mark: u64,\n    pub jit_bulk_dt: u128,\n    /// A kernel's dry code: it stopped (a path no kernel takes), and its\n    /// accesses (the kind, the bits, the address, a write's value).\n    pub probe_bad: bool,\n    pub probe_n: u8,\n    pub probe_acc: [(u8, u32, u64, u128); 4],\n"
+     }
+ 
+     pub(crate) fn jit_init(&self) -> &'static str {
+         if !self.jit {
+             return "";
+         }
+-        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n            jit_left: 0,\n            jit_fault: None,\n            jit_sync_at: 0,\n            jit_bulk_mark: 0,\n            jit_bulk_dt: 0,\n            probe_bad: false,\n            probe_n: 0,\n            probe_acc: [(0, 0, 0, 0); 4],\n"
++        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n            jit_left: 0,\n            jit_tab: JitTab::new(16384),\n            jit_next: 0,\n            jit_fault: None,\n            jit_sync_at: 0,\n            jit_bulk_mark: 0,\n            jit_bulk_dt: 0,\n            probe_bad: false,\n            probe_n: 0,\n            probe_acc: [(0, 0, 0, 0); 4],\n"
+     }
+ 
+     /// The trace's fields for compiled code (inside `Trace`).
+@@ -156,6 +158,7 @@ impl Gen<'_> {
+         if self.jit.count() >= machine_jit::LIMIT {{
+             self.jit.clear();
+             for t in self.traces.iter_mut().flatten() {{ t.code = machine_jit::Code::default(); }}
++            for e in self.jit_tab.0.iter_mut() {{ e.code = 0; }}
+         }}
+         let calls: Vec<machine_jit::Call> = match self.traces[slot].as_mut() {{
+             Some(t) => {{
+@@ -188,6 +191,9 @@ impl Gen<'_> {
+                 // for them), and the run's key.
+                 let spec = self.jit_spec_values();
+                 let key = t.key;
++                // Its links and the table of compiled runs, where its end
++                // looks for the next run (`MACHINE_JIT_NOCHAIN`: it does not).
++                let chain = if Self::jit_chain_on() {{ (&t.links as *const _ as u64, self.jit_tab.0.as_ptr() as u64) }} else {{ (0, 0) }};
+                 // Entered at its first step only (`jit_burst`): past it, a
+                 // step is reached only from the one before.
+                 // The run keeps the time in the processor's cycles
+@@ -206,13 +212,15 @@ impl Gen<'_> {
+                     let checked = k == 0 || lowered[k - 1];
+                     // Only reached from a lowered step before it.
+                     let follows = k >= 1 && lowered[k - 1];
+-                    lowered[k] = Self::jit_emit_step(e, &steps[k], k, checked, follows, fetch[k], units[k], &spec, &key);
++                    lowered[k] = Self::jit_emit_step(e, &steps[k], k, checked, follows, fetch[k], units[k], &spec, &key, chain);
+                 }})
+             }}
+             None => None,
+         }};
+         if let Some(t) = self.traces[slot].as_mut() {{
+             t.code = machine_jit::Code::new(code);
++            // For compiled code to chain to.
++            self.jit_tab.0[slot] = JitEnt {{ code: t.code.addr().unwrap_or(0) as u64, phys: t.phys, pc: t.pc, page: t.page, stamp: t.stamp, mask: t.mask, len: t.steps.len() as u32 }};
+         }}
+     }}
+     /// Entries into a run before it is compiled (`HOT` in the generator;
+@@ -223,6 +231,10 @@ impl Gen<'_> {
+         static H: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+         *H.get_or_init(|| std::env::var("MACHINE_JIT_HOT2").ok().and_then(|v| v.parse().ok()).unwrap_or({HOT2}))
+     }}
++    fn jit_chain_on() -> bool {{
++        static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++        *C.get_or_init(|| std::env::var_os("MACHINE_JIT_NOCHAIN").is_none())
++    }}
+     fn jit_hot() -> u32 {{
+         static H: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+         *H.get_or_init(|| std::env::var("MACHINE_JIT_HOT").ok().and_then(|v| v.parse().ok()).unwrap_or({HOT}))
+@@ -246,43 +258,83 @@ impl Gen<'_> {
+         if {quantum}u128 != 0 {{
+             self.jit_sync_at = self.jit_sync_at.min(self.bus.jit_urgent_due());
+         }}
+-        // SAFETY: `c` is this machine's compiled code for its current run,
+-        // which is live: runs are only replaced while stepping, not while
+-        // compiled code runs.
+-        let f: extern "C" fn(*mut Self, u32) -> u32 = unsafe {{ std::mem::transmute(c) }};
+-        let n = f(self as *mut Self, from);
+-        self.jit_pending = false;
+-        if self.jit_guard_failed {{
+-            // Compiled for other values of the speculated registers: past a
+-            // few refusals, compiled again for the values now.
+-            self.jit_guard_failed = false;
+-            if let Some(t) = self.traces[self.tr_cur as usize].as_mut() {{
+-                t.guard_fails += 1;
+-                if t.guard_fails >= 8 {{
+-                    t.code = machine_jit::Code::default();
+-                    t.hits = 0;
+-                    t.guard_fails = 0;
++        // The run, and those it hands on to: a run whose end finds its link
++        // good, and the next run compiled, there and in the same state,
++        // leaves its code in `jit_next` (made the current run, as
++        // `jit_follow` makes it), and it is called at once.
++        let mut c = c;
++        let mut from = from;
++        let mut n = 0u32;
++        loop {{
++            let slot = self.tr_cur as usize;
++            self.jit_next = 0;
++            // SAFETY: `c` is this machine's compiled code for its current run,
++            // which is live: runs are only replaced while stepping, not while
++            // compiled code runs.
++            let f: extern "C" fn(*mut Self, u32) -> u32 = unsafe {{ std::mem::transmute(c) }};
++            let k = f(self as *mut Self, from);
++            self.jit_pending = false;
++            if self.jit_guard_failed {{
++                // Compiled for other values of the speculated registers: past a
++                // few refusals, compiled again for the values now.
++                self.jit_guard_failed = false;
++                if let Some(t) = self.traces[self.tr_cur as usize].as_mut() {{
++                    t.guard_fails += 1;
++                    if t.guard_fails >= 8 {{
++                        self.jit_tab.0[self.tr_cur as usize].code = 0;
++                        t.code = machine_jit::Code::default();
++                        t.hits = 0;
++                        t.guard_fails = 0;
++                    }}
+                 }}
+             }}
+-        }}
+-        if {sync_run} || {sync_block} {{
+-            // `sync: run`: the devices, once for the run (`sync: block`:
+-            // as it returns, as well as where it went round).
+-            self.bus.after_step();
+-        }}
+-        // (As compiled code does at a run's end: a device made due, its
+-        // deadline to be worked out again, is caught up too.)
+-        if {quantum}u128 != 0
+-            && (self.jit_bus_time(|b| Some(b.now)) >= self.jit_sync_at
+-                || B::jit_board().is_some_and(|b| b.due.is_some()) && self.jit_bus_time(|b| b.due) == 0)
+-        {{
+-            self.jit_sync_quantum();
+-        }}
+-        if self.jit_last != 0 {{
+-            // SAFETY: a step of this machine's run, which is live.
+-            self.last = Some(unsafe {{ *(self.jit_last as usize as *const Instr) }});
+-            self.last_fault = None;
+-            self.jit_last = 0;
++            if {sync_run} || {sync_block} {{
++                // `sync: run`: the devices, once for the run (`sync: block`:
++                // as it returns, as well as where it went round).
++                self.bus.after_step();
++            }}
++            // (As compiled code does at a run's end: a device made due, its
++            // deadline to be worked out again, is caught up too.)
++            if {quantum}u128 != 0
++                && (self.jit_bus_time(|b| Some(b.now)) >= self.jit_sync_at
++                    || B::jit_board().is_some_and(|b| b.due.is_some()) && self.jit_bus_time(|b| b.due) == 0)
++            {{
++                self.jit_sync_quantum();
++            }}
++            if self.jit_last != 0 {{
++                // SAFETY: a step of this machine's run, which is live (taken
++                // before the run may be compiled again, below).
++                self.last = Some(unsafe {{ *(self.jit_last as usize as *const Instr) }});
++                self.last_fault = None;
++                self.jit_last = 0;
++            }}
++            n += k;
++            // Hot enough to pay for the optimiser: compiled again, at the
++            // optimised tier.
++            let again = match self.traces.get_mut(slot).and_then(|t| t.as_mut()) {{
++                Some(t) if t.tier == 0 && t.code.addr() == Some(c) => {{
++                    t.exec = t.exec.saturating_add(k as u64);
++                    if t.exec >= Self::jit_hot2().saturating_mul(t.steps.len() as u64) {{
++                        t.tier = 1;
++                        true
++                    }} else {{
++                        false
++                    }}
++                }}
++                _ => false,
++            }};
++            let next = std::mem::take(&mut self.jit_next);
++            if again {{
++                // (Compiling may free the code handed on: the next run is
++                // left current, to be replayed or entered by the caller.)
++                self.jit_compile(slot);
++                break;
++            }}
++            if next == 0 || self.jit_err.is_some() {{
++                break;
++            }}
++            c = next as usize;
++            from = 0;
+         }}
+         n
+     }}
+@@ -337,28 +389,10 @@ impl Gen<'_> {
+             if let Some((c, len)) = found {{
+                 if budget >= len {{
+                     self.jit_left = budget;
+-                    let slot = self.tr_cur as usize;
+                     let n = self.jit_enter(c, 0) as u64;
+                     if let Some(e) = self.jit_err.take() {{
+                         return Err(e);
+                     }}
+-                    // Hot enough to pay for the optimiser: compiled again,
+-                    // at the optimised tier.
+-                    let again = match self.traces.get_mut(slot).and_then(|t| t.as_mut()) {{
+-                        Some(t) if t.tier == 0 && t.code.addr() == Some(c) => {{
+-                            t.exec = t.exec.saturating_add(n);
+-                            if t.exec >= Self::jit_hot2().saturating_mul(t.steps.len() as u64) {{
+-                                t.tier = 1;
+-                                true
+-                            }} else {{
+-                                false
+-                            }}
+-                        }}
+-                        _ => false,
+-                    }};
+-                    if again {{
+-                        self.jit_compile(slot);
+-                    }}
+                     if n > 0 {{
+                         return Ok(n);
+                     }}
+@@ -926,7 +960,7 @@ impl Gen<'_> {
+     /// `follows`: the step is reached only from a lowered step before it,
+     /// which retired with the processor running, not shut down, and the
+     /// epoch as it was unless its writes bumped it.
+-    fn jit_emit_step(e: &mut machine_jit::Em, j: &JitStep, k: usize, checked: bool, follows: bool, fetch: Option<u128>, units: Option<(u64, u64, u128)>, spec: &[u128], key: &TKey) -> bool {{
++    fn jit_emit_step(e: &mut machine_jit::Em, j: &JitStep, k: usize, checked: bool, follows: bool, fetch: Option<u128>, units: Option<(u64, u64, u128)>, spec: &[u128], key: &TKey, chain: (u64, u64)) -> bool {{
+         let s = &j.step;
+         if k == 0 {{
+             Self::jit_declare_bits(e);
+@@ -1411,6 +1445,107 @@ impl Gen<'_> {
+                 e.store(std::mem::offset_of!(Self, tr_idx), machine_jit::N::U32, machine_jit::V::K(0));
+             }});
+         }}
++        // The run's end, not going round: the run its link leads to, when
++        // compiled, there, in this page at this count, nothing written to
++        // code since it was checked, and the steps allowed lasting, is made
++        // the current run as `jit_follow` makes it and handed on in
++        // `jit_next` (`jit_enter` calls it at once). Not with `sync: run` or
++        // `sync: quantum` (the caller catches the devices up between runs).
++        if j.last && !{sync_run} && {quantum}u128 == 0 && chain.0 != 0 {{
++            if let Some(b) = B::jit_board() {{
++                use machine_jit::{{N, Op, V}};
++                let bus = std::mem::offset_of!(Self, bus);
++                let pc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, r.{pc0n}), n: {pc_n}, bump: 0 }});
++                let pc = e.cast(pc, {pc_n}, N::U64);
++                let aep = e.load(std::mem::offset_of!(Self, tr_aepoch), N::U64);
++                let kep = e.load(std::mem::offset_of!(Self, tr_kepoch), N::U64);
++                // The links, the first that holds (as `jit_follow` looks).
++                let lsz = std::mem::size_of::<TLink>() as u128;
++                let (mut ok, mut slot, mut lphys) = (V::K(0), V::K(0), V::K(0));
++                for i in (0..2u128).rev() {{
++                    let at = chain.0 as u128 + i * lsz;
++                    let lpc = e.load_at(V::K(at + std::mem::offset_of!(TLink, pc) as u128), N::U64);
++                    let lep = e.load_at(V::K(at + std::mem::offset_of!(TLink, ep) as u128), N::U64);
++                    let lkep = e.load_at(V::K(at + std::mem::offset_of!(TLink, kep) as u128), N::U64);
++                    let ls = e.load_at(V::K(at + std::mem::offset_of!(TLink, slot) as u128), N::U32);
++                    let lph = e.load_at(V::K(at + std::mem::offset_of!(TLink, phys) as u128), N::U64);
++                    let a = e.op(Op::Eq, lpc, pc, N::U64);
++                    let b1 = e.op(Op::Eq, lep, aep, N::U64);
++                    let c1 = e.op(Op::Eq, lkep, kep, N::U64);
++                    let x = e.op(Op::And, a, b1, N::Bool);
++                    let x = e.op(Op::And, x, c1, N::Bool);
++                    slot = e.select(x, ls, slot, N::U32);
++                    lphys = e.select(x, lph, lphys, N::U64);
++                    ok = e.op(Op::Or, ok, x, N::Bool);
++                }}
++                // The run there, by the table.
++                let esz = std::mem::size_of::<JitEnt>() as u128;
++                let s64 = e.cast(slot, N::U32, N::U64);
++                let eo = e.op(Op::Mul, s64, V::K(esz), N::U64);
++                let ent = e.op(Op::Add, eo, V::K(chain.1 as u128), N::U64);
++                let mut fld = |e: &mut machine_jit::Em, off: usize, n: N| {{
++                    let p = e.op(Op::Add, ent, V::K(off as u128), N::U64);
++                    e.load_at(p, n)
++                }};
++                let code = fld(e, std::mem::offset_of!(JitEnt, code), N::U64);
++                let tphys = fld(e, std::mem::offset_of!(JitEnt, phys), N::U64);
++                let tpc = fld(e, std::mem::offset_of!(JitEnt, pc), N::U64);
++                let tpage = fld(e, std::mem::offset_of!(JitEnt, page), N::U32);
++                let tstamp = fld(e, std::mem::offset_of!(JitEnt, stamp), N::U32);
++                let tmask = fld(e, std::mem::offset_of!(JitEnt, mask), N::U32);
++                let tlen = fld(e, std::mem::offset_of!(JitEnt, len), N::U32);
++                let cur = chain.1 as u128 + j.slot as u128 * esz;
++                let cstamp = e.load_at(V::K(cur + std::mem::offset_of!(JitEnt, stamp) as u128), N::U32);
++                let cmask = e.load_at(V::K(cur + std::mem::offset_of!(JitEnt, mask) as u128), N::U32);
++                // (`jit_follow`'s: the code there, the run it was linked to,
++                // at this pc; in this page at this count, in blocks this run's
++                // check covered, so its code needs no check again.)
++                let mut all = ok;
++                let has = e.op(Op::Ne, code, V::K(0), N::U64);
++                let p1 = e.op(Op::Eq, tphys, lphys, N::U64);
++                let p2 = e.op(Op::Eq, tpc, pc, N::U64);
++                let p3 = e.op(Op::Eq, tpage, V::K(j.page as u128), N::U32);
++                let p4 = e.op(Op::Eq, tstamp, cstamp, N::U32);
++                let nm = e.not(cmask, N::U32);
++                let out = e.op(Op::And, tmask, nm, N::U32);
++                let p5 = e.op(Op::Eq, out, V::K(0), N::U32);
++                for c in [has, p1, p2, p3, p4, p5] {{
++                    all = e.op(Op::And, all, c, N::Bool);
++                }}
++                // Nothing written to code since it was last checked.
++                let mut w = V::K(0);
++                for off in b.writes {{
++                    let x = e.load(bus + off, N::U64);
++                    w = e.op(Op::Add, w, x, N::U64);
++                }}
++                let tw = e.load(std::mem::offset_of!(Self, tr_w), N::U64);
++                let wok = e.op(Op::Eq, w, tw, N::U64);
++                // The steps allowed, past this run's, cover it; running, not
++                // in reset.
++                let made = e.made_through();
++                let made = e.cast(made, N::U32, N::U64);
++                let left = e.load(std::mem::offset_of!(Self, jit_left), N::U64);
++                let len = e.cast(tlen, N::U32, N::U64);
++                let need = e.op(Op::Add, made, len, N::U64);
++                let fits = e.op(Op::Le, need, left, N::U64);
++                let running = e.not(h, N::Bool);
++                let ir = e.load(std::mem::offset_of!(Self, in_reset), N::Bool);
++                let out_of_reset = e.not(ir, N::Bool);
++                for c in [wok, fits, running, out_of_reset] {{
++                    all = e.op(Op::And, all, c, N::Bool);
++                }}
++                e.exit_if(all, true, |e| {{
++                    e.store(std::mem::offset_of!(Self, jit_next), N::U64, code);
++                    let rest = e.op(Op::Sub, left, made, N::U64);
++                    e.store(std::mem::offset_of!(Self, jit_left), N::U64, rest);
++                    e.store(std::mem::offset_of!(Self, tr_on), N::Bool, V::K(1));
++                    e.store(std::mem::offset_of!(Self, tr_cur), N::U32, slot);
++                    e.store(std::mem::offset_of!(Self, tr_idx), N::U32, V::K(0));
++                    let ep = e.load(std::mem::offset_of!(Self, tr_epoch), N::U64);
++                    e.store(std::mem::offset_of!(Self, tr_ep0), N::U64, ep);
++                }});
++            }}
++        }}
+         let on = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, tr_on), n: machine_jit::N::Bool, bump: 0 }});
+         let off = e.not(on, machine_jit::N::Bool);
+         let stop = e.op(machine_jit::Op::Or, h, off, machine_jit::N::Bool);
+diff --git a/hdl/crates/machine-model/src/gen/trace.rs b/hdl/crates/machine-model/src/gen/trace.rs
+index 466ddbb..0b74777 100644
+--- a/hdl/crates/machine-model/src/gen/trace.rs
++++ b/hdl/crates/machine-model/src/gen/trace.rs
+@@ -46,7 +46,7 @@ use super::{ident, Cx, Gen, GenError, R};
+ /// thousands of instructions: at 4096, runs sharing a slot evicted each
+ /// other before they were entered often enough to compile (Xmas
+ /// Lemmings' bit-counting loop never was); 16384 keeps them, at a few MB.
+-const TRACES: usize = 16384;
++pub(crate) const TRACES: usize = 16384;
+ /// Instructions in a run at most.
+ const STEPS: usize = 64;
+ 
+@@ -564,9 +564,16 @@ impl Gen<'_> {
+         };
+         let jit_init = self.jit_trace_init();
+         let jit_clear = if self.jit { "        self.jit.clear();\n" } else { "" };
++        // The JIT core's table of compiled runs by slot (`jit_tab`), kept as
++        // the runs are replaced and their stamps move on.
++        let tab_fns = if self.jit {
++            "    /// Slot `slot` holds another run (or none): no compiled code there\n    /// to chain to.\n    #[inline]\n    fn tr_dropped(&mut self, slot: usize) {\n        if let Some(e) = self.jit_tab.0.get_mut(slot) { e.code = 0; }\n    }\n    /// The run at `slot` holds at the page's count `stamp`.\n    #[inline]\n    fn tr_stamped(&mut self, slot: usize, stamp: u32) {\n        if let Some(e) = self.jit_tab.0.get_mut(slot) { e.stamp = stamp; }\n    }\n"
++        } else {
++            "    #[inline]\n    fn tr_dropped(&mut self, _slot: usize) {}\n    #[inline]\n    fn tr_stamped(&mut self, _slot: usize, _stamp: u32) {}\n"
++        };
+         let _ = write!(
+             self.out,
+-            r#"    #[inline]
++            r#"{tab_fns}    #[inline]
+     /// The slot of the run at `phys` under the board's address key `bus`
+     /// (0 on boards without one): the runs for each value of the key, at
+     /// different slots as a rule, are kept together.
+@@ -639,6 +646,7 @@ impl Gen<'_> {
+         if let Some(t) = self.traces[slot].as_mut() {{
+             t.stamp = now;
+         }}
++        self.tr_stamped(slot, now);
+         true
+     }}
+     /// The next instruction of the run, checked: the state set as decoding
+@@ -866,6 +874,7 @@ impl Gen<'_> {
+                 }}
+                 t.ok_ep = u64::MAX;
+                 self.traces[slot] = Some(t);
++                self.tr_dropped(slot);
+             }}
+         }}
+     }}
+@@ -896,6 +905,7 @@ impl Gen<'_> {
+     /// the description).
+     pub fn trace_clear(&mut self) {{
+         for t in self.traces.iter_mut() {{ *t = None; }}
++        for slot in 0..{TRACES} {{ self.tr_dropped(slot); }}
+         self.tr_rec = None;
+         self.tr_on = false;
+         self.tr_prev = u32::MAX;

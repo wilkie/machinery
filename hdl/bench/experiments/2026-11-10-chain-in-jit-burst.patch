@@ -1,0 +1,77 @@
+The next compiled run entered from jit_burst (not kept).
+
+Base: 857c893. Apply from the repository root: git apply hdl/bench/experiments/2026-11-10-chain-in-jit-burst.patch
+What it did and why it was not kept: hdl/bench/CHRONICLE.md, 2026-11-10.
+
+diff --git a/hdl/crates/machine-model/src/gen/jit.rs b/hdl/crates/machine-model/src/gen/jit.rs
+index 071ebf8..fb0fd0c 100644
+--- a/hdl/crates/machine-model/src/gen/jit.rs
++++ b/hdl/crates/machine-model/src/gen/jit.rs
+@@ -360,11 +360,66 @@ impl Gen<'_> {
+                         self.jit_compile(slot);
+                     }}
+                     if n > 0 {{
+-                        return Ok(n);
++                        return self.jit_chain(budget, n);
+                     }}
+                 }}
+             }}
+         }}
++        self.jit_one(budget)
++    }}
++    /// Compiled runs chained: after one that made `made` steps, while the
++    /// budget lasts and nothing stops, the run its link leads to (or that
++    /// starts at the pc), when it is compiled, entered at once, as the next
++    /// `jit_burst` would enter it, without returning to the caller between
++    /// them; a run whose code makes no step leaves it to an ordinary step,
++    /// as `jit_burst` does. The steps made.
++    fn jit_chain(&mut self, budget: u64, mut made: u64) -> Result<u64, Fault> {{
++        loop {{
++            if made >= budget || self.tr_on || self.halted || self.in_reset {{
++                return Ok(made);
++            }}
++            self.tr_bus();
++            let found = if self.tr_prev != u32::MAX {{ self.jit_follow() }} else {{ None }};
++            let found = match found {{
++                Some(f) => Some(f),
++                None if !self.tr_on => self.jit_lookup(),
++                None => None,
++            }};
++            let Some((c, len)) = found else {{ return Ok(made) }};
++            if budget - made < len {{
++                return Ok(made);
++            }}
++            self.jit_left = budget - made;
++            let slot = self.tr_cur as usize;
++            let n = self.jit_enter(c, 0) as u64;
++            if let Some(e) = self.jit_err.take() {{
++                return Err(e);
++            }}
++            let again = match self.traces.get_mut(slot).and_then(|t| t.as_mut()) {{
++                Some(t) if t.tier == 0 && t.code.addr() == Some(c) => {{
++                    t.exec = t.exec.saturating_add(n);
++                    if t.exec >= Self::jit_hot2().saturating_mul(t.steps.len() as u64) {{
++                        t.tier = 1;
++                        true
++                    }} else {{
++                        false
++                    }}
++                }}
++                _ => false,
++            }};
++            if again {{
++                self.jit_compile(slot);
++            }}
++            if n == 0 {{
++                return Ok(made + self.jit_one(budget - made)?);
++            }}
++            made += n;
++        }}
++    }}
++    /// One step as `System::step` makes it (and the run it entered compiled
++    /// once it has been entered `HOT` times; a run it goes on replaying, in
++    /// the replay loop), at most `budget` steps: how many were made.
++    fn jit_one(&mut self, budget: u64) -> Result<u64, Fault> {{
+         let was_halted = self.halted;
+         let r = self.step();
+         if was_halted && self.halted {{ self.bus.halted_cycle(); }}

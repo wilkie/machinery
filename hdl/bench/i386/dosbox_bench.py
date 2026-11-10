@@ -18,6 +18,8 @@ code in hex), held 150 ms. Sound is mixed and discarded (nosound).
 """
 import argparse, os, re, resource, subprocess, sys, tempfile
 
+import perfbin
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT = os.path.join(HERE, "..", "..", "target", "dosbox-bench", "dosbox")
 
@@ -35,6 +37,8 @@ p.add_argument("--every", type=float, help="also report every this many emulated
 p.add_argument("--shots", help="a directory: a screenshot at each --every report")
 p.add_argument("--dosbox", default=os.environ.get("DOSBOX_BENCH", DEFAULT))
 a = p.parse_args()
+# PERF=none: no host instruction counts (screenshots, checks).
+PERF = None if os.environ.get("PERF") == "none" else perfbin.find()
 
 def keys_ms(keys):
     out = []
@@ -85,8 +89,8 @@ def run(seconds):
         if a.shots:
             os.makedirs(a.shots, exist_ok=True)
             env["DOSBOX_BENCH_SHOTS"] = "1"
-        r = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", "-o", stat,
-                            a.dosbox, "-conf", path],
+        counted = [PERF, "stat", "-x,", "-e", "instructions:u", "-o", stat] if PERF else []
+        r = subprocess.run(counted + [a.dosbox, "-conf", path],
                            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                            timeout=3600, preexec_fn=limit)
         m = re.search(r"DOSBOX_BENCH end ms (\d+) cycles (\d+) instructions (\d+) wall ([\d.]+) tick (\w+) ram (\w+)", r.stdout)
@@ -95,7 +99,7 @@ def run(seconds):
         for l in r.stdout.splitlines():
             if l.startswith("DOSBOX_BENCH at"):
                 print(l)
-        host = next(int(l.split(",")[0]) for l in open(stat) if "instructions" in l)
+        host = next(int(l.split(",")[0]) for l in open(stat) if "instructions" in l) if PERF else 0
         ms, cycles, instr, wall = int(m[1]), int(m[2]), int(m[3]), float(m[4])
         print(f"DOSBOX {a.core} cycles/ms {a.cycles} to {ms / 1000:.3f} s: host {host / 1e9:.2f}G wall {wall:.3f} "
               f"speed {ms / 1000 / wall:.2f}x cycles {cycles} normal_instructions {instr} tick {m[5]} ram {m[6]}")

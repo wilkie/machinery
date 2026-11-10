@@ -478,3 +478,68 @@ frame dot by dot at the CRTC's timing). Our `blocks` profile costs 4.7
 times the dynamic core per guest instruction otherwise, and 2.6 times the
 normal interpreter. DOSBox's timing is not the 386's (a cycle is about an
 instruction), so its work is not exact; ours (`jit`) is.
+
+Then (2026-11-09): the comparison repeatable from a clone. The disks
+boot FreeDOS 1.4 (GPL) instead of MS-DOS 3.30, with HimemX (without it
+FreeDOS leaves Jetpack 20 KB short) but not DOS=HIGH: with the kernel in
+the high memory area, programs load below 64 KB, and Lemmings' packed VGAL
+then wraps at 1 MB, needing A20 off, which the direct-memory profiles do
+not model (an "Invalid Opcode" on ours, fine in DOSBox). `fetch_games.sh`
+fetches FreeDOS's Floppy Edition and HimemX from their releases and the
+three freeware games from archive.org, each checked by SHA-256; the
+`build_*.sh` scripts make the same disks byte for byte on every build
+(files dated 1993-01-01, a fixed volume serial). `chk` costs the same
+on FreeDOS (377.9 host instructions a guest instruction, 377.8 before).
+Only the board's ROMs (AMI's BIOS, IBM's VGA BIOS) are still yours to
+supply.
+
+`compare_games.py` makes the games table: it builds the tree's crates
+for the profiles asked for, runs ours and the patched DOSBox over each
+game's window (drawing every frame and drawing none or almost none),
+finds the DOSBox cycles that match our guest instructions an emulated
+second, and prints medians as markdown (saved in hdl/target/compare).
+The windows, chosen by screenshots of both every 20 s: Lemmings' main
+menu 40-90 s; Jetpack's attract mode (title, demo, high scores; a
+cycle is under 120 s on both) 60-180 s; One Must Fall's main menu,
+Enter pressed at 45 s, 160-240 s (both there by 80 s). `perfbin.py`
+finds a perf that runs (Ubuntu's wrapper refuses a WSL kernel it has
+no tools for; a linux-tools perf counts instructions on any kernel).
+From a clone:
+
+    sh fetch_games.sh && sh build.sh && sh build_lemm.sh \
+      && sh build_jetpack.sh && sh build_omf.sh && sh build_dosbox.sh
+    python3 compare_games.py
+
+The first table (screenshots of both at each window's ends checked):
+
+Xmas Lemmings, its main menu (a banner scrolling), 40 s to 90 s; DOSBox at `cycles=fixed 2940`:
+
+| | every frame | drawing none | drawing | the rest, a guest instruction | guest instructions an emulated second |
+|---|---|---|---|---|---|
+| ours, `jit` | 2.31 G | 0.97 G (none) | 1.34 G | 369 | 2.62 M |
+| ours, `blocks` | 2.13 G | 0.80 G (none) | 1.34 G | 303 | 2.62 M |
+| DOSBox 0.74-3, normal | 0.53 G | 0.33 G (1 in 11) | 0.22 G | 115 | 2.65 M |
+| DOSBox 0.74-3, dynamic | 0.39 G | 0.19 G (1 in 11) | 0.23 G | 63 | 2.65 M |
+
+Jetpack, its attract mode (title, demo, high scores), 60 s to 180 s; DOSBox at `cycles=fixed 4580`:
+
+| | every frame | drawing none | drawing | the rest, a guest instruction | guest instructions an emulated second |
+|---|---|---|---|---|---|
+| ours, `jit` | 1.96 G | 1.36 G (none) | 0.61 G | 401 | 3.38 M |
+| ours, `blocks` | 1.83 G | 1.23 G (none) | 0.61 G | 363 | 3.38 M |
+| DOSBox 0.74-3, normal | 0.53 G | 0.40 G (1 in 11) | 0.15 G | 113 | 3.38 M |
+| DOSBox 0.74-3, dynamic | 0.35 G | 0.21 G (1 in 11) | 0.15 G | 59 | 3.38 M |
+
+One Must Fall 2097, its main menu (music playing; Enter at 45 s), 160 s to 240 s; DOSBox at `cycles=fixed 5600`:
+
+| | every frame | drawing none | drawing | the rest, a guest instruction | guest instructions an emulated second |
+|---|---|---|---|---|---|
+| ours, `jit` | 1.57 G | 1.21 G (none) | 0.35 G | 226 | 5.38 M |
+| ours, `blocks` | 1.12 G | 0.77 G (none) | 0.35 G | 143 | 5.38 M |
+| DOSBox 0.74-3, normal | 0.69 G | 0.58 G (1 in 11) | 0.13 G | 105 | 5.40 M |
+| DOSBox 0.74-3, dynamic | 0.33 G | 0.21 G (1 in 11) | 0.13 G | 36 | 5.40 M |
+
+Drawing is the larger gap where the screen changes most (Lemmings'
+scrolling banner: 6 times DOSBox's); the processor elsewhere: Jetpack's
+demo costs `blocks` 363 host instructions a guest instruction against 59
+for DOSBox's dynamic core. One Must Fall's menu is the closest: `blocks` 143 against 36.

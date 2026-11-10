@@ -509,7 +509,8 @@ From a clone:
 
     sh fetch_games.sh && sh build.sh && sh build_lemm.sh \
       && sh build_jetpack.sh && sh build_omf.sh && sh build_dosbox.sh
-    python3 compare_games.py
+    python3 compare_games.py           # with AMI's and IBM's ROMs in ~/roms
+    sh build_bios.sh && python3 compare_games.py --free-roms   # or without
 
 The first table (screenshots of both at each window's ends checked):
 
@@ -590,3 +591,56 @@ One Must Fall 2097, its main menu (music playing; Enter at 45 s), 160 s to 240 s
 | ours, `blocks` | 1.14 G | 0.79 G (none) | 0.35 G | 146 | 5.38 M |
 | DOSBox 0.74-3, normal | 0.70 G | 0.58 G (1 in 11) | 0.13 G | 105 | 5.40 M |
 | DOSBox 0.74-3, dynamic | 0.33 G | 0.21 G (1 in 11) | 0.13 G | 36 | 5.40 M |
+
+Then (2026-11-10): free ROMs. `build_bios.sh` builds the Bochs project's
+2.7 "legacy" BIOS (LGPL; for ISA machines, without PCI) with
+`patches/rombios-2.7-at.patch`, and takes its LGPL VGABIOS 0.8a, into
+~/roms/free; built unpatched, the same steps make Ubuntu's bochsbios byte
+for byte. The BIOS was written for Bochs's hardware, and the patch makes
+it an AT's where it relied on that:
+- it seeks before reading, writing or formatting a diskette (Bochs's
+  controller moved the head to the cylinder asked for; a 765 reads where
+  its head is: Wrong Cylinder at the first read past cylinder 0);
+- it gates A20 through the keyboard controller (it used port 92h, the
+  PS/2's, which an AT does not have), telling the gate's state by the
+  wrap at 1 MB, as HIMEM does;
+- it closes the gate before booting, as an AT's POST does (the 8042 comes
+  out of reset with it open; HimemX took that for "always on").
+The board changed too, as a 386 AT of its time could: the VGA's ROM
+window is 64 KB (C0000-CFFFF; the free VGABIOS is 38 KB), and the WD1003
+answers ECh, IDENTIFY, as the AT-bus IDE drives that followed it did (the
+BIOS finds its disks so), with the IDE signature after a reset. The AT
+tests take `PC_BIOS` and `PC_VGABIOS`; `free_roms_boot_freedos` boots
+FreeDOS's floppy on them with the fixed disk identified. Lemmings ends
+alike on `trace` and `jit` at 120 M instructions; One Must Fall boots
+from the fixed disk. `compare_games.py --free-roms` makes the table on
+them, needing nothing that is not free (screenshots checked at each
+window's ends; the Bochs BIOS, without a memory test, boots some seconds
+sooner):
+
+Xmas Lemmings, its main menu (a banner scrolling), 40 s to 90 s; DOSBox at `cycles=fixed 2880`:
+
+| | every frame | drawing none | drawing | the rest, a guest instruction | guest instructions an emulated second |
+|---|---|---|---|---|---|
+| ours, `jit` | 2.32 G | 0.98 G (none) | 1.34 G | 380 | 2.57 M |
+| ours, `blocks` | 2.15 G | 0.81 G (none) | 1.34 G | 314 | 2.57 M |
+| DOSBox 0.74-3, normal | 0.53 G | 0.32 G (1 in 11) | 0.22 G | 116 | 2.61 M |
+| DOSBox 0.74-3, dynamic | 0.39 G | 0.19 G (1 in 11) | 0.23 G | 63 | 2.61 M |
+
+Jetpack, its attract mode (title, demo, high scores), 60 s to 180 s; DOSBox at `cycles=fixed 4730`:
+
+| | every frame | drawing none | drawing | the rest, a guest instruction | guest instructions an emulated second |
+|---|---|---|---|---|---|
+| ours, `jit` | 1.92 G | 1.34 G (none) | 0.58 G | 385 | 3.49 M |
+| ours, `blocks` | 1.74 G | 1.16 G (none) | 0.58 G | 333 | 3.49 M |
+| DOSBox 0.74-3, normal | 0.54 G | 0.41 G (1 in 11) | 0.15 G | 114 | 3.49 M |
+| DOSBox 0.74-3, dynamic | 0.35 G | 0.22 G (1 in 11) | 0.15 G | 59 | 3.49 M |
+
+One Must Fall 2097, its main menu (music playing; Enter at 45 s), 160 s to 240 s; DOSBox at `cycles=fixed 5600`:
+
+| | every frame | drawing none | drawing | the rest, a guest instruction | guest instructions an emulated second |
+|---|---|---|---|---|---|
+| ours, `jit` | 1.55 G | 1.20 G (none) | 0.35 G | 224 | 5.37 M |
+| ours, `blocks` | 1.13 G | 0.78 G (none) | 0.35 G | 144 | 5.38 M |
+| DOSBox 0.74-3, normal | 0.70 G | 0.58 G (1 in 11) | 0.13 G | 105 | 5.40 M |
+| DOSBox 0.74-3, dynamic | 0.33 G | 0.21 G (1 in 11) | 0.14 G | 36 | 5.40 M |

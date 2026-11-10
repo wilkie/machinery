@@ -15,8 +15,9 @@ unit VgaFontBase(n: u8) -> u32 {
 /// The IBM VGA with 256 KB: four 64 KB bit planes behind the sequencer,
 /// the graphics controller and the attribute controller, a CRTC, and the
 /// DAC, at the ISA bus's window A0000-BFFFF and ports 3B0-3DF; its BIOS
-/// (`bios`, a 32 KB window at C0000, which the host fills) is the system's
-/// video BIOS.
+/// (`bios`, a 64 KB window at C0000, which the host fills: IBM's 24 KB, or
+/// a free one of 38 KB; the rest reads as the host left it) is the
+/// system's video BIOS.
 ///
 /// The processor's side is the EGA's (`Ega`), and more:
 /// - every register reads back;
@@ -60,7 +61,7 @@ component Vga {
     }
     model {
         mem planes: [u8; 0x40000];
-        mem bios: [u8; 0x8000];
+        mem bios: [u8; 0x10000];
         mem frame: [u8; 1036800];
         mem dac: [u8; 768];
         state frame_width: u32 = 0;
@@ -564,10 +565,10 @@ component Vga {
         }
 
         on port.read(space: Space, addr: u24, size: BusSize) -> (data: u16, wait: u8) {
-            if space == Space::Mem && addr >= 0xC0000 && addr <= 0xC7FFF {
-                let a = addr[14:0];
+            if space == Space::Mem && addr >= 0xC0000 && addr <= 0xCFFFF {
+                let a = addr[15:0];
                 if size == BusSize::Word {
-                    return (data: concat(bios[(a + 1) & 0x7FFF], bios[a]), wait: 1);
+                    return (data: concat(bios[(a + 1) & 0xFFFF], bios[a]), wait: 1);
                 }
                 return (data: bios[a] as u16, wait: 1);
             }

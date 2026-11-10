@@ -6,8 +6,9 @@
 # GitHub, and the freeware games from archive.org.
 # Files already there and correct are kept. Not in the repository.
 #
-# The board's ROMs are not free and are not fetched: the AT BIOS
-# (BIOS_5170_30APR89_U27/U47_AMI_27256.BIN) and the VGA BIOS (ibm_vga.bin).
+# The board's ROMs: AMI's AT BIOS (BIOS_5170_30APR89_U27/U47_AMI_27256.BIN)
+# and IBM's VGA BIOS (ibm_vga.bin) are not free and are not fetched;
+# build_bios.sh makes free ones (`compare_games.py --free-roms`).
 set -e
 ROMS=${PC_ROMS:-$HOME/roms}
 

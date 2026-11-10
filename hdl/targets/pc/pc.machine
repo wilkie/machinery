@@ -2295,8 +2295,12 @@ component Fdc765 {
 /// 40h ready, 10h seek complete, 08h data request, 01h error) and takes a
 /// command: 1xh restore, 7xh seek, 2xh read and 3xh write sectors (a
 /// request and an interrupt a sector), 4xh verify, 50h format a track,
-/// 90h diagnostics, 91h set the drive's parameters. 3F6h: bit 2 resets
-/// the controller, bit 1 masks its interrupt.
+/// 90h diagnostics, 91h set the drive's parameters, and ECh identify (as
+/// the AT-bus IDE drives that followed answer it: a sector of what the
+/// drive is, its geometry and size, CHS only; BIOSes written for IDE find
+/// their disks so). 3F6h: bit 2 resets the controller, bit 1 masks its
+/// interrupt; a reset leaves the IDE signature (sector count 1, sector 1,
+/// cylinder 0).
 ///
 /// The disk is `image`, `cylinders` by `heads` by `sectors` (17 a track)
 /// of 512 bytes, when `present`: by default the AT's type 2 drive, 615
@@ -2335,10 +2339,13 @@ component Wd1003 {
         state pos: u32 = 0;
         state writing: bool = false;
         state formatting: bool = false;
+        /// The buffer holds the drive's identification (ECh), not a sector.
+        state identifying: bool = false;
         state left: u32 = 0;
         /// What completes when the busy time is up (0 nothing, 1 a sector
         /// to read, 2 the buffer to write, 3 done: ready and interrupt, 4
-        /// verify, 5 the format), and the clocks left.
+        /// verify, 5 the format, 6 the identification), and the clocks
+        /// left.
         state pending: u8 = 0;
         state busy: u32 = 0;
 
@@ -2362,6 +2369,7 @@ component Wd1003 {
             else if what == 3 { status = 0x50; interrupt(); }
             else if what == 4 { verify(); }
             else if what == 5 { written(); }
+            else if what == 6 { identify(); }
             return 0xFFFFFFFF;
         }
 
@@ -2417,12 +2425,76 @@ component Wd1003 {
             interrupt();
         }
 
+        /// A word of the identification, little-endian in the buffer.
+        fn word(i: u32, v: u32) {
+            buf[i * 2] = v as u8;
+            buf[i * 2 + 1] = (v >> 8) as u8;
+        }
+
+        /// The drive's identification into the buffer for the host to
+        /// read (ECh): a fixed drive, its cylinders, heads and sectors a
+        /// track, its size in sectors; no LBA, no 32-bit transfers; its
+        /// serial number, firmware and model as text, two characters a
+        /// word, the first in the high byte.
+        fn identify() {
+            for i in 0..512 { buf[i] = 0; }
+            word(0, 0x0040);
+            word(1, cylinders);
+            word(3, heads);
+            word(4, sectors * 512);
+            word(5, 512);
+            word(6, sectors);
+            word(10, 0x5744);
+            word(11, 0x3130);
+            word(12, 0x3033);
+            word(13, 0x2D30);
+            word(14, 0x3030);
+            word(15, 0x3120);
+            word(16, 0x2020);
+            word(17, 0x2020);
+            word(18, 0x2020);
+            word(19, 0x2020);
+            word(23, 0x312E);
+            word(24, 0x3020);
+            word(25, 0x2020);
+            word(26, 0x2020);
+            word(27, 0x4D41);
+            word(28, 0x4348);
+            word(29, 0x494E);
+            word(30, 0x4552);
+            word(31, 0x5920);
+            word(32, 0x4154);
+            word(33, 0x2046);
+            word(34, 0x4958);
+            word(35, 0x4544);
+            word(36, 0x2044);
+            word(37, 0x4953);
+            word(38, 0x4B20);
+            word(39, 0x2020);
+            word(40, 0x2020);
+            word(41, 0x2020);
+            word(42, 0x2020);
+            word(43, 0x2020);
+            word(44, 0x2020);
+            word(45, 0x2020);
+            word(46, 0x2020);
+            let total = cylinders * heads * sectors;
+            word(60, total & 0xFFFF);
+            word(61, total >> 16);
+            pos = 0;
+            left = 1;
+            identifying = true;
+            status = 0x58;
+            interrupt();
+        }
+
         fn command(c: u8) {
             intrq = false;
             line();
             error = 0;
             writing = false;
             formatting = false;
+            identifying = false;
             let op = c >> 4;
             if c == 0x90 {
                 error = 1;
@@ -2431,6 +2503,8 @@ component Wd1003 {
                 fail(0x04);
             } else if c == 0x91 {
                 after(3, 2386);
+            } else if c == 0xEC {
+                after(6, 2386);
             } else if op == 1 {
                 cyl = 0;
                 after(3, 2386);
@@ -2499,6 +2573,12 @@ component Wd1003 {
             let b = buf[pos];
             pos = pos + 1;
             if pos == 512 {
+                if identifying {
+                    identifying = false;
+                    left = 0;
+                    status = 0x50;
+                    return b;
+                }
                 advance();
                 left = left - 1;
                 if left == 0 { status = 0x50; } else { after(1, 1193); }
@@ -2551,8 +2631,12 @@ component Wd1003 {
                 if was[2] == 1 && d[2] == 0 {
                     error = 1;
                     status = if present { 0x50 } else { 0 };
+                    count = 1;
+                    sector = 1;
+                    cyl = 0;
                     writing = false;
                     formatting = false;
+                    identifying = false;
                     intrq = false;
                     pending = 0;
                 }

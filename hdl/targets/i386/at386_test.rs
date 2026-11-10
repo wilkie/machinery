@@ -57,15 +57,47 @@ fn skip() {
     eprintln!("the AMI BIOS, VGA BIOS or disk images are not in ~/roms; skipping");
 }
 
-/// A 386 AT with AMI's BIOS, IBM's VGA BIOS and a configured CMOS, after
-/// reset; None without the ROM images.
+/// The system BIOS: the 64 KB image at `PC_BIOS` (a path: the Bochs
+/// project's free "legacy" BIOS, say), else AMI's.
+fn system_bios() -> Option<Vec<u8>> {
+    match std::env::var_os("PC_BIOS") {
+        Some(p) => std::fs::read(p).ok().filter(|b| b.len() == 0x10000),
+        None => ami_bios(),
+    }
+}
+
+/// The VGA's BIOS: the image at `PC_VGABIOS` (a path: the free LGPL
+/// VGABIOS, say; up to 64 KB), else IBM's (its 24 KB).
+fn video_bios() -> Option<Vec<u8>> {
+    match std::env::var_os("PC_VGABIOS") {
+        Some(p) => std::fs::read(p).ok().filter(|b| b.len() <= 0x10000),
+        None => Some(read("ibm_vga.bin")?.get(0x2000..0x8000)?.to_vec()),
+    }
+}
+
+/// A 386 AT with AMI's BIOS (or `PC_BIOS`), IBM's VGA BIOS (or
+/// `PC_VGABIOS`) and a configured CMOS, after reset; None without the ROM
+/// images.
 fn at(disk_type: u8) -> Option<System> {
-    let bios = ami_bios()?;
-    let vga = read("ibm_vga.bin")?;
+    Some(at_with(system_bios()?, &video_bios()?, disk_type, std::env::var_os("PC_BIOS").is_some()))
+}
+
+/// The 386 AT with these ROMs, after reset. `bochs`: the system BIOS is
+/// the Bochs project's, which boots the devices CMOS 3Dh lists (the
+/// diskette, then the fixed disk) and takes the extended memory from
+/// 30h-31h, which AMI's POST measures and writes itself (AMI's runs keep
+/// their CMOS).
+fn at_with(bios: Vec<u8>, vga: &[u8], disk_type: u8, bochs: bool) -> System {
     let mut sys = System::new();
     sys.board().rom.cells = bios;
-    sys.board().vga.bios[..0x6000].copy_from_slice(vga.get(0x2000..0x8000)?);
-    sys.board().rtc.cmos.copy_from_slice(&cmos(disk_type));
+    sys.board().vga.bios[..vga.len()].copy_from_slice(vga);
+    let mut c = cmos(disk_type);
+    if bochs {
+        c[0x3D] = 0x21;
+        c[0x30] = c[0x17];
+        c[0x31] = c[0x18];
+    }
+    sys.board().rtc.cmos.copy_from_slice(&c);
     if disk_type == 2 {
         let h = &mut sys.board().hdc;
         h.present = true;
@@ -74,7 +106,7 @@ fn at(disk_type: u8) -> Option<System> {
         h.sectors = 17;
     }
     sys.reset();
-    Some(sys)
+    sys
 }
 
 /// The VGA's text page (characters at the even bytes of plane 0), a line
@@ -168,6 +200,28 @@ fn ami_bios_boots_ms_dos_on_the_386() {
     answer(&mut sys, "Enter new time", &[ENTER], 20_000_000);
     answer(&mut sys, "A>", &[0x2F, 0x12, 0x13, ENTER], 20_000_000);
     until_screen(&mut sys, "MS-DOS Version 3.30", 20_000_000);
+}
+
+/// The free ROMs (`bench/i386/build_bios.sh`: the Bochs project's legacy
+/// BIOS, patched for an AT, and the LGPL VGABIOS, in `free/`) on the 386
+/// with the 20 MB fixed disk: the BIOS finds the drive by IDE's
+/// identification, which the WD1003 answers, and FreeDOS's boot floppy
+/// (`fetch_games.sh`) boots from drive A. Nothing that is not free.
+#[test]
+fn free_roms_boot_freedos() {
+    let Some(r) = roms() else { return skip() };
+    let (Ok(bios), Ok(vga), Some(d)) = (
+        std::fs::read(r.join("free").join("BIOS-bochs-legacy-at")),
+        std::fs::read(r.join("free").join("VGABIOS-lgpl-latest")),
+        read("freedos/120m/x86BOOT.img"),
+    ) else {
+        return skip();
+    };
+    let mut sys = at_with(bios, &vga, 2, true);
+    insert(&mut sys, &d);
+    until_screen(&mut sys, "ata0 master: MACHINERY AT FIXED DISK", 100_000_000);
+    until_screen(&mut sys, "FreeDOS kernel", 400_000_000);
+    assert_eq!(sys.board().ram.cells[0x449], 3, "VGA text mode 3");
 }
 
 /// MS-DOS 3.30 installs on the 386's 20 MB fixed disk (FDISK, which

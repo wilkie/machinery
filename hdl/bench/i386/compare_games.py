@@ -4,7 +4,7 @@ an emulated second over a window of each game, and prints a table per game
 (markdown, also saved under hdl/target/compare).
 
     compare_games.py [--games lemm,jetpack,omf] [--profiles jit,blocks]
-                     [--reps 3] [--no-dosbox] [--shots DIR]
+                     [--reps 3] [--no-dosbox] [--shots DIR] [--free-roms]
 
 Before: fetch_games.sh (FreeDOS and the games), the build_*.sh scripts
 (the disks), build_dosbox.sh (the patched DOSBox), and the board's ROMs in
@@ -51,11 +51,22 @@ p.add_argument("--games", default="lemm,jetpack,omf")
 p.add_argument("--profiles", default="jit,blocks")
 p.add_argument("--reps", type=int, default=3)
 p.add_argument("--no-dosbox", action="store_true")
+p.add_argument("--free-roms", action="store_true",
+               help="ours on the free ROMs (build_bios.sh) rather than AMI's and IBM's")
 p.add_argument("--shots", help="a directory: first, an unmeasured run of each game on ours (the first "
                "profile) and DOSBox, with screenshots every 10 s to the window's end, to check the windows")
 p.add_argument("--dosbox", default=os.path.join(HDL, "target", "dosbox-bench", "dosbox"))
 a = p.parse_args()
 PERF = perfbin.find()
+# The board's ROMs: AMI's BIOS and IBM's VGA BIOS from ~/roms, or the free
+# ones build_bios.sh makes there (`--free-roms`).
+ROMS = {}
+if a.free_roms:
+    free = os.path.join(os.environ.get("PC_ROMS", os.path.expanduser("~/roms")), "free")
+    ROMS = {"PC_BIOS": os.path.join(free, "BIOS-bochs-legacy-at"), "PC_VGABIOS": os.path.join(free, "VGABIOS-lgpl-latest")}
+    for f in ROMS.values():
+        if not os.path.exists(f):
+            sys.exit(f"no {f}: run build_bios.sh")
 games = a.games.split(",")
 profiles = a.profiles.split(",")
 for g in games:
@@ -110,7 +121,7 @@ def ours(exe, game, seconds, draw):
     """(host instructions, guest instructions) to `seconds`."""
     g = GAMES[game]
     env = dict(os.environ, PLAY_DISK=os.path.join(DISKS, g["img"]), PLAY_SECONDS=str(seconds),
-               PLAY_EVERY="1000000", PLAY_DRAW=str(draw), PLAY_KEYS=g["keys"])
+               PLAY_EVERY="1000000", PLAY_DRAW=str(draw), PLAY_KEYS=g["keys"], **ROMS)
     if "hd" in g:
         env["PLAY_HD"] = os.path.join(DISKS, g["hd"])
     host, out = perf([exe, "--ignored", "--nocapture", "--exact", "play_disk"], env)
@@ -136,7 +147,7 @@ def ours_shots(exe, game, d):
     g = GAMES[game]
     os.makedirs(d, exist_ok=True)
     env = dict(os.environ, PLAY_DISK=os.path.join(DISKS, g["img"]), PLAY_SECONDS=str(g["t2"]),
-               PLAY_EVERY="10", PLAY_SHOTS=d, PLAY_KEYS=g["keys"])
+               PLAY_EVERY="10", PLAY_SHOTS=d, PLAY_KEYS=g["keys"], **ROMS)
     if "hd" in g:
         env["PLAY_HD"] = os.path.join(DISKS, g["hd"])
     run([exe, "--ignored", "--nocapture", "--exact", "play_disk"], env=env)
@@ -227,8 +238,8 @@ if a.shots:
             dosbox_shots(game, os.path.join(a.shots, f"{game}-dosbox"))
 
 when = datetime.date.today().isoformat()
-lines = [f"Games compared {when}, commit {commit()}, on {cpu()}; host instructions an emulated second, "
-         f"medians of {a.reps}.", ""]
+lines = [f"Games compared {when}, commit {commit()}, on {cpu()}" + (", ours on the free ROMs" if a.free_roms else "")
+         + f"; host instructions an emulated second, medians of {a.reps}.", ""]
 for game in games:
     g = GAMES[game]
     rows = []

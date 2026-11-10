@@ -1,0 +1,178 @@
+diff -ru bochs-2.7/bios/rombios.c
+--- bochs-2.7/bios/rombios.c
++++ bochs-2.7/bios/rombios.c
+@@ -883,9 +883,11 @@
+ static void           determine_floppy_media();
+ static bx_bool        floppy_drive_exists();
+ static bx_bool        floppy_drive_recal();
++static bx_bool        floppy_drive_seek();
+ static bx_bool        floppy_media_known();
+ static bx_bool        floppy_media_sense();
+ static bx_bool        set_enable_a20();
++static bx_bool        a20_enabled();
+ static void           debugger_on();
+ static void           debugger_off();
+ static void           keyboard_init();
+@@ -2268,23 +2270,38 @@
+ }
+ 
+   bx_bool
+-set_enable_a20(val)
+-  bx_bool val;
++a20_enabled()
+ {
+-  Bit8u  oldval;
++  Bit16u lo, r;
+ 
+-  // Use PS2 System Control port A to set A20 enable
++  // Whether FFFF:0010 is the byte above 1 MB, not 0:0000 (as HIMEM tests
++  // it): the gate's state, whatever set it.
++  lo = read_word(0x0000, 0x0000);
++  if (read_word(0xffff, 0x0010) != lo)
++    return(1);
++  write_word(0x0000, 0x0000, lo ^ 0xffff);
++  r = (read_word(0xffff, 0x0010) != (lo ^ 0xffff));
++  write_word(0x0000, 0x0000, lo);
++  return(r);
++}
+ 
+-  // get current setting first
+-  oldval = inb(PORT_A20);
++  bx_bool
++set_enable_a20(val)
++  bx_bool val;
++{
++  bx_bool old;
+ 
+-  // change A20 status
+-  if (val)
+-    outb(PORT_A20, oldval | 0x02);
+-  else
+-    outb(PORT_A20, oldval & 0xfd);
++  // An AT's A20 gate is bit 1 of the keyboard controller's output port,
++  // written with D1h as IBM's BIOS writes it (DFh open, DDh closed): an AT
++  // has no System Control Port A (92h), the PS/2's, which Bochs answers.
++  old = a20_enabled();
++  while (inb(PORT_PS2_STATUS) & 0x02) ;
++  outb(PORT_PS2_STATUS, 0xd1);
++  while (inb(PORT_PS2_STATUS) & 0x02) ;
++  outb(PORT_PS2_DATA, val ? 0xdf : 0xdd);
++  while (inb(PORT_PS2_STATUS) & 0x02) ;
+ 
+-  return((oldval & 0x02) != 0);
++  return(old);
+ }
+ 
+   void
+@@ -3909,14 +3926,14 @@
+           regs.u.r8.ah = 0;
+           break;
+         case 0x02:
+-          regs.u.r8.al = (inb(PORT_A20) >> 1) & 0x01;
++          regs.u.r8.al = a20_enabled();
+           CLEAR_CF();
+           regs.u.r8.ah = 0;
+           break;
+         case 0x03:
+           CLEAR_CF();
+           regs.u.r8.ah = 0;
+-          regs.u.r16.bx = 3;
++          regs.u.r16.bx = 1; // the keyboard controller only
+           break;
+         default:
+           BX_INFO("int15: Func 24h, subfunc %02xh, A20 gate control not supported\n", (unsigned) regs.u.r8.al);
+@@ -7291,6 +7308,58 @@
+ }
+ 
+   bx_bool
++floppy_drive_seek(drive, head, track)
++  Bit16u drive;
++  Bit16u head;
++  Bit16u track;
++{
++  Bit8u  val8;
++  Bit16u curr_cyl_offset;
++
++  //
++  // DS has been set to 0x40 before call
++  //
++  // A real 765 reads, writes and formats where its head is: it must be
++  // sought first (Bochs's own controller moves it to the cylinder asked
++  // for, so the BIOS did not).
++
++  curr_cyl_offset = drive ? 0x0095 : 0x0094;
++  if (read_byte_DS(curr_cyl_offset) == track)
++    return(1);
++
++  floppy_prepare_controller(drive);
++
++  // send Seek command (3 bytes) to controller
++  outb(PORT_FD_DATA, 0x0f);                // 0f: Seek
++  outb(PORT_FD_DATA, (head << 2) | drive); // HD DR1 DR2
++  outb(PORT_FD_DATA, track);
++
++  // turn on interrupts
++ASM_START
++  sti
++ASM_END
++
++  // wait on 40:3e bit 7 to become 1
++  do {
++    val8 = (read_byte_DS(0x003e) & 0x80);
++  } while ( val8 == 0 );
++
++  val8 = 0; // separate asm from while() loop
++  // turn off interrupts
++ASM_START
++  cli
++ASM_END
++
++  // set 40:3e bit 7 to 0
++  val8 = read_byte_DS(0x003e);
++  val8 &= 0x7f;
++  write_byte_DS(0x003e, val8);
++  write_byte_DS(curr_cyl_offset, track);
++
++  return(1);
++}
++
++  bx_bool
+ floppy_drive_exists(drive)
+   Bit16u drive;
+ {
+@@ -7470,6 +7539,7 @@
+         //--------------------------------------
+         // set up floppy controller for transfer
+         //--------------------------------------
++        floppy_drive_seek(drive, head, track);
+         floppy_prepare_controller(drive);
+ 
+         // send read-normal-data command (9 bytes) to controller
+@@ -7491,6 +7561,7 @@
+         //--------------------------------------
+         // set up floppy controller for transfer
+         //--------------------------------------
++        floppy_drive_seek(drive, head, track);
+         floppy_prepare_controller(drive);
+ 
+         // send write-normal-data command (9 bytes) to controller
+@@ -7651,6 +7722,7 @@
+       outb(PORT_DMA1_MASK_REG, 0x02);
+ 
+       // set up floppy controller for transfer
++      floppy_drive_seek(drive, head, track);
+       floppy_prepare_controller(drive);
+ 
+       // send format-track command (6 bytes) to controller
+@@ -8289,6 +8361,11 @@
+ 
+   ipl_entry_t e;
+ 
++  // The A20 gate closed for what boots, as an AT's POST leaves it (the
++  // keyboard controller's output port comes up with it open): an 8086's
++  // wrap at 1 MB, and HIMEM's test that it can switch it.
++  set_enable_a20(0);
++
+   // if BX_ELTORITO_BOOT is not defined, old behavior
+   //   check bit 5 in CMOS reg 0x2d.  load either 0x00 or 0x80 into DL
+   //   in preparation for the initial INT 13h (0=floppy A:, 0x80=C:)

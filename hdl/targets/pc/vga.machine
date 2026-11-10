@@ -77,6 +77,12 @@ component Vga {
         state blink: u8 = 0;
         /// The beam, in dots from the top left of the frame.
         state pos: u32 = 0;
+        /// Where the beam's line ends and the frame's dots, as `advance`
+        /// last found them (`adv_end` 0: not known): a move within the
+        /// line is then an add. A write to the card's ports (the timing,
+        /// the clocks, the sequencer) forgets them.
+        state adv_end: u32 = 0;
+        state adv_total: u32 = 0;
         state latch: [u8; 4];
 
         state misc: u8 = 0;
@@ -101,7 +107,7 @@ component Vga {
         state dac_rc: u8 = 0;
         state dac_reading: bool = false;
 
-        on reset { t = VgaCrtcTiming(crtc); }
+        on reset { t = VgaCrtcTiming(crtc); adv_end = 0; }
 
         // -- the processor's side --------------------------------------------------
 
@@ -417,6 +423,10 @@ component Vga {
 
         /// The beam moves `n` dots; returns the dots left in the frame.
         fn advance(n: u32) -> u32 {
+            if adv_end > pos && n < adv_end - pos {
+                pos = pos + n;
+                return adv_total - pos;
+            }
             let ld = line_dots();
             let total = ld * t.frame_lines;
             if total == 0 || seq[0] & 3 != 3 {
@@ -443,6 +453,8 @@ component Vga {
                     }
                 }
             }
+            adv_end = (pos / ld + 1) * ld;
+            adv_total = total;
             return total - pos;
         }
 
@@ -516,6 +528,7 @@ component Vga {
         }
 
         fn write_io(r: u12, d: u8) {
+            adv_end = 0;
             if r == 0x3C0 {
                 if !attr_flip {
                     attr_index = d & 0x3F;

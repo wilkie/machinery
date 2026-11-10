@@ -537,7 +537,10 @@ fn play_disk() {
     }
     while sys.seconds() < seconds && next_shot != f64::MAX {
         let until = next_shot.min(keys.get(k).map_or(f64::MAX, |p| p.0)).min(seconds);
-        steps += sys.run_until(4_000_000_000, |s| s.seconds() >= until).unwrap();
+        // (The stop in time units, worked out once: the time in seconds is
+        // a 128-bit integer's conversion, too dear after each step.)
+        let limit = (until * machine_at386_vga::system::BASE_DEN as f64 / machine_at386_vga::system::BASE_NUM as f64).ceil() as u128;
+        steps += sys.run_until(4_000_000_000, |s| s.now() >= limit).unwrap();
         while k < keys.len() && keys[k].0 <= sys.seconds() {
             // Held a while: a game may look at which keys are down once a
             // frame, not at each press.

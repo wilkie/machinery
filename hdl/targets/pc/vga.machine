@@ -61,6 +61,12 @@ component Vga {
     }
     model {
         mem planes: [u8; 0x40000];
+        /// The planes as dots, kept as they are written: at each offset, its
+        /// eight dots' 4-bit colours (dot d, from the left, in bits 4(7-d) to
+        /// 4(7-d)+3; plane p's bit in each nibble's bit p), what the 16-colour
+        /// modes draw, a word a character clock rather than four bytes and
+        /// eight gatherings of four bits.
+        mem chunky: [u32; 0x10000];
         mem bios: [u8; 0x10000];
         mem frame: [u8; 1036800];
         mem dac: [u8; 768];
@@ -112,7 +118,18 @@ component Vga {
         // -- the processor's side --------------------------------------------------
 
         fn plane(p: u2, off: u32) -> u8 { return planes[((p as u32) << 16) | (off & 0xFFFF)]; }
-        fn set_plane(p: u2, off: u32, v: u8) { planes[((p as u32) << 16) | (off & 0xFFFF)] = v; }
+        fn set_plane(p: u2, off: u32, v: u8) {
+            planes[((p as u32) << 16) | (off & 0xFFFF)] = v;
+            // The byte's bits spread four apart (bit i to bit 4i), at the
+            // plane's bit of each nibble.
+            let mut x = v as u32;
+            x = (x | (x << 12)) & 0x000F000F;
+            x = (x | (x << 6)) & 0x03030303;
+            x = (x | (x << 3)) & 0x11111111;
+            let o = off & 0xFFFF;
+            chunky[o] = (chunky[o] & ~(0x11111111_u32 << (p as u32))) | (x << (p as u32));
+        }
+        fn chunk(off: u32) -> u32 { return chunky[off & 0xFFFF]; }
 
         /// The offset of `addr` in the processor's window, or 0x10000.
         fn window(addr: u24) -> u32 {
@@ -381,14 +398,10 @@ component Vga {
                         // 16 colours, eight dots a character clock, each
                         // shown once or (320-dot modes) twice: the common
                         // cases, the bits in a fixed order.
-                        let p0 = plane(0, a);
-                        let p1 = plane(1, a);
-                        let p2 = plane(2, a);
-                        let p3 = plane(3, a);
+                        let dots = chunk(a);
                         let w: u32 = if half { 2 } else { 1 };
                         for d in 0..8 {
-                            let b = 7 - (d as u3);
-                            let v = ((p0[b] as u8) | ((p1[b] as u8) << 1) | ((p2[b] as u8) << 2) | ((p3[b] as u8) << 3)) as u32;
+                            let v = (dots >> ((7 - (d as u32)) * 4)) & 15;
                             for r in 0..2 {
                                 let rr = r as u32;
                                 if rr < w {

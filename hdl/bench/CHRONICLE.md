@@ -109,6 +109,7 @@ Games (host instructions an emulated second, `blocks`, drawing none;
 | 2026-11-10 | JIT | a cache of lookups by pc | goes stale on the epochs links do; value-checked links measured the equivalent | not tried | entry below |
 | 2026-11-10 | devices | the PIT's counter read as arithmetic on the time (as DOSBox does) | already so: its tick is constant-time; a read costs the catch-up's machinery | nothing to change | entry below |
 | 2026-11-10 | devices | lazy catch-up: a transaction skips its responder's catch-up when it can see nothing the ticks do | Lemmings −4.3% undrawn, −1.6% drawn; Jetpack +0.3%, One Must Fall 0 | kept | (this entry's commit) |
+| 2026-11-10 | VGA | a chunky copy of video memory kept as the planes are written; 16 colours drawn from it (as DOSBox's `fastmem`) | drawn: Lemmings −18%, Jetpack −6%, One Must Fall −5.7%; undrawn: Lemmings +1.5%, others 0 | kept | (this entry's commit) |
 
 ## Entries
 
@@ -312,7 +313,31 @@ suggested, each measured (`blocks`, drawing none):
   line's end) to be deferred exactly; that, and a chunky copy of the
   planes, are the VGA leads below.
 
+### 2026-11-10: a chunky copy of video memory (kept)
+
+- Idea: drawing a 16-colour dot gathered a bit from each of four planes
+  (generated as checked variable shifts) and stored three bytes; with
+  four plane reads recorded for the scanline memo a character, about 80
+  host instructions a dot. DOSBox keeps the planes expanded to pixels as
+  they are written (`VGA_UnchainedEGA_Handler`, `fastmem`).
+- Change: `mem chunky: [u32; 0x10000]` in the VGA, each offset's eight
+  dots' 4-bit colours, kept by `set_plane` (the byte's bits spread four
+  apart, merged at the plane's bit: three shifts and masks); the 8-dot
+  16-colour path of `render` reads one word a character and takes each
+  dot's colour with a shift.
+- Exact: Lemmings' frame and memory at 240 M as before (`jit`).
+- Measured (`blocks`): Lemmings 2.074 → 1.696 G drawn, 0.735 → 0.746 G
+  undrawn; Jetpack 1.761 → 1.656 G drawn, 1.153 → 1.154 G undrawn; One
+  Must Fall 1.036 → 0.977 G drawn, 0.688 → 0.689 G undrawn.
+- Learned: what is left of drawing a dot is mostly the three
+  bounds-checked byte stores into the frame and the colour table's
+  lookups: the generated loop, not the planes.
+
 ## Open leads
+
+- **Drawing's stores:** the frame's three bounds-checked byte stores a
+  dot (an RGB frame); a frame of indices with the colours applied at the
+  end of the line, or the generator proving indices in range.
 
 - **Runs that follow each other compiled into one function** (a
   superblock or trace tree), so a hop keeps its state in registers: what

@@ -1,0 +1,242 @@
+Flattening by reordering: each bridge context again with one device's decode first (not kept).
+
+Applies to 5c14dd4 (git apply from the repository root).
+What it measured: hdl/bench/CHRONICLE.md, 2026-11-10, "flattening by reordering the decode".
+
+diff --git a/hdl/crates/machine-model/src/gen/system.rs b/hdl/crates/machine-model/src/gen/system.rs
+index 3ff5640..f737fab 100644
+--- a/hdl/crates/machine-model/src/gen/system.rs
++++ b/hdl/crates/machine-model/src/gen/system.rs
+@@ -933,6 +933,76 @@ impl<'a> Gen<'a> {
+             Ok(s)
+         };
+ 
++        // Flattening: a bridge's context again for each device on a bus it
++        // masters, the device's decode first, so its handlers compiled for
++        // that context (they are generic over it) go to the device without
++        // the rest of the decode: the bridge partially evaluated, by the
++        // compiler, for the device's ranges. Which context a call into the
++        // bridge gets is chosen by its address alone; any address works with
++        // any of them (the decode is the same, in a different order where
++        // the ranges it passes over do not overlap), so the choice is only
++        // a guess at where the bridge will go. (`MACHINE_GEN_NOFLAT`: none.)
++        struct FlatV {
++            name: String,
++            bus: usize,
++            slave: hir::InstPort,
++            ranges: Vec<hir::AddressRange>,
++        }
++        let overlap = |a: &hir::AddressRange, b: &hir::AddressRange| -> bool {
++            (a.space.is_none() || b.space.is_none() || a.space == b.space) && a.lo <= b.hi && b.lo <= a.hi
++        };
++        let mut flat: Vec<Vec<FlatV>> = (0..insts.len()).map(|_| Vec::new()).collect();
++        if std::env::var_os("MACHINE_GEN_NOFLAT").is_none() {
++            for (ii, vs) in flat.iter_mut().enumerate() {
++                let is_slave = sys.buses.iter().any(|b| b.slaves.iter().any(|((s, _), _)| *s as usize == ii));
++                // (A bridge: a slave whose transactions make bus calls.)
++                let forwards = insts[ii].model.handlers.iter().any(|h| {
++                    if !matches!(h.kind, HandlerKind::Transaction { .. }) {
++                        return false;
++                    }
++                    let mut e = Effects::default();
++                    self.effects(insts[ii].model, &h.body, None, &mut e, &mut Vec::new());
++                    e.bus
++                });
++                if ii == proc_idx || !full(ii) || !is_slave || !forwards {
++                    continue;
++                }
++                for (bi, b) in sys.buses.iter().enumerate() {
++                    if !has_txns[bi] || !b.masters.iter().any(|(m, _)| *m as usize == ii) {
++                        continue;
++                    }
++                    let info = self.bus(b.bus)?;
++                    if !info.transactions.iter().any(|t| t.params.iter().any(|(n, _)| n == "addr")) {
++                        continue;
++                    }
++                    let order: Vec<&(hir::InstPort, Vec<hir::AddressRange>)> = b
++                        .slaves
++                        .iter()
++                        .filter(|((s, _), r)| !r.is_empty() && *s as usize != ii)
++                        .collect();
++                    for (k, ((si, sp), ranges)) in order.iter().enumerate() {
++                        let dev = &insts[*si as usize];
++                        let answers = dev.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Transaction { port, .. } if port == *sp));
++                        let passes = order[..k].iter().any(|(_, rs)| rs.iter().any(|a| ranges.iter().any(|r| overlap(a, r))));
++                        if !answers || passes {
++                            continue;
++                        }
++                        vs.push(FlatV {
++                            name: format!(
++                                "Flat_{}_{}_{}",
++                                ident(&insts[ii].name),
++                                ident(&dev.name),
++                                ident(&dev.comp.ports[*sp as usize].name)
++                            ),
++                            bus: bi,
++                            slave: (*si, *sp),
++                            ranges: ranges.clone(),
++                        });
++                    }
++                }
++            }
++        }
++
+         // One context per instance.
+         for (ii, i) in insts.iter().enumerate() {
+             let cname = ident(&i.comp.name);
+@@ -950,16 +1020,23 @@ impl<'a> Gen<'a> {
+                     );
+                 }
+             }
++            // The context, then its flattened variants (above).
++            for variant in std::iter::once(None).chain(flat[ii].iter().map(Some)) {
++            let sname = match variant {
++                Some(v) => v.name.clone(),
++                None => format!("Ctx_{n}"),
++            };
+             let mut m = String::new();
+             for (pi, p) in i.comp.ports.iter().enumerate() {
+                 let PortKind::Bus { bus, role: 0 } = p.kind else {
+                     continue;
+                 };
+                 let info = self.bus(bus)?;
+-                let inst_bus = sys
++                let inst_bi = sys
+                     .buses
+                     .iter()
+-                    .find(|b| b.masters.contains(&(ii as u32, pi as u32)));
++                    .position(|b| b.masters.contains(&(ii as u32, pi as u32)));
++                let inst_bus = inst_bi.map(|k| &sys.buses[k]);
+                 for tr in &info.transactions {
+                     let ret_items: Vec<(Option<String>, Ty)> = match &tr.ret {
+                         Some(Ty::Tuple(items)) => items.clone(),
+@@ -1014,6 +1091,15 @@ impl<'a> Gen<'a> {
+                             b.slaves.iter().filter(|(_, r)| !r.is_empty()).collect();
+                         order.extend(b.slaves.iter().filter(|(_, r)| r.is_empty()));
+                         order.retain(|((si, _), _)| *si as usize != ii);
++                        // A flattened variant: its device's decode first.
++                        if let (Some(v), Some(_)) = (variant, &addr) {
++                            if inst_bi == Some(v.bus) {
++                                if let Some(k) = order.iter().position(|(s, _)| *s == v.slave) {
++                                    let hot = order.remove(k);
++                                    order.insert(0, hot);
++                                }
++                            }
++                        }
+                         for ((si, sp), ranges) in order {
+                             let si = *si as usize;
+                             let dev = &insts[si];
+@@ -1046,14 +1132,80 @@ impl<'a> Gen<'a> {
+                             let catch = format!("{behind}let Some(dev) = self.{dn}.as_deref_mut() else {{ self.sig.now += {base} * {period}; return {open}; }}; {}", catch_in(si, ii));
+                             // The responder may have changed what it schedules:
+                             // it is due again after the access.
+-                            let call = format!(
+-                                "{{ let r = {{ let mut c = {}; dev.on_{}_{}(&mut c, {}) }};{} r }}",
+-                                ctx_for(si, "self", Some(ii)),
+-                                ident(&dev.comp.ports[*sp as usize].name),
+-                                ident(&tr.name),
+-                                args.join(", "),
+-                                make_due(si, "self", true)
+-                            );
++                            // Into the device with its context; into a bridge
++                            // with flattened variants, with the one whose
++                            // device the address is in (above).
++                            let base_ctx = ctx_for(si, "self", Some(ii));
++                            let ctx_call = |ctx: &str| {
++                                format!(
++                                    "{{ let mut c = {ctx}; dev.on_{}_{}(&mut c, {}) }}",
++                                    ident(&dev.comp.ports[*sp as usize].name),
++                                    ident(&tr.name),
++                                    args.join(", ")
++                                )
++                            };
++                            // (Not those whose ranges an arm before this one
++                            // takes: they never reach it.)
++                            let before: Vec<&hir::AddressRange> = b
++                                .slaves
++                                .iter()
++                                .filter(|((s, _), r)| !r.is_empty() && *s as usize != ii)
++                                .take_while(|((s, _), _)| *s as usize != si)
++                                .flat_map(|(_, rs)| rs.iter())
++                                .collect();
++                            let fv: Vec<(usize, &FlatV)> = flat[si]
++                                .iter()
++                                .enumerate()
++                                .filter(|(_, v)| !v.ranges.iter().all(|r| before.iter().any(|p| p.space == r.space && p.lo <= r.lo && r.hi <= p.hi)))
++                                .collect();
++                            let sel_call = match (&addr, fv.is_empty()) {
++                                (Some(a), false) => {
++                                    let one = format!("Ctx_{dn} {{");
++                                    let mut arms = String::new();
++                                    for &(k, v) in &fv {
++                                        let ctx = base_ctx.replacen(&one, &format!("{} {{", v.name), 1);
++                                        let _ = write!(arms, "{} => {}, ", k + 1, ctx_call(&ctx));
++                                    }
++                                    let in_ranges = |rs: &[&hir::AddressRange]| -> String {
++                                        rs.iter()
++                                            .map(|r| format!("(({a} as u128) >= {:#x} && ({a} as u128) <= {:#x})", r.lo, r.hi))
++                                            .collect::<Vec<_>>()
++                                            .join(" || ")
++                                    };
++                                    let chain = |space: Option<i128>| -> String {
++                                        let mut s = String::new();
++                                        for &(k, v) in &fv {
++                                            let rs: Vec<&hir::AddressRange> = v
++                                                .ranges
++                                                .iter()
++                                                .filter(|r| space.is_none() || r.space.is_none() || r.space == space)
++                                                .collect();
++                                            if !rs.is_empty() {
++                                                let _ = write!(s, "if {} {{ {} }} else ", in_ranges(&rs), k + 1);
++                                            }
++                                        }
++                                        s.push_str("{ 0 }");
++                                        s
++                                    };
++                                    let mut spaces: Vec<i128> = fv.iter().map(|x| x.1).flat_map(|v| v.ranges.iter().filter_map(|r| r.space)).collect();
++                                    spaces.sort();
++                                    spaces.dedup();
++                                    let sel = match (&space, spaces.is_empty()) {
++                                        (Some(s), false) => {
++                                            let mut t = String::new();
++                                            for v in &spaces {
++                                                let _ = write!(t, "if {s} as i128 == {v} {{ {} }} else ", chain(Some(*v)));
++                                            }
++                                            t.push_str("{ 0 }");
++                                            t
++                                        }
++                                        _ => chain(None),
++                                    };
++                                    format!("match {sel} {{ {arms}_ => {} }}", ctx_call(&base_ctx))
++                                }
++                                _ => ctx_call(&base_ctx),
++                            };
++                            let call = format!("{{ let r = {sel_call};{} r }}", make_due(si, "self", true));
+                             let Some(a) = addr.clone() else {
+                                 // Not decoded: offered to each responder that
+                                 // handles it, in binding order, until one
+@@ -1110,13 +1262,7 @@ impl<'a> Gen<'a> {
+                                     .filter(|r| r.space.is_some_and(|v| lazy_ranges.contains(&v)))
+                                     .map(|r| format!("({s_} as i128 == {} && ({a} as u128) >= {:#x} && ({a} as u128) <= {:#x})", r.space.unwrap(), r.lo, r.hi))
+                                     .collect();
+-                                let lcall = format!(
+-                                    "{{ let mut c = {}; dev.on_{}_{}(&mut c, {}) }}",
+-                                    ctx_for(si, "self", Some(ii)),
+-                                    ident(&dev.comp.ports[*sp as usize].name),
+-                                    ident(&tr.name),
+-                                    args.join(", ")
+-                                );
++                                let lcall = &sel_call;
+                                 let _ = writeln!(
+                                     body,
+                                     "        if {} {{\n            {behind}let Some(dev) = self.{dn}.as_deref_mut() else {{ self.sig.now += {base} * {period}; return {open}; }};\n            match {lcall} {{\n                Some(r) => {{\n                    self.sig.now += ({base} + r.{n_ret} as clock::Time) * {period};\n                    return {result};\n                }}\n                None => {{\n                    self.sig.now += {base} * {period};\n                    return {open};\n                }}\n            }}\n        }}",
+@@ -1197,7 +1343,8 @@ impl<'a> Gen<'a> {
+                     _ => {}
+                 }
+             }
+-            let _ = write!(o, "    pub struct Ctx_{n}<'a> {{\n{fields}    }}\n    impl {cname}Ports for Ctx_{n}<'_> {{\n{m}    }}\n");
++            let _ = write!(o, "    pub struct {sname}<'a> {{\n{fields}    }}\n    impl {cname}Ports for {sname}<'_> {{\n{m}    }}\n");
++            }
+         }
+ 
+         // Catch-up functions: run a device's clocks up to the present.

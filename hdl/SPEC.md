@@ -1988,6 +1988,26 @@ drives), and `system::System`:
   cheaper undrawn, every result the same.
   On the 386 AT this made a DOS boot 15-20% faster, with identical
   results.
+  **Flattening.** A bridge (a device whose transaction handlers start
+  transactions of their own) also gets, for each device on a bus it
+  masters that masters none itself, a context holding only that device
+  (with the signals and the marks). Its handlers, generic over their
+  context, are compiled for it too, so a call through it goes straight
+  to the device: the bridge partially evaluated, by the compiler, for
+  that device. The generator uses it for a call into the bridge whose
+  space and address are in a range it proved sends every transaction the
+  handler starts (through the model fns it calls) to that device, in its
+  ranges: an interval analysis of the handler with the space known and
+  the address in the device's range, shrunk by up to 7 bytes so the
+  handler's own offsets stay inside it; a transaction without an address
+  only where no other device answers it. Anywhere else, the bridge's own
+  context, as before. On the 386 AT the AT bus controller's local reads
+  and writes are flattened for the VGA's memory and ports, the PIT, the
+  fixed disk and the Sound Blaster (not for ports narrower than the
+  handler's dword: which lanes it uses is not known), and its system
+  memory accesses (the DMA's) for RAM and the boot ROM: Xmas Lemmings'
+  window 7.6% cheaper undrawn, Jetpack's 3.5%, every result the same
+  (`MACHINE_GEN_NOFLAT` turns it off).
 - `step()` runs one instruction, or an interrupt the isa's `boundary` fn
   took, and catches the devices up; a halted processor waits one cycle
   of its clock per step. `run(n)` runs until the processor halts and

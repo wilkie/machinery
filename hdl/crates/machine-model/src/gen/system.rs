@@ -933,6 +933,132 @@ impl<'a> Gen<'a> {
             Ok(s)
         };
 
+        // Flattening: a bridge's context again for each device on a bus it
+        // masters that is no master itself, holding that device alone, so
+        // the bridge's handlers compiled for it (they are generic over their
+        // context) go straight to the device: the bridge partially
+        // evaluated, by the compiler, for the device. A call into the bridge
+        // gets it where its space and address are in a range the generator
+        // proved (`flat_calls`) keeps every bus call the handler makes to
+        // the device, in its ranges (the decode would choose it). Where the
+        // proof does not settle, the bridge's own context, as before.
+        // (`MACHINE_GEN_NOFLAT`: none.)
+        struct FlatV {
+            name: String,
+            bus: usize,
+            slave: hir::InstPort,
+            /// Proved: (the bridge's handler: port, transaction), the space,
+            /// and the address interval.
+            sel: Vec<(u32, DefId, Option<i128>, i128, i128)>,
+        }
+        let overlap = |a: &hir::AddressRange, b: &hir::AddressRange| -> bool {
+            (a.space.is_none() || b.space.is_none() || a.space == b.space) && a.lo <= b.hi && b.lo <= a.hi
+        };
+        let mut flat: Vec<Vec<FlatV>> = (0..insts.len()).map(|_| Vec::new()).collect();
+        if std::env::var_os("MACHINE_GEN_NOFLAT").is_none() {
+            for (ii, vs) in flat.iter_mut().enumerate() {
+                let i = &insts[ii];
+                if ii == proc_idx || !full(ii) {
+                    continue;
+                }
+                for (bi, b) in sys.buses.iter().enumerate() {
+                    let Some(&(_, pm)) = b.masters.iter().find(|(m, _)| *m as usize == ii) else {
+                        continue;
+                    };
+                    if !has_txns[bi] {
+                        continue;
+                    }
+                    let info = self.bus(b.bus)?;
+                    let order: Vec<&(hir::InstPort, Vec<hir::AddressRange>)> = b
+                        .slaves
+                        .iter()
+                        .filter(|((s, _), r)| !r.is_empty() && *s as usize != ii)
+                        .collect();
+                    for (k, ((si, sp), ranges)) in order.iter().enumerate() {
+                        let dev = &insts[*si as usize];
+                        let answers = dev.model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Transaction { port, .. } if port == *sp));
+                        let passes = order[..k].iter().any(|(_, rs)| rs.iter().any(|a| ranges.iter().any(|r| overlap(a, r))));
+                        if !answers || passes || full(*si as usize) {
+                            continue;
+                        }
+                        // Whether the calls a handler makes all go to the
+                        // device, in its ranges.
+                        let to_dev = |calls: &[(u32, DefId, Vec<Option<(i128, i128)>>)]| -> bool {
+                            calls.iter().all(|(port, td, args)| {
+                                let Some(t) = info.transactions.iter().find(|t| t.def == *td) else { return false };
+                                if *port != pm {
+                                    return false;
+                                }
+                                let at = |n: &str| t.params.iter().position(|(x, _)| x == n);
+                                match at("addr") {
+                                    Some(ak) => {
+                                        let Some(Some((lo, hi))) = args.get(ak) else { return false };
+                                        let sv = match at("space") {
+                                            Some(sk) => match args.get(sk) {
+                                                Some(Some((a, b))) if a == b => Some(*a),
+                                                _ => return false,
+                                            },
+                                            None => None,
+                                        };
+                                        ranges.iter().any(|r| (r.space.is_none() || r.space == sv) && *lo >= r.lo as i128 && *hi <= r.hi as i128)
+                                    }
+                                    // Offered to every responder: none other
+                                    // may answer it.
+                                    None => !b.slaves.iter().any(|((s, p), _)| {
+                                        (*s, *p) != (*si, *sp)
+                                            && *s as usize != ii
+                                            && insts[*s as usize].model.handlers.iter().any(|h| matches!(h.kind, HandlerKind::Transaction { port, transaction } if port == *p && transaction == *td))
+                                    }),
+                                }
+                            })
+                        };
+                        let mut sel = Vec::new();
+                        for h in &i.model.handlers {
+                            let HandlerKind::Transaction { port: hp, transaction: td } = h.kind else { continue };
+                            let PortKind::Bus { bus: hb, .. } = i.comp.ports[hp as usize].kind else { continue };
+                            let Some(ht) = self.bus(hb)?.transactions.iter().find(|t| t.def == td) else { continue };
+                            let at = |n: &str| ht.params.iter().position(|(x, _)| x == n);
+                            let Some(ak) = at("addr") else { continue };
+                            for r in ranges.iter() {
+                                let mut known = Vec::new();
+                                match (r.space, at("space")) {
+                                    (Some(v), Some(sk)) => known.push((sk, (v, v))),
+                                    (Some(_), None) => continue,
+                                    _ => {}
+                                }
+                                for shrink in [0i128, 1, 3, 7] {
+                                    let (lo, hi) = (r.lo as i128, r.hi as i128 - shrink);
+                                    if hi < lo {
+                                        break;
+                                    }
+                                    let mut kn = known.clone();
+                                    kn.push((ak, (lo, hi)));
+                                    if self.flat_calls(i.model, h, &kn).is_some_and(|c| !c.is_empty() && to_dev(&c)) {
+                                        sel.push((hp, td, r.space, lo, hi));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if sel.is_empty() {
+                            continue;
+                        }
+                        vs.push(FlatV {
+                            name: format!(
+                                "Flat_{}_{}_{}",
+                                ident(&i.name),
+                                ident(&dev.name),
+                                ident(&dev.comp.ports[*sp as usize].name)
+                            ),
+                            bus: bi,
+                            slave: (*si, *sp),
+                            sel,
+                        });
+                    }
+                }
+            }
+        }
+
         // One context per instance.
         for (ii, i) in insts.iter().enumerate() {
             let cname = ident(&i.comp.name);
@@ -950,16 +1076,28 @@ impl<'a> Gen<'a> {
                     );
                 }
             }
+            // The context, then its flattened variants (above): the
+            // signals, the marks and the one device.
+            let all_fields = fields;
+            for variant in std::iter::once(None).chain(flat[ii].iter().map(Some)) {
+            let (sname, fields) = match variant {
+                Some(v) => {
+                    let d = &insts[v.slave.0 as usize];
+                    (v.name.clone(), format!("        pub sig: &'a mut Signals,\n        pub marks: &'a mut Marks,\n        pub {}: Option<&'a mut {}>,\n", ident(&d.name), ident(&d.comp.name)))
+                }
+                None => (format!("Ctx_{n}"), all_fields.clone()),
+            };
             let mut m = String::new();
             for (pi, p) in i.comp.ports.iter().enumerate() {
                 let PortKind::Bus { bus, role: 0 } = p.kind else {
                     continue;
                 };
                 let info = self.bus(bus)?;
-                let inst_bus = sys
+                let inst_bi = sys
                     .buses
                     .iter()
-                    .find(|b| b.masters.contains(&(ii as u32, pi as u32)));
+                    .position(|b| b.masters.contains(&(ii as u32, pi as u32)));
+                let inst_bus = inst_bi.map(|k| &sys.buses[k]);
                 for tr in &info.transactions {
                     let ret_items: Vec<(Option<String>, Ty)> = match &tr.ret {
                         Some(Ty::Tuple(items)) => items.clone(),
@@ -1014,6 +1152,15 @@ impl<'a> Gen<'a> {
                             b.slaves.iter().filter(|(_, r)| !r.is_empty()).collect();
                         order.extend(b.slaves.iter().filter(|(_, r)| r.is_empty()));
                         order.retain(|((si, _), _)| *si as usize != ii);
+                        // A flattened variant: its device alone on its bus,
+                        // nothing on the others (proved not reached).
+                        if let Some(v) = variant {
+                            if inst_bi == Some(v.bus) {
+                                order.retain(|(s, _)| *s == v.slave);
+                            } else {
+                                order.clear();
+                            }
+                        }
                         for ((si, sp), ranges) in order {
                             let si = *si as usize;
                             let dev = &insts[si];
@@ -1046,14 +1193,75 @@ impl<'a> Gen<'a> {
                             let catch = format!("{behind}let Some(dev) = self.{dn}.as_deref_mut() else {{ self.sig.now += {base} * {period}; return {open}; }}; {}", catch_in(si, ii));
                             // The responder may have changed what it schedules:
                             // it is due again after the access.
-                            let call = format!(
-                                "{{ let r = {{ let mut c = {}; dev.on_{}_{}(&mut c, {}) }};{} r }}",
-                                ctx_for(si, "self", Some(ii)),
-                                ident(&dev.comp.ports[*sp as usize].name),
-                                ident(&tr.name),
-                                args.join(", "),
-                                make_due(si, "self", true)
-                            );
+                            // Into the device with its context; into a bridge
+                            // with flattened variants, with the one whose
+                            // device the address is in (above).
+                            let base_ctx = ctx_for(si, "self", Some(ii));
+                            let ctx_call = |ctx: &str| {
+                                format!(
+                                    "{{ let mut c = {ctx}; dev.on_{}_{}(&mut c, {}) }}",
+                                    ident(&dev.comp.ports[*sp as usize].name),
+                                    ident(&tr.name),
+                                    args.join(", ")
+                                )
+                            };
+                            // (The variants proved for this handler, whose
+                            // device this context can lend.)
+                            let fv: Vec<(usize, &FlatV, Vec<(Option<i128>, i128, i128)>)> = flat[si]
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, v)| reach[ii].contains(&(v.slave.0 as usize)))
+                                .map(|(k, v)| (k, v, v.sel.iter().filter(|x| x.0 == *sp && x.1 == tr.def).map(|x| (x.2, x.3, x.4)).collect::<Vec<_>>()))
+                                .filter(|x| !x.2.is_empty())
+                                .collect();
+                            let sel_call = match (&addr, fv.is_empty()) {
+                                (Some(a), false) => {
+                                    let mut arms = String::new();
+                                    for (k, v, _) in &fv {
+                                        let hn = ident(&insts[v.slave.0 as usize].name);
+                                        let ctx = format!("{} {{ sig: &mut *self.sig, marks: &mut *self.marks, {hn}: self.{hn}.as_deref_mut() }}", v.name);
+                                        let _ = write!(arms, "{} => {}, ", k + 1, ctx_call(&ctx));
+                                    }
+                                    let in_ranges = |rs: &[(i128, i128)]| -> String {
+                                        rs.iter()
+                                            .map(|r| format!("(({a} as u128) >= {:#x} && ({a} as u128) <= {:#x})", r.0, r.1))
+                                            .collect::<Vec<_>>()
+                                            .join(" || ")
+                                    };
+                                    let chain = |space: Option<i128>| -> String {
+                                        let mut s = String::new();
+                                        for (k, _, sel) in &fv {
+                                            let rs: Vec<(i128, i128)> = sel
+                                                .iter()
+                                                .filter(|r| r.0.is_none() || r.0 == space)
+                                                .map(|r| (r.1, r.2))
+                                                .collect();
+                                            if !rs.is_empty() {
+                                                let _ = write!(s, "if {} {{ {} }} else ", in_ranges(&rs), k + 1);
+                                            }
+                                        }
+                                        s.push_str("{ 0 }");
+                                        s
+                                    };
+                                    let mut spaces: Vec<i128> = fv.iter().flat_map(|x| x.2.iter().filter_map(|r| r.0)).collect();
+                                    spaces.sort();
+                                    spaces.dedup();
+                                    let sel = match (&space, spaces.is_empty()) {
+                                        (Some(s), false) => {
+                                            let mut t = String::new();
+                                            for v in &spaces {
+                                                let _ = write!(t, "if {s} as i128 == {v} {{ {} }} else ", chain(Some(*v)));
+                                            }
+                                            t.push_str("{ 0 }");
+                                            t
+                                        }
+                                        _ => chain(None),
+                                    };
+                                    format!("match {sel} {{ {arms}_ => {} }}", ctx_call(&base_ctx))
+                                }
+                                _ => ctx_call(&base_ctx),
+                            };
+                            let call = format!("{{ let r = {sel_call};{} r }}", make_due(si, "self", true));
                             let Some(a) = addr.clone() else {
                                 // Not decoded: offered to each responder that
                                 // handles it, in binding order, until one
@@ -1110,13 +1318,7 @@ impl<'a> Gen<'a> {
                                     .filter(|r| r.space.is_some_and(|v| lazy_ranges.contains(&v)))
                                     .map(|r| format!("({s_} as i128 == {} && ({a} as u128) >= {:#x} && ({a} as u128) <= {:#x})", r.space.unwrap(), r.lo, r.hi))
                                     .collect();
-                                let lcall = format!(
-                                    "{{ let mut c = {}; dev.on_{}_{}(&mut c, {}) }}",
-                                    ctx_for(si, "self", Some(ii)),
-                                    ident(&dev.comp.ports[*sp as usize].name),
-                                    ident(&tr.name),
-                                    args.join(", ")
-                                );
+                                let lcall = &sel_call;
                                 let _ = writeln!(
                                     body,
                                     "        if {} {{\n            {behind}let Some(dev) = self.{dn}.as_deref_mut() else {{ self.sig.now += {base} * {period}; return {open}; }};\n            match {lcall} {{\n                Some(r) => {{\n                    self.sig.now += ({base} + r.{n_ret} as clock::Time) * {period};\n                    return {result};\n                }}\n                None => {{\n                    self.sig.now += {base} * {period};\n                    return {open};\n                }}\n            }}\n        }}",
@@ -1197,7 +1399,8 @@ impl<'a> Gen<'a> {
                     _ => {}
                 }
             }
-            let _ = write!(o, "    pub struct Ctx_{n}<'a> {{\n{fields}    }}\n    impl {cname}Ports for Ctx_{n}<'_> {{\n{m}    }}\n");
+            let _ = write!(o, "    pub struct {sname}<'a> {{\n{fields}    }}\n    impl {cname}Ports for {sname}<'_> {{\n{m}    }}\n");
+            }
         }
 
         // Catch-up functions: run a device's clocks up to the present.
@@ -2206,6 +2409,200 @@ impl Gen<'_> {
                 self.effects(model, &model.fns[i as usize].body, None, out, seen);
             }
         }
+    }
+
+    /// Flattening's proof: the bus calls `handler` makes (through the model
+    /// fns it calls), with an interval for each argument (None: unknown),
+    /// given intervals for some of its parameters (`known`, by position).
+    /// Flow-insensitive: a local's interval holds every value assigned to
+    /// it anywhere; an operation that may wrap, or that is not followed, is
+    /// unknown. None when it does not settle.
+    #[allow(clippy::type_complexity)]
+    fn flat_calls(&self, model: &hir::ModelBody, handler: &hir::Handler, known: &[(usize, (i128, i128))]) -> Option<Vec<(u32, DefId, Vec<Option<(i128, i128)>>)>> {
+        use hir::ExprKind as H;
+        use machine_syntax::ast::BinaryOp as B;
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        // A value: Bot (nothing yet), an interval, or Top.
+        #[derive(Clone, Copy, PartialEq, Debug)]
+        enum V {
+            Bot,
+            I(i128, i128),
+            Top,
+        }
+        fn join(a: V, b: V) -> V {
+            match (a, b) {
+                (V::Bot, x) | (x, V::Bot) => x,
+                (V::I(a, b), V::I(c, d)) => V::I(a.min(c), b.max(d)),
+                _ => V::Top,
+            }
+        }
+        fn range(t: &Ty) -> Option<(i128, i128)> {
+            match t {
+                Ty::UInt(b) if *b < 64 => Some((0, (1i128 << b) - 1)),
+                Ty::Bool => Some((0, 1)),
+                _ => None,
+            }
+        }
+        fn fit(v: V, t: &Ty) -> V {
+            match (v, range(t)) {
+                (V::I(a, b), Some((lo, hi))) if a >= lo && b <= hi => v,
+                (V::I(..), Some(_)) => V::Top,
+                (V::I(..), None) if matches!(t, Ty::Enum(_) | Ty::Const(_)) => v,
+                (V::Bot, _) => V::Bot,
+                _ => V::Top,
+            }
+        }
+        // Bodies: 0 the handler, 1 + i model fn i.
+        let env: RefCell<HashMap<(usize, u32), V>> = RefCell::new(HashMap::new());
+        for &(k, iv) in known {
+            let l = *handler.params.get(k)?;
+            env.borrow_mut().insert((0, l), V::I(iv.0, iv.1));
+        }
+        for (k, &l) in handler.params.iter().enumerate() {
+            if !known.iter().any(|x| x.0 == k) {
+                env.borrow_mut().insert((0, l), V::Top);
+            }
+        }
+        let enums = |d: DefId, i: u32| self.enums[&d].variants[i as usize].1;
+        fn eval(e: &hir::Expr, body: usize, env: &HashMap<(usize, u32), V>, enums: &dyn Fn(DefId, u32) -> i128) -> V {
+            let v = match &e.kind {
+                H::Int(v) => V::I(*v, *v),
+                H::Bool(b) => V::I(*b as i128, *b as i128),
+                H::Variant(d, i) => {
+                    let x = enums(*d, *i);
+                    V::I(x, x)
+                }
+                H::Local(l) => env.get(&(body, *l)).copied().unwrap_or(V::Bot),
+                H::Cast(x) => return fit(eval(x, body, env, enums), &e.ty),
+                H::Ternary(_, a, b) => join(eval(a, body, env, enums), eval(b, body, env, enums)),
+                H::Binary(op @ (B::Add | B::Sub | B::BitAnd), a, b) => match (eval(a, body, env, enums), eval(b, body, env, enums)) {
+                    (V::Bot, _) | (_, V::Bot) => V::Bot,
+                    (V::I(a, b), V::I(c, d)) => match op {
+                        B::Add => V::I(a + c, b + d),
+                        B::Sub => V::I(a - d, b - c),
+                        // (A constant mask of high bits: monotone.)
+                        _ if c == d && c >= 0 && a >= 0 && {
+                            let w = range(&e.ty).map(|r| r.1).unwrap_or(-1);
+                            w > 0 && (w & !c).count_ones() == (w & !c).trailing_ones()
+                        } => V::I(a & c, b & c),
+                        _ => V::Top,
+                    },
+                    _ => V::Top,
+                },
+                _ => V::Top,
+            };
+            match v {
+                V::I(..) => fit(v, &e.ty),
+                x => x,
+            }
+        }
+        let calls: RefCell<Vec<(u32, DefId, Vec<Option<(i128, i128)>>)>> = RefCell::new(Vec::new());
+        let walk = |body: usize, b: &hir::Block, record: bool| -> bool {
+            let mut changed = false;
+            let set = |key: (usize, u32), v: V, changed: &mut bool| {
+                let mut env = env.borrow_mut();
+                let old = env.get(&key).copied().unwrap_or(V::Bot);
+                let new = join(old, v);
+                if new != old {
+                    env.insert(key, new);
+                    *changed = true;
+                }
+            };
+            let ch = RefCell::new(false);
+            hir::visit_block(
+                b,
+                &mut |st| {
+                    let mut c = ch.borrow_mut();
+                    match &st.kind {
+                        hir::StmtKind::Let(t, v) => {
+                            let val = v.as_ref().map(|v| eval(v, body, &env.borrow(), &enums)).unwrap_or(V::Bot);
+                            match t {
+                                hir::LetTarget::Local(l) => set((body, *l), val, &mut c),
+                                _ => {
+                                    let mut stack = vec![t];
+                                    while let Some(t) = stack.pop() {
+                                        match t {
+                                            hir::LetTarget::Local(l) => set((body, *l), V::Top, &mut c),
+                                            hir::LetTarget::Tuple(ts) => stack.extend(ts.iter()),
+                                            hir::LetTarget::Discard => {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        hir::StmtKind::Assign(p, v) => {
+                            if let H::Local(l) = &p.kind {
+                                let x = eval(v, body, &env.borrow(), &enums);
+                                set((body, *l), x, &mut c);
+                            }
+                        }
+                        hir::StmtKind::For(l, lo, hi, _) => set((body, *l), V::I(*lo, (*hi - 1).max(*lo)), &mut c),
+                        _ => {}
+                    }
+                },
+                &mut |x| match &x.kind {
+                    H::ModelFnCall(i, args) => {
+                        let f = &model.fns[*i as usize];
+                        let mut c = ch.borrow_mut();
+                        for (a, &l) in args.iter().zip(&f.params) {
+                            let v = eval(a, body, &env.borrow(), &enums);
+                            set((1 + *i as usize, l), v, &mut c);
+                        }
+                    }
+                    H::BusCall(port, t, args) if record => {
+                        let vs = args
+                            .iter()
+                            .map(|a| match eval(a, body, &env.borrow(), &enums) {
+                                V::I(a, b) => Some((a, b)),
+                                _ => None,
+                            })
+                            .collect();
+                        calls.borrow_mut().push((*port, *t, vs));
+                    }
+                    _ => {}
+                },
+            );
+            changed |= *ch.borrow();
+            changed
+        };
+        // The fns the handler reaches.
+        let callees = |b: &hir::Block| {
+            let mut v = Vec::new();
+            hir::visit_block(b, &mut |_| {}, &mut |x| {
+                if let H::ModelFnCall(i, _) = &x.kind {
+                    v.push(*i);
+                }
+            });
+            v
+        };
+        let mut fns: Vec<u32> = Vec::new();
+        let mut todo = callees(&handler.body);
+        while let Some(i) = todo.pop() {
+            if !fns.contains(&i) {
+                fns.push(i);
+                todo.extend(callees(&model.fns[i as usize].body));
+            }
+        }
+        let mut settled = false;
+        for _ in 0..32 {
+            let mut changed = walk(0, &handler.body, false);
+            for &i in &fns {
+                changed |= walk(1 + i as usize, &model.fns[i as usize].body, false);
+            }
+            if !changed {
+                settled = true;
+                break;
+            }
+        }
+        if !settled {
+            return None;
+        }
+        walk(0, &handler.body, true);
+        for &i in &fns {
+            walk(1 + i as usize, &model.fns[i as usize].body, true);
+        }
+        Some(calls.into_inner())
     }
 
     /// Whether an access answered by `handler` (of a device whose ticks are

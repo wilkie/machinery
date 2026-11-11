@@ -62,6 +62,7 @@ Games (host instructions an emulated second, `blocks`, drawing none;
 | 2026-11-10 | c92b448 | 0.81 G | 1.21 G | 0.79 G | DOS=HIGH disks, A20 gate |
 | 2026-11-10 | ed27d7f | 0.80 G | 1.18 G | 0.74 G | the harness's stop test |
 | 2026-11-10 | 857c893 | 0.77 G | 1.17 G | 0.69 G | the VGA's beam, runs back before their start |
+| 2026-11-10 | (flattening's commit) | 0.69 G | 1.11 G | 0.69 G | lazy catch-up, the chunky copy, flattening |
 
 ## Index
 
@@ -111,6 +112,9 @@ Games (host instructions an emulated second, `blocks`, drawing none;
 | 2026-11-10 | devices | lazy catch-up: a transaction skips its responder's catch-up when it can see nothing the ticks do | Lemmings −4.3% undrawn, −1.6% drawn; Jetpack +0.3%, One Must Fall 0 | kept | (this entry's commit) |
 | 2026-11-10 | VGA | a chunky copy of video memory kept as the planes are written; 16 colours drawn from it (as DOSBox's `fastmem`) | drawn: Lemmings −18%, Jetpack −6%, One Must Fall −5.7%; undrawn: Lemmings +1.5%, others 0 | kept | (this entry's commit) |
 | 2026-11-10 | buses | flattening, sized: the VGA's memory path written by hand as one function (the model's read_n, the local bus, the bridge, the ISA bus) | Lemmings −12.1% undrawn; Jetpack −0.5%, One Must Fall −0.6% | sizing (exact); the generic flattening is the lead | experiments/2026-11-10-flatten-vga-by-hand.crate.patch |
+| 2026-11-10 | buses | flattening by reordering: the bridge's context again per device, that device's decode first | Lemmings +0.9%, Jetpack 0, One Must Fall +0.1% | not kept | experiments/2026-11-10-flatten-by-reordering.patch |
+| 2026-11-10 | buses | flattening, the bridge alone sized by hand (the processor model's path kept) | Lemmings −7.6% | sizing (exact) | entry below |
+| 2026-11-10 | buses | flattening: the bridge's context again per device holding that device alone, used where the generator proves the handler's calls all go to it | Lemmings −7.6%, Jetpack −3.5%, One Must Fall −0.3% undrawn | kept | (this entry's commit) |
 
 ## Entries
 
@@ -356,6 +360,77 @@ suggested, each measured (`blocks`, drawing none):
   partial evaluation of the bridge's handlers for the range's space,
   width and lanes), I/O too (Jetpack's PIT reads).
 
+### 2026-11-10: flattening by reordering the decode
+
+- Idea: the bridge's handlers are generic over their context, so a
+  second context type whose decode tries one device first would have
+  rustc compile the bridge for that device, with the other 13 range
+  checks (twice a byte for `cs16`) behind it. A call into the bridge
+  picks the context by its address; any context is right for any address
+  (the same decode in another order, where the ranges passed over do not
+  overlap), so the choice is only a guess.
+- Change: in the generator, a context per (bridge, device on a bus it
+  masters), the device's arm first; the call into the bridge chooses by
+  space, then range.
+- Exact (Lemmings and Jetpack at 240 M alike with and without).
+- Measured (`blocks`, none drawn): Lemmings 0.749 → 0.756 G, Jetpack
+  1.155 → 1.155 G, One Must Fall 0.689 → 0.690 G.
+- Why: the decode got short, but each context still holds every device
+  (16 references copied in), so it can fall back to any of them, and
+  the profile showed the copying and the calls not inlined costing what
+  the decode saved.
+- Outcome: not kept; superseded by the next entry, which removes the
+  fallback by proving it is not needed.
+
+### 2026-11-10: flattening, the bridge alone sized
+
+- Idea: before writing the proof, size what evaluating the bridge alone
+  gives (the processor model's `read_n` path and the board's context
+  kept).
+- Change (by hand, in the crate of the entry above): the local bus's
+  call into the bridge, in memory space and the VGA's window, a
+  straight-line function of the VGA's byte handlers, waits and catch-ups.
+- Exact; Lemmings 0.749 → 0.692 G (−7.6%), against −12.1% for the whole
+  path by hand: the bridge is about two thirds of it, the board's
+  context and the processor model's layers the rest.
+
+### 2026-11-10: flattening
+
+- Idea: the reordered contexts, holding only the one device (and the
+  signals and marks), used only where the generator has proved the
+  bridge's handler cannot reach any other: every transaction it starts,
+  through the model fns it calls, goes to that device within its ranges.
+  Then the decode in the context is the device's arm alone, and rustc
+  compiles the bridge straight through to it.
+- The proof (`flat_calls` in `gen/system.rs`): an interval analysis of
+  the handler with `space` known and `addr` in the device's range,
+  shrunk by 0, 1, 3 or 7 bytes until the handler's own offsets (`a + 1`,
+  `a + 2`) stay inside it. Flow-insensitive; additions and subtractions
+  that cannot wrap, casts that fit, masks of high bits; anything else is
+  unknown and the proof fails. A transaction without an address
+  (`wait_state`) is allowed only where no other device answers it. Only
+  devices that master no bus (a master's context holds everything).
+- What it proves on the 386 AT: the AT bus controller's local reads and
+  writes for the VGA's memory and ports, the PIT (40h-43h), the fixed
+  disk's 1F0h-1F7h and the Sound Blaster's ports, and its system memory
+  side (the DMA's cycles) for RAM and the boot ROM. Not the 1- and
+  2-byte port ranges (61h, the PICs, the keyboard controller): which
+  lanes a call uses is not known to the analysis, so the dword the
+  handler might touch leaves the range.
+- Exact: Lemmings and Jetpack at 240 M end alike with and without it
+  (`blocks`), and `trace` and `jit` with it end as `trace` did before;
+  the full test round passes.
+- Measured (`blocks`, none drawn): Lemmings 0.749 → 0.692 G (−7.6%, the
+  sizing above exactly), Jetpack 1.155 → 1.114 G (−3.5%, its PIT reads;
+  the hand version of the VGA alone gave −0.5%), One Must Fall 0.689 →
+  0.687 G.
+- Outcome: kept. `MACHINE_GEN_NOFLAT` turns it off.
+- Next: the board level, the other third of the VGA's path (the
+  processor's 17-device context and the model's `read_n`). The same
+  proof needs the address hook's mask, which is a wire (A20): a variant
+  per gate value, or the board choosing after `cpu_addr`. Lanes known
+  per access width would admit the narrow ports.
+
 ## Open leads
 
 - **Drawing's stores:** the frame's three bounds-checked byte stores a
@@ -369,8 +444,9 @@ suggested, each measured (`blocks`, drawing none):
   whose handler reads none of what its tick writes, while the tick reports
   nothing due before then (the VGA's memory accesses, the PIT's reads).
   Lemmings' VGA catch-up is 23% of its window, undrawn.
-- **A shorter path to video memory** in the emulator profiles (the
-  processor model, the AT bus and the ISA bus layers: 25% of Lemmings).
+- **A shorter path to video memory** in the emulator profiles: the
+  bridge is flattened (above); the board's context and the processor
+  model's layers are left (about 5% of Lemmings, by the sizing).
 - **Compiled 32-bit code** (One Must Fall's compiled code, 73 host
   instructions a guest instruction against DOSBox's 36 for all of it).
 - **Rare paths out of line** (README 2026-11-08: 18 a step, 47 IR

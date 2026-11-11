@@ -1086,6 +1086,43 @@ impl<'a> Gen<'a> {
                                 let _ = writeln!(body, "        if {cond} {{ self.sig.now += {base} * {period}; return {open}; }}");
                                 continue;
                             }
+                            // Lazy catch-up: in a space where the handler
+                            // reads nothing the device's ticks write and writes
+                            // nothing they read (and they reach no bus), the
+                            // device is not caught up first, nor made due
+                            // after: the ticks it skips come out the same.
+                            // (`MACHINE_GEN_NOLAZY`: always caught up.)
+                            let lazy_ranges: Vec<i128> = match (&space, dev.model.handlers.iter().find(|h| matches!(h.kind, HandlerKind::Transaction { port, transaction } if port == *sp && transaction == tr.def))) {
+                                (Some(_), Some(h)) if ticking(si) && std::env::var_os("MACHINE_GEN_NOLAZY").is_none() => {
+                                    let si_space = tr.params.iter().position(|(n, _)| n == "space").and_then(|k| h.params.get(k).copied());
+                                    let mut vs: Vec<i128> = ranges.iter().filter_map(|r| r.space).collect();
+                                    vs.sort();
+                                    vs.dedup();
+                                    vs.into_iter().filter(|v| si_space.is_some_and(|l| self.lazy_access(dev.model, h, Some((l, *v))))).collect()
+                                }
+                                _ => Vec::new(),
+                            };
+                            if !lazy_ranges.is_empty() {
+                                let a = addr.clone().unwrap();
+                                let s_ = space.clone().unwrap();
+                                let lcond: Vec<String> = ranges
+                                    .iter()
+                                    .filter(|r| r.space.is_some_and(|v| lazy_ranges.contains(&v)))
+                                    .map(|r| format!("({s_} as i128 == {} && ({a} as u128) >= {:#x} && ({a} as u128) <= {:#x})", r.space.unwrap(), r.lo, r.hi))
+                                    .collect();
+                                let lcall = format!(
+                                    "{{ let mut c = {}; dev.on_{}_{}(&mut c, {}) }}",
+                                    ctx_for(si, "self", Some(ii)),
+                                    ident(&dev.comp.ports[*sp as usize].name),
+                                    ident(&tr.name),
+                                    args.join(", ")
+                                );
+                                let _ = writeln!(
+                                    body,
+                                    "        if {} {{\n            {behind}let Some(dev) = self.{dn}.as_deref_mut() else {{ self.sig.now += {base} * {period}; return {open}; }};\n            match {lcall} {{\n                Some(r) => {{\n                    self.sig.now += ({base} + r.{n_ret} as clock::Time) * {period};\n                    return {result};\n                }}\n                None => {{\n                    self.sig.now += {base} * {period};\n                    return {open};\n                }}\n            }}\n        }}",
+                                    lcond.join(" || ")
+                                );
+                            }
                             let _ = writeln!(
                                 body,
                                 "        if {cond} {{\n            {catch}match {call} {{\n                Some(r) => {{\n                    self.sig.now += ({base} + r.{n_ret} as clock::Time) * {period};\n                    return {result};\n                }}\n                None => {{\n                    self.sig.now += {base} * {period};\n                    return {open};\n                }}\n            }}\n        }}"
@@ -2049,5 +2086,154 @@ impl Gen<'_> {
             )));
         }
         Ok(Some(wires))
+    }
+}
+
+/// What code reads and writes of a device model: its states, mems, output
+/// ports and signals (by kind and index), and whether it reaches a bus.
+#[derive(Default)]
+struct Effects {
+    reads: Vec<(u8, u32)>,
+    writes: Vec<(u8, u32)>,
+    bus: bool,
+}
+
+impl Gen<'_> {
+    /// `e`, given the transaction's `space` parameter `known` (its local
+    /// and value): Some(b) when it settles to `b`.
+    fn space_cond(e: &hir::Expr, known: Option<(u32, i128)>, enums: &dyn Fn(DefId, u32) -> i128) -> Option<bool> {
+        use hir::ExprKind as H;
+        use machine_syntax::ast::BinaryOp as B;
+        let (l, v) = known?;
+        match &e.kind {
+            H::Bool(b) => Some(*b),
+            H::Binary(op @ (B::Eq | B::Ne), a, b) => {
+                let side = |x: &hir::Expr, y: &hir::Expr| match (&x.kind, &y.kind) {
+                    (H::Local(id), H::Variant(d, i)) if *id == l => Some(enums(*d, *i) == v),
+                    _ => None,
+                };
+                let eq = side(a, b).or_else(|| side(b, a))?;
+                Some(if matches!(op, B::Eq) { eq } else { !eq })
+            }
+            H::Binary(B::And, a, b) => match (Self::space_cond(a, known, enums), Self::space_cond(b, known, enums)) {
+                (Some(false), _) | (_, Some(false)) => Some(false),
+                (Some(true), Some(true)) => Some(true),
+                _ => None,
+            },
+            H::Binary(B::Or, a, b) => match (Self::space_cond(a, known, enums), Self::space_cond(b, known, enums)) {
+                (Some(true), _) | (_, Some(true)) => Some(true),
+                (Some(false), Some(false)) => Some(false),
+                _ => None,
+            },
+            H::Unary(machine_syntax::ast::UnaryOp::Not, a) => Self::space_cond(a, known, enums).map(|b| !b),
+            _ => None,
+        }
+    }
+
+    /// Whether `b` always leaves the handler (it ends in a return or a
+    /// decline, or an if both of whose branches do).
+    fn ends(b: &hir::Block) -> bool {
+        match b.stmts.last().map(|s| &s.kind) {
+            Some(hir::StmtKind::Return(_) | hir::StmtKind::Decline) => true,
+            Some(hir::StmtKind::If(_, t, Some(f))) => Self::ends(t) && Self::ends(&hir::Block { stmts: vec![(**f).clone()], span: t.span }),
+            _ => false,
+        }
+    }
+
+    /// The effects of `body` in `model` (through the model fns it calls),
+    /// an `if` settled by the known `space` walked only where it goes.
+    fn effects(&self, model: &hir::ModelBody, body: &hir::Block, known: Option<(u32, i128)>, out: &mut Effects, seen: &mut Vec<u32>) {
+        let enums = |d: DefId, i: u32| self.enums[&d].variants[i as usize].1;
+        let mut calls: Vec<u32> = Vec::new();
+        for st in &body.stmts {
+            if let hir::StmtKind::If(c, t, f) = &st.kind {
+                match Self::space_cond(c, known, &enums) {
+                    Some(true) => {
+                        self.effects(model, t, known, out, seen);
+                        // (A branch that ends the handler: what follows is
+                        // not reached.)
+                        if Self::ends(t) {
+                            return;
+                        }
+                        continue;
+                    }
+                    Some(false) => {
+                        if let Some(f) = f {
+                            let b = hir::Block { stmts: vec![(**f).clone()], span: t.span };
+                            self.effects(model, &b, known, out, seen);
+                            if Self::ends(&b) {
+                                return;
+                            }
+                        }
+                        continue;
+                    }
+                    None => {}
+                }
+            }
+            let (reads, writes, bus) = (&mut out.reads, &mut out.writes, &mut out.bus);
+            hir::visit_stmt(
+                st,
+                &mut |s| match &s.kind {
+                    hir::StmtKind::Assign(p, _) => {
+                        let mut e = p;
+                        loop {
+                            match &e.kind {
+                                hir::ExprKind::State(_, i) => break writes.push((0, *i)),
+                                hir::ExprKind::ModelMem(_, i) => break writes.push((1, *i)),
+                                hir::ExprKind::Port(_, i, _) => break writes.push((2, *i)),
+                                hir::ExprKind::Field(b, _) | hir::ExprKind::Index(b, _) | hir::ExprKind::Slice(b, ..) | hir::ExprKind::TupleField(b, _) => e = b,
+                                _ => break,
+                            }
+                        }
+                    }
+                    hir::StmtKind::Emit { port, .. } => writes.push((3, *port)),
+                    _ => {}
+                },
+                &mut |x| match &x.kind {
+                    hir::ExprKind::State(_, i) => reads.push((0, *i)),
+                    hir::ExprKind::ModelMem(_, i) => reads.push((1, *i)),
+                    hir::ExprKind::Port(_, i, _) => reads.push((2, *i)),
+                    hir::ExprKind::SignalLevel(p, ..) => reads.push((3, *p)),
+                    hir::ExprKind::BusCall(..) => *bus = true,
+                    hir::ExprKind::ModelFnCall(i, _) => calls.push(*i),
+                    _ => {}
+                },
+            );
+        }
+        for i in calls {
+            if !seen.contains(&i) {
+                seen.push(i);
+                self.effects(model, &model.fns[i as usize].body, None, out, seen);
+            }
+        }
+    }
+
+    /// Whether an access answered by `handler` (of a device whose ticks are
+    /// `model`'s), in the space `known` gives, may skip catching the device
+    /// up (lazy catch-up): the device's ticks reach no bus, and the handler
+    /// reads nothing they write and writes nothing they read, so the ticks
+    /// it skips come out the same after it.
+    fn lazy_access(&self, model: &hir::ModelBody, handler: &hir::Handler, known: Option<(u32, i128)>) -> bool {
+        let mut tick = Effects::default();
+        let mut seen = Vec::new();
+        for h in model.handlers.iter().filter(|h| matches!(h.kind, HandlerKind::Tick { .. })) {
+            self.effects(model, &h.body, None, &mut tick, &mut seen);
+        }
+        if tick.bus {
+            return false;
+        }
+        let mut acc = Effects::default();
+        let mut seen = Vec::new();
+        self.effects(model, &handler.body, known, &mut acc, &mut seen);
+        let ok = !acc.reads.iter().any(|c| tick.writes.contains(c)) && !acc.writes.iter().any(|c| tick.reads.contains(c));
+        if std::env::var_os("MACHINE_GEN_LAZYDEBUG").is_some() {
+            let name = |c: &(u8, u32)| match c.0 { 0 => model.states[c.1 as usize].name.clone(), 1 => format!("mem {}", model.mems[c.1 as usize].name), 2 => format!("port {}", c.1), _ => format!("signal {}", c.1) };
+            let mut rw: Vec<String> = acc.reads.iter().filter(|c| tick.writes.contains(c)).map(name).collect();
+            rw.sort(); rw.dedup();
+            let mut wr: Vec<String> = acc.writes.iter().filter(|c| tick.reads.contains(c)).map(name).collect();
+            wr.sort(); wr.dedup();
+            eprintln!("lazy {:?} {:?}: reads what ticks write {:?}; writes what ticks read {:?} -> {ok}", known, handler.kind, rw, wr);
+        }
+        ok
     }
 }

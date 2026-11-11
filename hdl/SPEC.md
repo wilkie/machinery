@@ -1972,6 +1972,20 @@ drives), and `system::System`:
   every device that ticks is scheduled, the system keeps the least of
   their deadlines (lowered whenever one is set): until it passes and
   while no edge waits, the after-instruction catch-up is one comparison.
+  **Lazy catch-up.** A transaction need not catch its responder up first
+  when nothing it could see depends on it: the device's ticks reach no
+  bus, and the handler, on the path the transaction's space takes,
+  reads no state, mem, port or signal its ticks write and writes none
+  they read. The ticks it skips then come out the same after it, and its
+  deadline is unchanged (it is not made due). The generator decides by
+  the handlers' and ticks' reads and writes (through the model fns they
+  call), with the `space` parameter's value known where the board decodes
+  the access (`MACHINE_GEN_LAZYDEBUG` reports each decision,
+  `MACHINE_GEN_NOLAZY` turns it off). On the 386 AT the VGA's memory
+  reads (latches, not the beam), the Sound Blaster's port reads and the
+  fixed disk's 16-bit select qualify; a VGA memory write does not (the
+  scanlines drawn later read the planes): Xmas Lemmings' window 4.3%
+  cheaper undrawn, every result the same.
   On the 386 AT this made a DOS boot 15-20% faster, with identical
   results.
 - `step()` runs one instruction, or an interrupt the isa's `boundary` fn

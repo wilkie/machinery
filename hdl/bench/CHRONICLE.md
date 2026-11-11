@@ -108,6 +108,7 @@ Games (host instructions an emulated second, `blocks`, drawing none;
 | 2026-11-10 | JIT | the direct memories' pointers fetched once, not at each entry | Jetpack, One Must Fall −0.1% | not kept (sized) | entry below |
 | 2026-11-10 | JIT | a cache of lookups by pc | goes stale on the epochs links do; value-checked links measured the equivalent | not tried | entry below |
 | 2026-11-10 | devices | the PIT's counter read as arithmetic on the time (as DOSBox does) | already so: its tick is constant-time; a read costs the catch-up's machinery | nothing to change | entry below |
+| 2026-11-10 | devices | lazy catch-up: a transaction skips its responder's catch-up when it can see nothing the ticks do | Lemmings −4.3% undrawn, −1.6% drawn; Jetpack +0.3%, One Must Fall 0 | kept | (this entry's commit) |
 
 ## Entries
 
@@ -284,6 +285,32 @@ suggested, each measured (`blocks`, drawing none):
   constant-time already (a channel's count from `n`, the refresh
   channel's OUT not wired); a read costs the catch-up's machinery, not
   the counting.
+
+### 2026-11-10: lazy catch-up (kept)
+
+- Idea: a transaction catches its responder up first so that its handler
+  sees the device as of now. When the handler can see nothing the ticks
+  do, the catch-up only costs.
+- Change: the generator works out, for each transaction a device
+  answers and each space its ranges cover, the handler's reads and
+  writes (states, mems, output ports, signals, through the model fns it
+  calls; an `if` settled by the known `space` walked only where it goes,
+  and nothing after a branch that returns), and its ticks'. When the
+  ticks reach no bus, and the handler reads nothing they write and writes
+  nothing they read, those ranges call the handler without the catch-up
+  and without making the device due. On the 386 AT: the VGA's memory
+  reads, the Sound Blaster's port reads, the fixed disk's `cs16`.
+- Exact: `trace` and `jit` as before (frame, memory, time) at 240 M of
+  Jetpack and of Lemmings.
+- Measured (`blocks`, against `MACHINE_GEN_NOLAZY` from the same tree):
+  Lemmings 0.768 → 0.735 G undrawn, 2.107 → 2.074 G drawn; Jetpack 1.149
+  → 1.153 G; One Must Fall 0.688 G both.
+- Learned: the first analysis walked on past a branch that returned, and
+  counted the VGA's I/O path (`pos`, `blink`) against its memory reads.
+  The VGA's memory writes stay caught up: the scanlines drawn after read
+  the planes they write, which needs the drawing's own deadline (the next
+  line's end) to be deferred exactly; that, and a chunky copy of the
+  planes, are the VGA leads below.
 
 ## Open leads
 

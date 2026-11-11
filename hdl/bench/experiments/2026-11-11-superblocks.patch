@@ -1,0 +1,350 @@
+Superblocks: a hot run compiled with the runs that followed it, joined by seams (not kept).
+
+Applies to e543fc9 (git apply from the repository root).
+What it measured: hdl/bench/CHRONICLE.md, 2026-11-11, "superblocks".
+
+diff --git a/hdl/crates/machine-jit/src/emit.rs b/hdl/crates/machine-jit/src/emit.rs
+index 9fee082..5ddb5ad 100644
+--- a/hdl/crates/machine-jit/src/emit.rs
++++ b/hdl/crates/machine-jit/src/emit.rs
+@@ -2175,8 +2175,10 @@ impl<'a, 'f> Em<'a, 'f> {
+         };
+         self.flush();
+         self.trial_limit = limit;
++        // (The steps made going round: those through this one, which ends
++        // a run that is not the function's last in a superblock.)
+         let bv = self.b.use_var(self.made_base);
+-        let nb = self.b.ins().iadd_imm(bv, self.steps as i64);
++        let nb = self.b.ins().iadd_imm(bv, self.k as i64 + 1);
+         self.b.def_var(self.made_base, nb);
+         self.b.ins().jump(first, &args);
+         self.restore(&before);
+diff --git a/hdl/crates/machine-model/src/gen/jit.rs b/hdl/crates/machine-model/src/gen/jit.rs
+index 071ebf8..e7c5725 100644
+--- a/hdl/crates/machine-model/src/gen/jit.rs
++++ b/hdl/crates/machine-model/src/gen/jit.rs
+@@ -46,14 +46,14 @@ impl Gen<'_> {
+         if !self.jit {
+             return "";
+         }
+-        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n    /// The steps compiled code may make before it returns (a run whose\n    /// end leads to its start goes round while they last).\n    pub jit_left: u64,\n    /// A fault an outlined fn raised, for `jit_deliver_c` to deliver.\n    pub jit_fault: Option<Fault>,\n    /// `sync: quantum(...)`: when the devices are next caught up.\n    pub jit_sync_at: u128,\n    /// `repeat: bulk(n)`: the time as an element ended, a period of elements\n    /// before a kernel runs (its low half); the time the kernel's elements\n    /// took.\n    pub jit_bulk_mark: u64,\n    pub jit_bulk_dt: u128,\n    /// A kernel's dry code: it stopped (a path no kernel takes), and its\n    /// accesses (the kind, the bits, the address, a write's value).\n    pub probe_bad: bool,\n    pub probe_n: u8,\n    pub probe_acc: [(u8, u32, u64, u128); 4],\n"
++        "    /// The JIT core: the code generator, whether the step's prologue left\n    /// the step to the instruction, and a fault to return.\n    pub jit: machine_jit::Engine,\n    pub jit_go: bool,\n    pub jit_err: Option<Fault>,\n    /// The instruction of the last step compiled code made and retired\n    /// itself (a pointer into its run), 0 when none since: `last` is set\n    /// from it when the code returns.\n    pub jit_last: u64,\n    /// The board's direct memory pointers (`Bus::jit_mem_ptrs`), as of\n    /// entering compiled code.\n    pub jit_ptrs: [usize; 8],\n    /// A fn compiled code called raised a fault, delivered: the run ends.\n    pub jit_pending: bool,\n    /// A compiled run's entry guard failed (the speculated registers\n    /// differ from what it was compiled for).\n    pub jit_guard_failed: bool,\n    /// The steps compiled code may make before it returns (a run whose\n    /// end leads to its start goes round while they last).\n    pub jit_left: u64,\n    /// The superblock compiled code is running (its first run's slot), or\n    /// `u32::MAX`.\n    pub jit_sb: u32,\n    /// A fault an outlined fn raised, for `jit_deliver_c` to deliver.\n    pub jit_fault: Option<Fault>,\n    /// `sync: quantum(...)`: when the devices are next caught up.\n    pub jit_sync_at: u128,\n    /// `repeat: bulk(n)`: the time as an element ended, a period of elements\n    /// before a kernel runs (its low half); the time the kernel's elements\n    /// took.\n    pub jit_bulk_mark: u64,\n    pub jit_bulk_dt: u128,\n    /// A kernel's dry code: it stopped (a path no kernel takes), and its\n    /// accesses (the kind, the bits, the address, a write's value).\n    pub probe_bad: bool,\n    pub probe_n: u8,\n    pub probe_acc: [(u8, u32, u64, u128); 4],\n"
+     }
+ 
+     pub(crate) fn jit_init(&self) -> &'static str {
+         if !self.jit {
+             return "";
+         }
+-        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n            jit_left: 0,\n            jit_fault: None,\n            jit_sync_at: 0,\n            jit_bulk_mark: 0,\n            jit_bulk_dt: 0,\n            probe_bad: false,\n            probe_n: 0,\n            probe_acc: [(0, 0, 0, 0); 4],\n"
++        "            jit: machine_jit::Engine::default(),\n            jit_go: false,\n            jit_err: None,\n            jit_last: 0,\n            jit_ptrs: [0; 8],\n            jit_pending: false,\n            jit_guard_failed: false,\n            jit_left: 0,\n            jit_sb: u32::MAX,\n            jit_fault: None,\n            jit_sync_at: 0,\n            jit_bulk_mark: 0,\n            jit_bulk_dt: 0,\n            probe_bad: false,\n            probe_n: 0,\n            probe_acc: [(0, 0, 0, 0); 4],\n"
+     }
+ 
+     /// The trace's fields for compiled code (inside `Trace`).
+@@ -61,14 +61,14 @@ impl Gen<'_> {
+         if !self.jit {
+             return "";
+         }
+-        "    /// Compiled code for the run after its first instruction, what each\n    /// of its steps was compiled with, and how often the run has been\n    /// entered.\n    pub code: machine_jit::Code,\n    pub jit_steps: Vec<JitStep>,\n    pub hits: u32,\n    /// Entries its guard turned away: past a few, it is compiled again\n    /// for the values then.\n    pub guard_fails: u32,\n    /// The steps its compiled code has made, and the tier it is compiled\n    /// at (0 quick; past `HOT2` steps a step, compiled again optimised).\n    pub exec: u64,\n    pub tier: u8,\n"
++        "    /// Compiled code for the run after its first instruction, what each\n    /// of its steps was compiled with, and how often the run has been\n    /// entered.\n    pub code: machine_jit::Code,\n    pub jit_steps: Vec<JitStep>,\n    pub hits: u32,\n    /// Entries its guard turned away: past a few, it is compiled again\n    /// for the values then.\n    pub guard_fails: u32,\n    /// The steps its compiled code has made, and the tier it is compiled\n    /// at (0 quick; past `HOT2` steps a step, compiled again optimised).\n    pub exec: u64,\n    pub tier: u8,\n    /// A superblock's runs, as their code was when it was compiled (page,\n    /// blocks, stamp): each checked as the first run's own code is.\n    pub sb: Vec<(u32, u32, u32)>,\n    /// Code memory's write total when its runs were last all found fresh.\n    pub sb_w: u64,\n"
+     }
+ 
+     pub(crate) fn jit_trace_init(&self) -> &'static str {
+         if !self.jit {
+             return "";
+         }
+-        "code: machine_jit::Code::default(), jit_steps: Vec::new(), hits: 0, guard_fails: 0, exec: 0, tier: 0, "
++        "code: machine_jit::Code::default(), jit_steps: Vec::new(), hits: 0, guard_fails: 0, exec: 0, tier: 0, sb: Vec::new(), sb_w: u64::MAX, "
+     }
+ 
+     /// What a compiled step is compiled with (beside the trace types).
+@@ -76,7 +76,7 @@ impl Gen<'_> {
+         if !self.jit {
+             return "";
+         }
+-        "/// A compiled step's data: the step, and what checking and replaying it\n/// needs of its run (the pc it is at, its address, the run's page, stamp\n/// and slot, and whether it is the run's last).\n#[derive(Clone, Copy, Debug)]\npub struct JitStep {\n    pub step: TStep,\n    pub pc: u64,\n    pub phys: u64,\n    pub page: u32,\n    pub stamp: u32,\n    pub slot: u32,\n    pub last: bool,\n    /// The run's pc (where it starts).\n    pub start: u64,\n}\n"
++        "/// A compiled step's data: the step, and what checking and replaying it\n/// needs of its run (the pc it is at, its address, the run's page, stamp\n/// and slot, and whether it is the run's last).\n#[derive(Clone, Copy, Debug)]\npub struct JitStep {\n    pub step: TStep,\n    pub pc: u64,\n    pub phys: u64,\n    pub page: u32,\n    pub stamp: u32,\n    pub slot: u32,\n    pub last: bool,\n    /// The run's pc (where it starts).\n    pub start: u64,\n    /// A superblock (runs that followed each other compiled as one): the\n    /// step's index in its own run, whether it starts one past the first,\n    /// the run its own run's end goes on to (its pc and slot), and the\n    /// superblock's first run (its slot).\n    pub idx: u32,\n    pub first: bool,\n    pub seam: Option<(u64, u32)>,\n    pub owner: u32,\n    /// The steps that must be left to go on at its run's end: the next\n    /// run's (at a seam), and the first run's (going round).\n    pub go: u32,\n    pub round: u32,\n}\n"
+     }
+ 
+     /// The JIT core's methods (inside the machine's impl).
+@@ -157,19 +157,54 @@ impl Gen<'_> {
+             self.jit.clear();
+             for t in self.traces.iter_mut().flatten() {{ t.code = machine_jit::Code::default(); }}
+         }}
++        // The runs compiled together: the run, and at the optimised tier
++        // the runs that followed it, while each followed the one before
++        // (by its link, at this address epoch) with the same key
++        // (`MACHINE_JIT_NOSB`: the run alone).
++        let members = self.jit_members(slot);
++        let (jsteps, sbv) = {{
++            let start = match self.traces[slot].as_ref() {{ Some(t) => t.pc, None => return }};
++            let mut v = Vec::new();
++            let mut sbv = Vec::new();
++            for (mi, &ms) in members.iter().enumerate() {{
++                let t = self.traces[ms].as_ref().unwrap();
++                let n = t.steps.len();
++                let seam = members.get(mi + 1).map(|&nx| (self.traces[nx].as_ref().unwrap().pc, nx as u32));
++                let round = self.traces[slot].as_ref().unwrap().steps.len() as u32;
++                let go = match members.get(mi + 1) {{
++                    Some(&nx) => self.traces[nx].as_ref().unwrap().steps.len() as u32,
++                    None => round,
++                }};
++                for (k, s) in t.steps.iter().enumerate() {{
++                    v.push(JitStep {{
++                        step: *s,
++                        pc: t.pc.wrapping_add(s.off as i64 as u64),
++                        phys: t.phys.wrapping_add(s.off as i64 as u64),
++                        page: t.page,
++                        stamp: t.stamp,
++                        slot: ms as u32,
++                        last: k + 1 == n,
++                        start,
++                        idx: k as u32,
++                        first: mi > 0 && k == 0,
++                        seam: if k + 1 == n {{ seam }} else {{ None }},
++                        owner: slot as u32,
++                        go,
++                        round,
++                    }});
++                }}
++                sbv.push((t.page, t.mask, t.stamp));
++            }}
++            if members.len() < 2 {{
++                sbv.clear();
++            }}
++            (v, sbv)
++        }};
+         let calls: Vec<machine_jit::Call> = match self.traces[slot].as_mut() {{
+             Some(t) => {{
+-                let n = t.steps.len();
+-                t.jit_steps = t.steps.iter().enumerate().map(|(k, s)| JitStep {{
+-                    step: *s,
+-                    pc: t.pc.wrapping_add(s.off as i64 as u64),
+-                    phys: t.phys.wrapping_add(s.off as i64 as u64),
+-                    page: t.page,
+-                    stamp: t.stamp,
+-                    slot: slot as u32,
+-                    last: k + 1 == n,
+-                    start: t.pc,
+-                }}).collect();
++                t.jit_steps = jsteps;
++                t.sb = sbv;
++                t.sb_w = u64::MAX;
+                 t.jit_steps.iter().map(|j| machine_jit::Call {{
+                     run: Self::jit_step_fn(&j.step.instr),
+                     arg: j as *const JitStep as usize,
+@@ -203,9 +238,11 @@ impl Gen<'_> {
+                     }});
+                 self.jit.tier = t.tier;
+                 self.jit.compile_with(steps.len(), 1, |e, k| {{
+-                    let checked = k == 0 || lowered[k - 1];
++                    // (A later run of a superblock is checked as a run's
++                    // first step is: its code, the epoch, the pc.)
++                    let checked = k == 0 || (lowered[k - 1] && !steps[k].first);
+                     // Only reached from a lowered step before it.
+-                    let follows = k >= 1 && lowered[k - 1];
++                    let follows = k >= 1 && lowered[k - 1] && !steps[k].first;
+                     lowered[k] = Self::jit_emit_step(e, &steps[k], k, checked, follows, fetch[k], units[k], &spec, &key);
+                 }})
+             }}
+@@ -215,6 +252,46 @@ impl Gen<'_> {
+             t.code = machine_jit::Code::new(code);
+         }}
+     }}
++    /// The runs a run in `slot` is compiled with (a superblock): itself,
++    /// and at the optimised tier (not with `sync: run`) the run its link
++    /// leads to while that run is recorded, at this address epoch, under
++    /// the same key, and not yet among them (back to the first: that run
++    /// goes round), up to 8 runs and 256 steps; not on from a run that has
++    /// gone round to itself.
++    fn jit_members(&self, slot: usize) -> Vec<usize> {{
++        let mut ms = vec![slot];
++        let Some(a) = self.traces[slot].as_ref() else {{ return ms }};
++        static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++        if a.tier == 0 || {sync_run} || *OFF.get_or_init(|| std::env::var_os("MACHINE_JIT_NOSB").is_some()) {{
++            return ms;
++        }}
++        let mut n = a.steps.len();
++        let mut cur = slot;
++        while ms.len() < 8 {{
++            let t = self.traces[cur].as_ref().unwrap();
++            // (Not on from a later run that has gone round to its own start:
++            // its seam would leave where its own code goes round.)
++            if cur != slot && t.links.iter().any(|l| l.pc == t.pc && l.phys == t.phys) {{
++                break;
++            }}
++            let next = t.links.iter().find_map(|l| {{
++                if l.ep != self.tr_aepoch || l.slot as usize >= self.traces.len() {{
++                    return None;
++                }}
++                let u = self.traces[l.slot as usize].as_ref()?;
++                (u.phys == l.phys && u.pc == l.pc && u.key == a.key && !u.steps.is_empty()).then_some(l.slot as usize)
++            }});
++            let Some(nx) = next else {{ break }};
++            let len = self.traces[nx].as_ref().unwrap().steps.len();
++            if ms.contains(&nx) || n + len > 256 {{
++                break;
++            }}
++            ms.push(nx);
++            n += len;
++            cur = nx;
++        }}
++        ms
++    }}
+     /// Entries into a run before it is compiled (`HOT` in the generator;
+     /// `MACHINE_JIT_HOT` overrides it, for tuning).
+     /// Steps a step of a run makes compiled at the quick tier before the
+@@ -238,6 +315,18 @@ impl Gen<'_> {
+         if !self.jit_code_ok(page, stamp) {{
+             return 0;
+         }}
++        // A superblock: its runs' code, each as it was compiled (a check
++        // since may have covered another run only).
++        let owner = self.tr_cur;
++        let sb = self.traces[owner as usize].as_ref().is_some_and(|t| !t.sb.is_empty());
++        if sb {{
++            if !self.jit_sb_fresh(owner as usize) {{
++                self.tr_on = false;
++                self.tr_prev = u32::MAX;
++                return 0;
++            }}
++            self.jit_sb = owner;
++        }}
+         self.bus.jit_mem_ptrs(&mut self.jit_ptrs);
+         // `sync: quantum`: no later than an urgent device is due. Steps made
+         // outside compiled code catch the devices up as the board does, not
+@@ -252,6 +341,21 @@ impl Gen<'_> {
+         let f: extern "C" fn(*mut Self, u32) -> u32 = unsafe {{ std::mem::transmute(c) }};
+         let n = f(self as *mut Self, from);
+         self.jit_pending = false;
++        if sb {{
++            self.jit_sb = u32::MAX;
++            // Left within a later run of the superblock: replayed on from
++            // where it stopped, while its slot still holds that run (else
++            // the steps go on unreplayed).
++            if self.tr_on && self.tr_cur != owner {{
++                let holds = self.tr_idx >= 1 && self.traces[self.tr_cur as usize].as_ref().is_some_and(|t| {{
++                    t.steps.get(self.tr_idx as usize - 1).is_some_and(|s| t.phys.wrapping_add(s.off as i64 as u64) == self.tr_phys)
++                }});
++                if !holds {{
++                    self.tr_on = false;
++                    self.tr_prev = u32::MAX;
++                }}
++            }}
++        }}
+         if self.jit_guard_failed {{
+             // Compiled for other values of the speculated registers: past a
+             // few refusals, compiled again for the values now.
+@@ -632,9 +736,11 @@ impl Gen<'_> {
+         let w = self.bus.{sp}_code_writes();
+         if w != self.tr_w {{
+             // (The run whose code asks: the current one, its stamp its own,
+-            // which a check may have moved on since it was compiled.)
++            // which a check may have moved on since it was compiled; in a
++            // superblock, every run in it, as it was compiled.)
+             let _ = stamp;
+-            if self.tr_bus() || !self.tr_fresh(self.tr_cur as usize, page) {{
++            let sb = self.jit_sb;
++            if self.tr_bus() || (sb == u32::MAX && !self.tr_fresh(self.tr_cur as usize, page)) || (sb != u32::MAX && !self.jit_sb_fresh(sb as usize)) {{
+                 self.tr_on = false;
+                 self.tr_prev = u32::MAX;
+                 return false;
+@@ -643,6 +749,33 @@ impl Gen<'_> {
+         }}
+         true
+     }}
++    /// A superblock's runs' code as it was compiled: each page's count, or
++    /// none of the run's blocks written since (as `tr_fresh`).
++    fn jit_sb_fresh(&mut self, owner: usize) -> bool {{
++        let w = self.bus.{sp}_code_writes();
++        let n = match self.traces.get(owner).and_then(|t| t.as_ref()) {{
++            Some(t) if t.sb_w == w => return true,
++            Some(t) => t.sb.len(),
++            None => return false,
++        }};
++        for i in 0..n {{
++            let (page, mask, stamp) = self.traces[owner].as_ref().unwrap().sb[i];
++            let now = self.bus.{sp}_code_stamp(page);
++            if now == stamp {{
++                continue;
++            }}
++            if !self.bus.{sp}_code_fresh(page, mask, stamp) {{
++                return false;
++            }}
++            if let Some(t) = self.traces[owner].as_mut() {{
++                t.sb[i].2 = now;
++            }}
++        }}
++        if let Some(t) = self.traces[owner].as_mut() {{
++            t.sb_w = w;
++        }}
++        true
++    }}
+     extern "C" fn jit_code_c(m: *mut Self, page: u64, stamp: u64) -> u64 {{
+         // SAFETY: called by compiled code with its machine.
+         let m = unsafe {{ &mut *m }};
+@@ -1050,7 +1183,7 @@ impl Gen<'_> {
+             assume(e);
+             e.assume(std::mem::offset_of!(Self, halted), machine_jit::N::Bool, 0);
+         }}
+-{restore}        e.store(std::mem::offset_of!(Self, tr_idx), machine_jit::N::U32, machine_jit::V::K(k as u128 + 1));
++{restore}        e.store(std::mem::offset_of!(Self, tr_idx), machine_jit::N::U32, machine_jit::V::K(j.idx as u128 + 1));
+ {opcodes_store}{opcode}        if j.last {{
+             e.store(std::mem::offset_of!(Self, tr_on), machine_jit::N::Bool, machine_jit::V::K(0));
+             e.store(std::mem::offset_of!(Self, tr_prev), machine_jit::N::U32, machine_jit::V::K(j.slot as u128));
+@@ -1391,6 +1524,8 @@ impl Gen<'_> {
+         // caller would enter it (by its link: the epoch unchanged, so the
+         // key and the code's page hold), while the steps allowed last.
+         // Not with `sync: run` (the devices wait for the run's end).
++        // (In a superblock, round from any of its runs' ends: to the first
++        // run's start.)
+         if j.last && !{sync_run} {{
+             let pc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, r.{pc0n}), n: {pc_n}, bump: 0 }});
+             let again = e.op(machine_jit::Op::Eq, pc, machine_jit::V::K((j.start & {pc_mask:#x}) as u128), {pc_n});
+@@ -1399,7 +1534,7 @@ impl Gen<'_> {
+             let same = e.op(machine_jit::Op::Eq, ep, ep0, machine_jit::N::U64);
+             let made = e.made_through();
+             let made = e.cast(made, machine_jit::N::U32, machine_jit::N::U64);
+-            let need = e.op(machine_jit::Op::Add, made, machine_jit::V::K(e.steps() as u128), machine_jit::N::U64);
++            let need = e.op(machine_jit::Op::Add, made, machine_jit::V::K(j.round as u128), machine_jit::N::U64);
+             let left = e.load(std::mem::offset_of!(Self, jit_left), machine_jit::N::U64);
+             let fits = e.op(machine_jit::Op::Le, need, left, machine_jit::N::U64);
+             let running = e.not(h, machine_jit::N::Bool);
+@@ -1409,8 +1544,38 @@ impl Gen<'_> {
+             e.loop_back(c, |e| {{
+                 e.store(std::mem::offset_of!(Self, tr_on), machine_jit::N::Bool, machine_jit::V::K(1));
+                 e.store(std::mem::offset_of!(Self, tr_idx), machine_jit::N::U32, machine_jit::V::K(0));
++                // (A superblock goes round to its first run.)
++                if j.slot != j.owner {{
++                    e.store(std::mem::offset_of!(Self, tr_cur), machine_jit::N::U32, machine_jit::V::K(j.owner as u128));
++                }}
+             }});
+         }}
++        // A superblock's seam: the run's end going on to the next run in
++        // it, as the caller would enter that run by the link (the epoch
++        // unchanged: the key, the address map and the code's pages hold),
++        // while the steps allowed last; else out, as at a run's end.
++        if let (true, Some((npc, nslot))) = (j.last && !{sync_run}, j.seam) {{
++            let pc = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, r.{pc0n}), n: {pc_n}, bump: 0 }});
++            let at = e.op(machine_jit::Op::Eq, pc, machine_jit::V::K((npc & {pc_mask:#x}) as u128), {pc_n});
++            let ep = e.load(std::mem::offset_of!(Self, tr_epoch), machine_jit::N::U64);
++            let ep0 = e.load(std::mem::offset_of!(Self, tr_ep0), machine_jit::N::U64);
++            let same = e.op(machine_jit::Op::Eq, ep, ep0, machine_jit::N::U64);
++            let made = e.made_through();
++            let made = e.cast(made, machine_jit::N::U32, machine_jit::N::U64);
++            let need = e.op(machine_jit::Op::Add, made, machine_jit::V::K(j.go as u128), machine_jit::N::U64);
++            let left = e.load(std::mem::offset_of!(Self, jit_left), machine_jit::N::U64);
++            let fits = e.op(machine_jit::Op::Le, need, left, machine_jit::N::U64);
++            let running = e.not(h, machine_jit::N::Bool);
++            let c = e.op(machine_jit::Op::And, at, same, machine_jit::N::Bool);
++            let c = e.op(machine_jit::Op::And, c, fits, machine_jit::N::Bool);
++            let c = e.op(machine_jit::Op::And, c, running, machine_jit::N::Bool);
++            let out = e.not(c, machine_jit::N::Bool);
++            e.exit_if(out, true, |_| {{}});
++            e.store(std::mem::offset_of!(Self, tr_on), machine_jit::N::Bool, machine_jit::V::K(1));
++            e.store(std::mem::offset_of!(Self, tr_cur), machine_jit::N::U32, machine_jit::V::K(nslot as u128));
++            e.store(std::mem::offset_of!(Self, tr_idx), machine_jit::N::U32, machine_jit::V::K(0));
++            return true;
++        }}
+         let on = e.read(&machine_jit::Place::Mem {{ off: std::mem::offset_of!(Self, tr_on), n: machine_jit::N::Bool, bump: 0 }});
+         let off = e.not(on, machine_jit::N::Bool);
+         let stop = e.op(machine_jit::Op::Or, h, off, machine_jit::N::Bool);

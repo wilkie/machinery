@@ -62,7 +62,7 @@ Games (host instructions an emulated second, `blocks`, drawing none;
 | 2026-11-10 | c92b448 | 0.81 G | 1.21 G | 0.79 G | DOS=HIGH disks, A20 gate |
 | 2026-11-10 | ed27d7f | 0.80 G | 1.18 G | 0.74 G | the harness's stop test |
 | 2026-11-10 | 857c893 | 0.77 G | 1.17 G | 0.69 G | the VGA's beam, runs back before their start |
-| 2026-11-10 | (flattening's commit) | 0.69 G | 1.11 G | 0.69 G | lazy catch-up, the chunky copy, flattening |
+| 2026-11-10 | e543fc9 | 0.69 G | 1.11 G | 0.69 G | lazy catch-up, the chunky copy, flattening |
 
 ## Index
 
@@ -114,7 +114,8 @@ Games (host instructions an emulated second, `blocks`, drawing none;
 | 2026-11-10 | buses | flattening, sized: the VGA's memory path written by hand as one function (the model's read_n, the local bus, the bridge, the ISA bus) | Lemmings −12.1% undrawn; Jetpack −0.5%, One Must Fall −0.6% | sizing (exact); the generic flattening is the lead | experiments/2026-11-10-flatten-vga-by-hand.crate.patch |
 | 2026-11-10 | buses | flattening by reordering: the bridge's context again per device, that device's decode first | Lemmings +0.9%, Jetpack 0, One Must Fall +0.1% | not kept | experiments/2026-11-10-flatten-by-reordering.patch |
 | 2026-11-10 | buses | flattening, the bridge alone sized by hand (the processor model's path kept) | Lemmings −7.6% | sizing (exact) | entry below |
-| 2026-11-10 | buses | flattening: the bridge's context again per device holding that device alone, used where the generator proves the handler's calls all go to it | Lemmings −7.6%, Jetpack −3.5%, One Must Fall −0.3% undrawn | kept | (this entry's commit) |
+| 2026-11-10 | buses | flattening: the bridge's context again per device holding that device alone, used where the generator proves the handler's calls all go to it | Lemmings −7.6%, Jetpack −3.5%, One Must Fall −0.3% undrawn | kept | e543fc9 |
+| 2026-11-11 | JIT | superblocks: a hot run compiled with the runs that followed it, joined by seams | exact; One Must Fall's hops halved, but Lemmings +2%, One Must Fall +2.9%, Jetpack 0 | not kept | experiments/2026-11-11-superblocks.patch |
 
 ## Entries
 
@@ -431,15 +432,63 @@ suggested, each measured (`blocks`, drawing none):
   per gate value, or the board choosing after `cpu_addr`. Lanes known
   per access width would admit the narrow ports.
 
+### 2026-11-11: superblocks (not kept)
+
+- Idea: the hop between compiled runs (about 450 host instructions on
+  Jetpack) is paid because each run is its own function; runs that
+  follow each other compiled as one keep their state in registers across
+  the hop (what the chaining entries above found chaining would need).
+- Change (`gen/jit.rs`): at the optimised tier, a run is compiled with
+  the runs its link leads to, one after another (at this address epoch,
+  under the same key, up to 8 runs and 256 steps). At a run's end, a
+  seam: going round to the first run's start if the pc is there, else
+  on into the next run if the pc is at its start, the epoch is unchanged
+  and its steps fit the budget, as the dispatcher would enter it (the
+  trace core's current run and index set to it); else out, as at any
+  run's end. The next run's first step is checked as a run's first step
+  is. Each run's code is checked as it was compiled, at entry and at
+  every code-write check (the slots it came from may hold other runs
+  since); leaving within a later run, it is replayed on only while its
+  slot still holds it.
+- Exactness: `jit` with superblocks ends as `trace` does at 240 M of
+  Lemmings and Jetpack. Two bugs on the way, both found by this check:
+  going round added the function's whole length to the steps made
+  (`Em::loop_back`, right only at the last step; now the steps through
+  the step going round), and a first version left at the seam where its
+  first run used to go round (most hot runs are loops whose exit was the
+  link: 4.07 M of 4.08 M seams failed on the pc).
+- Measured (`blocks`, none drawn, `MACHINE_JIT_NOSB` in the same
+  binary): Lemmings 0.693 → 0.707 G (+2%), One Must Fall 0.693 → 0.713 G
+  (+2.9%), Jetpack 1.126 → 1.127 G.
+- Why (One Must Fall, 200 s profiled both ways): entries into compiled
+  code fell from 38 M to 20 M and the dispatcher's share by 9%, but its
+  cost an entry rose from about 370 host instructions to 640. A
+  superblock leaving at a failed seam or inside a later run leaves the
+  dispatcher a run that is rarely entered by its link, so it looks up by
+  address. Compiling rose 10% (the superblocks compiled at the
+  optimising tier on top of their runs), about what the dispatcher
+  saved. Compiled code itself cost the same (56.3 k samples against
+  56.9 k): runs sharing registers across the seam did not show. Jetpack
+  makes none: its runs are joined by far calls and returns, which change
+  CS, in the key.
+- Learned: the hops a superblock removes are the cheap ones (followed by
+  link); what is left costs more. For this to pay, a superblock must
+  cover the paths actually taken, with its exits leading somewhere
+  linked: built from counts of the hops taken (a trace tree growing
+  from its hot exits) rather than from the last link, and the key
+  compared by value at a seam for far transfers.
+- Code: `experiments/2026-11-11-superblocks.patch`, on e543fc9.
+
 ## Open leads
 
 - **Drawing's stores:** the frame's three bounds-checked byte stores a
   dot (an RGB frame); a frame of indices with the colours applied at the
   end of the line, or the generator proving indices in range.
 
-- **Runs that follow each other compiled into one function** (a
-  superblock or trace tree), so a hop keeps its state in registers: what
-  chaining would need to pay (above).
+- **Runs that follow each other compiled into one function**: superblocks
+  from the last link did not pay (above); a trace tree grown from the
+  exits actually taken, with the key compared by value at its seams (for
+  Jetpack's far calls), is what is left of the idea.
 - **Lazy device catch-up:** skip a device's catch-up before a transaction
   whose handler reads none of what its tick writes, while the tick reports
   nothing due before then (the VGA's memory accesses, the PIT's reads).

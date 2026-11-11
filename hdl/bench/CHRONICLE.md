@@ -110,6 +110,7 @@ Games (host instructions an emulated second, `blocks`, drawing none;
 | 2026-11-10 | devices | the PIT's counter read as arithmetic on the time (as DOSBox does) | already so: its tick is constant-time; a read costs the catch-up's machinery | nothing to change | entry below |
 | 2026-11-10 | devices | lazy catch-up: a transaction skips its responder's catch-up when it can see nothing the ticks do | Lemmings −4.3% undrawn, −1.6% drawn; Jetpack +0.3%, One Must Fall 0 | kept | (this entry's commit) |
 | 2026-11-10 | VGA | a chunky copy of video memory kept as the planes are written; 16 colours drawn from it (as DOSBox's `fastmem`) | drawn: Lemmings −18%, Jetpack −6%, One Must Fall −5.7%; undrawn: Lemmings +1.5%, others 0 | kept | (this entry's commit) |
+| 2026-11-10 | buses | flattening, sized: the VGA's memory path written by hand as one function (the model's read_n, the local bus, the bridge, the ISA bus) | Lemmings −12.1% undrawn; Jetpack −0.5%, One Must Fall −0.6% | sizing (exact); the generic flattening is the lead | experiments/2026-11-10-flatten-vga-by-hand.crate.patch |
 
 ## Entries
 
@@ -332,6 +333,28 @@ suggested, each measured (`blocks`, drawing none):
 - Learned: what is left of drawing a dot is mostly the three
   bounds-checked byte stores into the frame and the colour table's
   lookups: the generated loop, not the planes.
+
+### 2026-11-10: flattening, sized
+
+- Idea: a video memory access goes through the board, the processor
+  model's `read_n`/`read_in` (A20), the local bus's decode (a 17-device
+  context), the bridge's lanes, its `cs16` question (13 range checks, no
+  time) twice a byte, the ISA decode (the VGA its 14th range), the VGA,
+  and four `wait_state` transactions: the layers cost more than the
+  device.
+- Change (by hand, in a generated crate): `flat_vga_read`/`_write` on
+  the board, tried after direct memory: the gate on each dword, the DMA
+  controllers caught up when due (as the local bus does before the
+  bridge), each enabled byte the VGA's read (or its catch-up, write and
+  deadlines), 2 ISA clocks and its wait, 4 waits, then the local bus's 2
+  clocks; anything else (a transfer past the window) by the layers.
+- Exact: Lemmings and Jetpack at 240 M alike flattened and not (the same
+  binary, `NOFLAT`).
+- Measured (`blocks`, drawing none): Lemmings 0.749 → 0.658 G (−12.1%),
+  Jetpack 1.155 → 1.149 G, One Must Fall 0.689 → 0.685 G.
+- Next: the generator making this for every range a bridge passes on (a
+  partial evaluation of the bridge's handlers for the range's space,
+  width and lanes), I/O too (Jetpack's PIT reads).
 
 ## Open leads
 

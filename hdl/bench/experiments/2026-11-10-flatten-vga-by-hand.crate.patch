@@ -1,0 +1,127 @@
+The VGA's memory path flattened by hand in a generated crate (a sizing, not kept).
+
+A diff of the At386Vga crate generated (profile blocks) from 5327da1, not of the
+repository: generate it (bench/i386/compare_games.py does), then patch its src/lib.rs.
+What it measured: hdl/bench/CHRONICLE.md, 2026-11-10, "flattening, sized".
+
+--- a/src/lib.rs	2026-11-10 20:55:18.974116649 -0800
++++ b/src/lib.rs	2026-11-10 22:00:27.958568060 -0800
+@@ -48264,6 +48264,7 @@
+     fn mem_addr_mask(&mut self) -> u64 { let m = if self.sig.gate_seen == self.sig.addr_gen { self.sig.gate_mask } else { self.gate_mask() }; if m == 0 { 0 } else { m | !0xffffffffu64 } }
+     fn mem_read(&mut self, addr: u64, bits: u32) -> u128 {
+         if let Some(g) = self.cpu_span(addr, (bits / 8) as u64) { if let Some(v) = self.direct_read(g, (bits / 8) as u64) { return v; } }
++        if crate::flat_on() { if let Some(v) = self.flat_vga_read(addr, bits) { return v; } }
+         let mut ctx = Ctx_cpu { sig: &mut self.sig, marks: &mut self.marks, ram: Some(&mut self.ram), rom: Some(&mut self.rom), atbus: Some(&mut self.atbus), pic1: Some(&mut self.pic1), pic2: Some(&mut self.pic2), pit: Some(&mut self.pit), dma: Some(&mut self.dma), dma2: Some(&mut self.dma2), rtc: Some(&mut self.rtc), kbc: Some(&mut self.kbc), fdc: Some(&mut self.fdc), hdc: Some(&mut self.hdc), post: Some(&mut self.post), vga: Some(&mut self.vga), sb: Some(&mut self.sb), opl: Some(&mut self.opl) };
+         let addr = addr & 0xffffffffu64;
+         match bits {
+@@ -48283,6 +48284,7 @@
+     }
+     fn mem_write(&mut self, addr: u64, bits: u32, value: u128) {
+         if let Some(g) = self.cpu_span(addr, (bits / 8) as u64) { if self.direct_write(g, (bits / 8) as u64, value) { return; } }
++        if crate::flat_on() { if self.flat_vga_write(addr, bits, value) { return; } }
+         let mut ctx = Ctx_cpu { sig: &mut self.sig, marks: &mut self.marks, ram: Some(&mut self.ram), rom: Some(&mut self.rom), atbus: Some(&mut self.atbus), pic1: Some(&mut self.pic1), pic2: Some(&mut self.pic2), pit: Some(&mut self.pit), dma: Some(&mut self.dma), dma2: Some(&mut self.dma2), rtc: Some(&mut self.rtc), kbc: Some(&mut self.kbc), fdc: Some(&mut self.fdc), hdc: Some(&mut self.hdc), post: Some(&mut self.post), vga: Some(&mut self.vga), sb: Some(&mut self.sb), opl: Some(&mut self.opl) };
+         let addr = addr & 0xffffffffu64;
+         match bits {
+@@ -48871,3 +48873,102 @@
+         }
+     }
+ }
++
++mod flat {
++    use crate::*;
++    use crate::system::*;
++    impl Board {
++        #[inline]
++        fn flat_behind(&mut self) {
++            if self.sig.now >= self.marks.due_dma_on_tick { { let mut c = Ctx_dma { sig: &mut self.sig, marks: &mut self.marks, ram: Some(&mut self.ram), rom: Some(&mut self.rom), atbus: Some(&mut self.atbus), pic1: Some(&mut self.pic1), pic2: Some(&mut self.pic2), pit: Some(&mut self.pit), dma2: Some(&mut self.dma2), rtc: Some(&mut self.rtc), kbc: Some(&mut self.kbc), fdc: Some(&mut self.fdc), hdc: Some(&mut self.hdc), post: Some(&mut self.post), vga: Some(&mut self.vga), sb: Some(&mut self.sb), opl: Some(&mut self.opl) }; catch_up_dma(&mut self.dma, &mut c); } }
++            if self.sig.now >= self.marks.due_dma2_on_tick { { let mut c = Ctx_dma2 { sig: &mut self.sig, marks: &mut self.marks, ram: Some(&mut self.ram), rom: Some(&mut self.rom), atbus: Some(&mut self.atbus), pic1: Some(&mut self.pic1), pic2: Some(&mut self.pic2), pit: Some(&mut self.pit), dma: Some(&mut self.dma), rtc: Some(&mut self.rtc), kbc: Some(&mut self.kbc), fdc: Some(&mut self.fdc), hdc: Some(&mut self.hdc), post: Some(&mut self.post), vga: Some(&mut self.vga), sb: Some(&mut self.sb), opl: Some(&mut self.opl) }; catch_up_dma2(&mut self.dma2, &mut c); } }
++        }
++        #[inline]
++        fn flat_vga_byte_read(&mut self, a: u32) -> u8 {
++            let r = { let mut c = Ctx_vga { sig: &mut self.sig }; self.vga.on_port_read(&mut c, 0, a, BusSize::Byte) };
++            let v = match r { Some(r) => { self.sig.now += (2 + r.1 as clock::Time) * clock::C2; r.0 } None => { self.sig.now += 2 * clock::C2; 0xffff } };
++            self.sig.now += 4 * clock::C2;
++            v as u8
++        }
++        #[inline]
++        fn flat_vga_byte_write(&mut self, a: u32, d: u8) {
++            catch_up_vga(&mut self.vga, &mut self.sig, &mut self.marks);
++            let r = { let mut c = Ctx_vga { sig: &mut self.sig }; self.vga.on_port_write(&mut c, 0, a, BusSize::Byte, d as u16) };
++            self.marks.due_vga_on_tick_dot25 = 0; self.marks.next_due = 0; self.marks.due_vga_on_tick_dot28 = 0; self.marks.next_due = 0;
++            match r { Some(r) => { self.sig.now += (2 + r.0 as clock::Time) * clock::C2; } None => { self.sig.now += 2 * clock::C2; } }
++            self.sig.now += 4 * clock::C2;
++        }
++        fn flat_vga_local_read(&mut self, a: u32, be: u8) -> u32 {
++            self.flat_behind();
++            let mut lo: u16 = 0xffff;
++            if be & 3 != 0 {
++                if be & 1 != 0 { lo = (lo & 0xff00) | self.flat_vga_byte_read(a) as u16; }
++                if be & 2 != 0 { lo = (lo & 0x00ff) | (self.flat_vga_byte_read(a + 1) as u16) << 8; }
++            }
++            let mut hi: u16 = 0xffff;
++            if be & 12 != 0 {
++                if be & 4 != 0 { hi = (hi & 0xff00) | self.flat_vga_byte_read(a + 2) as u16; }
++                if be & 8 != 0 { hi = (hi & 0x00ff) | (self.flat_vga_byte_read(a + 3) as u16) << 8; }
++            }
++            self.sig.now += 2 * clock::C1;
++            (lo as u32) | (hi as u32) << 16
++        }
++        fn flat_vga_local_write(&mut self, a: u32, be: u8, data: u32) {
++            self.flat_behind();
++            if be & 1 != 0 { self.flat_vga_byte_write(a, data as u8); }
++            if be & 2 != 0 { self.flat_vga_byte_write(a + 1, (data >> 8) as u8); }
++            if be & 4 != 0 { self.flat_vga_byte_write(a + 2, (data >> 16) as u8); }
++            if be & 8 != 0 { self.flat_vga_byte_write(a + 3, (data >> 24) as u8); }
++            self.sig.now += 2 * clock::C1;
++        }
++        #[inline]
++        fn in_vga(a: u32) -> bool { a >= 0xa0000 && a <= 0xbfffc }
++        /// The VGA's memory window, flattened: the processor model's read_n,
++        /// the local bus, the bridge, the ISA bus, as they would go.
++        pub fn flat_vga_read(&mut self, addr: u64, bits: u32) -> Option<u128> {
++            if bits > 32 || bits % 8 != 0 { return None; }
++            let addr = (addr & 0xffffffff) as u32;
++            let n = bits / 8;
++            let first = 4 - (addr & 3);
++            if n <= first {
++                let a = (self.cpu_addr(addr as u64) as u32) & !3;
++                if !Self::in_vga(a) { return None; }
++                let v = self.flat_vga_local_read(a, unit_Lanes(addr, n as u8)) >> ((addr & 3) * 8);
++                return Some((v as u128) & ((1u128 << bits) - 1));
++            }
++            let a0 = (self.cpu_addr(addr as u64) as u32) & !3;
++            let next = (addr & !3).wrapping_add(4);
++            let a1 = (self.cpu_addr(next as u64) as u32) & !3;
++            if !Self::in_vga(a0) || !Self::in_vga(a1) { return None; }
++            let lo = self.flat_vga_local_read(a0, unit_Lanes(addr, first as u8));
++            let hi = self.flat_vga_local_read(a1, unit_Lanes(next, (n - first) as u8));
++            let v = lo | hi.checked_shl(first * 8).unwrap_or(0);
++            Some((v as u128) & ((1u128 << bits) - 1))
++        }
++        pub fn flat_vga_write(&mut self, addr: u64, bits: u32, value: u128) -> bool {
++            if bits > 32 || bits % 8 != 0 { return false; }
++            let addr = (addr & 0xffffffff) as u32;
++            let n = bits / 8;
++            let data = value as u32;
++            let first = 4 - (addr & 3);
++            if n <= first {
++                let a = (self.cpu_addr(addr as u64) as u32) & !3;
++                if !Self::in_vga(a) { return false; }
++                self.flat_vga_local_write(a, unit_Lanes(addr, n as u8), data << ((addr & 3) * 8));
++                return true;
++            }
++            let a0 = (self.cpu_addr(addr as u64) as u32) & !3;
++            let next = (addr & !3).wrapping_add(4);
++            let a1 = (self.cpu_addr(next as u64) as u32) & !3;
++            if !Self::in_vga(a0) || !Self::in_vga(a1) { return false; }
++            self.flat_vga_local_write(a0, unit_Lanes(addr, first as u8), data << ((addr & 3) * 8));
++            self.flat_vga_local_write(a1, unit_Lanes(next, (n - first) as u8), data.checked_shr(first * 8).unwrap_or(0));
++            true
++        }
++    }
++}
++
++pub fn flat_on() -> bool {
++    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *F.get_or_init(|| std::env::var_os("NOFLAT").is_none())
++}

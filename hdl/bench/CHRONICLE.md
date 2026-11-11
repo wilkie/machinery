@@ -103,6 +103,11 @@ Games (host instructions an emulated second, `blocks`, drawing none;
 | 2026-11-10 | JIT | compiled runs chained in compiled code | 8% of hops chain; Jetpack +5%, One Must Fall +2.4% | not kept, to retry | experiments/2026-11-10-chain-in-compiled-code.patch |
 | 2026-11-10 | trace core | links checked by value (what maps the pc to its address), not an address epoch | Jetpack −2.9%, One Must Fall +1.2%, Lemmings +0.3% | not kept (mixed) | experiments/2026-11-10-value-checked-links.patch |
 | 2026-11-10 | JIT | chaining in compiled code, with value-checked links | 40% of hops chain; Jetpack +4%, One Must Fall +3.4%, Lemmings +1% (against value links alone) | not kept | experiments/2026-11-10-chain-with-value-links.patch |
+| 2026-11-10 | devices | a catch-up skips a clock whose tick last said nothing pending (the VGA's idle dot clock) | Lemmings 0.768 → 0.772 G (none) | not kept (sized in a generated crate) | entry below |
+| 2026-11-10 | devices | the board's sync gate inline, the catch-ups and deadline rescan out of line | Jetpack −1.4%, One Must Fall −0.9%, Lemmings 0 | kept | (this entry's commit) |
+| 2026-11-10 | JIT | the direct memories' pointers fetched once, not at each entry | Jetpack, One Must Fall −0.1% | not kept (sized) | entry below |
+| 2026-11-10 | JIT | a cache of lookups by pc | goes stale on the epochs links do; value-checked links measured the equivalent | not tried | entry below |
+| 2026-11-10 | devices | the PIT's counter read as arithmetic on the time (as DOSBox does) | already so: its tick is constant-time; a read costs the catch-up's machinery | nothing to change | entry below |
 
 ## Entries
 
@@ -247,6 +252,38 @@ about 450 host instructions a hop. The entries below follow from this.
   the hop (one function for runs that follow each other), not by moving
   the dispatcher's checks into compiled code.
 - Code: `experiments/2026-11-10-chain-with-value-links.patch`, on d61f355.
+
+### 2026-11-10: from how DOSBox does it: cheap leads (a)-(e)
+
+DOSBox (0.74-3's source): linked blocks of host code (`CacheBlock::LinkTo`),
+time as an instruction count with devices computed when asked (the PIT's
+counter from the elapsed time, `timer.cpp`), memory one hop to a page
+handler, the VGA's planes expanded to a chunky copy as they are written
+(`fastmem`) and drawn in batches of lines, lazy flags. The cheap leads it
+suggested, each measured (`blocks`, drawing none):
+
+- (a) A catch-up that skips a clock whose last tick returned
+  `0xFFFFFFFF` (sized in a generated crate, phase not kept, not exact):
+  Lemmings 0.768 → 0.772 G, drawing 2.114 → 2.111 G. An idle clock's
+  catch-up is a few instructions (a division is one); the VGA's 23% is
+  its active clock, and how often it is caught up. A first try, the idle
+  block deleted, left its deadline 0 and caught the VGA up at every sync
+  (0.97 G): measure the deadline too.
+- (b) `board_sync`'s gate (nothing due, no edge) inline at every step,
+  the catch-ups and the rescan of the deadlines out of line: Jetpack
+  1.165 → 1.149 G, One Must Fall 0.694 → 0.688 G, Lemmings 0.768 G.
+  Code motion: Jetpack's `blocks` run alike at 300 M. Kept. The rescan
+  (a minimum over 11 deadlines, `cmovb`s) is about a third of what is
+  left of `after_step`, run after any device was touched.
+- (c) `jit_enter` fetched the direct memories' pointers through the bus
+  at each entry (55 M on Jetpack's window); fetched once (sized): −0.1%.
+  Not kept.
+- (d) A cache of `jit_lookup` by pc: not tried; it would go stale on the
+  same epochs links do, and value-checked links measured that fix.
+- (e) The PIT's counter as arithmetic on the time: our PIT's tick is
+  constant-time already (a channel's count from `n`, the refresh
+  channel's OUT not wired); a read costs the catch-up's machinery, not
+  the counting.
 
 ## Open leads
 

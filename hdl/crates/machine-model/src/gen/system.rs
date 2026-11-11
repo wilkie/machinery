@@ -1952,11 +1952,17 @@ impl<'a> Gen<'a> {
     }}
     impl Board {{
         /// `System::sync`: the devices due caught up, and signal edges
-        /// delivered.
-        #[inline]
+        /// delivered. (The test that none is due, inline at every step; the
+        /// rest, out of line.)
+        #[inline(always)]
         pub fn board_sync(&mut self) {{
             let b = &mut *self;
-{sync_gate}{sync}            b.board_deliver();
+{sync_gate}            b.board_sync_due();
+        }}
+        #[inline(never)]
+        fn board_sync_due(&mut self) {{
+            let b = &mut *self;
+{sync}            b.board_deliver();
 {sync_next_board}        }}
         /// Signal edges delivered to the ports that observe them.
         pub fn board_deliver(&mut self) {{
